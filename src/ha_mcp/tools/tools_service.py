@@ -580,17 +580,10 @@ def _attach_resolution_to_response(
         response.setdefault("warnings", []).extend(resolution_warnings)
 
 
-class _AmbiguousDispatch:
-    """Sentinel type for a post-send-ambiguous component write (see below)."""
+class _AmbiguousDispatch(NamedTuple):
+    """An uncertain component write, retaining diagnostics without allowing replay."""
 
-
-# Returned by ``_call_service_via_component`` when the component frame was SENT but
-# its response/confirmation never arrived (a response-wait timeout or a post-send
-# transport drop): the write MAY have landed, so the caller reports it as ``partial``
-# and MUST NOT re-POST via the legacy path (D9 at-most-once — an ambiguous post-send
-# outcome is never retried). Distinct from ``None`` (the component provably never
-# dispatched → a safe legacy first fire).
-_COMPONENT_DISPATCH_AMBIGUOUS = _AmbiguousDispatch()
+    error: Exception
 
 
 def _parse_json_dict_param(
@@ -1391,54 +1384,21 @@ class ServiceTools:
     ) -> dict[str, Any] | _AmbiguousDispatch | None:
         """Route one service call through the component ``call_service`` capability.
 
-        Returns one of three outcomes:
+        A result envelope confirms dispatch, even if state confirmation is partial.
+        ``None`` permits a first legacy call only when the capability is absent,
+        acquisition fails, the readiness guard raises CommandNotSent, or the router
+        answers unknown_command. Every other post-send error or malformed result is
+        an _AmbiguousDispatch: the service may have mutated before raising. Even a
+        genuine Core error code does not establish that the service never ran.
 
-        * the component's frozen result envelope — ``{domain, service, dispatched,
-          confirmed, partial, transitions, service_response?}`` — when the component
-          advertises ``call_service``, the frame lands, and its response arrives (the
-          caller maps it and does NOT re-POST, even for a ``partial`` confirmation);
-        * ``None`` when the component provably never dispatched, so the caller runs
-          its legacy REST POST as a safe first fire;
-        * ``_COMPONENT_DISPATCH_AMBIGUOUS`` when the frame WAS sent but its
-          response/confirmation never arrived — the caller reports ``partial`` and
-          does NOT re-POST.
+        The caller raises an outcome-unknown ToolError for ambiguity, never success
+        or a second dispatch. Losing the response does not cancel HA's background
+        handler. An explicit dispatched result with incomplete confirmation retains
+        its existing partial-success projection.
 
-        Verb resolution stays server-side (D6): the fully-formed ``domain`` /
-        ``service`` / ``service_data`` / ``entity_ids`` are handed to the component,
-        which fires exactly what it is given and never guesses a service name.
-
-        **D9 — at-most-once (correctness-critical).** The boundary is PRE-SEND vs
-        POST-SEND, NOT "error vs success":
-
-        * PRE-SEND → ``None`` (safe legacy first fire): a capability miss, an
-          ``unknown_command``, or a connection-ESTABLISHMENT failure
-          (``get_websocket_client`` raising before the frame is sent) all mean the
-          component never dispatched. A command-ERROR RESPONSE is also ``None``: it is
-          pre-dispatch for the component's own guards (the D1 domain block and
-          ``ServiceNotFound`` raise before any ``async_call``), and for a non-unknown
-          command error it is the ONE documented residual — an ``async_call`` that
-          mutated state and THEN raised could double-apply on the legacy re-POST
-          (accepted per the approved design; no idempotency token exists anywhere in
-          the write path).
-        * POST-SEND → never retried: a confirmation that lapsed comes back as a
-          normal result dict (``partial=True`` / ``dispatched=True``). A response-wait
-          TIMEOUT (``HomeAssistantCommandTimeout`` — the frame was sent) or any
-          post-send transport drop is AMBIGUOUS-dispatched: the component's
-          ``@async_response`` handler is a background HA task, so the client
-          abandoning the message id does NOT cancel the write, and
-          ``async_call(blocking=True)`` is itself unbounded (a long ``update.install``
-          / script legitimately outlives the 30s response-wait). These return the
-          sentinel so the caller reports ``partial`` and MUST NOT re-POST — re-POSTing
-          here is the double-fire this split exists to prevent.
-
-        **Security (layered defense-in-depth).** The server-side reserved-domain guard
-        (``_validate_service_call_params``) gates BOTH this component route AND the
-        legacy REST fallback, refusing ``ha_mcp_tools`` before either runs — it is the
-        authoritative single-call gate. The component's own D1 block is the
-        authoritative refusal AT the component for any future consumer that reaches it
-        directly; here a component D1 refusal would surface as a command-error
-        response → ``None`` → legacy REST, and that REST POST is itself gated by the
-        same server guard, so no ``ha_mcp_tools`` invocation can reach REST.
+        The server's reserved-domain guard applies before either route, and the
+        component independently guards its own dispatch. Verb resolution stays
+        server-side; the component executes the exact service it receives.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "call_service"):
@@ -1459,15 +1419,6 @@ class ServiceTools:
                 exc,
             )
             return None
-        # ``send_command`` transmits the frame INSIDE itself, AFTER its readiness guard
-        # and the actual socket write — so exception TYPE marks the send boundary:
-        # ``HomeAssistantCommandNotSent`` is raised ONLY at the readiness guard (the one
-        # provably-never-sent site → safe legacy first fire); a command-ERROR response is
-        # pre-dispatch by the component's guards / the documented mutate-then-raise
-        # residual → legacy; a response-wait TIMEOUT, a send() that raised (bytes may
-        # already be on the socket), or a post-send transport drop (a mid-await socket
-        # close raises plain ``HomeAssistantConnectionError``) is POST-SEND/AMBIGUOUS →
-        # partial, never retried.
         # The confirmation HINT: the expected primary state after ``service`` (or
         # ``None`` for a service with no known primary state). The component confirms
         # only on REACHING this state — skipping a multi-phase service's intermediate
@@ -1498,39 +1449,18 @@ class ServiceTools:
             )
             return None
         except HomeAssistantCommandError as exc:
-            # unknown_command means the command vanished: invalidate the cached caps so
-            # the next call re-probes. Any other command error → legacy re-POST (the
-            # documented at-most-once residual, see D9 above).
+            # Only the router's unknown_command proves the handler never ran.
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
-            else:
-                logger.warning(
-                    "%s command error; falling back to legacy: %r",
-                    WS_CALL_SERVICE,
-                    exc,
-                )
-            return None
+                return None
+            return _AmbiguousDispatch(exc)
         except Exception as exc:  # noqa: BLE001
-            # HomeAssistantCommandTimeout (response-wait expired — the frame WAS sent)
-            # or any post-send transport drop (e.g. a pooled-WS drop after send). The
-            # component may still be lawfully mid-write, so this is ambiguous-
-            # dispatched: report partial, NEVER re-POST (D9 at-most-once).
-            logger.warning(
-                "%s post-send timeout/drop; reporting partial (not retried): %r",
-                WS_CALL_SERVICE,
-                exc,
-            )
-            return _COMPONENT_DISPATCH_AMBIGUOUS
+            # A send failure or lost reply cannot establish whether HA acted.
+            return _AmbiguousDispatch(exc)
         result = raw.get("result")
-        # A SUCCESS result frame is produced ONLY after the prep ran to completion (the
-        # single async_call fired), so a malformed/unusable success envelope means the
-        # write already HAPPENED. Report it AMBIGUOUS (partial, never re-POSTed) — a
-        # ``None`` here would route to the legacy REST path and DOUBLE-APPLY. The
-        # happy-path envelope is a dict whose ``dispatched`` is True: presence of the
-        # key is not enough, since a received post-dispatch envelope whose
-        # ``dispatched`` isn't True is one we cannot trust to re-fire.
+        # An unusable acknowledgement proves neither acceptance nor non-execution.
         if not isinstance(result, dict) or result.get("dispatched") is not True:
-            return _COMPONENT_DISPATCH_AMBIGUOUS
+            return _AmbiguousDispatch(ValueError("Malformed component service result"))
         return result
 
     @staticmethod
@@ -1759,9 +1689,8 @@ class ServiceTools:
         this returns ``None`` and the caller stays on legacy.
 
         Returns a FINAL ``ha_call_service`` response when the component served the
-        call: the mapped transition, or — on a post-send timeout / transport drop
-        (the ambiguous sentinel) — the same dispatched-but-unconfirmed ``partial`` the
-        legacy timeout path builds, NEVER re-POSTed (D9 at-most-once). Returns ``None``
+        call: the mapped transition, or an outcome-unknown ToolError when no usable
+        verdict arrived. Neither outcome is re-POSTed. Returns ``None``
         when the component was not used or provably never dispatched, so the caller
         runs the legacy REST path as a safe first fire.
 
@@ -1788,8 +1717,28 @@ class ServiceTools:
             return_response=return_response,
         )
         if isinstance(component_result, _AmbiguousDispatch):
-            return self._build_timeout_response(
-                domain, service, entity_id, data, return_response=return_response
+            error = component_result.error
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"The outcome of {domain}.{service} is unknown; it may have taken effect.",
+                    details=str(error),
+                    context={
+                        "domain": domain,
+                        "service": service,
+                        "entity_id": entity_id,
+                        "write_outcome_unknown": True,
+                        "ha_error_code": (
+                            error.code
+                            if isinstance(error, HomeAssistantCommandError)
+                            else None
+                        ),
+                    },
+                    suggestions=[
+                        "Check the target state and Home Assistant logs before retrying; "
+                        "the service may already have acted."
+                    ],
+                )
             )
         if component_result is None:
             return None

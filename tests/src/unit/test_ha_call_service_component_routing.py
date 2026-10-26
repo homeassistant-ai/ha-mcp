@@ -7,8 +7,8 @@ component advertises ``call_service`` one in-process frame fires exactly one
 component's ``new_state`` into ``verified_state`` and the transition records feed the
 same result projection. These tests pin: the component-served single call (mapped
 into the legacy response shape), and the error-taxonomy fallbacks — capability miss,
-``unknown_command`` (invalidate caps + legacy), a command error/timeout, and a
-connection-establishment failure — all serving the legacy REST POST unchanged.
+``unknown_command`` (invalidate caps + legacy), and a connection-establishment
+failure. Command errors and lost replies are unknown outcomes without replay.
 
 D9 (at-most-once, correctness-critical) has its own class: a component result with
 ``partial=True`` (dispatched, unconfirmed) must NEVER trigger a legacy re-POST, while
@@ -941,9 +941,8 @@ async def test_unknown_command_invalidates_and_falls_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command-ERROR response (pre-dispatch / mutate-then-raise
-    residual) → exactly one legacy POST."""
+async def test_command_error_is_unknown_without_legacy_replay() -> None:
+    """A command error does not prove the service failed before an effect."""
     ws = make_ws(
         "ha_mcp_tools/call_service",
         info_result=_CAPS_CALL,
@@ -952,13 +951,13 @@ async def test_command_error_falls_back_to_legacy() -> None:
     client = RoutingClient()
     call_service = _build_call_service(client)
 
-    with patch_ws(ws, tools_service):
-        resp = await call_service(
-            domain="light", service="turn_on", entity_id="light.a"
-        )
+    with (
+        patch_ws(ws, tools_service),
+        pytest.raises(ToolError, match="write_outcome_unknown"),
+    ):
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
 
-    assert resp["success"] is True
-    assert len(client.call_service_calls) == 1
+    assert client.call_service_calls == []
 
 
 @pytest.mark.asyncio
@@ -982,10 +981,8 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_envelope_reports_partial_no_redispatch() -> None:
-    """A SUCCESS envelope without a truthy 'dispatched' is produced ONLY after the
-    single async_call fired, so the write already landed: report it partial and NEVER
-    re-POST (I2 — a legacy re-POST would double-apply)."""
+async def test_malformed_envelope_is_unknown_no_redispatch() -> None:
+    """An unusable success payload proves neither acceptance nor non-execution."""
     ws = make_ws(
         "ha_mcp_tools/call_service",
         info_result=_CAPS_CALL,
@@ -994,19 +991,18 @@ async def test_malformed_envelope_reports_partial_no_redispatch() -> None:
     client = RoutingClient()
     call_service = _build_call_service(client)
 
-    with patch_ws(ws, tools_service):
-        resp = await call_service(
-            domain="light", service="turn_on", entity_id="light.a"
-        )
+    with (
+        patch_ws(ws, tools_service),
+        pytest.raises(ToolError, match="write_outcome_unknown"),
+    ):
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
 
-    assert resp["success"] is True
-    assert resp["partial"] is True
     # I2: a malformed SUCCESS envelope is ambiguous-dispatched → ZERO legacy re-POST.
     assert client.call_service_calls == []
 
 
 @pytest.mark.asyncio
-async def test_dispatched_not_true_reports_partial_no_redispatch() -> None:
+async def test_dispatched_not_true_is_unknown_no_redispatch() -> None:
     """A SUCCESS envelope carrying 'dispatched' present but not True is a received
     post-dispatch envelope we cannot trust to re-fire: ambiguous, ZERO legacy re-POST
     (I2 — presence of the key is not enough; the value must be True)."""
@@ -1018,13 +1014,12 @@ async def test_dispatched_not_true_reports_partial_no_redispatch() -> None:
     client = RoutingClient()
     call_service = _build_call_service(client)
 
-    with patch_ws(ws, tools_service):
-        resp = await call_service(
-            domain="light", service="turn_on", entity_id="light.a"
-        )
+    with (
+        patch_ws(ws, tools_service),
+        pytest.raises(ToolError, match="write_outcome_unknown"),
+    ):
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
 
-    assert resp["success"] is True
-    assert resp["partial"] is True
     assert client.call_service_calls == []
 
 
@@ -1056,7 +1051,7 @@ async def test_never_sent_falls_to_exactly_one_post() -> None:
 async def test_post_send_connection_drop_is_ambiguous_no_re_post() -> None:
     """C1 (the other direction): a PLAIN HomeAssistantConnectionError from send_command
     is a mid-await socket close AFTER the frame was sent (the close handler sets it on
-    the pending future) — POST-SEND and ambiguous. It must report partial and NEVER
+    the pending future) — POST-SEND and ambiguous. It must report unknown and NEVER
     re-POST; only HomeAssistantCommandNotSent (a subclass) signals never-sent, so a
     bare connection error is not misclassified as pre-send."""
     ws = make_ws(
@@ -1067,13 +1062,12 @@ async def test_post_send_connection_drop_is_ambiguous_no_re_post() -> None:
     client = RoutingClient()
     call_service = _build_call_service(client)
 
-    with patch_ws(ws, tools_service):
-        resp = await call_service(
-            domain="light", service="turn_on", entity_id="light.a"
-        )
+    with (
+        patch_ws(ws, tools_service),
+        pytest.raises(ToolError, match="write_outcome_unknown"),
+    ):
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
 
-    assert resp["success"] is True
-    assert resp["partial"] is True
     # THE C1 boundary assertion: a post-send drop is ambiguous → ZERO legacy POST.
     assert client.call_service_calls == []
 
@@ -1124,7 +1118,7 @@ class TestD9AtMostOnce:
     async def test_post_send_timeout_is_ambiguous_no_re_post(self) -> None:
         """A response-wait timeout on the SENT frame is ambiguous-dispatched: the
         component may still be lawfully mid-write (async_call is unbounded), so the
-        consumer reports partial and NEVER re-POSTs — the double-fire guard."""
+        consumer reports unknown and NEVER re-POSTs — the double-fire guard."""
         ws = make_ws(
             "ha_mcp_tools/call_service",
             info_result=_CAPS_CALL,
@@ -1133,15 +1127,14 @@ class TestD9AtMostOnce:
         client = RoutingClient()
         call_service = _build_call_service(client)
 
-        with patch_ws(ws, tools_service):
-            resp = await call_service(
-                domain="light", service="turn_on", entity_id="light.a"
-            )
+        with (
+            patch_ws(ws, tools_service),
+            pytest.raises(ToolError, match="write_outcome_unknown"),
+        ):
+            await call_service(domain="light", service="turn_on", entity_id="light.a")
 
-        # Dispatched-but-unconfirmed partial success, and — THE D9 assertion — ZERO
+        # Unknown outcome, and — THE D9 assertion — ZERO
         # legacy POST despite the timeout (the frame was sent; re-POST would double-fire).
-        assert resp["success"] is True
-        assert resp["partial"] is True
         assert client.call_service_calls == []
 
     @pytest.mark.asyncio

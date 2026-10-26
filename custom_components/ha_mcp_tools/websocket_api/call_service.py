@@ -83,15 +83,15 @@ async def _call_service_prep(
     Raised exceptions PROPAGATE — the WS handler turns them into a command error the
     server maps (D7). Two distinct classes propagate: the D1 domain block and
     ``ServiceNotFound`` are PRE-dispatch (they raise before ``async_call``, so nothing
-    landed); an ``async_call`` / ``return_response`` validation error is MID-dispatch
-    (the handler may mutate state and THEN raise — the documented D9 at-most-once
-    residual, NOT pre-dispatch). A confirmation timeout is caught and reported as
+    landed); an ``async_call`` / ``return_response`` validation error may follow a
+    mutation. The consumer cannot infer non-execution from a generic command error
+    and must not replay it. A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
 
     The whole POST-dispatch section — the immediate-match re-read, the wait, and the
     pre→post diff — runs inside ONE ``try`` that, once ``dispatched`` is True, never
-    lets a raise escape (I1): a raise mapped to a command error would re-POST an
-    already-landed write. A pre-confirmation ``async_call`` failure (``dispatched``
+    lets a raise escape (I1), preserving the known acceptance rather than reporting
+    an unknown outcome. A pre-confirmation ``async_call`` failure (``dispatched``
     still False) re-raises so the server can map it; any post-dispatch failure degrades
     to a minimal dispatched-but-unconfirmed envelope. The immediate-match re-read is
     itself raise-proof (:func:`_match_immediate`), the attribute diff is raise-proofed
@@ -144,8 +144,8 @@ async def _call_service_prep(
 
     # 5. Dispatch exactly once. 6. Immediate-match + bounded wait. 7. Build the diff.
     # Everything after ``dispatched = True`` is inside this ONE try so no post-dispatch
-    # raise (a drifted re-read, an exotic-attribute diff) escapes (I1) — that would be
-    # mapped to legacy and re-POST an already-landed write. ``unsub`` always runs.
+    # raise (a drifted re-read, an exotic-attribute diff) loses the known acceptance
+    # (I1). ``unsub`` always runs.
     response: Any = None
     dispatched = False
     result: dict[str, Any]
@@ -180,8 +180,8 @@ async def _call_service_prep(
             response=response,
         )
     except Exception:
-        # PRE-confirmation ``async_call`` failure (never dispatched) → re-raise so the
-        # server maps it (D7/D9 MID-dispatch residual). Any POST-dispatch failure →
+        # An async_call failure may follow an effect: re-raise for an unknown outcome.
+        # A failure after async_call returned preserves its known acceptance:
         # degrade to a minimal dispatched-but-unconfirmed envelope (never re-POSTed).
         if not dispatched:
             raise
@@ -336,10 +336,9 @@ def _match_immediate(
     (pre == expected == "on") instead of timing out to a false ``partial``. No-hint
     targets (``exp is None``) are left for the any-first-event waiter — unchanged.
 
-    Called AFTER the dispatch, so it MUST be raise-proof (I1): a re-read that raised
-    and reached the WS handler would be mapped to legacy and re-POST an already-landed
-    write. ``_state_get`` is guarded (``None`` on drift) and ``_event_state_value`` is
-    raise-proof, so this never propagates past dispatch. ``captured`` is mutated in
+    Called AFTER the dispatch, so it MUST be raise-proof (I1): a re-read failure
+    must not erase the known acceptance. ``_state_get`` is guarded (``None`` on
+    drift) and ``_event_state_value`` is raise-proof. ``captured`` is mutated in
     place with the raw ``State`` (``_post_state``/``_state_as_dict`` normalize it, the
     same shape the waiter captures).
     """
@@ -429,8 +428,8 @@ def _dispatched_unconfirmed_result(domain: str, service: str) -> dict[str, Any]:
 
     The single ``async_call`` already fired; building the rich transition raised (an
     exotic captured state / serialization edge). Report dispatched-but-unconfirmed with
-    no transitions rather than propagating — a propagated raise would become a command
-    error the server maps to legacy and re-POST an already-landed write (double-apply).
+    no transitions rather than propagating and losing the known acceptance in a
+    generic command error whose effect the consumer cannot establish.
     Reads only the plain domain/service strings, so it cannot itself raise.
     """
     return {
@@ -467,9 +466,8 @@ def _values_differ(a: Any, b: Any) -> bool:
 
     A plain ``a != b`` raises "truth value ... is ambiguous" for numpy arrays and
     other exotic ``__ne__`` results that aren't a bool. Post-dispatch formatting MUST
-    NOT raise (a raise here would surface as a command error the server maps to legacy
-    → a re-POST of an already-landed write), so fall back to a ``repr`` compare when
-    the direct compare's truthiness is not a plain bool.
+    NOT erase the known acceptance with a generic command error, so fall back to a
+    ``repr`` compare when the direct compare's truthiness is not a plain bool.
     """
     try:
         return bool(a != b)
