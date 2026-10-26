@@ -139,8 +139,8 @@ async def test_rest_refusal_diagnostic_survives_conservative_unknown_classificat
 @pytest.mark.parametrize(
     ("code", "expected_status"),
     [
-        ("unauthorized", "not_started"),
-        ("invalid_format", "not_started"),
+        ("unauthorized", "outcome_unknown"),
+        ("unknown_command", "not_started"),
         ("unknown_error", "outcome_unknown"),
         ("home_assistant_error", "outcome_unknown"),
         ([], "outcome_unknown"),
@@ -176,6 +176,47 @@ async def test_ws_native_error_distinguishes_preflight_from_handler_failure(
         expected_status == "outcome_unknown"
     )
     send.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("invalid_format", "Stop callback validation failed after work began"),
+        ("not_found", "Service homeassistant.restart not found."),
+        ("home_assistant_error", "Unauthorized"),
+    ],
+)
+async def test_native_service_error_after_effect_cannot_prove_restart_not_started(
+    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    message: str,
+) -> None:
+    """Core catches these exceptions around async_call, including stop-handler work."""
+    client, ws = restart_client
+    effects = 0
+
+    async def respond(command: dict[str, Any]) -> None:
+        nonlocal effects
+        effects += 1
+        await ws._process_message(
+            {
+                "id": command["id"],
+                "type": "result",
+                "success": False,
+                "error": {"code": code, "message": message},
+            }
+        )
+
+    monkeypatch.setattr(ws, "send_json_message", AsyncMock(side_effect=respond))
+    with pytest.raises(ToolError) as caught:
+        await SystemTools(client).ha_restart(confirm=True)
+
+    result = json.loads(str(caught.value))
+    assert result["execution_status"] == "outcome_unknown"
+    assert result["write_outcome_unknown"] is True
+    assert result["error"]["details"]
+    assert effects == 1
 
 
 async def test_restart_success_payload_cannot_replace_its_protocol_envelope(
@@ -235,11 +276,11 @@ async def test_unexpected_ws_frame_cannot_assert_native_error_provenance(
     send.assert_awaited_once()
 
 
-async def test_ws_authentication_refusal_before_dispatch_is_not_started(
+async def test_ws_authentication_refusal_after_rest_dispatch_is_unknown(
     restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preserve the pool's authentication refusal when no command could be sent."""
+    """A refused WS handshake cannot establish the prior REST call's outcome."""
     client, ws = restart_client
     acquire = AsyncMock(side_effect=HomeAssistantAuthError("Invalid token"))
     monkeypatch.setattr(websocket_client, "get_websocket_client", acquire)
@@ -249,6 +290,6 @@ async def test_ws_authentication_refusal_before_dispatch_is_not_started(
     with pytest.raises(ToolError) as caught:
         await SystemTools(client).ha_restart(confirm=True)
 
-    assert json.loads(str(caught.value))["execution_status"] == "not_started"
+    assert json.loads(str(caught.value))["execution_status"] == "outcome_unknown"
     acquire.assert_awaited_once()
     send.assert_not_awaited()

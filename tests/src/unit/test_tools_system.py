@@ -155,10 +155,9 @@ class TestHaRestartErrorHandling:
                 HomeAssistantCommandNotSent("WebSocket not authenticated"),
                 "CONNECTION_FAILED",
             ),
-            (HomeAssistantAuthError("Invalid token"), "AUTH_INVALID_TOKEN"),
             (
                 HomeAssistantWebSocketServiceError(
-                    "Restart refused by Core", code="invalid_format"
+                    "Command not registered by Core", code="unknown_command"
                 ),
                 "VALIDATION_FAILED",
             ),
@@ -176,6 +175,17 @@ class TestHaRestartErrorHandling:
         assert outcome["error"]["message"] == str(error)
         assert not outcome.get("write_outcome_unknown")
         client.call_service.assert_awaited_once()
+
+    async def test_auth_failure_during_precheck_cannot_start_restart(self) -> None:
+        client = _make_client_that_fails_on_check_config(
+            HomeAssistantAuthError("Invalid token")
+        )
+        with pytest.raises(ToolError) as caught:
+            await SystemTools(client).ha_restart(confirm=True)
+        outcome = json.loads(str(caught.value))
+        assert outcome["execution_status"] == "not_started"
+        assert outcome["error"]["code"] == "AUTH_INVALID_TOKEN"
+        client.call_service.assert_not_awaited()
 
     async def test_missing_confirmation_never_checks_or_restarts(self) -> None:
         client = AsyncMock()

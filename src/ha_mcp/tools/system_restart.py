@@ -10,7 +10,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_embedded
 from ..client.rest_client import (
-    HomeAssistantAuthError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
@@ -224,17 +223,13 @@ async def restart_home_assistant(
 
 
 def _restart_was_refused(error: Exception) -> bool:
-    if isinstance(error, HomeAssistantCommandNotSent | HomeAssistantAuthError):
+    if isinstance(error, HomeAssistantCommandNotSent):
         return True
     if isinstance(error, HomeAssistantWebSocketServiceError):
-        # The service adapter's 400 is synthetic. Only Core's structured
-        # preflight codes prove refusal; HTTP status or message text cannot.
-        return error.code in {
-            "unauthorized",
-            "invalid_format",
-            "not_found",
-            "unknown_command",
-        }
+        # Core catches validation/not-found/auth errors around async_call, so
+        # native provenance does not prove no handler work happened. Only the
+        # router's unknown command guarantees no service handler was selected.
+        return error.code == "unknown_command"
     return False
 
 
