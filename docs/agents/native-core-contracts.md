@@ -54,9 +54,10 @@ consumer therefore ship together, and the capability handshake and
 component version. Version skew is the gate's job, never a reason to avoid the
 component.
 
-Use native REST/WebSocket APIs over copies in every case. Preserve native
-response fields and forward payload fields instead of selecting a copied
-allowlist. Fetch metadata from the API that owns it; a current entity state is
+Both routes are native, in this order: the component bridge when its
+capability is advertised, Core's REST/WebSocket API otherwise, and either one
+over a copy in every case. Preserve native response fields and forward payload
+fields instead of selecting a copied allowlist. Fetch metadata from the API that owns it; a current entity state is
 not a substitute for recorder metadata. Use the result or readback of a
 mutation when computing hashes, because Core may coerce values, add defaults or
 generate fields.
