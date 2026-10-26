@@ -53,6 +53,14 @@ def _uses_cache_action(job: dict[str, Any]) -> bool:
     )
 
 
+def _cache_step(job: dict[str, Any]) -> dict[str, Any]:
+    return next(
+        step
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith(_CACHE_STEP_PREFIX)
+    )
+
+
 def test_every_testcontainer_job_caches_the_wheel_tree() -> None:
     """A lane that runs E2E must restore the pip cache the knobs bind."""
     missing = [
@@ -70,14 +78,29 @@ def test_the_cache_step_receives_the_lane_image() -> None:
         for job_name, job in _jobs(name).items():
             if not _runs_e2e(job):
                 continue
-            step = next(
-                step
-                for step in job["steps"]
-                if str(step.get("uses", "")).startswith(_CACHE_STEP_PREFIX)
-            )
+            step = _cache_step(job)
             assert step["with"]["ha-image"] == "${{ env.HA_IMAGE_GHCR }}", (
                 f"{name}:{job_name} must key the cache on the lane's image"
             )
+
+
+def test_the_embedded_lanes_key_their_own_cache() -> None:
+    """Embedded and plain lanes resolve different wheels, and entries are immutable.
+
+    The embedded lane installs the checkout wheel under Home Assistant's package
+    constraints; the plain container lane installs the manifest's server pin
+    without them. The first job to save a key wins for that key's lifetime, so
+    a shared key would leave the other lane re-downloading its variants forever.
+    """
+    unkeyed = [
+        f"{name}:{job_name}"
+        for name in _CONTAINER_LANES
+        for job_name, job in _jobs(name).items()
+        if _runs_e2e(job)
+        and "embedded" in job_name
+        and _cache_step(job)["with"].get("lane") != "embedded"
+    ]
+    assert unkeyed == [], f"embedded E2E jobs sharing the plain lane's cache: {unkeyed}"
 
 
 def test_the_action_points_the_lanes_at_the_restored_directory() -> None:
@@ -88,6 +111,12 @@ def test_the_action_points_the_lanes_at_the_restored_directory() -> None:
         step for step in steps if step.get("uses", "").startswith("actions/cache")
     )
     assert cache["with"]["path"] == "${{ runner.temp }}/ha-e2e-pip"
+
+    # One entry per lane: the restore prefix must carry the lane too, or a
+    # lockfile change falls back to the other lane's wheels.
+    assert "${{ inputs.lane }}" in cache["with"]["key"]
+    assert "${{ inputs.lane }}" in cache["with"]["restore-keys"]
+    assert action["inputs"]["lane"]["default"] == "container"
 
     export = "\n".join(str(step.get("run", "")) for step in steps)
     assert "HA_E2E_PIP_CACHE=" in export, (

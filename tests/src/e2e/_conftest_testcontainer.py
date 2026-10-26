@@ -275,6 +275,34 @@ def _prepare_testcontainer_config(
     return config_path, temp_dir, local_blueprint, embedded_wheel_name
 
 
+def _claim_pip_cache_command(container_dir: str) -> str:
+    """Make the mounted cache root-owned inside the container, or say why not.
+
+    pip run as root only caches into a directory owned by uid 0. Guarded
+    because a bind mount whose file-sharing layer refuses ``chown`` (some
+    macOS and ``/mnt/c`` setups) would otherwise fail the whole lane; pip then
+    prints its own "cache has been disabled" warning and the run still boots.
+    """
+    return (
+        f"(chown 0:0 {container_dir} || echo '⚠️ could not claim "
+        f"{container_dir} for root; pip will disable the cache' >&2)"
+    )
+
+
+def _hand_back_pip_cache_command(container_dir: str) -> str:
+    """Return the mount to the ``/config`` owner, which is the invoking host user.
+
+    ``/config`` is bind-mounted from a directory the fixture created, so its
+    owner is the host uid; without this the host-side cache stays root-owned
+    and a developer cannot clean it up. Guarded for the same reason as the
+    claim: a failed hand-back must not fail a lane that already installed.
+    """
+    return (
+        f'(chown -R "$(stat -c %u:%g /config)" {container_dir} '
+        f"|| echo '⚠️ could not hand {container_dir} back to the /config owner' >&2)"
+    )
+
+
 def _build_ha_testcontainer(
     config_path: Path, embedded: bool, embedded_wheel_name: str | None
 ) -> DockerContainer:
@@ -303,14 +331,18 @@ def _build_ha_testcontainer(
     # Opt-in pip cache reuse (``HA_E2E_PIP_CACHE``): bind a host directory over
     # the image's pip cache so the preinstalls below stop paying for the same
     # wheel tree on every run. Unset leaves the container's cache ephemeral.
-    # The host directory is created here (as the invoking user rather than as
-    # the container's root) so a reused cache cannot end up owned by root.
+    # The directory is created here so the mount always has a host-side owner;
+    # the entrypoint then hands it to root for pip, because pip run as root
+    # only uses a cache directory owned by uid 0 (``check_path_owner`` in
+    # ``pip/_internal/utils/filesystem.py``) while a bind mount carries the
+    # invoking user's uid.
     cache_mount = pip_cache_mount()
+    cache_dir_in_container: str | None = None
     if cache_mount is not None:
-        host_cache_dir, container_cache_dir = cache_mount
+        host_cache_dir, cache_dir_in_container = cache_mount
         host_cache_dir.mkdir(parents=True, exist_ok=True)
         container = container.with_volume_mapping(
-            str(host_cache_dir), container_cache_dir, "rw"
+            str(host_cache_dir), cache_dir_in_container, "rw"
         )
         logger.info(f"♻️ Reusing the pip cache at {host_cache_dir}")
     # Add privileged mode for Home Assistant hardware access.
@@ -331,7 +363,8 @@ def _build_ha_testcontainer(
     # an HA boot with missing dependencies.
     preinit_cmds: list[str] = []
     # ``--no-cache-dir `` unless ``HA_E2E_PIP_CACHE`` supplies a cache to fill,
-    # in which case pip's default caching is what populates the mount.
+    # in which case an explicit ``--cache-dir`` overrides the image's
+    # ``no-cache-dir = false`` pip.conf (see ``pip_cache_flags``).
     cache_flags = pip_cache_flags()
 
     # The embedded lane's wheel supplies the server; see is_server_requirement.
@@ -404,6 +437,9 @@ def _build_ha_testcontainer(
         )
 
     if preinit_cmds:
+        if cache_dir_in_container is not None:
+            preinit_cmds.insert(0, _claim_pip_cache_command(cache_dir_in_container))
+            preinit_cmds.append(_hand_back_pip_cache_command(cache_dir_in_container))
         container_kwargs["entrypoint"] = [
             "sh",
             "-c",

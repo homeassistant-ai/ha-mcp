@@ -77,7 +77,11 @@ slow host or network:
 
 - `HA_E2E_PIP_CACHE=<dir>` binds that host directory over the image's pip cache
   (`/root/.cache/pip`) and lets the preinstalls cache wheels, so later runs skip
-  the downloads. CI sets it to a directory restored by
+  the downloads. The image's `/etc/pip.conf` sets `no-cache-dir = false`, which
+  pip treats as "no cache" whatever the value, so the lanes pass `--cache-dir`
+  explicitly; pip also only caches into a directory owned by uid 0 when it runs
+  as root, so the entrypoint claims the mount and hands it back to the host user
+  after the installs. CI sets it to a directory restored by
   `.github/actions/ha-e2e-pip-cache`, which is why every testcontainer job there
   carries that step.
 - `HA_E2E_READY_TIMEOUT=<seconds>` overrides the API-ready budget for both

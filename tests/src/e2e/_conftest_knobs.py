@@ -5,9 +5,9 @@ always used.
 
 ``HA_E2E_PIP_CACHE``
     Host directory bound over the container image's pip cache. When set, the
-    container lanes' preinstalls drop ``--no-cache-dir`` so their downloads
-    land in that directory and a later run reuses them instead of paying for
-    the whole wheel tree again. When unset, each container keeps its own
+    container lanes' preinstalls pass ``--cache-dir`` for that directory so
+    their downloads land in it and a later run reuses them instead of paying
+    for the whole wheel tree again. When unset, each container keeps its own
     ephemeral pip cache, exactly as before.
 
 ``HA_E2E_READY_TIMEOUT``
@@ -61,13 +61,23 @@ def pip_cache_mount() -> tuple[Path, str] | None:
 def pip_cache_flags() -> str:
     """The cache flag interpolated into every container-lane ``pip install``.
 
-    ``"--no-cache-dir "`` unless a cache directory is mounted, in which case
-    pip's own default — cache into ``$HOME/.cache/pip``, which IS the mount —
-    is what we want and the flag is dropped. The trailing space lets callers
-    interpolate it directly in front of the next flag; an empty return value
-    therefore leaves the command's spacing intact.
+    ``"--no-cache-dir "`` unless a cache directory is mounted. With a mount the
+    flag becomes an explicit ``--cache-dir``: the image's ``/etc/pip.conf``
+    (inherited from ``home-assistant/docker-base``) sets
+    ``no-cache-dir = false``, and pip disables caching for ANY valid value of
+    that option, ``false`` included (``_handle_no_cache_dir`` in
+    ``pip/_internal/cli/cmdoptions.py`` keeps that for backwards
+    compatibility). Dropping the command-line flag is therefore not enough, and
+    ``PIP_CACHE_DIR`` loses to the config as well; ``--cache-dir`` on the
+    command line is what overrides it.
+
+    The trailing space lets callers interpolate it directly in front of the
+    next flag.
     """
-    return "" if pip_cache_mount() is not None else "--no-cache-dir "
+    mount = pip_cache_mount()
+    if mount is None:
+        return "--no-cache-dir "
+    return f"--cache-dir {mount[1]} "
 
 
 def resolve_ready_timeout(default: int) -> int:

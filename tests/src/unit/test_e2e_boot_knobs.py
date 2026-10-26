@@ -154,7 +154,42 @@ def test_a_mounted_pip_cache_is_used_by_every_preinstall(
     assert cache_dir.is_dir()
     installs = _preinstalls(_entrypoint_script(container))
     assert len(installs) >= 2
-    assert not any("--no-cache-dir" in install for install in installs)
+    # Dropping --no-cache-dir is not enough: the image's pip.conf sets
+    # no-cache-dir = false, which pip disables the cache for just the same.
+    assert all(
+        install.startswith(f"--cache-dir {_conftest_knobs.PIP_CACHE_MOUNT_PATH} ")
+        for install in installs
+    )
+
+
+def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pip as root only caches into a uid-0 directory; the host keeps its owner.
+
+    The bind mount carries the invoking user's uid, so the entrypoint has to
+    hand the directory to root before the first install and back afterwards —
+    otherwise pip disables the cache, or the developer's directory is left
+    undeletable.
+    """
+    config = _config_dir(tmp_path, ["ruamel.yaml"])
+    cache_dir = tmp_path / "pip-cache"
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
+
+    script = _entrypoint_script(
+        _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
+    )
+
+    claim = script.index("chown 0:0 /root/.cache/pip")
+    first_install = script.index("pip install ")
+    last_install = script.rindex("pip install ")
+    hand_back = script.index('chown -R "$(stat -c %u:%g /config)" /root/.cache/pip')
+
+    assert claim < first_install
+    assert hand_back > last_install
+    # Both are guarded so a file-sharing layer that refuses chown costs the
+    # cache, not the lane.
+    assert script.count("|| echo") >= 2
 
 
 def test_a_relative_cache_path_is_resolved_before_it_is_mounted(
@@ -173,10 +208,10 @@ def test_a_relative_cache_path_is_resolved_before_it_is_mounted(
     assert container_dir == _conftest_knobs.PIP_CACHE_MOUNT_PATH
 
 
-def test_the_cache_knob_leaves_the_plain_container_lane_alone(
+def test_the_plain_container_lane_gets_the_cache_without_the_wheel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The plain container lane shares this builder but has no wheel to install."""
+    """The plain container lane shares this builder; it caches, it has no wheel."""
     config = _config_dir(tmp_path, ["ruamel.yaml"])
     cache_dir = tmp_path / "pip-cache"
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
@@ -190,5 +225,8 @@ def test_the_cache_knob_leaves_the_plain_container_lane_alone(
     script = _entrypoint_script(container)
     installs = _preinstalls(script)
     assert len(installs) >= 1
-    assert not any("--no-cache-dir" in install for install in installs)
+    assert all(
+        install.startswith(f"--cache-dir {_conftest_knobs.PIP_CACHE_MOUNT_PATH} ")
+        for install in installs
+    )
     assert _WHEEL not in script
