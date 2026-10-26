@@ -70,6 +70,43 @@ async def _send_with_acquire_failure(
         return await client.send_websocket_message({"type": "config_entries/get"})
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", [HomeAssistantConnectionError, ConnectionResetError]
+)
+async def test_write_is_not_repeated_after_effect_and_403_transport_failure(
+    client: HomeAssistantClient, no_retry_sleep: Any, failure: type[Exception]
+) -> None:
+    """Proxy-looking error text after a write cannot make that write safe to replay."""
+    effects: list[dict[str, Any]] = []
+
+    async def mutate_then_disconnect(command: str, **arguments: Any) -> None:
+        assert command == "config/entity_registry/update"
+        effects.append(arguments)
+        raise failure("Connection closed after dispatch: 403 Forbidden")
+
+    ws_client = MagicMock()
+    ws_client.send_command = AsyncMock(side_effect=mutate_then_disconnect)
+    with (
+        patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=AsyncMock(return_value=ws_client),
+        ) as acquire,
+        pytest.raises(HomeAssistantConnectionError, match="403 Forbidden"),
+    ):
+        await client.send_websocket_message(
+            {
+                "type": "config/entity_registry/update",
+                "entity_id": "light.test",
+                "name": "Updated",
+            }
+        )
+
+    assert effects == [{"entity_id": "light.test", "name": "Updated"}]
+    acquire.assert_awaited_once()
+    no_retry_sleep.assert_not_awaited()
+
+
 class TestNoAnswerRaises:
     """A missing answer raises; a rejection HA sent back still returns.
 
@@ -179,16 +216,12 @@ class TestNoAnswerRaises:
             await _send_with_acquire_failure(client, exc)
 
     @pytest.mark.asyncio
-    async def test_403_transport_death_raises_after_retries(
+    async def test_403_acquisition_failure_raises_after_safe_retries(
         self, client: HomeAssistantClient, no_retry_sleep: Any
     ) -> None:
-        """The 403 branch matches on message text, and a connection error can
-        carry that text: the class is free to wrap an httpx failure whose
-        message spells a 403 as ``Client error '403 Forbidden' for url ...``.
-        Deciding by phase and type rather than by the message keeps a dead
-        transport failing loud on this path too."""
+        """A proxy refusal before a usable connection exists may be retried."""
         with pytest.raises(HomeAssistantConnectionError, match="403 Forbidden"):
-            await _send_with_failure(
+            await _send_with_acquire_failure(
                 client,
                 HomeAssistantConnectionError(
                     "HTTP error: Client error '403 Forbidden' for url 'http://ha/api'"
@@ -210,6 +243,7 @@ class TestNoAnswerRaises:
         assert result["success"] is False
         assert "403 Forbidden" in result["error"]
         assert result["suggestions"]
+        no_retry_sleep.assert_not_awaited()
 
 
 class TestRenderTemplateBranch:

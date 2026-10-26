@@ -1988,9 +1988,9 @@ class HomeAssistantClient:
                 error_str = str(e)
                 is_403 = "403" in error_str and "Forbidden" in error_str
 
-                # Transient 403 (rate limiting / reverse proxy throttling): retry
-                # before deciding anything, since the next attempt may succeed.
-                if is_403 and attempt < max_retries - 1:
+                # Retry a refused connection only before dispatch. Proxy-looking
+                # error text after send_command cannot prove a write had no effect.
+                if acquiring and is_403 and attempt < max_retries - 1:
                     logger.warning(
                         f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
                         f"retrying after {retry_delay}s: {error_str}"
@@ -2037,7 +2037,7 @@ class HomeAssistantClient:
                 # (or a proxy) answered, so the tailored suggestions apply.
                 if is_403:
                     logger.error(
-                        f"WebSocket 403 error after {max_retries} attempts: {error_str}"
+                        f"WebSocket request blocked (403 Forbidden): {error_str}"
                     )
                     return {
                         "success": False,
