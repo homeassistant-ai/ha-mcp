@@ -462,7 +462,7 @@ def test_metadata_redirect_is_refused_before_any_other_host_is_contacted(
         requests.append(request.full_url)
         if request.full_url == metadata_url:
             return _http_response(request, b"", 302, "https://redirect.invalid/release")
-        pytest.fail("The metadata redirect was followed")
+        raise AssertionError("The metadata redirect was followed")
 
     _stub_http(seed, monkeypatch, respond)
     with pytest.raises(urllib.error.HTTPError) as error:
