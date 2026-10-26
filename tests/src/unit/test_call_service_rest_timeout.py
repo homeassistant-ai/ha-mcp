@@ -241,6 +241,40 @@ async def test_ordinary_http_read_error_does_not_become_an_unknown_write(
     rest_call.ws_call.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "body,diagnostic", [([], "[]"), (123, "123"), ({"message": 123}, "123")]
+)
+async def test_malformed_http_error_body_still_preserves_service_uncertainty(
+    rest_call: SimpleNamespace,
+    body: Any,
+    diagnostic: str,
+) -> None:
+    rest_call.timeout = False
+    rest_call.response_status = 500
+    rest_call.response = body
+    with pytest.raises(ToolError) as caught:
+        await rest_call.call(
+            domain="light", service="turn_on", entity_id="light.test", wait=False
+        )
+    result = json.loads(str(caught.value))
+    assert rest_call.effects == [{"entity_id": "light.test"}]
+    assert rest_call.requests == [("POST", "/api/services/light/turn_on")]
+    rest_call.ws_call.assert_not_awaited()
+    assert result["write_outcome_unknown"] is True
+    assert result["http_status"] == 500
+    assert result["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert diagnostic in result["error"]["details"]
+    assert "before retrying" in result["error"]["suggestion"]
+    error = caught.value.__context__
+    assert isinstance(error, HomeAssistantAPIError)
+    assert error.status_code == 500
+    assert isinstance(error.__cause__, HomeAssistantAPIError)
+    if isinstance(body, dict):
+        assert error.response_data == body
+    else:
+        assert error.response_data["response_body"] == body
+
+
 @pytest.mark.parametrize("payload", [False, 0, {}, [], None, {"success": False}])
 async def test_received_rest_payload_is_preserved(
     rest_call: SimpleNamespace,

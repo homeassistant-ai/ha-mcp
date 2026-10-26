@@ -69,6 +69,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .service_outcome import record_service_failure
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import (
     verify_entity_removed,
@@ -1227,16 +1228,9 @@ class AutomationConfigTools:
                         "enabled": enabled,
                     },
                 )
-            logger.warning(
-                "Enabled state not applied to %s after config write: %s",
-                entity_id,
-                exc,
-            )
             response["enabled_requested"] = enabled
-            response["enabled_applied"] = False
-            response.setdefault("warnings", []).append(
-                "Automation config was written, but the requested enabled state "
-                f"could not be applied: {exc}"
+            record_service_failure(
+                response, exc, field="enabled_applied", entity_id=entity_id
             )
             return
         response["enabled"] = enabled
@@ -1272,12 +1266,8 @@ class AutomationConfigTools:
                         "entity_id": entity_id,
                     },
                 )
-            logger.warning(
-                "Actions not run for %s after config write: %s", entity_id, exc
-            )
-            response["actions_triggered"] = False
-            response.setdefault("warnings", []).append(
-                f"The requested change was applied, but the actions could not be run: {exc}"
+            record_service_failure(
+                response, exc, field="actions_triggered", entity_id=entity_id
             )
             return
         response["actions_triggered"] = True

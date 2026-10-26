@@ -28,6 +28,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .service_outcome import create_service_item_error
 from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
@@ -798,13 +799,7 @@ class UpdateTools:
                 raise
             except Exception as e:  # noqa: BLE001
                 # Batch item failure — collect, don't raise.
-                results.append(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        str(e),
-                        context={"entity_id": eid},
-                    )
-                )
+                results.append(create_service_item_error(e, context={"entity_id": eid}))
         return results, succeeded
 
     async def _execute_batch_action(

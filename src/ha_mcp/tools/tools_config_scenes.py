@@ -58,6 +58,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .scene_discovery import discover_scenes
+from .service_outcome import record_service_failure
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
@@ -888,12 +889,8 @@ class ConfigSceneTools:
                 exception_to_structured_error(
                     exc, context={"action": "activate", "entity_id": entity_id}
                 )
-            logger.warning(
-                "Scene %s not activated after config write: %s", entity_id, exc
-            )
-            response["activated"] = False
-            response.setdefault("warnings", []).append(
-                f"Scene config was written, but the scene could not be activated: {exc}"
+            record_service_failure(
+                response, exc, field="activated", entity_id=entity_id
             )
             return
         response["activated"] = True

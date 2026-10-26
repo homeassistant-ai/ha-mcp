@@ -52,3 +52,18 @@ class HomeAssistantWebSocketServiceError(HomeAssistantAPIError):
             response_data={"message": message},
         )
         self.code = code if isinstance(code, str) else None
+
+
+def is_service_outcome_unknown(error: Exception) -> bool:
+    """Recognize local service-attempt types before generic error handling."""
+    return isinstance(
+        error,
+        (
+            HomeAssistantServiceAPIOutcomeUnknown,
+            HomeAssistantServiceAuthOutcomeUnknown,
+            HomeAssistantServiceConnectionOutcomeUnknown,
+        ),
+    ) or (
+        isinstance(error, HomeAssistantWebSocketServiceError)
+        and error.code != "unknown_command"
+    )

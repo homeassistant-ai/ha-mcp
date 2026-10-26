@@ -24,12 +24,7 @@ from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
-from ..client.service_errors import (
-    HomeAssistantServiceAPIOutcomeUnknown,
-    HomeAssistantServiceAuthOutcomeUnknown,
-    HomeAssistantServiceConnectionOutcomeUnknown,
-    HomeAssistantWebSocketServiceError,
-)
+from ..client.service_errors import is_service_outcome_unknown
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import (
     TOOL_ERROR_LOG_LEVEL,
@@ -368,17 +363,7 @@ def _classify_exception(
     context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Classify exception into structured error response by type, then message."""
-    if isinstance(
-        error,
-        (
-            HomeAssistantServiceAPIOutcomeUnknown,
-            HomeAssistantServiceAuthOutcomeUnknown,
-            HomeAssistantServiceConnectionOutcomeUnknown,
-        ),
-    ) or (
-        isinstance(error, HomeAssistantWebSocketServiceError)
-        and error.code != "unknown_command"
-    ):
+    if is_service_outcome_unknown(error):
         return create_service_outcome_unknown_error(error, context=context)
     result: dict[str, Any] | None = None
 

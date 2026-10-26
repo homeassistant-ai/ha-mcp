@@ -343,24 +343,18 @@ class ThemesTools:
             try:
                 await self._client.call_service("frontend", "set_theme", service_data)
             except HomeAssistantAPIError as e:
-                # HA's REST layer collapses the service's validation detail
-                # ("Theme X not found") into a bare 400 - name the theme here.
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to set theme '{theme_name}': {e}. "
-                        "The theme may not be installed.",
-                        context={
-                            "action": action,
-                            "theme_name": theme_name,
-                            "mode": mode,
-                        },
-                        suggestions=[
-                            "Call ha_manage_theme(action='list') to see "
-                            "installed themes",
-                        ],
-                    )
+                error_response = exception_to_structured_error(
+                    e,
+                    raise_error=False,
+                    context={"action": action, "theme_name": theme_name, "mode": mode},
+                    suggestions=[
+                        "Call ha_manage_theme(action='list') to see installed themes"
+                    ],
                 )
+                error_response["error"]["message"] = (
+                    f"Theme '{theme_name}': {error_response['error']['message']}"
+                )
+                raise_tool_error(error_response)
 
             # Re-read the defaults so the agent sees the effective state.
             listing = await self._list_themes()

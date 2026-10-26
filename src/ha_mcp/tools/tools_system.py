@@ -37,6 +37,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .service_outcome import project_service_reload_results
 from .system_restart import restart_home_assistant
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import filter_active_repairs, summarize_theme_listing
@@ -360,32 +361,7 @@ class SystemTools:
             return_exceptions=True,
         )
 
-        results = []
-        errors = []
-        for (reload_target, _), outcome in zip(reloadable, outcomes, strict=True):
-            if isinstance(outcome, BaseException):
-                # A non-Exception BaseException (CancelledError,
-                # KeyboardInterrupt, SystemExit) must still unwind the
-                # request, exactly as the prior sequential
-                # ``except Exception`` let it propagate — never demote
-                # it to a per-target warning.
-                if not isinstance(outcome, Exception):
-                    raise outcome
-                # Some services might not be available in all installations
-                error_msg = str(outcome)
-                if "not found" not in error_msg.lower():
-                    errors.append(f"{reload_target}: {error_msg}")
-            else:
-                results.append(reload_target)
-
-        response: dict[str, Any] = {
-            "success": True,
-            "message": f"Reloaded {len(results)} components",
-            "reloaded": results,
-        }
-        if errors:
-            response["warnings"] = errors
-        return response
+        return project_service_reload_results(reloadable, outcomes)
 
     async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Reload a single config entry via the REST config-entries endpoint.

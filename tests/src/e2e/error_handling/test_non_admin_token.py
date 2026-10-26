@@ -20,6 +20,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantError,
 )
+from ha_mcp.client.service_errors import (
+    HomeAssistantServiceAuthOutcomeUnknown,
+    HomeAssistantWebSocketServiceError,
+    is_service_outcome_unknown,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 from tests.test_constants import NON_ADMIN_TEST_TOKEN
 
@@ -209,8 +214,11 @@ async def test_non_admin_service_calls_go_over_websocket(
 ):
     """REST would answer an admin-only service with a 401 that http.ban counts."""
     sent = _record_requests(non_admin_client)
-    with pytest.raises(HomeAssistantAdminRequiredError, match=r"automation.reload"):
+    # Core can return the generic unknown_error code for a handler's Unauthorized.
+    # Its text is diagnostic, not authoritative provenance or proof of no effect.
+    with pytest.raises(HomeAssistantWebSocketServiceError) as caught:
         await non_admin_client.call_service("automation", "reload")
+    assert is_service_outcome_unknown(caught.value)
     result = await non_admin_client.call_service(
         "persistent_notification", "dismiss", {"notification_id": "ha_mcp_e2e_absent"}
     )
@@ -235,7 +243,13 @@ async def test_unanswered_probe_lets_one_service_401_reach_home_assistant(
         )
     finally:
         await _dismiss_login_notification(ha_client)
-    assert all(isinstance(r, HomeAssistantAdminRequiredError) for r in results), results
+    assert (
+        sum(isinstance(r, HomeAssistantServiceAuthOutcomeUnknown) for r in results) == 1
+    )
+    assert sum(isinstance(r, HomeAssistantWebSocketServiceError) for r in results) == 3
+    assert all(
+        isinstance(r, Exception) and is_service_outcome_unknown(r) for r in results
+    )
     assert sent == ["/api/services/automation/reload"]
 
 

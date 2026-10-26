@@ -418,17 +418,17 @@ class HomeAssistantClient:
     def _error_message_from_response(
         response: httpx.Response,
     ) -> tuple[str, dict[str, Any]]:
-        """Build a human message and structured error data from a 4xx/5xx body.
-
-        Prefers the JSON ``message`` field; falls back to reason phrase or a
-        placeholder when the body is empty or unparseable.
-        """
+        """Normalize error bodies while retaining their diagnostic data."""
         try:
             error_data = response.json()
         except Exception:  # noqa: BLE001
             error_data = {"message": response.text}
+        if not isinstance(error_data, dict):
+            error_data = {"message": response.text, "response_body": error_data}
 
         message = error_data.get("message")
+        if message is not None and not isinstance(message, str):
+            message = str(message)
         if not message or not message.strip():
             message = response.reason_phrase or "<empty body>"
         return message, error_data
