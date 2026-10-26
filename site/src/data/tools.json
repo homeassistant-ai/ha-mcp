@@ -2611,27 +2611,27 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and the full exception\ntraceback, and its counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks, which structured=False gets back; use it for entries\nbelow system_log's WARNING+ ~50-entry cap, or for the per-component\nrollup. In structured mode limit/order do not apply: issues are ranked\nby count, then severity, then recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook responses\ncarry has_more plus a pagination_hint; error_log and fault_log carry\nhas_more with a next_offset to pass back while it stays true.",
+    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and the full exception\ntraceback, and its counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks; structured=False returns the raw records instead, so\nit covers what falls outside system_log's WARNING+ in-memory buffer. Use\nstructured=True for the per-component rollup; in structured mode\nlimit/order do not apply: issues are ranked by count, then severity,\nthen recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook\nresponses carry has_more plus a pagination_hint; error_log and fault_log\ncarry has_more with a next_offset to pass back while it stays true.",
     "inputSchema": {
       "properties": {
         "source": {
           "type": "Literal['logbook', 'system', 'error_log', 'supervisor', 'system_service', 'logger', 'fault_log']",
-          "description": "'logbook': entity state-change history. 'system': HA's structured system_log entries (errors, warnings). 'error_log': raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs). 'supervisor': app (add-on) container logs (needs slug). 'system_service': Supervisor-managed system service logs (needs slug). 'logger': effective log level per integration (confirms ha_set_integration(log_level=...) changes took effect). 'fault_log': HA Core's faulthandler crash dump (home-assistant.log.fault), written only when HA dies from a native fatal signal, which never reaches journald or error_log; empty on a healthy install (crash_recorded=False); whole crash blocks are ordered with each block's lines kept in place; reads through the 'HA-MCP File & YAML Tools' entry.",
+          "description": "'logbook': entity state-change history. 'system': HA's structured system_log entries (errors, warnings) with full exception tracebacks; search also matches those exceptions. 'error_log': raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs), grouped into records: a header line starts one and every following line that is not itself a header joins it — traceback frames, the blank lines around chained exceptions, and non-HA banners such as s6-overlay restart lines. 'supervisor': app (add-on) container logs (needs slug). 'system_service': Supervisor-managed system service logs (needs slug). 'logger': effective log level per integration (confirms ha_set_integration(log_level=...) changes took effect). 'fault_log': HA Core's faulthandler crash dump (home-assistant.log.fault), written only when HA dies from a native fatal signal, which never reaches journald or error_log; empty on a healthy install (crash_recorded=False); whole crash blocks are ordered with each block's lines kept in place; reads through the 'HA-MCP File & YAML Tools' entry.",
           "default": "logbook"
         },
         "limit": {
           "type": "int | None",
-          "description": "Max entries/lines to return. Does not apply to source='error_log' with structured=True.",
+          "description": "Max entries/lines to return. For source='error_log' with structured=False it bounds returned lines: whole records are selected within it, and a record longer than it is cut (header and last lines kept) with a warning naming how many lines were cut. Does not apply to source='error_log' with structured=True.",
           "default": null
         },
         "search": {
           "type": "str | None",
-          "description": "Keyword filter on entries/lines; matches the integration domain for source='logger'. In structured error_log mode it matches the message and logger name only; on the raw path the whole line.",
+          "description": "Keyword filter on entries/lines. For source='system' it matches message, name and exception text; for the raw error_log path it matches any line of a record, so a traceback frame brings back its header and siblings. Structured error_log mode matches message and logger name only; source='logger' matches the integration domain.",
           "default": null
         },
         "order": {
           "type": "Literal['newest', 'oldest']",
-          "description": "Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log): 'newest' returns most-recent first; 'oldest' returns chronological-first. For raw-text sources it sets the read direction of the most-recent window; fault_log orders whole crash blocks. Ignored for source='logger', and for source='error_log' with structured=True.",
+          "description": "Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log): 'newest' returns most-recent first; 'oldest' returns chronological-first. For raw-text sources it sets the read direction of the most-recent window; fault_log orders whole crash blocks; error_log orders whole records and keeps each record's lines in place. Ignored for source='logger', and for source='error_log' with structured=True.",
           "default": "newest"
         },
         "hours_back": {
@@ -2663,11 +2663,8 @@
           "default": null
         },
         "offset": {
-          "type": "int",
-          "constraints": {
-            "ge": 0
-          },
-          "description": "Page deeper into source='logbook', 'error_log' and 'fault_log' (ignored for other sources). On error_log it counts raw log lines back from the newest entry; on fault_log it counts lines from the start of the assembled crash text. Pass the response's 'next_offset' to continue while 'has_more' is true.",
+          "type": "int | str",
+          "description": "Page deeper into source='logbook', 'error_log' and 'fault_log' (ignored for other sources). On error_log it counts raw log lines back from the newest entry, or is the opaque token a previous page returned in 'next_offset' on Supervisor/journald installs, which keeps paging exact while new log lines arrive (`structured=True` accepts and returns that token too); on fault_log it counts lines from the start of the assembled crash text. Pass the response's 'next_offset' to continue while 'has_more' is true.",
           "default": 0
         },
         "compact": {
@@ -2677,7 +2674,7 @@
         },
         "level": {
           "type": "str | None",
-          "description": "system / error_log only: keep only entries at exactly this level (ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold.",
+          "description": "system / error_log only: keep only entries at exactly this level (ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold. For source='error_log' it matches the record's header only, so matching text in a traceback frame does not satisfy it.",
           "default": null
         },
         "structured": {
