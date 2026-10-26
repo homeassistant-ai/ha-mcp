@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+from io import StringIO
 from typing import Any, Literal, TypedDict
 
 logger = logging.getLogger(__name__)
@@ -134,15 +135,17 @@ def _build_text_diff_response(
             "unchanged": False,
             "truncated": False,
         }
-    lines = list(
-        difflib.unified_diff(
-            str(current).splitlines(),
-            stored.splitlines(),
-            fromfile="current",
-            tofile="snapshot",
-            lineterm="",
-        )
-    )
+    lines: list[str] = []
+    # Split only at LF: Unicode separators are file content, not diff lines.
+    for line in difflib.unified_diff(
+        list(StringIO(str(current))),
+        list(StringIO(stored)),
+        fromfile="current",
+        tofile="snapshot",
+    ):
+        lines.append(line.removesuffix("\n"))
+        if not line.endswith("\n"):
+            lines.append("\\ No newline at end of file")
     truncated = len(lines) > _MAX_DIFF_LINES
     if truncated:
         lines = lines[:_MAX_DIFF_LINES]
