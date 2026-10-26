@@ -1097,16 +1097,11 @@ class TestSweepWarningsShape:
         client.token = "t"
         client.verify_ssl = False
         client.get_config = AsyncMock(return_value={"components": []})
-        # Safety backup and restore send are exercised by
-        # test_backup_snapshot_restore.
+        # The restore send is exercised by test_backup_snapshot_restore.
         with (
             patch(
                 "ha_mcp.tools.backup_snapshot.get_connected_ws_client",
                 new=AsyncMock(return_value=(ws, None)),
-            ),
-            patch(
-                "ha_mcp.tools.backup_snapshot_restore._generate_backup",
-                new=AsyncMock(return_value=({"backup_id": "safety"}, 1, [])),
             ),
             patch(
                 "ha_mcp.tools.backup_snapshot_restore._send_restore",

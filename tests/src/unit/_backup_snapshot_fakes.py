@@ -21,6 +21,7 @@ UPLOAD_FAILED = {
     "reason": "upload_failed",
 }
 IDLE = {"manager_state": "idle"}
+GENERATE_COMMANDS = ("backup/generate", "backup/generate_with_automatic_settings")
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +40,9 @@ class FakeWS:
     ``events`` is what ``backup/subscribe_events`` streams after ``last``, the
     manager's last event that Core sends first on every subscription. A
     generated backup gets an id other than the job id, as on Supervisor
-    installs, and ``backup/info`` lists it next to an older backup.
+    installs, and ``backup/info`` lists it next to an older backup. The
+    automatic-backup settings have no agents and Core's default contents
+    unless ``agent_ids`` / ``create`` say otherwise.
     """
 
     def __init__(
@@ -47,6 +50,7 @@ class FakeWS:
         *,
         agent_ids: list[str] | None = None,
         password: str | None = "pw",
+        create: dict[str, Any] | None = None,
         last: dict[str, Any] = IDLE,
         events: list[dict[str, Any]] | None = None,
         details: dict[str, Any] | None = None,
@@ -57,8 +61,16 @@ class FakeWS:
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.last = last
         self.events = events if events is not None else [COMPLETED]
-        self.agent_ids = agent_ids if agent_ids is not None else ["backup.local"]
-        self.password = password
+        self.create = {
+            "agent_ids": agent_ids or [],
+            "include_addons": None,
+            "include_all_addons": False,
+            "include_database": True,
+            "include_folders": None,
+            "name": None,
+            "password": password,
+            **(create or {}),
+        }
         self.details = details
         self.new_backup_fields = new_backup or {}
         self.stored = [_entry("older")]
@@ -85,15 +97,20 @@ class FakeWS:
         if (err := self.errors.get(command)) is not None:
             raise err
         if command == "backup/config/info":
-            create = {"agent_ids": self.agent_ids, "password": self.password}
+            create = dict(self.create)
             return {"success": True, "result": {"config": {"create_backup": create}}}
-        if command == "backup/generate":
-            fields = {"name": kwargs["name"], **self.new_backup_fields}
+        if command in GENERATE_COMMANDS:
+            automatic = command == "backup/generate_with_automatic_settings"
+            fields = {
+                "name": "Automatic backup 2026.10.4" if automatic else kwargs["name"],
+                "with_automatic_settings": automatic,
+                **self.new_backup_fields,
+            }
             self.stored.append(_entry("new-backup", **fields))
             self.stored.extend(self.late)
             return {"success": True, "result": {"backup_job_id": "job1"}}
         if command == "backup/info":
-            errors = {} if self.sent("backup/generate") else self.unlisted
+            errors = {} if self.generated() else self.unlisted
             result = {"backups": list(self.stored), "agent_errors": errors}
             return {"success": True, "result": result}
         if command == "backup/details":
@@ -105,6 +122,10 @@ class FakeWS:
 
     def sent(self, command: str) -> list[dict[str, Any]]:
         return [kwargs for name, kwargs in self.calls if name == command]
+
+    def generated(self) -> list[dict[str, Any]]:
+        """Every backup started, by either command."""
+        return [kwargs for name, kwargs in self.calls if name in GENERATE_COMMANDS]
 
 
 def _entry(backup_id: str, **fields: Any) -> dict[str, Any]:

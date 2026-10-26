@@ -1,14 +1,14 @@
 """Snapshot restore for ``ha_manage_backup(scope="snapshot", action="restore")``.
 
-Restores through Home Assistant's ``backup/restore`` after a safety backup of
-what the restore replaces. Shared backup plumbing lives in
-``backup_snapshot.py``.
+Restores through Home Assistant's ``backup/restore``, after a safety backup of
+what the restore replaces when the caller asks for one. Shared backup plumbing
+lives in ``backup_snapshot.py``.
 """
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -24,8 +24,10 @@ from ..errors import ErrorCode, create_error_response
 from .backup_snapshot import (
     _BACKUP_MAX_WAIT_S,
     _BACKUP_PROGRESS_INTERVAL_S,
-    _backup_plan,
+    _automatic_backup_settings,
+    _backup_contents,
     _dedicated_ws,
+    _default_agent,
     _generate_backup,
     _require_idle,
 )
@@ -137,6 +139,7 @@ def _check_restore_request(
     addons: list[str],
     folders: list[str],
     is_supervised: bool,
+    safety_without_password: bool,
 ) -> None:
     """Refuse a restore Home Assistant would reject or mishandle, before the safety backup.
 
@@ -146,6 +149,10 @@ def _check_restore_request(
     reasons are reported at once.
     """
     reasons = []
+    if safety_without_password:
+        reasons.append(
+            "safety_backup=true, but no default backup password is configured"
+        )
     has_database = bool(target.get("database_included"))
     if restore_database and not has_database:
         # Rejected on Supervisor installs; elsewhere Home Assistant deletes the
@@ -185,30 +192,40 @@ def _check_restore_request(
 
 
 async def _safety_backup(
+    client: HomeAssistantClient,
     ws_client: HomeAssistantWebSocketClient,
     ctx: Context | None,
     *,
     password: str,
-    agent_ids: list[str],
-    include_database: bool,
+    is_supervised: bool,
+    restore_database: bool,
     addons: list[str],
     folders: list[str],
 ) -> tuple[str, list[str]]:
     """Back up what the restore replaces; return ``(backup_id, warnings)``.
 
     That is the configuration, plus the database, apps and folders the restore
-    takes from the backup.
+    takes from the backup, as a manual backup on the default agent. Not an
+    automatic backup: an automatic one adds to the count that Home Assistant's
+    retention trims after every backup, oldest first, which can remove the
+    backup being restored, and Home Assistant Cloud keeps a single backup per
+    instance. Refuses to go on when the backup failed to hold an app or
+    folder.
     """
     safety, _, warnings = await _generate_backup(
         ws_client,
         ctx,
         name=f"PreRestore_Safety_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}",
         password=password,
-        agent_ids=agent_ids,
-        include_homeassistant=True,
-        include_database=include_database,
-        **({"include_addons": addons} if addons else {}),
-        **({"include_folders": folders} if folders else {}),
+        agent_ids=[await _default_agent(client, is_supervised)],
+        **_backup_contents(
+            {
+                "include_database": restore_database,
+                "include_addons": addons,
+                "include_folders": folders,
+            },
+            include_homeassistant=True,
+        ),
     )
     if safety.get("failed_addons") or safety.get("failed_folders"):
         raise_tool_error(
@@ -230,11 +247,12 @@ async def restore_backup(
     *,
     restore_addons: list[str] | None = None,
     restore_folders: list[str] | None = None,
+    safety_backup: bool = False,
 ) -> dict[str, Any]:
     """
     Restore Home Assistant from a backup (DESTRUCTIVE - use with caution).
 
-    Creates a safety backup first when the default backup password is set.
+    With ``safety_backup`` it first backs up what the restore replaces.
 
     Args:
         client: Home Assistant REST client
@@ -246,6 +264,7 @@ async def restore_backup(
         restore_addons: Slugs of the apps (add-ons) to restore; none by
             default, as in Home Assistant's own restore dialog
         restore_folders: Folders to restore; none by default
+        safety_backup: Back up what the restore replaces first
 
     Returns:
         Dictionary with restore result including safety_backup_id, status, etc.
@@ -275,7 +294,8 @@ async def restore_backup(
                     )
                 )
 
-            password, agent_ids, is_supervised = await _backup_plan(client, ws_client)
+            create, is_supervised = await _automatic_backup_settings(client, ws_client)
+            password = create.get("password")
             if restore_database is None:
                 restore_database = bool(target.get("database_included"))
             _check_restore_request(
@@ -284,6 +304,7 @@ async def restore_backup(
                 addons=addons,
                 folders=folders,
                 is_supervised=is_supervised,
+                safety_without_password=safety_backup and not password,
             )
             restore_params: dict[str, Any] = {
                 "backup_id": backup_id,
@@ -301,30 +322,27 @@ async def restore_backup(
             warnings = [
                 "Home Assistant is restarting. Connection will be temporarily lost."
             ]
-            if password:
+            if safety_backup:
                 safety_backup_id, safety_warnings = await _safety_backup(
+                    client,
                     ws_client,
                     ctx,
-                    password=password,
-                    agent_ids=agent_ids,
-                    include_database=restore_database,
+                    password=cast(str, password),
+                    is_supervised=is_supervised,
+                    restore_database=restore_database,
                     addons=addons,
                     folders=folders,
                 )
                 warnings.extend(safety_warnings)
                 note = (
-                    "A safety backup was created before restore. You can "
-                    "restore from it if needed."
+                    "A safety backup of what the restore replaces was made "
+                    "(safety_backup_id); you can restore from it if needed."
                 )
             else:
-                warnings.append(
-                    "No safety backup was created (the default backup "
-                    "password is not set). If the restore corrupts state, "
-                    "there is no automatic rollback — configure the "
-                    "default password in Settings → System → Backups and "
-                    "retry to get a safety net."
+                note = (
+                    "No backup of the state before the restore was made "
+                    "(safety_backup=false)."
                 )
-                note = "Restore proceeding WITHOUT a safety backup. See warnings above."
 
             if warning := await _send_restore(
                 ws_client, restore_params, ctx, started, safety_backup_id

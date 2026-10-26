@@ -78,9 +78,9 @@ def register_backup_tools(
 
 | scope | action | What it does |
 |---|---|---|
-| `snapshot` | `create` | Create an HA tarball (config, plus all apps (add-ons) on Supervisor installs; no DB, no share/media folders) on the backup locations of Home Assistant's automatic-backup settings other than Home Assistant Cloud; without those, on the default location. Can take a while on a large instance; progress heartbeats are sent while waiting. |
+| `snapshot` | `create` | Without any `include_*`: a full Home Assistant backup, made as Home Assistant's own automatic backup (its contents and locations, Home Assistant Cloud included) and counted by its retention like a scheduled backup; with no automatic-backup locations configured, the same contents on the default location. With any `include_*`: a custom backup of just those parts (e.g. one app; on Supervisor installs Home Assistant's configuration brings the `ssl` folder along) on the default location. Needs the default backup password. Can take a while on a large instance; progress heartbeats are sent while waiting. |
 | `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed; a non-empty `agent_errors` means the list is partial. |
-| `snapshot` | `restore` | Restore from a full HA tarball. Replaces Home Assistant's configuration plus what `restore_database` / `restore_addons` / `restore_folders` select; other apps and folders stay as they are. **Restarts HA.** Last-resort recovery. |
+| `snapshot` | `restore` | Restore from a full HA tarball. Replaces Home Assistant's configuration plus what `restore_database` / `restore_addons` / `restore_folders` select; other apps and folders stay as they are. `safety_backup` first backs up what the restore replaces. **Restarts HA.** Last-resort recovery. |
 | `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
@@ -90,11 +90,10 @@ def register_backup_tools(
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
 **When to use which scope:**
-- Use `scope="edits"` to undo a recent automation/script/scene/dashboard/helper edit by the agent. Lightweight, fast, no restart.
-- Use `scope="snapshot"` only for system-wide recovery (mass config corruption, a broken app update with that app in `restore_addons`, etc.).
+- `scope="edits"`: ha-mcp's own per-entity YAML backups of automations, scripts, scenes, dashboards and helpers. Use them to undo a recent edit by the agent. Lightweight, fast, no restart.
+- `scope="snapshot"`: Home Assistant's own backups — a full backup (`create` without `include_*`), or a custom backup of some parts, such as one or more apps (`include_addons`). Restore one only for system-wide recovery (mass config corruption, a broken app update with that app in `restore_addons`, etc.).
 
-**When to take a snapshot:**
-Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.
+**A snapshot backup is the user's call:** before a change that cannot be undone, you may ask the user whether they want one first; make it only when they say so. A full backup is large, and an unrequested one can push an older backup out of retention.
 
 **`(snapshot, delete)` is off by default and layered even when enabled:** a human must
 set `enable_snapshot_delete=true` (env var, web settings UI, or add-on Supervisor
@@ -111,10 +110,12 @@ survives an agent's own mistakes.
 **Flow-helper filters:** `edits.create` accepts a flow helper's entity ID and returns its stable config-entry ID as `entity_id`. Use that returned ID for `edits.list` and bulk `edits.delete`; those filters do not resolve entity aliases. After recreation, the restore result reports the replacement config-entry ID and `entity_id_mapping` separately.
 
 **Examples:**
-- Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
+- Full backup, when the user asks for one: `ha_manage_backup(scope="snapshot", action="create")`
+- Backup of one app: `ha_manage_backup(scope="snapshot", action="create", include_addons=["core_mosquitto"])`
 - List snapshots (to discover a backup_id or confirm one landed): `ha_manage_backup(scope="snapshot", action="list")`
 - Restore a snapshot's configuration (the database follows the backup): `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
 - Restore a snapshot with one of its apps: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed", restore_addons=["core_mosquitto"])`
+- Restore after a backup of what it replaces, when the user chose one: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed", safety_backup=True)`
 - Delete an old snapshot (requires `enable_snapshot_delete=true`): `ha_manage_backup(scope="snapshot", action="delete", backup_id="dd7550ed", confirm=True)`
 - On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="welcome_home_active")`
 - List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="welcome_home")`
@@ -151,7 +152,8 @@ survives an agent's own mistakes.
             str | None,
             Field(
                 default=None,
-                description="(snapshot.create) Tarball name. Auto-generated if not provided.",
+                description="(snapshot.create) Tarball name. Auto-generated if not provided. "
+                "Home Assistant names a full backup made with its automatic-backup settings itself.",
             ),
         ] = None,
         backup_id: Annotated[
@@ -190,6 +192,58 @@ survives an agent's own mistakes.
                 "Default: none. Supervisor installs only.",
             ),
         ] = None,
+        include_homeassistant: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description="(snapshot.create) Custom backup: include Home Assistant's "
+                "configuration.",
+            ),
+        ] = None,
+        include_database: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description="(snapshot.create) Custom backup: include the database "
+                "(history); needs include_homeassistant=True.",
+            ),
+        ] = None,
+        include_addons: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="(snapshot.create) Custom backup: slugs of the apps (add-ons) "
+                "to include. Supervisor installs only.",
+            ),
+        ] = None,
+        include_all_addons: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description="(snapshot.create) Custom backup: include every app (add-on); "
+                "not together with include_addons. Supervisor installs only.",
+            ),
+        ] = None,
+        include_folders: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="(snapshot.create) Custom backup: folders to include "
+                "(`share`, `addons/local`, `ssl`, `media`). Supervisor installs only.",
+            ),
+        ] = None,
+        safety_backup: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="(snapshot.restore) Back up what the restore replaces "
+                "(configuration, plus the database, apps and folders it restores) first, "
+                "as a manual backup on the default location. Off by default; offer it "
+                "to the user, who decides. Needs the default backup password.",
+            ),
+        ] = False,
         confirm: Annotated[
             bool,
             Field(
@@ -258,6 +312,14 @@ survives an agent's own mistakes.
                 restore_database=restore_database,
                 restore_addons=restore_addons,
                 restore_folders=restore_folders,
+                safety_backup=safety_backup,
+                parts={
+                    "include_homeassistant": include_homeassistant,
+                    "include_database": include_database,
+                    "include_addons": include_addons,
+                    "include_all_addons": include_all_addons,
+                    "include_folders": include_folders,
+                },
                 confirm=confirm,
                 limit=limit,
                 ctx=ctx,
@@ -288,13 +350,18 @@ async def _dispatch_snapshot_action(
     restore_database: bool | None,
     restore_addons: list[str] | None,
     restore_folders: list[str] | None,
+    safety_backup: bool,
+    parts: dict[str, Any],
     confirm: bool,
     limit: int,
     ctx: Context | None,
 ) -> dict[str, Any]:
-    """Route a ``scope="snapshot"`` action to its full-tarball handler."""
+    """Route a ``scope="snapshot"`` action to its full-tarball handler.
+
+    ``parts`` holds the ``include_*`` parameters of a custom backup.
+    """
     if action == "create":
-        return await create_backup(client, name, ctx=ctx)
+        return await create_backup(client, name, ctx=ctx, **parts)
     if action == "list":
         return await list_backups(client, limit)
     if action == "delete":
@@ -309,6 +376,7 @@ async def _dispatch_snapshot_action(
         ctx=ctx,
         restore_addons=restore_addons,
         restore_folders=restore_folders,
+        safety_backup=safety_backup,
     )
 
 

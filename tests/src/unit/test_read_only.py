@@ -764,11 +764,10 @@ _EXEMPT_GATED_OR_READ_ARGS = {
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate
         # inspects: snapshot create/restore payloads...
-        "name",
-        "backup_id",
-        "restore_database",
-        "restore_addons",
-        "restore_folders",
+        *("name", "backup_id", "restore_database", "restore_addons"),
+        *("restore_folders", "safety_backup", "include_homeassistant"),
+        *("include_database", "include_addons", "include_all_addons"),
+        "include_folders",
         # snapshot delete confirmation flag — the dispatch blocks (snapshot,
         # delete) outright, so confirm has no mutation capability of its own.
         "confirm",

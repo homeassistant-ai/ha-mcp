@@ -44,8 +44,6 @@ _BACKUP_PROGRESS_INTERVAL_S = 10
 # _wait_timeout) can be too tight for a slow or rate-limited remote agent —
 # same class of false timeout that _BACKUP_MAX_WAIT_S covers for creation.
 _BACKUP_DELETE_WAIT_S = 60.0
-# Home Assistant Cloud's backup agent (domain and unique_id are both "cloud").
-_CLOUD_AGENT_ID = "cloud.cloud"
 _CHECK_LIST_SUGGESTION = (
     "Check the snapshot list before retrying: the backup may exist or still run"
 )
@@ -82,31 +80,90 @@ async def _dedicated_ws(
             )
 
 
-async def _backup_plan(
+async def _automatic_backup_settings(
     client: HomeAssistantClient, ws_client: HomeAssistantWebSocketClient
-) -> tuple[str | None, list[str], bool]:
-    """Return ``(password, agent_ids, is_supervised)`` for a new backup.
+) -> tuple[dict[str, Any], bool]:
+    """Return ``(create, is_supervised)`` for a new backup.
 
-    Agents are picked the way Home Assistant picks them for its own backup
-    before a Core update (``backup_core_before_update`` in hassio/backup.py):
-    the configured automatic-backup agents other than Home Assistant Cloud,
-    else the default agent. Home Assistant keeps the cloud agent there, but
-    Cloud stores a single backup per instance, which an ha-mcp backup would
-    replace. Without a password no backup is made, so no agent is picked.
+    ``create`` is the ``create_backup`` part of Home Assistant's
+    automatic-backup settings: agents, contents, name and default password.
     """
     info = await ws_client.send_command("backup/config/info")
-    create = info["result"]["config"]["create_backup"]
+    create = cast(dict[str, Any], info["result"]["config"]["create_backup"])
     # Not the fail-open probe, and no default for a missing key: a Supervisor
-    # install read as Core would back up without add-ons and report success.
+    # install read as Core would pick backup.local, which Supervisor does not
+    # have, and refuse the apps and folders a backup or restore names.
     config = await client.get_config()
-    is_supervised = "hassio" in config["components"]
-    password = create.get("password")
-    if not password:
-        return None, [], is_supervised
-    agent_ids = [a for a in create["agent_ids"] if a != _CLOUD_AGENT_ID]
-    if not agent_ids:
-        agent_ids = [await _default_agent(client, is_supervised)]
-    return password, agent_ids, is_supervised
+    return create, "hassio" in config["components"]
+
+
+def _require_password(create: dict[str, Any]) -> str:
+    """The default backup password; ha-mcp makes no backup without it."""
+    if not (password := create.get("password")):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "No default backup password configured in Home Assistant",
+                suggestions=[
+                    "Configure automatic backups in Home Assistant "
+                    "settings to set a default password"
+                ],
+            )
+        )
+    return cast(str, password)
+
+
+async def _full_backup(
+    client: HomeAssistantClient,
+    ws_client: HomeAssistantWebSocketClient,
+    ctx: Context | None,
+    *,
+    create: dict[str, Any],
+    is_supervised: bool,
+    name: str,
+) -> tuple[dict[str, Any], int, list[str]]:
+    """A full backup, routed the way Home Assistant routes its own before a Core update.
+
+    With automatic-backup agents configured, it is an automatic backup:
+    their contents, locations and name, and their retention counts it.
+    Without them, Core rejects that command, so a manual backup goes to the
+    default agent, as ``backup_core_before_update`` in hassio/backup.py does.
+    Unlike Home Assistant's, it keeps the contents of the automatic-backup
+    settings and the default password, so a full backup holds the same
+    either way.
+    """
+    if create.get("agent_ids"):
+        return await _generate_backup(
+            ws_client, ctx, name=None, command="backup/generate_with_automatic_settings"
+        )
+    return await _generate_backup(
+        ws_client,
+        ctx,
+        name=name,
+        password=_require_password(create),
+        agent_ids=[await _default_agent(client, is_supervised)],
+        **_backup_contents(create, include_homeassistant=True),
+    )
+
+
+def _backup_contents(
+    parts: dict[str, Any], *, include_homeassistant: bool
+) -> dict[str, Any]:
+    """The ``include_*`` fields of ``backup/generate`` for ``parts``.
+
+    ``parts`` is the automatic-backup settings or a custom selection; an
+    empty app or folder list is left out, as Core expects.
+    """
+    contents: dict[str, Any] = {
+        "include_homeassistant": include_homeassistant,
+        "include_database": bool(parts.get("include_database")),
+        "include_all_addons": bool(parts.get("include_all_addons")),
+    }
+    if addons := parts.get("include_addons"):
+        contents["include_addons"] = addons
+    if folders := parts.get("include_folders"):
+        contents["include_folders"] = folders
+    return contents
 
 
 async def _default_agent(client: HomeAssistantClient, is_supervised: bool) -> str:
@@ -148,18 +205,22 @@ async def _generate_backup(
     ws_client: HomeAssistantWebSocketClient,
     ctx: Context | None,
     *,
-    name: str,
+    name: str | None,
+    command: str = "backup/generate",
     **params: Any,
 ) -> tuple[dict[str, Any], int, list[str]]:
-    """Run ``backup/generate`` to completion; return ``(entry, seconds, warnings)``.
+    """Run ``command`` to completion; return ``(entry, seconds, warnings)``.
 
     Subscribes to ``backup/subscribe_events`` before starting, as Home
     Assistant's frontend does. The job id is not the backup id on Supervisor
     installs, and the manager runs one backup at a time, so the result is the
-    backup with this name that ``backup/info`` lists after the job and did not
-    list before it, unless only agents that failed the earlier listing hold
-    it. A failed upload still leaves the backup on the agents whose upload
-    worked; it is returned with a warning.
+    backup that ``backup/info`` lists after the job and did not list before
+    it, named ``name``; with ``name=None`` Home Assistant names it, and an
+    automatic backup of this instance (``with_automatic_settings``) is looked
+    for instead, since a shared location also lists other instances' backups.
+    Agents that failed the earlier listing must not be its only holders. A failed
+    upload still leaves the backup on the agents whose upload worked; it is
+    returned with a warning.
     """
     before = await _backup_info(ws_client)
     known = {b["backup_id"] for b in before["backups"]}
@@ -170,7 +231,9 @@ async def _generate_backup(
     started = loop.time()
     try:
         _require_idle(queue)
-        job = await ws_client.send_command("backup/generate", name=name, **params)
+        if name is not None:
+            params["name"] = name
+        job = await ws_client.send_command(command, **params)
         job_id = job["result"]["backup_job_id"]
         outcome = await _wait_for_backup(queue, job_id, started, ctx)
     finally:
@@ -180,7 +243,11 @@ async def _generate_backup(
         b
         for b in listing["backups"]
         if b["backup_id"] not in known
-        and b.get("name") == name
+        and (
+            b.get("with_automatic_settings") is True
+            if name is None
+            else b.get("name") == name
+        )
         and not (unlisted and unlisted.issuperset(b.get("agents") or {}))
     ]
     # A failed upload still leaves the backup on the agents whose upload worked.
@@ -200,7 +267,7 @@ async def _generate_backup(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Backup finished, but Home Assistant lists {len(new)} new "
-                f"backups named {name!r}",
+                "backups" + (f" named {name!r}" if name is not None else ""),
                 context={
                     "backup_job_id": job_id,
                     "agent_errors": listing.get("agent_errors") or {},
@@ -293,47 +360,97 @@ def _backup_warnings(entry: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _check_custom_parts(parts: dict[str, Any], is_supervised: bool) -> None:
+    """Refuse a custom backup Home Assistant would reject or that holds nothing."""
+    reasons = []
+    if not any(parts.values()):
+        reasons.append("nothing is selected")
+    if parts["include_database"] and not parts["include_homeassistant"]:
+        reasons.append(
+            "the database is part of Home Assistant's own backup; "
+            "set include_homeassistant=true with it"
+        )
+    if parts["include_all_addons"] and parts["include_addons"]:
+        reasons.append("include_all_addons and include_addons exclude each other")
+    has_supervisor_parts = (
+        parts["include_all_addons"]
+        or parts["include_addons"]
+        or parts["include_folders"]
+    )
+    if not is_supervised and has_supervisor_parts:
+        reasons.append("apps (add-ons) and folders need a Supervisor install")
+    if reasons:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Backup not started: " + "; ".join(reasons),
+                context={"parts": parts},
+            )
+        )
+
+
 async def create_backup(
     client: HomeAssistantClient,
     name: str | None = None,
     ctx: Context | None = None,
+    *,
+    include_homeassistant: bool | None = None,
+    include_database: bool | None = None,
+    include_addons: list[str] | None = None,
+    include_all_addons: bool | None = None,
+    include_folders: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a fast backup (no database) on the agents ``_backup_plan`` picks.
+    """Create a full backup, or a custom one when any ``include_*`` is given.
+
+    A full backup is made by ``_full_backup``. A custom backup holds only the
+    parts given (an unset part is left out) and goes to the default agent.
 
     Args:
         client: Home Assistant REST client
-        name: Optional backup name (auto-generated if not provided)
+        name: Optional backup name (auto-generated if not provided); Home
+            Assistant names an automatic backup itself
         ctx: Optional FastMCP context for progress heartbeats during the wait
+        include_homeassistant, include_database, include_addons,
+        include_all_addons, include_folders: the parts of a custom backup
     """
+    parts = {
+        "include_homeassistant": include_homeassistant,
+        "include_database": include_database,
+        "include_addons": include_addons,
+        "include_all_addons": include_all_addons,
+        "include_folders": include_folders,
+    }
+    custom = any(v is not None for v in parts.values())
     try:
         async with _dedicated_ws(client) as ws_client:
-            password, agent_ids, is_supervised = await _backup_plan(client, ws_client)
-            if not password:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "No default backup password configured in Home Assistant",
-                        suggestions=[
-                            "Configure automatic backups in Home Assistant "
-                            "settings to set a default password"
-                        ],
-                    )
-                )
+            create, is_supervised = await _automatic_backup_settings(client, ws_client)
+            password = _require_password(create)
             # Core strips the name it stores.
-            name = (name or "").strip() or (
+            given_name = (name or "").strip()
+            name = given_name or (
                 f"MCP_Backup_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}"
             )
-            entry, seconds, warnings = await _generate_backup(
-                ws_client,
-                ctx,
-                name=name,
-                password=password,
-                agent_ids=agent_ids,
-                include_homeassistant=True,
-                include_database=False,
-                # Add-ons are a Supervisor concept; Core rejects them.
-                include_all_addons=is_supervised,
-            )
+            if custom:
+                _check_custom_parts(parts, is_supervised)
+                entry, seconds, warnings = await _generate_backup(
+                    ws_client,
+                    ctx,
+                    name=name,
+                    password=password,
+                    agent_ids=[await _default_agent(client, is_supervised)],
+                    **_backup_contents(
+                        parts, include_homeassistant=bool(include_homeassistant)
+                    ),
+                )
+            else:
+                entry, seconds, warnings = await _full_backup(
+                    client,
+                    ws_client,
+                    ctx,
+                    create=create,
+                    is_supervised=is_supervised,
+                    name=name,
+                )
         result = {
             **entry,
             "success": True,
@@ -341,6 +458,17 @@ async def create_backup(
             "status": "Backup completed successfully",
             "note": "Backup uses your Home Assistant's default backup password",
         }
+        if entry.get("with_automatic_settings"):
+            result["note"] = (
+                "Made with Home Assistant's automatic-backup settings (contents, "
+                "locations, name, password); their retention counts it like a "
+                "scheduled backup"
+            )
+            if given_name:
+                warnings.append(
+                    "Home Assistant names an automatic backup itself; "
+                    f"the name {given_name!r} was not used"
+                )
         if warnings:
             result["warnings"] = warnings
         return result

@@ -3,8 +3,8 @@
 A restore reads from an agent that holds the backup, follows the backup for
 the database and, like Home Assistant's restore dialog, restores only the
 apps (add-ons) and folders it is given (#2786). A safety backup of what the
-restore replaces comes first; a request Home Assistant would refuse or
-mishandle stops before it.
+restore replaces comes first only when asked for; a request Home Assistant
+would refuse or mishandle stops before it.
 """
 
 import asyncio
@@ -45,7 +45,7 @@ class TestRestore:
             await _run(restore_backup, ws, _client(), "nope")
         assert ErrorCode.RESOURCE_NOT_FOUND.value in str(exc_info.value)
         assert "hassio.nas" in str(exc_info.value)
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
         assert not ws.sent("backup/restore")
 
     @pytest.mark.asyncio
@@ -183,8 +183,9 @@ class TestRestore:
             ),
         ],
     )
+    @pytest.mark.parametrize("safety_backup", [False, True])
     async def test_restore_home_assistant_would_refuse_stops_before_the_safety_backup(
-        self, supervised, included, given, reasons
+        self, supervised, included, given, reasons, safety_backup
     ) -> None:
         """Home Assistant checks these only after the safety backup exists, or not at all.
 
@@ -200,13 +201,18 @@ class TestRestore:
         )
         with pytest.raises(ToolError) as exc_info:
             await _run(
-                restore_backup, ws, _client(supervised=supervised), "b1", **given
+                restore_backup,
+                ws,
+                _client(supervised=supervised),
+                "b1",
+                safety_backup=safety_backup,
+                **given,
             )
         assert ErrorCode.VALIDATION_INVALID_PARAMETER.value in str(exc_info.value)
         assert '"backup_id": "b1"' in str(exc_info.value)
         for reason in reasons:
             assert reason in str(exc_info.value)
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
         assert not ws.sent("backup/restore")
 
     @pytest.mark.asyncio
@@ -224,6 +230,16 @@ class TestRestore:
         ws = FakeWS(details=target)
         await _run(restore_backup, ws, _client(), "b1")
         assert ("password" in ws.sent("backup/restore")[0]) is forwarded
+
+    @pytest.mark.asyncio
+    async def test_no_backup_is_made_unless_asked_for(self) -> None:
+        """A full backup the user did not ask for takes a retention slot."""
+        ws = FakeWS(agent_ids=["hassio.nas"], details=_entry("b1"))
+        result = await _run(restore_backup, ws, _client(), "b1")
+        assert not ws.generated()
+        assert ws.sent("backup/restore")
+        assert result["safety_backup_id"] is None
+        assert "safety_backup=false" in result["note"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -249,22 +265,55 @@ class TestRestore:
             addons=[{"slug": "core_ssh"}],
             folders=["share"],
         )
-        ws = FakeWS(agent_ids=["hassio.nas"], details=target)
+        ws = FakeWS(details=target)
         result = await _run(
-            restore_backup, ws, _client(supervised=supervised), "b1", **given
+            restore_backup,
+            ws,
+            _client(supervised=supervised),
+            "b1",
+            safety_backup=True,
+            **given,
         )
         names = [name for name, _ in ws.calls]
         assert names.index("backup/restore") > names.index("backup/generate")
         safety = ws.sent("backup/generate")[0]
-        assert safety["agent_ids"] == ["hassio.nas"]
-        assert safety["include_homeassistant"] is True
-        assert safety["include_database"] is included
-        assert "include_all_addons" not in safety
-        assert safety.get("include_addons", []) == given.get("restore_addons", [])
-        assert safety.get("include_folders", []) == given.get("restore_folders", [])
-        restore = ws.sent("backup/restore")[0]
-        assert (restore["backup_id"], restore["restore_homeassistant"]) == ("b1", True)
+        assert safety["agent_ids"] == ["hassio.local" if supervised else "backup.local"]
+        assert safety["password"] == "pw"
+        assert safety["name"].startswith("PreRestore_Safety_")
+        parts = {k: v for k, v in safety.items() if k.startswith("include_")}
+        assert parts == {
+            "include_homeassistant": True,
+            "include_database": included,
+            "include_all_addons": False,
+            **({"include_addons": ["core_ssh"]} if given else {}),
+            **({"include_folders": ["share"]} if given else {}),
+        }
         assert result["safety_backup_id"] == "new-backup"
+
+    @pytest.mark.asyncio
+    async def test_safety_backup_without_default_password_is_refused(self) -> None:
+        """ha-mcp makes no backup without the default password; nothing runs."""
+        ws = FakeWS(password=None, details=_entry("b1"))
+        with pytest.raises(ToolError, match="no default backup password"):
+            await _run(restore_backup, ws, _client(), "b1", safety_backup=True)
+        assert not ws.generated()
+        assert not ws.sent("backup/restore")
+
+    @pytest.mark.asyncio
+    async def test_safety_backup_is_never_an_automatic_backup(self) -> None:
+        """An automatic backup could get the backup being restored deleted.
+
+        Home Assistant's retention trims the automatic backups beyond the
+        configured copies, oldest first, and Home Assistant Cloud keeps a single
+        backup per instance.
+        """
+        ws = FakeWS(
+            agent_ids=["hassio.nas", "cloud.cloud"],
+            details=_entry("b1", with_automatic_settings=True),
+        )
+        await _run(restore_backup, ws, _client(), "b1", safety_backup=True)
+        assert not ws.sent("backup/generate_with_automatic_settings")
+        assert ws.sent("backup/generate")[0]["agent_ids"] == ["backup.local"]
 
     @pytest.mark.asyncio
     async def test_rejected_restore_names_the_backup_and_its_safety_backup(
@@ -276,7 +325,7 @@ class TestRestore:
         )
         ws = FakeWS(details=_entry("b1"), errors={"backup/restore": rejected})
         with pytest.raises(ToolError) as exc_info:
-            await _run(restore_backup, ws, _client(), "b1")
+            await _run(restore_backup, ws, _client(), "b1", safety_backup=True)
         assert '"backup_id": "b1"' in str(exc_info.value)
         assert '"safety_backup_id": "new-backup"' in str(exc_info.value)
         assert "Home Assistant may be restoring" in str(exc_info.value)
@@ -288,13 +337,13 @@ class TestRestore:
         subscribe = ws.subscribe_command
 
         async def _busy_after_safety(command: str) -> tuple[int, Any]:
-            if ws.sent("backup/generate"):
+            if ws.generated():
                 ws.last = {"manager_state": "create_backup", "state": "in_progress"}
             return await subscribe(command)
 
         ws.subscribe_command = _busy_after_safety
         with pytest.raises(ToolError, match="busy") as exc_info:
-            await _run(restore_backup, ws, _client(), "b1")
+            await _run(restore_backup, ws, _client(), "b1", safety_backup=True)
         assert '"safety_backup_id": "new-backup"' in str(exc_info.value)
         assert not ws.sent("backup/restore")
 
@@ -320,6 +369,7 @@ class TestRestore:
                 ws,
                 _client(supervised=True),
                 "b1",
+                safety_backup=True,
                 restore_addons=["core_ssh"],
                 restore_folders=["share"],
             )
@@ -329,14 +379,14 @@ class TestRestore:
     @pytest.mark.asyncio
     async def test_safety_backup_warnings_reach_the_restore_reply(self) -> None:
         ws = FakeWS(details=_entry("b1"), new_backup={"failed_agent_ids": ["s3.x"]})
-        result = await _run(restore_backup, ws, _client(), "b1")
+        result = await _run(restore_backup, ws, _client(), "b1", safety_backup=True)
         assert "Not stored on backup agents: s3.x" in result["warnings"]
 
     @pytest.mark.asyncio
     async def test_failed_safety_backup_stops_the_restore(self) -> None:
         ws = FakeWS(details=_entry("b1"), events=[FAILED])
         with pytest.raises(ToolError) as exc_info:
-            await _run(restore_backup, ws, _client(), "b1")
+            await _run(restore_backup, ws, _client(), "b1", safety_backup=True)
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
         assert not ws.sent("backup/restore")
 
@@ -424,7 +474,7 @@ class TestRestore:
             await _run(restore_backup, ws, _client(), "b1")
         assert "boom" in str(exc_info.value)
         assert "safety_backup_id" not in str(exc_info.value)
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
 
     @pytest.mark.asyncio
     async def test_busy_backup_manager_stops_a_restore_without_safety_backup(
@@ -477,7 +527,7 @@ class TestRestore:
         assert min(progress) >= 100
 
     @pytest.mark.asyncio
-    async def test_without_password_restore_warns_there_is_no_safety_backup(
+    async def test_restore_without_safety_backup_needs_no_password(
         self,
     ) -> None:
         """The apps and folders given are still restored."""
@@ -491,7 +541,7 @@ class TestRestore:
             restore_addons=["core_ssh"],
             restore_folders=["share"],
         )
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
         sent = ws.sent("backup/restore")[0]
         assert "password" not in sent
         assert (sent["restore_addons"], sent["restore_folders"]) == (
@@ -499,4 +549,3 @@ class TestRestore:
             ["share"],
         )
         assert result["safety_backup_id"] is None
-        assert any("No safety backup" in w for w in result["warnings"])

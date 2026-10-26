@@ -2,8 +2,9 @@
 
 The snapshot actions follow Home Assistant's own contracts (#2632, #2786):
 
-* new backups go where Home Assistant puts its own backup before a Core
-  update: the configured automatic-backup agents, else the default agent;
+* a full backup is made as Home Assistant makes its own before a Core
+  update: with the automatic-backup settings, else on the default agent;
+  a custom backup holds the parts given and goes to the default agent;
 * completion comes from ``backup/subscribe_events``; the result is the
   backup the job added to ``backup/info``;
 * the list returns Core's ``backup/info`` reply.
@@ -35,71 +36,130 @@ from ._backup_snapshot_fakes import (
 )
 
 
-class TestWhereBackupsGo:
+class TestFullBackup:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("configured", "supervised", "mounts", "expected"),
-        [
-            pytest.param(["hassio.nas"], True, {}, ["hassio.nas"], id="configured"),
-            pytest.param(
-                ["hassio.nas", "cloud.cloud"], True, {}, ["hassio.nas"], id="no-cloud"
-            ),
-            pytest.param(
-                ["cloud.cloud"],
-                True,
-                {"default_backup_mount": "nas"},
-                ["hassio.nas"],
-                id="cloud-only-uses-default",
-            ),
-            pytest.param(
-                [], True, {"default_backup_mount": "nas"}, ["hassio.nas"], id="mount"
-            ),
-            pytest.param(
-                [], True, {"default_backup_mount": None}, ["hassio.local"], id="local"
-            ),
-            pytest.param([], False, {}, ["backup.local"], id="core-install"),
-        ],
-    )
-    async def test_backup_lands_where_home_assistant_puts_its_own(
-        self, configured, supervised, mounts, expected
-    ) -> None:
-        """A backup lands where Home Assistant backs up, not on the local disk."""
-        ws = FakeWS(agent_ids=configured)
-        await _run(create_backup, ws, _client(supervised=supervised), mounts=mounts)
-        assert ws.sent("backup/generate")[0]["agent_ids"] == expected
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(("supervised", "addons"), [(True, True), (False, False)])
-    async def test_addons_are_requested_only_on_supervisor_installs(
-        self, supervised, addons
-    ) -> None:
-        """Core rejects add-ons in a backup; Supervisor backups must include them."""
-        ws = FakeWS()
-        await _run(create_backup, ws, _client(supervised=supervised))
-        sent = ws.sent("backup/generate")[0]
-        assert sent["include_all_addons"] is addons
-        # The documented fast backup: configuration without the database.
-        assert sent["include_homeassistant"] is True
-        assert sent["include_database"] is False
-
-    @pytest.mark.asyncio
-    async def test_failed_install_probe_fails_instead_of_dropping_addons(
+    async def test_with_automatic_agents_it_is_home_assistants_automatic_backup(
         self,
     ) -> None:
-        """A Supervisor install read as Core would back up without add-ons."""
+        """Contents, locations and name come from the settings; retention counts it."""
+        ws = FakeWS(agent_ids=["hassio.nas", "cloud.cloud"])
+        result = await _run(create_backup, ws, _client(supervised=True))
+        assert ws.sent("backup/generate_with_automatic_settings") == [{}]
+        assert not ws.sent("backup/generate")
+        assert result["backup_id"] == "new-backup"
+        assert result["with_automatic_settings"] is True
+        assert "retention" in result["note"]
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_another_instances_backup_appearing_meanwhile_is_not_taken(
+        self,
+    ) -> None:
+        """A shared location lists other instances' backups too; Core marks only
+        this instance's own automatic backups with with_automatic_settings."""
+        ws = FakeWS(agent_ids=["hassio.nas"])
+        ws.late = [
+            _entry(
+                "other-instance",
+                name="Automatic backup 2026.10.4",
+                with_automatic_settings=None,
+            )
+        ]
+        result = await _run(create_backup, ws, _client())
+        assert result["backup_id"] == "new-backup"
+
+    @pytest.mark.asyncio
+    async def test_a_name_an_automatic_backup_cannot_take_is_named_in_a_warning(
+        self,
+    ) -> None:
+        ws = FakeWS(agent_ids=["hassio.nas"])
+        result = await _run(create_backup, ws, _client(), name="mine")
+        assert "the name 'mine' was not used" in result["warnings"][-1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("supervised", "mounts", "expected"),
+        [
+            pytest.param(
+                True, {"default_backup_mount": "nas"}, "hassio.nas", id="mount"
+            ),
+            pytest.param(
+                True, {"default_backup_mount": None}, "hassio.local", id="local"
+            ),
+            pytest.param(False, {}, "backup.local", id="core-install"),
+        ],
+    )
+    async def test_without_automatic_agents_it_goes_to_the_default_agent(
+        self, supervised, mounts, expected
+    ) -> None:
+        """Core rejects the automatic command without agents and raises a repair issue."""
+        ws = FakeWS()
+        await _run(create_backup, ws, _client(supervised=supervised), mounts=mounts)
+        assert not ws.sent("backup/generate_with_automatic_settings")
+        assert ws.sent("backup/generate")[0]["agent_ids"] == [expected]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("create", "expected"),
+        [
+            pytest.param(
+                {},
+                {"include_database": True, "include_all_addons": False},
+                id="core-defaults",
+            ),
+            pytest.param(
+                {
+                    "include_database": False,
+                    "include_addons": ["core_ssh"],
+                    "include_folders": ["share"],
+                },
+                {
+                    "include_database": False,
+                    "include_all_addons": False,
+                    "include_addons": ["core_ssh"],
+                    "include_folders": ["share"],
+                },
+                id="chosen-parts",
+            ),
+            pytest.param(
+                {"include_all_addons": True},
+                {"include_database": True, "include_all_addons": True},
+                id="every-app",
+            ),
+        ],
+    )
+    async def test_without_automatic_agents_it_holds_what_the_settings_hold(
+        self, create, expected
+    ) -> None:
+        ws = FakeWS(create=create)
+        await _run(create_backup, ws, _client(supervised=True))
+        sent = ws.sent("backup/generate")[0]
+        assert sent["password"] == "pw"
+        parts = {k: v for k, v in sent.items() if k.startswith("include_")}
+        assert parts == {"include_homeassistant": True, **expected}
+
+    @pytest.mark.asyncio
+    async def test_failed_install_probe_fails_instead_of_guessing_the_install(
+        self,
+    ) -> None:
+        """A Supervisor install read as Core would pick an agent it does not have."""
         ws = FakeWS()
         client = _client()
         client.get_config = AsyncMock(side_effect=OSError("config unreachable"))
         with pytest.raises(ToolError):
             await _run(create_backup, ws, client)
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
 
     @pytest.mark.asyncio
-    async def test_create_without_default_password_is_refused(self) -> None:
-        ws = FakeWS(password=None)
+    @pytest.mark.parametrize(
+        "agent_ids",
+        [pytest.param([], id="manual"), pytest.param(["x"], id="automatic")],
+    )
+    async def test_create_without_default_password_is_refused(self, agent_ids) -> None:
+        ws = FakeWS(agent_ids=agent_ids, password=None)
         with pytest.raises(ToolError, match="No default backup password"):
             await _run(create_backup, ws, _client())
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
 
     @pytest.mark.asyncio
     async def test_name_is_matched_as_home_assistant_stores_it(self) -> None:
@@ -108,6 +168,96 @@ class TestWhereBackupsGo:
         result = await _run(create_backup, ws, _client(), name="  mine ")
         assert ws.sent("backup/generate")[0]["name"] == "mine"
         assert result["backup_id"] == "new-backup"
+
+
+class TestCustomBackup:
+    @pytest.mark.asyncio
+    async def test_one_app_alone_goes_to_the_default_agent(self) -> None:
+        """Parts not given are left out."""
+        ws = FakeWS(agent_ids=["hassio.nas"])
+        await _run(
+            create_backup,
+            ws,
+            _client(supervised=True),
+            include_addons=["core_mosquitto"],
+            mounts={"default_backup_mount": None},
+        )
+        assert not ws.sent("backup/generate_with_automatic_settings")
+        sent = ws.sent("backup/generate")[0]
+        assert sent["agent_ids"] == ["hassio.local"]
+        assert sent["password"] == "pw"
+        parts = {k: v for k, v in sent.items() if k.startswith("include_")}
+        assert parts == {
+            "include_homeassistant": False,
+            "include_database": False,
+            "include_all_addons": False,
+            "include_addons": ["core_mosquitto"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_every_app_alone(self) -> None:
+        """Losing the flag would report an empty backup as a success."""
+        ws = FakeWS()
+        await _run(create_backup, ws, _client(supervised=True), include_all_addons=True)
+        sent = ws.sent("backup/generate")[0]
+        assert sent["include_all_addons"] is True
+        assert "include_addons" not in sent
+
+    @pytest.mark.asyncio
+    async def test_configuration_with_its_database_and_a_folder(self) -> None:
+        ws = FakeWS()
+        await _run(
+            create_backup,
+            ws,
+            _client(supervised=True),
+            include_homeassistant=True,
+            include_database=True,
+            include_folders=["share"],
+        )
+        sent = ws.sent("backup/generate")[0]
+        assert (sent["include_homeassistant"], sent["include_database"]) == (True, True)
+        assert sent["include_folders"] == ["share"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("supervised", "given", "reasons"),
+        [
+            pytest.param(
+                True,
+                {"include_homeassistant": False},
+                ["nothing is selected"],
+                id="empty",
+            ),
+            pytest.param(
+                True,
+                {"include_database": True},
+                ["set include_homeassistant=true with it"],
+                id="database-alone",
+            ),
+            pytest.param(
+                True,
+                {"include_all_addons": True, "include_addons": ["core_ssh"]},
+                ["exclude each other"],
+                id="all-and-some-apps",
+            ),
+            pytest.param(
+                False,
+                {"include_homeassistant": True, "include_folders": ["share"]},
+                ["need a Supervisor install"],
+                id="core-folders",
+            ),
+        ],
+    )
+    async def test_backup_home_assistant_would_refuse_or_that_holds_nothing_is_refused(
+        self, supervised, given, reasons
+    ) -> None:
+        ws = FakeWS()
+        with pytest.raises(ToolError) as exc_info:
+            await _run(create_backup, ws, _client(supervised=supervised), **given)
+        assert ErrorCode.VALIDATION_INVALID_PARAMETER.value in str(exc_info.value)
+        for reason in reasons:
+            assert reason in str(exc_info.value)
+        assert not ws.generated()
 
 
 class TestConnection:
@@ -149,7 +299,7 @@ class TestConnection:
         client.get_config = AsyncMock(return_value={})
         with pytest.raises(ToolError):
             await _run(create_backup, ws, client)
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
 
 
 class TestWaitingForTheBackup:
@@ -304,7 +454,7 @@ class TestWaitingForTheBackup:
         ws = FakeWS(last=last)
         with pytest.raises(ToolError, match="busy"):
             await _run(create_backup, ws, _client())
-        assert not ws.sent("backup/generate")
+        assert not ws.generated()
         ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -341,13 +491,17 @@ class TestWaitingForTheBackup:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("tool", "args"),
+        ("tool", "args", "kwargs"),
         [
-            pytest.param(create_backup, (), id="create"),
-            pytest.param(restore_backup, ("b1",), id="restore"),
+            pytest.param(create_backup, (), {}, id="create"),
+            pytest.param(
+                restore_backup, ("b1",), {"safety_backup": True}, id="restore"
+            ),
         ],
     )
-    async def test_long_backup_sends_progress_heartbeats(self, tool, args) -> None:
+    async def test_long_backup_sends_progress_heartbeats(
+        self, tool, args, kwargs
+    ) -> None:
         """#1861: without heartbeats a client drops a long-running call."""
         ws = FakeWS(events=[], details=_entry("b1"))
         ctx = MagicMock()
@@ -359,7 +513,7 @@ class TestWaitingForTheBackup:
 
         with patch.object(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             finisher = asyncio.create_task(_finish_later())
-            await _run(tool, ws, _client(), *args, ctx=ctx)
+            await _run(tool, ws, _client(), *args, ctx=ctx, **kwargs)
             await asyncio.gather(finisher)
         assert ctx.report_progress.await_count >= 3
 

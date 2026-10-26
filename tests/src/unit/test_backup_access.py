@@ -374,7 +374,55 @@ async def test_default_controls_preserve_snapshot_creation(
         backup_world, scope="snapshot", action="create", name="Before edit"
     )
     assert result["backup_id"] == "created"
-    create.assert_awaited_once_with(backup_world.ha, "Before edit", ctx=None)
+    create.assert_awaited_once_with(
+        backup_world.ha,
+        "Before edit",
+        ctx=None,
+        include_homeassistant=None,
+        include_database=None,
+        include_addons=None,
+        include_all_addons=None,
+        include_folders=None,
+    )
+
+
+async def test_create_parts_and_safety_backup_reach_their_handlers(
+    backup_world: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dropped or flipped safety_backup would make, or skip, a backup unasked."""
+    create = AsyncMock(return_value={"success": True})
+    restore = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(backup, "create_backup", create)
+    monkeypatch.setattr(backup, "restore_backup", restore)
+    await _direct(
+        backup_world,
+        scope="snapshot",
+        action="create",
+        include_homeassistant=True,
+        include_database=False,
+        include_addons=["core_ssh"],
+        include_all_addons=None,
+        include_folders=["share"],
+    )
+    assert create.await_args.kwargs == {
+        "ctx": None,
+        "include_homeassistant": True,
+        "include_database": False,
+        "include_addons": ["core_ssh"],
+        "include_all_addons": None,
+        "include_folders": ["share"],
+    }
+    await _direct(backup_world, scope="snapshot", action="restore", backup_id="b1")
+    assert restore.await_args.kwargs["safety_backup"] is False
+    await _direct(
+        backup_world,
+        scope="snapshot",
+        action="restore",
+        backup_id="b1",
+        safety_backup=True,
+    )
+    assert restore.await_args.kwargs["safety_backup"] is True
 
 
 async def test_snapshot_toggle_does_not_block_explicit_edit_capture(
