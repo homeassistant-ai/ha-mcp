@@ -17,6 +17,9 @@ constructing a ``DockerContainer`` only records configuration.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -190,6 +193,56 @@ def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
     # Both are guarded so a file-sharing layer that refuses chown costs the
     # cache, not the lane.
     assert script.count("|| echo") >= 2
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="the container lanes are POSIX-only"
+)
+def test_a_failed_preinstall_still_hands_the_cache_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An install failure must not leave the host cache root-owned.
+
+    ``chown`` only succeeds as root, so the failure path cannot be exercised
+    for real here; the generated script runs against stub ``pip``/``chown``/
+    ``stat`` binaries instead. The install fails, the hand-back still runs, and
+    the install's status is what the container exits with.
+    """
+    config = _config_dir(tmp_path, ["ruamel.yaml"])
+    cache_dir = tmp_path / "pip-cache"
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
+    script = _entrypoint_script(
+        _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+    )
+
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    calls = tmp_path / "calls.log"
+    stubs = {
+        "pip": f'#!/bin/sh\necho "pip $*" >> {calls}\nexit 3\n',
+        "chown": f'#!/bin/sh\necho "chown $*" >> {calls}\nexit 0\n',
+        "stat": "#!/bin/sh\necho 1000:1000\n",
+    }
+    for name, body in stubs.items():
+        stub = stub_bin / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", "-c", script],
+        check=False,
+        env={**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 3, result.stderr
+    invocations = calls.read_text(encoding="utf-8").splitlines()
+    assert invocations[0] == f"chown 0:0 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
+    assert invocations[-1] == (
+        f"chown -R 1000:1000 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
+    )
+    assert any(call.startswith("pip install ") for call in invocations)
 
 
 def test_a_relative_cache_path_is_resolved_before_it_is_mounted(

@@ -437,13 +437,25 @@ def _build_ha_testcontainer(
         )
 
     if preinit_cmds:
-        if cache_dir_in_container is not None:
-            preinit_cmds.insert(0, _claim_pip_cache_command(cache_dir_in_container))
-            preinit_cmds.append(_hand_back_pip_cache_command(cache_dir_in_container))
+        installs = " && ".join(preinit_cmds)
+        if cache_dir_in_container is None:
+            script = f"{installs} && exec /init"
+        else:
+            # The hand-back must run on failure too: the host directory belongs
+            # to the developer, and a failed install would otherwise leave it
+            # root-owned and undeletable. ``_rc`` carries the installs' status
+            # past the hand-back so the lane still fails on a failed preinstall.
+            script = (
+                f"{_claim_pip_cache_command(cache_dir_in_container)} "
+                f"&& {installs}; "
+                f"_rc=$?; "
+                f"{_hand_back_pip_cache_command(cache_dir_in_container)}; "
+                f'if [ "$_rc" -eq 0 ]; then exec /init; fi; exit "$_rc"'
+            )
         container_kwargs["entrypoint"] = [
             "sh",
             "-c",
-            " && ".join(preinit_cmds) + " && exec /init",
+            script,
         ]
 
     container = container.with_kwargs(**container_kwargs)
