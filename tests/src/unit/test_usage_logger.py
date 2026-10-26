@@ -389,7 +389,8 @@ class TestParameterRedaction:
         try:
             logger.log_tool_usage(
                 tool_name="ha_call_service",
-                parameters={"data": {"code": "4321", "entity_id": "lock.front"}},
+                # Digits alone can turn up in the entry's timestamp.
+                parameters={"data": {"code": "code-4321", "entity_id": "lock.front"}},
                 execution_time_ms=10.0,
                 success=True,
             )
@@ -403,7 +404,7 @@ class TestParameterRedaction:
             logger.shutdown()
 
         content = log_path.read_text()
-        assert "4321" not in content
+        assert "code-4321" not in content
         assert "lock.front" in content
         entry = json.loads(content.splitlines()[0])
         assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE
