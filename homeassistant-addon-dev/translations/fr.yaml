@@ -99,22 +99,24 @@ configuration:
       Désactivé par défaut. Nécessite un redémarrage pour prendre effet.
   redact_secrets:
     name: Masquer les secrets
-    description: Masque les secrets des réponses des outils avant qu'ils n'atteignent
+    description: Masque les secrets dans les réponses des outils avant qu'ils n'atteignent
       l'assistant IA. Les options de l'application (add-on) et les champs d'intégration
-      marqués comme des mots de passe sont remplacés par un marqueur défini/vide (afin
-      que la question "ce secret est-il configuré ?" puisse toujours recevoir une
-      réponse), et les autres réponses des outils sont nettoyées des valeurs secrètes
-      déjà vues par le serveur (les valeurs de moins de 6 caractères sont ignorées,
-      car le remplacement de minuscules fragments corromprait des sorties sans rapport).
-      Les champs non marqués comme mots de passe par leur schéma ne peuvent pas être
-      détectés. Désactivé par défaut.
+      marqués comme mots de passe sont remplacés par un marqueur défini/vide (afin
+      que la question « ce identifiant est-il configuré ? » reste traitable), et les
+      autres réponses d'outils sont nettoyées des valeurs secrètes déjà vues par le
+      serveur (les valeurs de moins de 6 caractères sont ignorées, car le remplacement
+      de minuscules fragments corromprait des sorties sans rapport). Les autres champs
+      ne sont pas détectés, à l'exception des clés privées dans les options de l'application
+      et des noms d'options d'application listés ci-dessous. Désactivé par défaut.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Clés d'options d'application supplémentaires à masquer
+    description: Noms d'options de l'application (add-on) à masquer comme les champs
+      de mot de passe, pour les applications dont le schéma stocke un secret en texte
+      brut (par exemple backup_password). Séparez les noms par des virgules ou des
+      retours à la ligne. Un nom s'applique à toutes les applications ; écrivez app_slug:name
+      pour le limiter à une seule application. Nommer un groupe d'options couvre toutes
+      les options qu'il contient. Utilisé uniquement lorsque l'option Masquer les
+      secrets est active. Vide par défaut.
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu

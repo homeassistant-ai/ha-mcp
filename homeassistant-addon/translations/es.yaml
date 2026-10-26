@@ -93,21 +93,24 @@ configuration:
   redact_secrets:
     name: Redactar secretos
     description: Elimina información confidencial de las respuestas de las herramientas
-      antes de que lleguen al asistente de IA. Las opciones de la app (add-on) y los
-      campos de integración marcados como contraseñas se reemplazan por un marcador
-      de establecido/vacío (para que "¿está esta credencial configurada?" siga teniendo
-      respuesta), y las respuestas de otras herramientas se depuran de valores secretos
-      que el servidor ya ha visto (se omiten los valores de menos de 6 caracteres,
-      ya que reemplazar fragmentos diminutos corrompería resultados no relacionados).
-      Los campos no marcados como contraseñas por su esquema no se pueden detectar.
-      Desactivado por defecto.
+      antes de que lleguen al asistente de IA. Las opciones de la aplicación (complemento)
+      y los campos de integración marcados como contraseñas se reemplazan por un marcador
+      de establecido/vacío (para que se pueda responder a "¿está configurada esta
+      credencial?"), y en las respuestas de otras herramientas se eliminan los valores
+      confidenciales que el servidor ya ha visto (se omiten los valores de menos de
+      6 caracteres, ya que reemplazar fragmentos diminutos corrompería resultados
+      no relacionados). No se detectan otros campos, excepto las claves privadas en
+      las opciones de la aplicación y los nombres de opciones de la aplicación enumerados
+      a continuación. Desactivado por defecto.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Claves adicionales de opciones de aplicación para ocultar
+    description: Nombres de opciones de la aplicación (complemento) para ocultar como
+      los campos de contraseña, para aplicaciones cuyo esquema almacena un secreto
+      como texto plano (por ejemplo, backup_password). Separa los nombres con comas
+      o saltos de línea. Un nombre se aplica a todas las aplicaciones; escribe app_slug:name
+      para limitarlo a una sola aplicación. Nombrar un grupo de opciones abarca todas
+      las opciones que contiene. Se usa solo mientras la opción Redactar secretos
+      esté activada. Vacío por defecto.
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las

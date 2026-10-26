@@ -91,20 +91,22 @@ configuration:
       olunur.
   redact_secrets:
     name: Məxfi məlumatları gizlət
-    description: Alət cavabları AI köməkçisinə çatmazdan əvvəl onlardan məxfi məlumatları
-      gizlədir. Parol kimi işarələnmiş tətbiq (əlavə) seçimləri və inteqrasiya sahələri
-      təyin edilib/boş göstəricisi ilə əvəz olunur (beləliklə, "bu giriş məlumatı
-      konfiqurasiya edilibmi?" sualını cavablandırmaq mümkün qalır), digər alət cavabları
-      isə serverin artıq gördüyü məxfi dəyərlərdən təmizlənir (6 simvoldan qısa dəyərlər
-      nəzərə alınmır, çünki kiçik fraqmentlərin əvəzlənməsi əlaqəsiz çıxışı korlayardı).
-      Sxemdə parol kimi işarələnməyən sahələr aşkarlana bilmir. Standart olaraq deaktivdir.
+    description: AI köməkçisinə çatmazdan əvvəl alət cavablarındakı məxfi məlumatları
+      gizlədir. Şifrə kimi qeyd olunmuş Tətbiq (əlavə) seçimləri və inteqrasiya sahələri
+      təyin edilmiş/boş markerlə əvəz olunur (beləliklə, "bu etimadnamə konfiqurasiya
+      edilibmi?" sualına cavab vermək mümkündür) və digər alət cavablarından serverin
+      artıq gördüyü məxfi dəyərlər təmizlənir (6 simvoldan qısa dəyərlər ötürülür,
+      ஏünki kiçik fraqmentlərin əvəz edilməsi əlaqəsiz çıxışı zədələyə bilər). Tətbiq
+      seçimlərindəki şəxsi açarlar və aşağıda sadalanan tətbiq seçim adları istisna
+      olmaqla, digər sahələr aşkar edilmir. Defolt olaraq söndürüldür.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Gizlədiləcək əlavə tətbiq seçim açarları
+    description: Sxemi sirri düz mətn kimi saxlayan tətbiqlər üçün (məsələn, backup_password)
+      şifrə sahələri kimi gizlədiləcək Tətbiq (əlavə) seçim adları. Adları vergül
+      və ya yeni sətirlərlə ayırın. Ad bütün tətbiqlərə şamil edilir; onu bir tətbiqlə
+      məhdudlaşdırmaq üçün app_slug:name yazın. Seçim qrupunun adlandırılması ondakı
+      hər bir seçimi əhatə edir. Yalnız Məxfiliklərin Gizlədilməsi (Redact Secrets)
+      aktiv olduqda istifadə olunur. Defolt olaraq boşdur.
   enable_mandatory_bps:
     name: Yazma zamanı ən yaxşı təcrübələr üzrə bacarıq təlimatlarını əlavə et
     description: 'Yazma alətlərinin bacarıq məzmunu təqdim etməsi funksiyası üçün

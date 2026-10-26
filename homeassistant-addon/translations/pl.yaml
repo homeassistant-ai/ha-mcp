@@ -87,21 +87,23 @@ configuration:
       zacząć obowiązywać.
   redact_secrets:
     name: Redaguj sekrety
-    description: Usuwa poufne dane z odpowiedzi narzędzi, zanim dotrą one do asystenta
-      AI. Opcje aplikacji (dodatku) i pola integracji oznaczone jako hasła są zastępowane
-      znacznikiem ustawienia/pustej wartości (dzięki czemu na pytanie "czy to poświadczenie
-      jest skonfigurowane?" nadal można odpowiedzieć), a inne odpowiedzi narzędzi
-      są czyszczone z poufnych wartości, które serwer już widział (wartości krótsze
-      niż 6 znaków są pomijane, ponieważ zastępowanie malutkich fragmentów mogłoby
-      uszkodzić powiązane dane wyjściowe). Pola nieoznaczone jako hasła przez ich
-      schemat nie mogą zostać wykryte. Domyślnie wyłączone.
+    description: Usuwa poufne dane (sekrety) z odpowiedzi narzędzi przed ich dotarciem
+      do asystenta AI. Opcje aplikacji (dodatku) oraz pola integracji oznaczone jako
+      hasła są zastępowane znacznikiem ustawienia/pustej wartości (dzięki czemu nadal
+      można odpowiedzieć na pytanie „czy te poświadczenia są skonfigurowane?”), a
+      pozostałe odpowiedzi narzędzi są czyszczone z poufnych wartości, które serwer
+      już widział (wartości krótsze niż 6 znaków są pomijane, ponieważ zastępowanie
+      małych fragmentów mogłoby uszkodzić niezwiązane z nimi dane wyjściowe). Inne
+      pola nie są wykrywane, z wyjątkiem kluczy prywatnych w opcjach aplikacji oraz
+      nazw opcji aplikacji wymienionych poniżej. Domyślnie wyłączone.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Dodatkowe klucze opcji aplikacji do ukrycia
+    description: Nazwy opcji aplikacji (dodatku) do ukrycia, tak jak pola haseł, dla
+      aplikacji, których schemat przechowuje sekret jako zwykły tekst (na przykład
+      backup_password). Rozdziel nazwy przecinkami lub nowymi liniami. Nazwa dotyczy
+      każdej aplikacji; wpisz app_slug:name, aby ograniczyć ją do jednej aplikacji.
+      Podanie nazwy grupy opcji obejmuje każdą opcję w niej zawartą. Używane tylko
+      wtedy, gdy funkcja ukrywania sekretów jest włączona. Domyślnie puste.
   enable_mandatory_bps:
     name: Dołącz umiejętności najlepszych praktyk przy zapisach
     description: 'Główny przełącznik funkcji dostarczania treści umiejętności narzędzi

@@ -62,17 +62,16 @@ configuration:
       같은 설정입니다. 기본값은 꺼짐입니다. 적용하려면 다시 시작해야 합니다.
   redact_secrets:
     name: 비밀 정보 가리기
-    description: 도구 응답이 AI 어시스턴트에 전달되기 전에 비밀 정보를 가립니다. 앱(애드온) 옵션과 통합 구성요소 필드 중 비밀번호로
-      표시된 항목은 설정됨/비어 있음 표시로 대체되어 "이 자격 증명이 설정되어 있는가?"라는 질문에는 여전히 답할 수 있으며, 다른 도구 응답에서도
-      서버가 이미 확인한 비밀 값이 제거됩니다(6자 미만인 값은 건너뜁니다. 짧은 조각을 치환하면 관련 없는 출력까지 망가지기 때문입니다).
-      스키마에서 비밀번호로 표시하지 않은 필드는 감지할 수 없습니다. 기본값은 꺼짐입니다.
+    description: AI 어시스턴트에 도달하기 전에 도구 응답에서 민감한 정보를 숨깁니다. 앱(추가 기능) 옵션 및 비밀번호로 표시된 통합
+      필드는 설정됨/비어 있음 표시로 대체되어("이 자격 증명이 설정되어 있는지" 여부는 계속 확인 가능) 처리되며, 서버가 이미 감지한 비밀
+      값은 다른 도구 응답에서 제거됩니다(너무 작은 조각을 바꾸면 관련 없는 출력이 손상될 수 있으므로 6자 미만의 값은 건너뜁니다). 앱 옵션의
+      비공개 키와 아래 나열된 앱 옵션 이름을 제외한 다른 필드는 감지되지 않습니다. 기본값은 꺼짐입니다.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: 숨길 추가 앱 옵션 키
+    description: '스키마에 비밀 정보가 일반 텍스트로 저장되는 앱(예: backup_password)을 위해, 비밀번호 필드처럼 숨길
+      앱(추가 기능) 옵션 이름입니다. 쉼표나 새 줄로 이름을 구분하세요. 이름은 모든 앱에 적용되며, 특정 앱으로 제한하려면 app_slug:name
+      형식으로 작성하세요. 옵션 그룹 이름을 지정하면 그 안의 모든 옵션이 포함됩니다. ''민감한 정보 숨기기''가 켜져 있는 동안에만 사용됩니다.
+      기본값은 비어 있음입니다.'
   enable_mandatory_bps:
     name: 쓰기 시 모범 사례 스킬 첨부
     description: '쓰기 도구 스킬 콘텐츠 전달 기능(이슈 #1182)의 마스터 스위치입니다. 켜져 있으면(기본값) 여섯 개의 설정 쓰기

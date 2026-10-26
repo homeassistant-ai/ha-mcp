@@ -100,22 +100,24 @@ configuration:
       il riavvio per avere effetto.
   redact_secrets:
     name: Rimuovi Segreti
-    description: Rimuove le informazioni riservate dalle risposte degli strumenti
-      prima che raggiungano l'assistente IA. Le opzioni dell'applicazione (add-on)
-      e i campi di integrazione contrassegnati come password vengono sostituiti con
-      un marcatore di impostato/vuoto (in modo che "questa credenziale è configurata?"
-      rimanga interrogabile), e le risposte di altri strumenti vengono ripulite dai
-      valori segreti che il server ha già visto (i valori più corti di 6 caratteri
-      vengono ignorati, poiché la sostituzione di frammenti minuscoli corromperebbe
-      output non correlati). I campi non contrassegnati come password dal loro schema
-      non possono essere rilevati. Disattivato per impostazione predefinita.
+    description: Rimuove i dati sensibili dalle risposte degli strumenti prima che
+      raggiungano l'assistente IA. Le opzioni dell'app (add-on) e i campi di integrazione
+      contrassegnati come password vengono sostituiti con un indicatore di impostato/vuoto
+      (in modo che sia comunque possibile rispondere a "questa credenziale è configurata?"),
+      e le altre risposte degli strumenti vengono ripulite dai valori segreti che
+      il server ha già visto (i valori più corti di 6 caratteri vengono ignorati,
+      poiché la sostituzione di frammenti minuscoli corromperebbe output non correlati).
+      Altri campi non vengono rilevati, ad eccezione delle chiavi private nelle opzioni
+      dell'app e dei nomi di opzione dell'app elencati di seguito. Disattivato per
+      impostazione predefinita.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Chiavi opzione app extra da oscurare
+    description: Nomi di opzioni dell'app (add-on) da oscurare come i campi password,
+      per le app il cui schema memorizza un segreto come testo in chiaro (ad esempio
+      backup_password). Separa i nomi con virgole o nuove righe. Un nome si applica
+      a ogni app; scrivi app_slug:name per limitarlo a una singola app. Denominare
+      un gruppo di opzioni copre ogni opzione al suo interno. Utilizzato solo quando
+      l'opzione Rimuovi dati sensibili è attiva. Vuoto per impostazione predefinita.
   enable_mandatory_bps:
     name: Allega le skill di buone pratiche alle scritture
     description: 'Interruttore principale della funzione che consegna il contenuto

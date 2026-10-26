@@ -94,21 +94,23 @@ configuration:
       Vereist herstart om van kracht te worden.
   redact_secrets:
     name: Geheimen redigeren
-    description: Verbergt geheimen uit toolresponsen voordat ze de AI-assistent bereiken.
-      App (add-on)-opties en integratievelden die zijn gemarkeerd als wachtwoorden
-      worden vervangen door een marker voor ingesteld/leeg (zodat "is deze inloggegeven
-      geconfigureerd?" beantwoordbaar blijft), en andere toolresponsen worden opgeschoond
+    description: Verbergt geheimen in toolreacties voordat ze de AI-assistent bereiken.
+      App-optie (add-on) velden en integratievelden die als wachtwoord zijn gemarkeerd,
+      worden vervangen door een marker voor ingesteld/leeg (zodat "is dit credential
+      geconfigureerd?" beantwoordbaar blijft), en andere toolreacties worden opgeschoond
       van geheime waarden die de server al heeft gezien (waarden korter dan 6 tekens
-      worden overgeslagen, aangezien het vervangen van kleine fragmenten gerelateerde
-      uitvoer zou beschadigen). Velden die niet door hun schema als wachtwoord zijn
-      gemarkeerd, kunnen niet worden gedetecteerd. Standaard uit.
+      worden overgeslagen, omdat het vervangen van kleine fragmenten ongerelateerde
+      uitvoer zou beschadigen. Andere velden worden niet gedetecteerd, met uitzondering
+      van privésleutels in app-opties en de hieronder vermelde app-optienamen. Standaard
+      uitgeschakeld.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Extra app-optiesleutels om te verbergen
+    description: Namen van app-opties (add-on) om te verbergen zoals wachtwoordvelden,
+      voor apps waarvan het schema een geheim opslaat als platte tekst (bijvoorbeeld
+      backup_password). Scheid namen met komma's of nieuwe regels. Een naam is van
+      toepassing op elke app; schrijf app_slug:name om het te beperken tot één app.
+      Het benoemen van een optiegroep dekt elke optie daarin. Alleen gebruikt wanneer
+      Verberg geheimen aan staat. Standaard leeg.
   enable_mandatory_bps:
     name: Koppel best-practice vaardigheden aan schrijfbewerkingen
     description: 'Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud

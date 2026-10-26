@@ -42,15 +42,12 @@ configuration:
       UI「工具」分頁中的切換開關相同。預設為關閉。需要重新啟動才能生效。
   redact_secrets:
     name: 遮蔽機密資訊
-    description: 在工具回應到達 AI 助理之前，將其中的機密資訊遮蔽。應用程式（附加元件）選項以及標記為密碼的整合欄位會被替換為已設定／空白標記（以便「此憑證是否已設定？」保持可回答），並且其他工具回應中會清除伺服器已經看過的機密值（小於
-      6 個字元的實值會被略過，因為替換微小片段會損壞不相關的輸出）。其結構定義未標記為密碼的欄位無法被偵測。預設為關閉。需要重新啟動才能生效。
+    description: 在工具回應傳送至 AI 助理之前，從中修訂（隱藏）密碼等機密資訊。應用程式（附加元件）選項以及標記為密碼的整合欄位會被替換為設定/空白標記（以便回答「此憑證是否已設定？」），並且伺服器已見過的其他工具回應中的機密值也會被清除（小於
+      6 個字元的長度會被跳過，因為替換微小的片段會損壞不相關的輸出）。除了應用程式選項中的私密金鑰以及下方列出的應用程式選項名稱外，不會偵測其他欄位。預設為關閉。
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: 要修訂的額外應用程式選項金鑰
+    description: 針對其結構描述將機密儲存為純文字（例如 backup_password）的應用程式，指定要像密碼欄位一樣進行修訂的應用程式（附加元件）選項名稱。多個名稱請用逗號或新行分隔。名稱適用於所有應用程式；若要限制為單一應用程式，請寫成
+      app_slug:name。命名選項群組會涵蓋其中的所有選項。僅在啟用「修訂機密」時使用。預設為空白。
   enable_mandatory_bps:
     name: 寫入時附加最佳實踐技能
     description: '寫入工具技能內容傳遞功能的主開關（issue #1182）。啟用時（預設），六個設定寫入工具（自動化、指令碼、場景、輔助程式、儀表板、原始

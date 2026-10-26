@@ -86,21 +86,23 @@ configuration:
       einen Neustart, um wirksam zu werden.
   redact_secrets:
     name: Geheimnisse schwärzen
-    description: Entfernt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
-      erreichen. App-Optionen (Add-on) und als Passwörter markierte Integrationsfelder
-      werden durch eine Markierung für gesetzt/leer ersetzt (sodass "ist diese Zugangsbezeichnung
-      konfiguriert?" beantwortet bleiben kann), und andere Tool-Antworten werden von
-      Geheimniswerten bereinigt, die der Server bereits gesehen hat (Werte, die kürzer
-      als 6 Zeichen sind, werden übersprungen, da das Ersetzen winziger Fragmente
-      zusammenhängende Ausgaben beschädigen würde). Felder, die von ihrem Schema nicht
-      als Passwörter markiert wurden, können nicht erkannt werden. Standardmäßig aus.
+    description: Entfernt Geheimnisse aus Werkzeugantworten, bevor sie den KI-Assistenten
+      erreichen. App- (Add-on-)Optionen und Integrationsfelder, die als Passwörter
+      markiert sind, werden durch eine Markierung für gesetzt/leer ersetzt (damit
+      „ist diese Zugangsmarke konfiguriert?“ beantwortet werden kann), und andere
+      Werkzeugantworten werden von Geheimnissen bereinigt, die der Server bereits
+      gesehen hat (Werte, die kürzer als 6 Zeichen sind, werden übersprungen, da das
+      Ersetzen kleiner Fragmente unrelated Ausgaben beschädigen würde). Andere Felder
+      werden nicht erkannt, außer privaten Schlüsseln in App-Optionen und den unten
+      aufgeführten App-Optionennamen. Standardmäßig aus.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Zusätzliche App-Optionsschlüssel zum Schwärzen
+    description: App- (Add-on-)Optionsnamen zum Schwärzen wie Passwortfelder für Apps,
+      deren Schema ein Geheimnis im Klartext speichert (zum Beispiel backup_password).
+      Trenne Namen mit Kommas oder Zeilenumbrüchen. Ein Name gilt für jede App; schreibe
+      app_slug:name, um ihn auf eine App zu beschränken. Das Benennen einer Optionsgruppe
+      deckt jede Option darin ab. Wird nur verwendet, wenn Geheimnisse schwärzen aktiv
+      ist. Standardmäßig leer.
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
     description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten

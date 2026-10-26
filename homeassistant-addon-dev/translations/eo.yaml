@@ -90,20 +90,22 @@ configuration:
       Iloj. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.
   redact_secrets:
     name: Redakti Sekretojn
-    description: Redaktas sekretojn el ilaj respondon antaŭ ol ili atingas la AI-asistanton.
-      Apaj (aldonaĵaj) opcioj kaj integriĝaj kampoj markitaj kiel pasvortoj estas
-      anstataŭigitaj per aro/malplena markilo (do "ĉu ĉi tiu akreditaĵo estas agordita?"
-      restas respondoebla), kaj aliaj ilaj respondoj estas purigitaj de sekretaj valoroj
-      kiujn la servilo jam vidis (valoroj pli mallongaj ol 6 signoj estas preterlasitaj,
-      ĉar anstataŭigi etajn fragmentojn koruptus senrilatan eligon). Kampoj ne markitaj
-      kiel pasvortoj per sia skemo ne povas esti detektitaj. Malŝaltita defaŭlte.
+    description: Kaŝas sekretojn el ilaj respondoj antaŭ ol ili atingas la AI-asistanton.
+      Opcioj de la aplikaĵo (aldonaĵo) kaj integriĝaj kampoj markitaj kiel pasvortoj
+      estas anstataŭigitaj per indikilo pri difinita/malplena valoro (por ke la demando
+      "ĉu ĉi tiu akreditaĵo estas agordita?" restu respondo-kapabla), kaj aliaj ilaj
+      respondoj estas purigitaj de sekretaj valoroj jam viditaj de la servilo (valoroj
+      pli mallongaj ol 6 signoj estas preterlasitaj, ĉar anstataŭigi etajn fragmentojn
+      koruptus nerilatan eliron). Aliaj kampoj ne estas detektitaj, krom privataj
+      ŝlosiloj en aplikaĵaj opcioj kaj la nomoj de aplikaĵaj opcioj listigitaj sube.
+      Malŝaltita defaŭlte.
   redact_app_option_keys:
-    name: Extra app option keys to redact
-    description: App (add-on) option names to redact like password fields, for apps
-      whose schema stores a secret as plain text (for example backup_password). Separate
-      names with commas or new lines. A name applies to every app; write app_slug:name
-      to limit it to one app. Naming an option group covers every option in it. Used
-      only while Redact Secrets is on. Empty by default.
+    name: Pliaj aplikaĵopciaj ŝlosiloj por kaŝi
+    description: Nomoj de aplikaĵaj (aldonaĵaj) opcioj kaŝendaj kiel pasvortkampoj,
+      por aplikaĵoj kies skemo konservas sekreton kiel plata teksto (ekzemple backup_password).
+      Disigu nomojn per komoj aŭ novaj linioj. Nomo aplikiĝas al ĉiu aplikaĵo; skribu
+      app_slug:name por limigi ĝin al unu aplikaĵo. Nomi opciogrupon kovras ĉiun opcion
+      en ĝi. Uzata nur dum "Redact Secrets" estas ŝaltita. Malplena defaŭlte.
   enable_mandatory_bps:
     name: Aligi plejbonajn praktikajn kapablojn ĉe skriboj
     description: 'Majstra ŝaltilo por la funkcio de liverado de enhavo de skrib-ila
