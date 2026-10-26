@@ -53,9 +53,9 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -70,6 +70,7 @@ from ..renamed_tools import current_tool_name
 from ..tool_dispatch import CALL_PROXY_META_TOOLS
 from ..tools.helpers import raise_tool_error
 from . import resolver
+from .identifier_aliases import build_identifier_aliases, hidden_identifier_argument
 from .model import VisibilityConfig
 from .resolver import (
     VisibilityDataUnavailable,
@@ -252,14 +253,23 @@ class _HiddenMatcher:
 
     Built only through :meth:`from_hidden`, so ``regex`` is ``None`` exactly when
     ``hidden`` is empty and every scan sees a consistent pair.
+    ``identifier_aliases`` holds, per script/scene/automation domain, the bare
+    keys that address a hidden entity (see ``identifier_aliases``).
     """
 
     hidden: frozenset[str]
     regex: re.Pattern[str] | None
+    identifier_aliases: Mapping[str, frozenset[str]] = field(
+        default_factory=dict, hash=False
+    )
 
     @classmethod
-    def from_hidden(cls, hidden: set[str]) -> _HiddenMatcher:
-        return cls(frozenset(hidden), _build_hidden_regex(hidden))
+    def from_hidden(
+        cls,
+        hidden: set[str],
+        aliases: Mapping[str, frozenset[str]] | None = None,
+    ) -> _HiddenMatcher:
+        return cls(frozenset(hidden), _build_hidden_regex(hidden), aliases or {})
 
     def exact(self, text: str) -> bool:
         """Whether ``text`` is a hidden entity_id."""
@@ -687,6 +697,16 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
 
+        bare = hidden_identifier_argument(
+            effective_name, effective_args, matcher.identifier_aliases
+        )
+        if bare is not None:
+            logger.info(
+                "visibility enforce: concealed hidden entity addressed by bare "
+                "identifier in %s call",
+                effective_name,
+            )
+            _conceal_as_not_found(bare)
         self._scan_inbound(effective_name, name, args, matcher)
         return await call_next(context)
 
@@ -779,7 +799,7 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         return result
 
 
-async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> set[str]:
+async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> _HiddenMatcher:
     """Fetch registry/states (+device registry when needed) and resolve strictly.
 
     Mirrors the search seam's fetches. Any fetch error, or a strict resolver
@@ -820,7 +840,9 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> set[str]
     hidden, _warnings = await load_hidden_set(
         fetched[1], fetched[0], client, device_result, strict=True
     )
-    return hidden
+    return _HiddenMatcher.from_hidden(
+        hidden, build_identifier_aliases(hidden, fetched[1])
+    )
 
 
 class _HiddenSetCache:
@@ -851,7 +873,7 @@ class _HiddenSetCache:
             if self._matcher is not None and self._key == key and now < self._expiry:
                 return self._matcher
             try:
-                hidden = await _refresh_hidden_set(config, client)
+                matcher = await _refresh_hidden_set(config, client)
             except Exception:
                 if self._matcher is not None and self._key == key:
                     logger.warning(
@@ -866,7 +888,6 @@ class _HiddenSetCache:
                     exc_info=True,
                 )
                 raise VisibilityDataUnavailable("hidden set unavailable") from None
-            matcher = _HiddenMatcher.from_hidden(hidden)
             self._matcher = matcher
             self._key = key
             self._expiry = now + _CACHE_TTL_SECONDS

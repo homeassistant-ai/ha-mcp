@@ -136,8 +136,11 @@ the [Entity visibility filter FAQ](docs/FAQ.md#enforce-mode)) makes a hidden set
 unreadable across ordinary tool reads: direct reads of a hidden entity are
 refused with a generic not-found before the tool runs, and scannable content
 reads (dashboards, templates, automations, traces, logs, files) that would
-surface a hidden entity_id are refused on contact. Those enforced paths fail
-closed when registry data cannot be loaded.
+surface a hidden entity_id are refused on contact. A hidden script, scene or
+automation addressed by its bare storage key or config `id` (the registry
+`unique_id`) rather than its entity_id is concealed the same way, as is a
+`script.<storage key>` service call. Those enforced paths fail closed when
+registry data cannot be loaded.
 
 One shape-bounded exception preserves an allowed entity's state: JSON
 `ha_get_state` results omit fields, mapping keys, list items, or related records

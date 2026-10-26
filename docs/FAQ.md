@@ -895,6 +895,15 @@ dimension. What it covers:
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
   entity by trying to control it.
+- **Bare script, scene and automation keys are concealed as well.** The
+  script, scene and automation config tools also accept a bare storage key
+  (`unlock_house`) or config `id` (`1727266720448`) instead of the entity_id,
+  and Home Assistant exposes every script as a `script.<storage key>` service.
+  When such a key belongs to a hidden script, scene or automation — including
+  a renamed one whose key no longer matches its entity_id — the
+  `ha_config_get_*` / `ha_config_set_*` / `ha_config_remove_*` call, or a
+  `ha_call_service` with `domain: script` and that key as `service`, is
+  concealed as not-found too.
 
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
 code execution via `ha_manage_custom_tool` (`code` / `run_saved` — pure
