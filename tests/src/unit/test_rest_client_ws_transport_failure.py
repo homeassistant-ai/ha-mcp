@@ -528,8 +528,6 @@ class TestRenderTemplateVerdict:
 
     @pytest.mark.asyncio
     async def test_lost_verdict_with_report_errors_is_an_event_timeout(self) -> None:
-        import asyncio
-
         from ha_mcp.client.rest_client import _read_render_verdict
 
         result = await _read_render_verdict(asyncio.Queue(), "t", 0.01, True)
@@ -538,8 +536,6 @@ class TestRenderTemplateVerdict:
 
     @pytest.mark.asyncio
     async def test_closed_socket_is_a_connection_error(self) -> None:
-        import asyncio
-
         from ha_mcp.client.rest_client import _read_render_verdict
 
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
