@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_service import _NON_ENVELOPE_WARNING, ServiceTools
 
@@ -319,29 +320,22 @@ class TestReturnResponsePlacement:
             f"the projection warning must survive alongside the envelope one: {warnings!r}"
         )
 
-    async def test_timeout_still_emits_the_requested_key(self):
-        """A timed-out call must not be the one shape missing service_response.
-
-        The reply never arrived, so the value is necessarily null — and that null
-        proves nothing, hence the ambiguity warning rather than a bare null.
-        """
+    async def test_missing_reply_does_not_fabricate_a_null_service_response(self):
+        """A missing reply is an unknown outcome, not an accepted null response."""
         timed_out = HomeAssistantConnectionError("timed out")
-        # ``_handle_connection_error`` classifies on ``__cause__`` — an httpx
-        # timeout is a dispatched-but-unanswered call, not a failure.
         timed_out.__cause__ = httpx.ReadTimeout("slow")
         tools = _make_tools(None)
         tools._client.call_service = AsyncMock(side_effect=timed_out)
 
-        response = await tools.ha_call_service(
-            domain="shell_command", service="test", return_response=True
-        )
-
-        assert response["partial"] is True
-        assert "service_response" in response
-        assert response["service_response"] is None
-        assert any("does NOT prove" in w for w in response["warnings"]), (
-            f"a timed-out return_response call must flag the ambiguity: {response!r}"
-        )
+        with pytest.raises(ToolError) as caught:
+            await tools.ha_call_service(
+                domain="shell_command", service="test", return_response=True
+            )
+        response = json.loads(str(caught.value))
+        assert response["success"] is False
+        assert response["write_outcome_unknown"] is True
+        assert "service_response" not in response
+        tools._client.call_service.assert_awaited_once()
 
     async def test_return_response_false_has_no_service_response_key(self):
         """Without return_response the REST reply is a plain changed-states list."""

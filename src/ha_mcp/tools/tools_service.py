@@ -878,47 +878,36 @@ class ServiceTools:
         return parsed_result_fields, parsed_result_attribute_keys
 
     @staticmethod
-    def _build_timeout_response(
+    def _raise_service_outcome_unknown(
+        error: Exception,
+        *,
         domain: str,
         service: str,
         entity_id: str | None,
-        data: str | dict[str, Any] | None,
-        *,
-        return_response: bool = False,
-    ) -> dict[str, Any]:
-        """Build a partial-success response for service call timeouts.
-
-        When ``return_response`` was requested the key is emitted here too, so a
-        caller never has to branch on whether the key exists: every successful
-        reply carries it. It is necessarily null — the reply never arrived — and
-        that null proves nothing about what the service returned, so it comes
-        with the same ambiguity warning the component's unconfirmed path uses.
-        """
-        response: dict[str, Any] = {
-            "success": True,
-            "partial": True,
-            "domain": domain,
-            "service": service,
-            "entity_id": entity_id,
-            "parameters": data,
-            "message": (
-                f"Service {domain}.{service} was dispatched but Home Assistant "
-                f"did not respond within the timeout period. The operation is likely "
-                f"still running in the background."
-            ),
-            "warnings": [
-                "Response timed out. This is normal for long-running services "
-                f"like updates or firmware installs. Use ha_get_state('{entity_id}') "
-                "to check the current status."
-                if entity_id
-                else "Response timed out. This is normal for long-running services. "
-                "The service was dispatched and may still be executing."
-            ],
-        }
-        if return_response:
-            response["service_response"] = None
-            response["warnings"].append(_COMPONENT_RESPONSE_UNCONFIRMED_WARNING)
-        return response
+    ) -> NoReturn:
+        """Fail an uncertain service write without claiming acceptance or retrying."""
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"The outcome of {domain}.{service} is unknown; it may have taken effect.",
+                details=str(error),
+                context={
+                    "domain": domain,
+                    "service": service,
+                    "entity_id": entity_id,
+                    "write_outcome_unknown": True,
+                    "ha_error_code": (
+                        error.code
+                        if isinstance(error, HomeAssistantCommandError)
+                        else None
+                    ),
+                },
+                suggestions=[
+                    "Check the target state and Home Assistant logs before retrying; "
+                    "the service may already have acted."
+                ],
+            )
+        )
 
     async def _validate_entity_before_wait(self, entity_id: str | None) -> str | None:
         """Fetch entity_id's pre-call state, failing fast on a settled bad target.
@@ -1176,23 +1165,15 @@ class ServiceTools:
         domain: str,
         service: str,
         entity_id: str | None,
-        data: str | dict[str, Any] | None,
-        return_response: bool = False,
-    ) -> dict[str, Any]:
-        """Handle a HomeAssistantConnectionError raised while calling a service.
-
-        Timeouts are treated as partial success (the service was dispatched but
-        Home Assistant did not respond in time) and return a partial-success
-        response. Non-timeout connection errors raise a structured ToolError.
-        """
-        # Check if this is a timeout - for service calls, timeouts typically
-        # mean the service was dispatched but HA didn't respond in time.
-        # The operation is likely still running (e.g., update.install, long automations).
-        if isinstance(error.__cause__, httpx.TimeoutException):
-            return self._build_timeout_response(
-                domain, service, entity_id, data, return_response=return_response
+    ) -> NoReturn:
+        """Keep an unanswered write distinct from a connection establishment failure."""
+        cause = error.__cause__
+        if isinstance(cause, httpx.TimeoutException) and not isinstance(
+            cause, (httpx.ConnectTimeout, httpx.PoolTimeout)
+        ):
+            self._raise_service_outcome_unknown(
+                error, domain=domain, service=service, entity_id=entity_id
             )
-        # Non-timeout connection errors are real failures
         exception_to_structured_error(
             error,
             context={
@@ -1202,7 +1183,6 @@ class ServiceTools:
             },
             suggestions=_build_service_suggestions(domain, service, entity_id),
         )
-        return None  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
     def _raise_unexpected_call_service_error(
@@ -1580,8 +1560,8 @@ class ServiceTools:
         legacy REST POST returns, so they feed the SAME ``_project_service_result``
         projection; the confirmed target's ``new_state.state`` becomes
         ``verified_state``; and the component's ``partial`` flag (dispatched but the
-        confirming event lapsed) drives the same partial-success shape the legacy
-        timeout path produces (``_build_timeout_response``).
+        confirming event lapsed) preserves accepted execution with incomplete
+        confirmation, unlike a missing service reply whose effect is unknown.
         """
         transitions = component_result.get("transitions") or []
         # A nonexistent target's pre-dispatch read excludes it from the wait
@@ -1717,28 +1697,11 @@ class ServiceTools:
             return_response=return_response,
         )
         if isinstance(component_result, _AmbiguousDispatch):
-            error = component_result.error
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"The outcome of {domain}.{service} is unknown; it may have taken effect.",
-                    details=str(error),
-                    context={
-                        "domain": domain,
-                        "service": service,
-                        "entity_id": entity_id,
-                        "write_outcome_unknown": True,
-                        "ha_error_code": (
-                            error.code
-                            if isinstance(error, HomeAssistantCommandError)
-                            else None
-                        ),
-                    },
-                    suggestions=[
-                        "Check the target state and Home Assistant logs before retrying; "
-                        "the service may already have acted."
-                    ],
-                )
+            self._raise_service_outcome_unknown(
+                component_result.error,
+                domain=domain,
+                service=service,
+                entity_id=entity_id,
             )
         if component_result is None:
             return None
@@ -2044,16 +2007,11 @@ class ServiceTools:
 
             return response
         except HomeAssistantConnectionError as error:
-            return self._handle_connection_error(
+            self._handle_connection_error(
                 error,
                 domain=domain,
                 service=service,
                 entity_id=entity_id,
-                data=data,
-                # The parameter, not ``return_response_bool`` — that local is
-                # bound inside the try and would be unbound if the error fired
-                # before it.
-                return_response=return_response,
             )
         except ToolError:
             raise
