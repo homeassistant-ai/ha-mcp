@@ -335,3 +335,40 @@ def is_connection_error_message(error_msg: Any) -> bool:
     """
     lowered = str(error_msg).lower()
     return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
+
+
+async def list_visible_registry_ids(
+    client: Any, domain: str, *, bare: bool = False
+) -> list[str]:
+    """Best-effort list of up to 10 visible ``domain`` entity IDs from the registry.
+
+    Populates the ``available_*_ids`` hint of a RESOURCE_NOT_FOUND error. With
+    ``bare`` the ``<domain>.`` prefix is stripped, for tools that take the bare
+    storage-key form. Entities hidden by enforce mode are dropped so the hint
+    neither leaks a hidden ID nor trips the outbound scan. Returns an empty list
+    on any failure: the caller treats absence as "no IDs to report" rather than
+    failing the structured error raise. The cap lives here so a new call site
+    can't bloat the error payload.
+    """
+    from ..visibility.enforcement import active_hidden_entity_ids
+
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Failed to list %s entity_ids from registry: %s", domain, e)
+        return []
+    entries = result.get("result", []) if isinstance(result, dict) else result
+    if not isinstance(entries, list):
+        return []
+    hidden = await active_hidden_entity_ids(client)
+    prefix = f"{domain}."
+    return [
+        entity_id.removeprefix(prefix) if bare else entity_id
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entity_id := entry.get("entity_id"), str)
+        and entity_id.startswith(prefix)
+        and entity_id not in hidden
+    ][:10]

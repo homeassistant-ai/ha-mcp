@@ -10,15 +10,20 @@ automations. Only the entity registry maps it back to the hidden entity_id, so
 the aliases are derived from the registry the hidden-set refresh already fetched.
 
 Home Assistant also registers every script as a ``script.<storage key>``
-service, so ``ha_call_service`` with ``domain: script`` is checked the same way.
+service, so ``ha_call_service`` with ``domain: script`` is checked the same way,
+and ``script.<storage key>`` joins the terms the embedded scans match. Traces
+and ``scripts.yaml`` / ``scenes.yaml`` / ``automations.yaml`` are keyed by
+storage key too, so trace records and config-file reads are checked against it.
 
-The check is scoped to these identifier arguments, so the same word appearing
-in template text or a message never triggers it.
+The argument check is scoped to these identifier arguments, so the same word
+appearing in template text or a message never triggers it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+import json
+import re
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,9 +39,21 @@ BARE_IDENTIFIER_ARGS: dict[str, tuple[str, str]] = {
     "ha_config_remove_automation": ("identifier", "automation"),
 }
 
+# Tools whose identifier carries its domain as a ``script.`` / ``automation.``
+# prefix but falls back to the bare key when no entity has that entity_id.
+PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
+    "ha_get_automation_traces": "automation_id",
+}
+
 _SERVICE_TOOL = "ha_call_service"
+_CONFIG_FILE_READ_TOOLS = frozenset({"ha_read_file", "ha_config_get_yaml"})
 
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
+# The automation tools read a bare ``identifier`` only as a config ``id``, so an
+# automation's object ID would only ever match a visible automation.
+_OBJECT_ID_DOMAINS = frozenset({"script", "scene"})
+# Trace records and raw trace commands name their target by ``domain`` + ``item_id``.
+_TRACE_DOMAINS = frozenset({"script", "automation"})
 
 
 @dataclass(frozen=True)
@@ -48,11 +65,18 @@ class IdentifierAliases:
     registry ``unique_id``) match exactly, like the tools' registry lookup, so a
     visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
     are the casefolded service names (storage keys) of hidden scripts.
+    ``config_file_pattern`` matches a hidden script's key or a hidden scene's or
+    automation's ``id`` as written in a YAML config file.
     """
 
     object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
     storage_keys: Mapping[str, frozenset[str]] = field(default_factory=dict)
     script_services: frozenset[str] = frozenset()
+    config_file_pattern: re.Pattern[str] | None = field(default=None, compare=False)
+
+    def embedded_terms(self) -> frozenset[str]:
+        """Strings that run a hidden script without naming its entity_id."""
+        return frozenset(f"script.{key}" for key in self.script_services)
 
     def addresses_hidden(self, domain: str, value: str) -> bool:
         key = value.strip().removeprefix(f"{domain}.")
@@ -72,7 +96,8 @@ def build_identifier_aliases(
     for hidden_id in hidden:
         domain, _, object_id = hidden_id.partition(".")
         if domain in _ALIASED_DOMAINS and object_id:
-            object_ids.setdefault(domain, set()).add(object_id.casefold())
+            if domain in _OBJECT_ID_DOMAINS:
+                object_ids.setdefault(domain, set()).add(object_id.casefold())
             if domain == "script":
                 hidden_scripts[hidden_id] = object_id
     entries = (
@@ -95,11 +120,34 @@ def build_identifier_aliases(
             storage_keys.setdefault(domain, set()).add(unique_id)
             if domain == "script":
                 hidden_scripts[entity_id] = unique_id
+    script_keys = frozenset(hidden_scripts.values())
+    config_ids = storage_keys.get("scene", set()) | storage_keys.get(
+        "automation", set()
+    )
     return IdentifierAliases(
         object_ids={d: frozenset(v) for d, v in object_ids.items()},
         storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
-        script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
+        script_services=frozenset(key.casefold() for key in script_keys),
+        config_file_pattern=_config_file_pattern(script_keys, config_ids),
     )
+
+
+def _config_file_pattern(
+    script_keys: Collection[str], config_ids: Collection[str]
+) -> re.Pattern[str] | None:
+    """Match ``<script key>:`` and ``id: <config id>`` lines in YAML config text."""
+    alternatives = []
+    if script_keys:
+        keys = "|".join(re.escape(k) for k in sorted(script_keys))
+        alternatives.append(rf"[\"']?(?:{keys})[\"']?[ \t]*:(?:[ \t]|$)")
+    if config_ids:
+        ids = "|".join(re.escape(i) for i in sorted(config_ids))
+        alternatives.append(
+            rf"[\"']?id[\"']?[ \t]*:[ \t]*[\"']?(?:{ids})[\"']?[ \t]*(?:#.*)?$"
+        )
+    if not alternatives:
+        return None
+    return re.compile(rf"^[ \t]*(?:-[ \t]+)?(?:{'|'.join(alternatives)})", re.MULTILINE)
 
 
 def hidden_identifier_argument(
@@ -107,7 +155,17 @@ def hidden_identifier_argument(
 ) -> str | None:
     """Return the caller's identifier argument when it addresses a hidden entity."""
     if tool_name == _SERVICE_TOOL:
-        return _hidden_script_service(args, aliases)
+        return _hidden_script_service(args, aliases) or _hidden_trace_item(
+            _json_mapping(args.get("data")), aliases
+        )
+    prefixed_arg = PREFIXED_IDENTIFIER_ARGS.get(tool_name)
+    if prefixed_arg is not None:
+        value = args.get(prefixed_arg)
+        if not isinstance(value, str):
+            return None
+        domain = value.strip().partition(".")[0]
+        hit = domain in _TRACE_DOMAINS and aliases.addresses_hidden(domain, value)
+        return value if hit else None
     spec = BARE_IDENTIFIER_ARGS.get(tool_name)
     if spec is None:
         return None
@@ -130,3 +188,72 @@ def _hidden_script_service(
         return None
     hit = service.strip().casefold() in aliases.script_services
     return service if hit else None
+
+
+def _json_mapping(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, Mapping) else None
+
+
+def _hidden_trace_item(
+    record: Mapping[str, Any] | None, aliases: IdentifierAliases
+) -> str | None:
+    """Return the ``item_id`` of a ``domain`` + ``item_id`` record naming a hidden one."""
+    if record is None:
+        return None
+    domain = record.get("domain")
+    item_id = record.get("item_id")
+    if not (isinstance(domain, str) and isinstance(item_id, str | int)):
+        return None
+    domain = domain.strip().casefold()
+    if domain in _TRACE_DOMAINS and aliases.addresses_hidden(domain, str(item_id)):
+        return str(item_id)
+    return None
+
+
+def _names_hidden_trace_item(value: Any, aliases: IdentifierAliases) -> bool:
+    if isinstance(value, Mapping):
+        if _hidden_trace_item(value, aliases) is not None:
+            return True
+        return any(_names_hidden_trace_item(item, aliases) for item in value.values())
+    if isinstance(value, list | tuple):
+        return any(_names_hidden_trace_item(item, aliases) for item in value)
+    return False
+
+
+def _strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            yield from _strings(item)
+
+
+def result_reveals_hidden(
+    tool_name: str, payloads: Iterable[Any], aliases: IdentifierAliases
+) -> bool:
+    """Whether a tool result names a hidden entity by storage key.
+
+    ``payloads`` are the result's JSON values (structured content and parsed
+    text blocks). Trace records (``trace/list``, ``trace/contexts``) name their
+    target by ``domain`` + ``item_id``; a config-file read shows a hidden
+    script's key or a hidden scene's or automation's ``id``.
+    """
+    pattern = (
+        aliases.config_file_pattern if tool_name in _CONFIG_FILE_READ_TOOLS else None
+    )
+    for payload in payloads:
+        if _names_hidden_trace_item(payload, aliases):
+            return True
+        if pattern is not None and any(
+            pattern.search(text) for text in _strings(payload)
+        ):
+            return True
+    return False

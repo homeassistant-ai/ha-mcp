@@ -901,9 +901,14 @@ dimension. What it covers:
   and Home Assistant exposes every script as a `script.<storage key>` service.
   When such a key belongs to a hidden script, scene or automation — including
   a renamed one whose key no longer matches its entity_id — the
-  `ha_config_get_*` / `ha_config_set_*` / `ha_config_remove_*` call, or a
+  `ha_config_get_*` / `ha_config_set_*` / `ha_config_remove_*` call, a
+  `ha_get_automation_traces` call for `script.<storage key>`, or a
   `ha_call_service` with `domain: script` and that key as `service`, is
-  concealed as not-found too.
+  concealed as not-found too. A script or automation body that calls
+  `script.<storage key>`, a raw `trace/*` command or result naming the key,
+  and an `ha_read_file` / `ha_config_get_yaml` read of `scripts.yaml`,
+  `scenes.yaml` or `automations.yaml` that shows a hidden body are refused.
+  An automation's bare `identifier` is only ever read as its config `id`.
 
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
 code execution via `ha_manage_custom_tool` (`code` / `run_saved` — pure

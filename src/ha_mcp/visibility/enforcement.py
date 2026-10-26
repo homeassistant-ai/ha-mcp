@@ -74,6 +74,7 @@ from .identifier_aliases import (
     IdentifierAliases,
     build_identifier_aliases,
     hidden_identifier_argument,
+    result_reveals_hidden,
 )
 from .model import VisibilityConfig
 from .resolver import (
@@ -253,31 +254,25 @@ def _build_hidden_regex(hidden: set[str]) -> re.Pattern[str] | None:
 
 @dataclass(frozen=True)
 class _HiddenMatcher:
-    """The enforced hidden set together with the boundary regex compiled from it.
+    """The enforced hidden set, its identifier aliases and the boundary regex.
 
-    Built only through :meth:`from_hidden`, so ``regex`` is ``None`` exactly when
-    ``hidden`` is empty and every scan sees a consistent pair.
     ``identifier_aliases`` holds the bare keys that address a hidden script,
-    scene or automation (see ``identifier_aliases``).
+    scene or automation (see ``identifier_aliases``). The regex matches the
+    hidden entity_ids plus the alias terms that run a hidden script without
+    naming it. Built only through :meth:`from_hidden`, so ``regex`` is ``None``
+    exactly when ``hidden`` is empty and every scan sees one consistent view.
     """
 
     hidden: frozenset[str]
     regex: re.Pattern[str] | None
-    identifier_aliases: IdentifierAliases = field(
-        default_factory=IdentifierAliases, hash=False
-    )
+    identifier_aliases: IdentifierAliases = field(hash=False)
 
     @classmethod
     def from_hidden(
-        cls,
-        hidden: set[str],
-        aliases: IdentifierAliases | None = None,
+        cls, hidden: set[str], aliases: IdentifierAliases
     ) -> _HiddenMatcher:
-        return cls(
-            frozenset(hidden),
-            _build_hidden_regex(hidden),
-            aliases or IdentifierAliases(),
-        )
+        terms = hidden | aliases.embedded_terms()
+        return cls(frozenset(hidden), _build_hidden_regex(terms), aliases)
 
     def exact(self, text: str) -> bool:
         """Whether ``text`` is a hidden entity_id."""
@@ -302,6 +297,22 @@ def _serialize_result(result: ToolResult) -> str:
         except (TypeError, ValueError):
             parts.append(str(structured))
     return "\n".join(parts)
+
+
+def _result_payloads(result: ToolResult) -> list[Any]:
+    """A tool result's structured content and text blocks, JSON-parsed if possible."""
+    payloads: list[Any] = []
+    structured = getattr(result, "structured_content", None)
+    if structured is not None:
+        payloads.append(structured)
+    for block in getattr(result, "content", None) or []:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            try:
+                payloads.append(json.loads(text))
+            except json.JSONDecodeError:
+                payloads.append(text)
+    return payloads
 
 
 # Sentinel returned for a hidden-naming string value or a mapping whose
@@ -658,7 +669,7 @@ class _VisibilityEnforcementBase(Middleware):
         return config
 
     async def _hidden_matcher(self, config: VisibilityConfig) -> _HiddenMatcher:
-        """Resolve the hidden set + regex through the module-shared cache."""
+        """Resolve the hidden set, aliases and regex through the module-shared cache."""
         return await _hidden_cache.get(config, self._get_client())
 
 
@@ -794,7 +805,9 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                     scrub_tally.unwarnable_representations,
                 )
                 _raise_enforced(name, _outbound_reason(name))
-        if matcher.embeds(_serialize_result(result)):
+        if matcher.embeds(_serialize_result(result)) or result_reveals_hidden(
+            name, _result_payloads(result), matcher.identifier_aliases
+        ):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
         if scrub_tally.mutated_representations:
@@ -905,18 +918,11 @@ class _HiddenSetCache:
 _hidden_cache = _HiddenSetCache()
 
 
-async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
-    """Return the hidden-set regex while enforce mode is active, else ``None``.
+async def _active_matcher(client: Any) -> _HiddenMatcher | None:
+    """The shared matcher while enforce mode is active; ``None`` otherwise or on error.
 
-    Collection-read surfaces (the ha_search config-body branches, legacy and
-    component) call this to OMIT records referencing a hidden entity before the
-    response reaches the middleware's outbound scan — which would otherwise
-    refuse the whole call on contact, turning the issue-#2015 "collection reads
-    omit" contract into a wholesale refusal. ``client`` is the CALLER's live
-    client, used only if the shared cache needs a refresh (the middleware's
-    inbound gate for the request in flight normally primed it already).
-    Fail-soft to ``None`` on any load/data error: the fail-closed policy is
-    owned by the middleware's call gates, not by this best-effort scrub seam.
+    Fail-soft: the fail-closed policy is owned by the middleware's call gates,
+    not by the best-effort tool-side scrubs that call this.
     """
     try:
         config = await asyncio.to_thread(
@@ -928,10 +934,34 @@ async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
             and config_has_active_hide_dimensions(config)
         ):
             return None
-        matcher = await _hidden_cache.get(config, client)
+        return await _hidden_cache.get(config, client)
     except Exception:  # noqa: BLE001
         return None
-    return matcher.regex
+
+
+async def active_hidden_entity_ids(client: Any) -> frozenset[str]:
+    """The enforced hidden entity_ids, empty while enforce mode is inactive.
+
+    Tools that list entity IDs in a genuine error (``available_script_ids``)
+    drop these so the list neither leaks a hidden ID nor trips the outbound scan.
+    """
+    matcher = await _active_matcher(client)
+    return matcher.hidden if matcher is not None else frozenset()
+
+
+async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
+    """Return the hidden-set regex while enforce mode is active, else ``None``.
+
+    Collection-read surfaces (the ha_search config-body branches, legacy and
+    component) call this to OMIT records referencing a hidden entity before the
+    response reaches the middleware's outbound scan — which would otherwise
+    refuse the whole call on contact, turning the issue-#2015 "collection reads
+    omit" contract into a wholesale refusal. ``client`` is the CALLER's live
+    client, used only if the shared cache needs a refresh (the middleware's
+    inbound gate for the request in flight normally primed it already).
+    """
+    matcher = await _active_matcher(client)
+    return matcher.regex if matcher is not None else None
 
 
 def scrub_records(

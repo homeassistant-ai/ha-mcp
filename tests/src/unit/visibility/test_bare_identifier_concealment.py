@@ -10,13 +10,20 @@ argument that never spells out its entity_id.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.visibility.identifier_aliases import BARE_IDENTIFIER_ARGS
+from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+from ha_mcp.visibility.identifier_aliases import (
+    BARE_IDENTIFIER_ARGS,
+    PREFIXED_IDENTIFIER_ARGS,
+)
 
 from ..test_container_param_coercion_complete import _all_registered_tools
 from .test_enforcement import (
@@ -36,6 +43,19 @@ def _registry(*entries: dict[str, str]) -> dict[str, Any]:
 
 def _entry(entity_id: str, unique_id: str, platform: str) -> dict[str, str]:
     return {"entity_id": entity_id, "unique_id": unique_id, "platform": platform}
+
+
+# A hidden script renamed from ``come_home``: its storage key, service name and
+# trace item_id stay ``come_home`` while its entity_id is ``script.front_door``.
+_RENAMED_HIDDEN_SCRIPT = _entry("script.front_door", "come_home", "script")
+
+
+def _enforce_hiding(
+    set_config: Callable[..., Any], hidden: str, *entries: dict[str, str]
+) -> Any:
+    set_config(enabled=True, enforce=True, deny_entity_ids=[hidden])
+    client = FakeClient(registry=_registry(*entries))
+    return make_mw(get_client=lambda: client)
 
 
 class TestBareIdentifierConcealment:
@@ -79,6 +99,47 @@ class TestBareIdentifierConcealment:
                 {"identifier": "1700000000001", "run_actions": True},
                 _entry("automation.buzz_door", "1700000000001", "automation"),
                 id="automation-config-id",
+            ),
+            pytest.param(
+                "ha_config_get_script",
+                {"script_id": "front_door"},
+                _RENAMED_HIDDEN_SCRIPT,
+                id="renamed-script-new-object-id",
+            ),
+            pytest.param(
+                "ha_config_get_script",
+                {"script_id": "script.come_home"},
+                _RENAMED_HIDDEN_SCRIPT,
+                id="renamed-script-prefixed-storage-key",
+            ),
+            # Traces are keyed by storage key, and the trace tool falls back to
+            # the bare object ID when no entity has the given entity_id.
+            pytest.param(
+                "ha_get_automation_traces",
+                {"automation_id": "script.come_home"},
+                _RENAMED_HIDDEN_SCRIPT,
+                id="trace-by-script-storage-key",
+            ),
+            pytest.param(
+                "ha_call_service",
+                {
+                    "ws_command": "trace/get",
+                    "data": json.dumps(
+                        {"domain": "script", "item_id": "come_home", "run_id": "1"}
+                    ),
+                },
+                _RENAMED_HIDDEN_SCRIPT,
+                id="raw-trace-command-by-storage-key",
+            ),
+            # The check must see the proxy-unwrapped call, not the envelope.
+            pytest.param(
+                "ha_call_write_tool",
+                {
+                    "name": "ha_config_set_script",
+                    "arguments": json.dumps({"script_id": "come_home", "run": "start"}),
+                },
+                _RENAMED_HIDDEN_SCRIPT,
+                id="proxied-bare-storage-key",
             ),
         ],
     )
@@ -138,6 +199,17 @@ class TestBareIdentifierConcealment:
                 {"domain": "script", "service": "front_door"},
                 id="visible-script-service-named-like-hidden-object-id",
             ),
+            # The automation tools read a bare identifier only as a config id.
+            pytest.param(
+                "automation.door_auto",
+                [
+                    _entry("automation.door_auto", "1700000000001", "automation"),
+                    _entry("automation.kitchen_motion", "door_auto", "automation"),
+                ],
+                "ha_config_get_automation",
+                {"identifier": "door_auto"},
+                id="visible-automation-config-id-like-hidden-object-id",
+            ),
         ],
     )
     async def test_visible_entity_sharing_a_hidden_alias_stays_reachable(
@@ -157,8 +229,164 @@ class TestBareIdentifierConcealment:
         assert result.content[0].text == "ran"
 
 
+class TestHiddenScriptStorageKeyInContent:
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            pytest.param(
+                "ha_config_set_script",
+                {
+                    "script_id": "visible_one",
+                    "config": {"sequence": [{"action": "script.come_home"}]},
+                },
+                id="script-calling-hidden-script-service",
+            ),
+            pytest.param(
+                "ha_config_set_automation",
+                {
+                    "config": {
+                        "alias": "Run it",
+                        "triggers": [],
+                        "actions": [{"action": "script.come_home"}],
+                    },
+                    "run_actions": True,
+                },
+                id="automation-calling-hidden-script-service",
+            ),
+        ],
+    )
+    async def test_config_body_running_a_renamed_hidden_script_is_refused(
+        self, set_config: Callable[..., Any], tool: str, args: dict[str, Any]
+    ) -> None:
+        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(make_context(tool, args), _unreached_call_next)
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_raw_trace_listing_naming_a_hidden_script_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
+        listing = {
+            "success": True,
+            "result": [
+                {"domain": "script", "item_id": "wake_up", "run_id": "1"},
+                {"domain": "script", "item_id": "come_home", "run_id": "2"},
+            ],
+        }
+        context = make_context(
+            "ha_call_service",
+            {"ws_command": "trace/list", "data": {"domain": "script"}},
+        )
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                context, _returns(text_result(json.dumps(listing), listing))
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+
+class TestHiddenConfigFileContent:
+    @pytest.mark.parametrize(
+        ("hidden_entry", "content"),
+        [
+            pytest.param(
+                _RENAMED_HIDDEN_SCRIPT,
+                "wake_up:\n  sequence: []\ncome_home:\n  sequence: []\n",
+                id="scripts-yaml-keyed-by-storage-key",
+            ),
+            pytest.param(
+                _entry("scene.open_up", "1727266720448", "homeassistant"),
+                "- id: '1727266720448'\n  name: Open up\n  entities: {}\n",
+                id="scenes-yaml-keyed-by-config-id",
+            ),
+        ],
+    )
+    async def test_reading_a_config_file_with_a_hidden_body_is_refused(
+        self,
+        set_config: Callable[..., Any],
+        hidden_entry: dict[str, str],
+        content: str,
+    ) -> None:
+        mw = _enforce_hiding(set_config, hidden_entry["entity_id"], hidden_entry)
+        body = {"success": True, "content": content}
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_read_file", {"path": "scripts.yaml"}),
+                _returns(text_result(json.dumps(body), body)),
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_config_file_with_only_visible_bodies_stays_readable(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
+        body = {"success": True, "content": "wake_up:\n  alias: come home early\n"}
+        result = await mw.on_call_tool(
+            make_context("ha_read_file", {"path": "scripts.yaml"}),
+            _returns(text_result(json.dumps(body), body)),
+        )
+        assert result.structured_content == body
+
+
+class _NotFoundClient(FakeClient):
+    """Answers every config fetch with a 404, as for a genuinely absent key."""
+
+    async def get_script_config(self, script_id: str) -> dict[str, Any]:
+        raise HomeAssistantAPIError(f"Script not found: {script_id}", status_code=404)
+
+    async def get_automation_config(self, identifier: str) -> dict[str, Any]:
+        raise HomeAssistantAPIError(f"Not found: {identifier}", status_code=404)
+
+
+@pytest.mark.parametrize(
+    ("hidden", "visible", "list_key", "call_tool"),
+    [
+        pytest.param(
+            _entry("script.unlock_house", "unlock_house", "script"),
+            _entry("script.wake_up", "wake_up", "script"),
+            "available_script_ids",
+            lambda client: ConfigScriptTools(client).ha_config_get_script(
+                script_id="no_such"
+            ),
+            id="script",
+        ),
+        pytest.param(
+            _entry("automation.buzz_door", "1700000000001", "automation"),
+            _entry("automation.kitchen_motion", "1700000000002", "automation"),
+            "available_automation_ids",
+            lambda client: AutomationConfigTools(client).ha_config_get_automation(
+                identifier="no_such"
+            ),
+            id="automation",
+        ),
+    ],
+)
+async def test_genuine_not_found_lists_only_visible_ids(
+    set_config: Callable[..., Any],
+    hidden: dict[str, str],
+    visible: dict[str, str],
+    list_key: str,
+    call_tool: Callable[[Any], Awaitable[Any]],
+) -> None:
+    set_config(enabled=True, enforce=True, deny_entity_ids=[hidden["entity_id"]])
+    client = _NotFoundClient(registry=_registry(hidden, visible))
+    mw = make_mw(get_client=lambda: client)
+
+    async def _run_tool(_context: Any) -> Any:
+        return await call_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await mw.on_call_tool(make_context("ha_config_get_script"), _run_tool)
+    body = _error_body(exc)
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    listed = body[list_key]
+    hidden_object_id = hidden["entity_id"].partition(".")[2]
+    assert listed, body
+    assert all(hidden_object_id not in item for item in listed)
+
+
 def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
-    if param_name in ("script_id", "scene_id"):
+    if param_name in ("script_id", "scene_id", "automation_id"):
         return True
     return param_name == "identifier" and "automation" in tool_name
 
@@ -174,6 +402,7 @@ def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:
         if _takes_bare_identifier(tool_name, param_name)
     }
     covered = {(tool, arg) for tool, (arg, _domain) in BARE_IDENTIFIER_ARGS.items()}
+    covered |= set(PREFIXED_IDENTIFIER_ARGS.items())
 
     assert discovered == covered, (
         "BARE_IDENTIFIER_ARGS is out of sync with the registered tools.\n"

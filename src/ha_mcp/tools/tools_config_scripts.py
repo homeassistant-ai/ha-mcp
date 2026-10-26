@@ -60,6 +60,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .tool_hints import read_only_hints, write_hints
+from .util_helpers import list_visible_registry_ids
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
 logger = logging.getLogger(__name__)
@@ -254,36 +255,6 @@ class ConfigScriptTools:
             response.setdefault("warnings", []).extend(cat_warnings)
         return response
 
-    async def _list_script_entity_ids(self) -> list[str]:
-        """Best-effort list of bare script IDs (up to 10) from the entity registry.
-
-        Returns the bare storage keys (e.g. ``morning_routine``), stripping
-        the ``script.`` entity_id prefix — ``ha_config_get_script`` /
-        ``ha_config_set_script`` / ``ha_config_remove_script`` all take the
-        bare form, so the entity_id prefix would force callers to strip it
-        before retry. Returns an empty list on any failure — caller treats
-        absence as "no IDs to report" rather than failing the structured
-        error raise. The 10-entry cap lives here (not at the callers) so a
-        new call site can't accidentally bloat the error payload.
-        """
-        try:
-            result = await self._client.send_websocket_message(
-                {"type": "config/entity_registry/list"}
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Failed to list script entity_ids from registry: %s", e)
-            return []
-        entries = result.get("result", []) if isinstance(result, dict) else result
-        if not isinstance(entries, list):
-            return []
-        return [
-            entry["entity_id"][len("script.") :]
-            for entry in entries
-            if isinstance(entry, dict)
-            and isinstance(entry.get("entity_id"), str)
-            and entry["entity_id"].startswith("script.")
-        ][:10]
-
     async def _raise_script_not_found(self, script_id: str) -> None:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing script.
 
@@ -293,7 +264,9 @@ class ConfigScriptTools:
         ``ha_config_remove_script``). Populates ``available_script_ids``
         (up to 10 bare IDs) from the entity registry.
         """
-        available_ids = await self._list_script_entity_ids()
+        available_ids = await list_visible_registry_ids(
+            self._client, "script", bare=True
+        )
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
