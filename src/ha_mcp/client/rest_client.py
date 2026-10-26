@@ -8,7 +8,6 @@ import logging
 import os
 import ssl
 import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
@@ -18,6 +17,13 @@ from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 from .admin_routes import is_admin_only_route
+from .error_log_journald import (
+    JournaldPage,
+    container_page,
+    first_cursor,
+    journald_page,
+    range_header,
+)
 from .models import ErrorLogPage
 from .supervisor_client import make_supervisor_httpx_client
 
@@ -62,16 +68,6 @@ _MAX_REQUEST_ATTEMPTS = 3
 # client mirrors that on every route, so all install types serve the same slice.
 # Shared with the tool layer, which sizes its fetch window against it.
 MIN_LOG_WINDOW_LINES = 2
-# Entries the has_more probe reads from just behind a full window. A one-entry
-# probe compared one rendered line, which a boundary duplicate (the same
-# timestamp-less traceback line logged twice) could false-match into "end of
-# history". Comparing a block this deep requires that many CONSECUTIVE
-# identical lines to straddle the boundary — and then the history a false stop
-# skips is more of the same duplicates. Timestamps cannot close the gap
-# instead: the colliding lines are exactly the ones without them, and
-# journald's cursor/timestamp metadata exists only in the journal export
-# format, which the hassio-proxy route cannot request.
-_PROBE_ENTRIES = 8
 NON_ADMIN_TOKEN_WARNING = (
     "ha-mcp does not officially support non-admin Home Assistant tokens. They "
     "still work, but admin-only operations fail. Use a long-lived access token "
@@ -898,126 +894,26 @@ class HomeAssistantClient:
         logger.debug("Checking configuration")
         return await self._request("POST", "/config/core/check_config")
 
-    @staticmethod
-    def _journald_range_header(lines: int, offset: int = 0) -> str:
-        """Build Supervisor's journald ``Range`` header for a bounded window.
+    async def _supervisor_core_logs(self, range_header: str) -> JournaldPage:
+        """Fetch one journald window straight from Supervisor, with its cursor."""
+        response = await self._supervisor_logs_response(
+            "core",
+            headers={"Accept": "text/plain", "Range": range_header},
+            params={"no_colors": "true"},
+        )
+        return JournaldPage(response.text, first_cursor(response))
 
-        Supervisor's log endpoints accept
-        ``Range: entries=<cursor>:<num_skip>:<num_entries>`` and build
-        ``entries=:-{N-1}:{N}`` themselves for a ``?lines=N`` request
-        (supervisor/api/host.py). ``offset`` moves the window that many entries
-        further back, so the returned slice ends ``offset`` entries before the
-        newest one.
-
-        A ``lines=1`` window is only expressible with a non-zero ``offset``: at
-        ``offset=0`` the header degenerates to ``entries=:0:1``, whose
-        non-negative skip reads from the OLDEST entry instead of the newest.
-        Callers anchoring at the newest entry pass ``lines`` already floored at
-        ``MIN_LOG_WINDOW_LINES``; the one-entry probe always carries an offset.
-        """
-        # Negate the computed skip rather than prefixing "-" so the degenerate
-        # skip of 0 renders as ":0:" (non-negative, reads from the oldest
-        # entry) instead of the ill-formed ":-0:".
-        return f"entries=:{-(offset + lines - 1)}:{lines}"
-
-    @staticmethod
-    def _container_error_log_page(text: str, lines: int, offset: int) -> ErrorLogPage:
-        """Window the whole-file ``/api/error_log`` body client-side.
-
-        Same tail semantics as the journald Range the Supervisor-backed
-        branches request, so ``get_error_log`` answers with the same slice of
-        history on every install type. Paging is exact here — the whole file is
-        in hand, so ``has_more`` is simply whether anything precedes the window.
-        An ``offset`` past the start of the file yields an empty final page.
-        """
-        all_lines = text.splitlines()
-        end = len(all_lines) - offset
-        if end <= 0:
-            return ErrorLogPage(text="", has_more=False)
-        start = max(end - lines, 0)
-        return ErrorLogPage(text="\n".join(all_lines[start:end]), has_more=start > 0)
-
-    async def _supervisor_core_logs(self, lines: int, offset: int) -> str:
-        """Fetch a journald window of HA Core's log straight from Supervisor."""
-        return await self._supervisor_logs_get("core", lines=lines, offset=offset)
-
-    async def _proxied_core_logs(self, lines: int, offset: int) -> str:
-        """Fetch the same window through HA Core's hassio proxy with the LLA."""
+    async def _proxied_core_logs(self, range_header: str) -> JournaldPage:
+        """The same window through HA Core's hassio proxy."""
         response = await self._raw_request(
             "GET",
             "/hassio/core/logs",
-            headers={
-                "Accept": "text/plain",
-                "Range": self._journald_range_header(lines, offset),
-            },
+            headers={"Accept": "text/plain", "Range": range_header},
             params={"no_colors": "true"},
         )
-        return response.text
+        return JournaldPage(response.text, first_cursor(response))
 
-    async def _journald_error_log_page(
-        self,
-        lines: int,
-        offset: int,
-        fetch: Callable[[int, int], Awaitable[str]],
-    ) -> ErrorLogPage:
-        """Read one journald window and settle ``has_more`` with a 1-entry probe.
-
-        systemd's journal-gatewayd does not guard the negative-skip branch the
-        way it guards the positive one (``sd_journal_previous_skip(-n_skip + 1)``
-        returns no END_OF_STREAM): an offset past the start of the journal
-        CLAMPS to the oldest entry and still answers with a full window. So a
-        saturated window proves nothing about what lies behind it, and a
-        count-based ``has_more`` would stay true forever — an agent following
-        the pagination hint would loop on identical pages.
-
-        Hence: a short or empty window means the journal really is exhausted
-        (nothing clamps a window smaller), and a saturated one is settled by
-        asking for the ``_PROBE_ENTRIES`` entries that should sit just behind
-        it. If the journal has nothing there, the clamp starts the probe at
-        the same oldest entry the window starts with, so the probe block
-        equals the window's opening lines — identity means end of history. A
-        differing block proves deeper history (an under-full span behind the
-        window also clamps and misaligns, which correctly reads as "more").
-        The identity check also terminates the degraded case where an
-        intermediary strips the ``Range`` header (RFC 7233 permits it): both
-        requests then return Supervisor's default window and compare equal.
-
-        The saturation test counts lines only to decide whether to probe, never
-        to answer: one journald entry can be a multi-line traceback, so the line
-        count over-estimates entries and can only over-trigger the probe, which
-        then gives the real answer. In practice the two rarely diverge here:
-        docker's journald log driver — how HAOS captures Core's output —
-        ingests stdout line by line, one journal entry per rendered line, so
-        multi-line entries reach this endpoint only from native journal-API
-        writers.
-
-        Known imprecision, accepted: the identity check can still stop one
-        page early when the compared block — ``_PROBE_ENTRIES`` lines, or the
-        window's own length when that is smaller — is byte-identical across
-        the boundary (see the constant's comment for why timestamps cannot
-        disambiguate instead). The failure
-        direction is a missed page of exactly those duplicates — bounded,
-        unlike the infinite loop a count-based ``has_more`` produces on the
-        clamp.
-        """
-        text = await fetch(lines, offset)
-        if not text or len(text.splitlines()) < lines:
-            return ErrorLogPage(text=text, has_more=False)
-        probe = await fetch(_PROBE_ENTRIES, offset + lines)
-        probe_lines = probe.splitlines()
-        window_lines = text.splitlines()
-        # Compare the shared-length prefix: with a window smaller than the
-        # probe (lines < _PROBE_ENTRIES), an end-of-history clamp returns a
-        # probe LONGER than the window, and a full-length compare would read
-        # that as "more history" forever — the small-limit loop this method
-        # exists to prevent.
-        shared = min(len(probe_lines), len(window_lines))
-        return ErrorLogPage(
-            text=text,
-            has_more=shared > 0 and probe_lines[:shared] != window_lines[:shared],
-        )
-
-    async def get_error_log(self, lines: int, offset: int = 0) -> ErrorLogPage:
+    async def get_error_log(self, lines: int, offset: int | str = 0) -> ErrorLogPage:
         """Get a bounded window of the Home Assistant error log.
 
         ``lines`` is the number of log lines to fetch and ``offset`` how many
@@ -1054,15 +950,14 @@ class HomeAssistantClient:
           keep the historical ``/api/error_log`` proxy path.
 
         The two Supervisor-backed branches express the window as a journald
-        ``Range`` header (see ``_journald_range_header``) and settle
-        ``has_more`` with a one-entry probe (see ``_journald_error_log_page``).
-        HA Core's hassio proxy forwards that header for its log paths
-        (``PATHS_LOGS`` in ``homeassistant/components/hassio/http.py``); an
-        intermediary that stripped it would degrade to Supervisor's 100-line
-        default, never to an unbounded fetch, and the probe still terminates
-        paging. ``/api/error_log`` is a whole-file plain-text endpoint with no
-        window support, so the container branch reads the file and applies the
-        same window client-side, where paging is exact.
+        ``Range`` header, either anchored on the newest entry (integer
+        ``offset``) or on an opaque cursor token from an earlier page; see
+        :mod:`ha_mcp.client.error_log_journald`. Working from Supervisor's
+        ``X-First-Cursor`` keeps a page stable while Home Assistant logs more
+        lines between two calls. ``/api/error_log`` is a whole-file plain-text
+        endpoint with no window support, so the container branch reads the file
+        and applies the same window client-side, where paging is exact and
+        integer offsets stay the contract.
 
         The middle branch was discovered by the HAOS E2E tier (#1326): the
         test harness runs ha-mcp externally against a booted HAOS, hits
@@ -1085,7 +980,7 @@ class HomeAssistantClient:
                     logger.debug(
                         "Fetching error log via Supervisor direct (core service)"
                     )
-                    return await self._journald_error_log_page(
+                    return await journald_page(
                         window, offset, self._supervisor_core_logs
                     )
 
@@ -1094,15 +989,18 @@ class HomeAssistantClient:
                         "Fetching error log via HA Core /hassio/core/logs proxy "
                         "(supervised)"
                     )
-                    return await self._journald_error_log_page(
-                        window, offset, self._proxied_core_logs
-                    )
+                    return await journald_page(window, offset, self._proxied_core_logs)
 
+                if isinstance(offset, str):
+                    raise HomeAssistantAPIError(
+                        "Cursor-token paging needs a Supervisor-backed install; "
+                        "the container /api/error_log endpoint has no cursor"
+                    )
                 logger.debug("Fetching error log via HA Core proxy (Container/pip)")
                 raw_response = await self._raw_request(
                     "GET", "/error_log", headers={"Accept": "text/plain"}
                 )
-                return self._container_error_log_page(raw_response.text, window, offset)
+                return container_page(raw_response.text, window, offset)
         except TimeoutError as e:
             raise HomeAssistantConnectionError(
                 f"Timeout fetching the error log after {self.timeout}s: "
@@ -1309,6 +1207,34 @@ class HomeAssistantClient:
             HomeAssistantConnectionError: Timeout or transport error, with
                 distinct messages so callers can tell them apart.
         """
+        headers = {"Accept": "text/plain"}
+        # Presence-triggered flag: journald output carries ANSI escapes otherwise.
+        params: dict[str, Any] = {"no_colors": "true"}
+        if lines is not None:
+            params["lines"] = lines
+        if offset is not None:
+            # An offset window with no size asked for falls back to the
+            # smallest one the Range syntax can express.
+            size = lines if lines is not None else MIN_LOG_WINDOW_LINES
+            headers["Range"] = range_header(size, offset)
+            params.pop("lines", None)
+        logger.debug(
+            "Fetching %s/%s/logs via Supervisor direct (%s)",
+            get_supervisor_base_url(),
+            path,
+            f"range={headers['Range']}" if offset is not None else f"lines={lines}",
+        )
+        response = await self._supervisor_logs_response(path, headers, params)
+        return response.text
+
+    async def _supervisor_logs_response(
+        self, path: str, headers: dict[str, str], params: dict[str, Any]
+    ) -> httpx.Response:
+        """Send one Supervisor ``/logs`` request and map its failures.
+
+        Split from ``_supervisor_logs_get`` so the error-log route can read
+        Supervisor's ``X-First-Cursor`` while plain-text callers keep the body.
+        """
         token = os.environ.get("SUPERVISOR_TOKEN", "")
         if not token:
             # The is_running_in_addon() gate already keys off SUPERVISOR_TOKEN
@@ -1319,25 +1245,7 @@ class HomeAssistantClient:
                 f"Supervisor token absent at call time for /{path}/logs "
                 "(addon-mode gate fired but SUPERVISOR_TOKEN env var not set)"
             )
-
         relative_path = f"/{path}/logs"
-        headers = {"Accept": "text/plain"}
-        # Presence-triggered flag: journald output carries ANSI escapes otherwise.
-        params: dict[str, Any] = {"no_colors": "true"}
-        if lines is not None:
-            params["lines"] = lines
-        if offset is not None:
-            # An offset window with no size asked for falls back to the
-            # smallest one the Range syntax can express.
-            size = lines if lines is not None else MIN_LOG_WINDOW_LINES
-            headers["Range"] = self._journald_range_header(size, offset)
-            params.pop("lines", None)
-        logger.debug(
-            "Fetching %s%s via Supervisor direct (%s)",
-            get_supervisor_base_url(),
-            relative_path,
-            f"range={headers['Range']}" if offset is not None else f"lines={lines}",
-        )
 
         try:
             async with asyncio.timeout(self.timeout):
@@ -1393,7 +1301,7 @@ class HomeAssistantClient:
                 status_code=response.status_code,
                 response_data={"message": text_body, "path": path},
             )
-        return response.text
+        return response
 
     async def _get_addon_logs_via_supervisor(
         self, slug: str, lines: int | None = None

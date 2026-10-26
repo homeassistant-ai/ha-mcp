@@ -9,7 +9,10 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.error_log_parsing import _DEFAULT_TOP_N
+from ha_mcp.tools.error_log_parsing import (
+    _DEFAULT_TOP_N,
+    _ERROR_LOG_HEADER_LOOKBACK_LINES,
+)
 
 from ..utilities.assertions import MCPAssertions, safe_call_tool
 
@@ -468,11 +471,16 @@ async def test_logs_error_log_source(mcp_client):
     assert "log" in data, "Response should contain log text"
     assert "total_lines" in data, "Response should contain total_lines"
     assert "returned_lines" in data, "Response should contain returned_lines"
+    assert "total_records" in data, "Response should contain total_records"
+    assert "returned_records" in data, "Response should contain returned_records"
     assert data["limit"] == 20, f"Limit should be 20, got {data['limit']}"
     # Pagination contract (#2279): the fetch is a bounded window, so the
-    # response has to say how big it was and whether history remains.
+    # response has to say how big it was and whether history remains. The
+    # window carries a header lookback beyond the caller's limit so the oldest
+    # visible record can arrive whole; when the window opens inside a record
+    # the tool re-fetches wider, so only the floor is fixed here.
     assert data["offset"] == 0
-    assert data["window_lines"] == 20
+    assert data["window_lines"] >= 20 + _ERROR_LOG_HEADER_LOOKBACK_LINES
     assert isinstance(data["has_more"], bool), (
         f"has_more should be a bool, got {data['has_more']!r}"
     )
@@ -515,8 +523,8 @@ async def test_logs_error_log_pagination_advances(mcp_client):
             if not page["has_more"]:
                 logger.info(f"Paging ended after {len(seen)} page(s)")
                 return
-            assert page["next_offset"] > offset, (
-                f"next_offset {page['next_offset']} must advance past {offset}"
+            assert page["next_offset"] != offset, (
+                f"next_offset {page['next_offset']!r} must advance past {offset!r}"
             )
             offset = page["next_offset"]
 

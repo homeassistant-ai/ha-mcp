@@ -23,19 +23,34 @@ Supervisor-backed install.
 """
 
 import asyncio
+from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from ha_mcp.client.error_log_journald import (
+    JournaldPage,
+    cursor_range_header,
+    cursor_token,
+    is_cursor_token,
+    journald_page,
+    range_header,
+    token_cursor,
+    token_skip,
+)
 from ha_mcp.client.rest_client import (
     MIN_LOG_WINDOW_LINES,
+    ErrorLogPage,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
+
+from ._error_log_test_helpers import journald_fetch
 
 # Any bounded window; the point of every assertion below is that the request
 # carries THIS number rather than a hard-coded one of the client's own.
@@ -43,7 +58,7 @@ _WINDOW = 100
 
 
 @pytest.fixture
-def client():
+def client() -> HomeAssistantClient:
     """``HomeAssistantClient`` with stubbed internals — no real network.
 
     Mirrors the fixture pattern in ``test_tools_utility_supervisor_logs.py``;
@@ -65,7 +80,7 @@ def client():
 
 
 @pytest.fixture
-def supervisor_http():
+def supervisor_http() -> Iterator[MagicMock]:
     """Capture the wire-level request the direct-Supervisor branch issues.
 
     Patches ``httpx.AsyncClient`` (what ``make_supervisor_httpx_client``
@@ -97,29 +112,55 @@ class TestJournaldRangeHeader:
     Supervisor offers for an offset window (``?lines=`` can only take the
     newest N)."""
 
-    def test_newest_window_matches_supervisors_own_lines_translation(self):
+    def test_newest_window_matches_supervisors_own_lines_translation(self) -> None:
         """Supervisor builds ``entries=:-{N-1}:{N}`` for its own ``?lines=N``."""
-        assert HomeAssistantClient._journald_range_header(100, 0) == "entries=:-99:100"
+        assert range_header(100, 0) == "entries=:-99:100"
 
-    def test_offset_moves_the_window_further_back(self):
+    def test_offset_moves_the_window_further_back(self) -> None:
         """The window ends ``offset`` entries before the newest one."""
-        assert (
-            HomeAssistantClient._journald_range_header(100, 250) == "entries=:-349:100"
-        )
+        assert range_header(100, 250) == "entries=:-349:100"
 
-    def test_one_entry_window_is_expressible_only_with_an_offset(self):
-        """The probe's shape: a single entry, ``offset`` back from the newest.
+    def test_one_entry_window_is_expressible_only_with_an_offset(self) -> None:
+        """A single-entry window degenerates at offset 0.
 
-        At offset 0 the same formula degenerates to ``entries=:0:1``, whose
-        non-negative skip reads from the OLDEST entry — which is why callers
+        ``entries=:0:1`` reads from the OLDEST entry, which is why callers
         anchoring at the newest end floor their window instead.
         """
-        assert HomeAssistantClient._journald_range_header(1, 250) == "entries=:-250:1"
-        assert HomeAssistantClient._journald_range_header(1, 0) == "entries=:0:1"
+        assert range_header(1, 250) == "entries=:-250:1"
+        assert range_header(1, 0) == "entries=:0:1"
+
+    def test_cursor_range_ends_behind_the_resume_point(self) -> None:
+        """A cursor window is the exact unfetched remainder.
+
+        Gatewayd reads ``entries=<cursor>:<skip>:<n>`` forward from
+        ``cursor + skip``, and the resume point is ``skip`` entries in, so the
+        block starts ``lines`` earlier and ends one entry behind it. Nothing
+        already returned repeats and nothing fetched behind the page is lost.
+        """
+        assert cursor_range_header("s=abc;i=1", 0, 5) == "entries=s=abc;i=1:-5:5"
+        assert cursor_range_header("s=abc;i=1", 3, 5) == "entries=s=abc;i=1:-2:5"
+
+    def test_cursor_tokens_round_trip(self) -> None:
+        token = cursor_token("s=abc;i=1", 7)
+        assert is_cursor_token(token)
+        assert token_cursor(token) == "s=abc;i=1"
+        assert token_skip(token) == 7
+        assert not is_cursor_token(12)
+        assert not is_cursor_token("cursor:")
+
+    def test_a_token_without_a_skip_is_rejected(self) -> None:
+        """``cursor:abc`` cannot resume exactly, so it must not be accepted."""
+        assert is_cursor_token("cursor:s=abc;i=1")
+        with pytest.raises(ValueError):
+            token_cursor("cursor:s=abc;i=1")
+        with pytest.raises(ValueError):
+            token_skip("not-a-token")
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_floors_a_one_line_window(client, supervisor_http):
+async def test_get_error_log_floors_a_one_line_window(
+    client: HomeAssistantClient, supervisor_http: MagicMock
+) -> None:
     """Every route serves at least ``MIN_LOG_WINDOW_LINES``.
 
     Supervisor coerces its own ``?lines=1`` to 2 because the Range syntax
@@ -139,7 +180,9 @@ async def test_get_error_log_floors_a_one_line_window(client, supervisor_http):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_returns_true_when_hassio_loaded(client):
+async def test_is_supervised_returns_true_when_hassio_loaded(
+    client: HomeAssistantClient,
+) -> None:
     """`hassio` in /api/config["components"] → True, cached."""
     client._request = AsyncMock(return_value={"components": ["sun", "hassio", "demo"]})
     assert await client._is_supervised_install() is True
@@ -147,7 +190,9 @@ async def test_is_supervised_returns_true_when_hassio_loaded(client):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_returns_false_when_hassio_absent_and_caches(client):
+async def test_is_supervised_returns_false_when_hassio_absent_and_caches(
+    client: HomeAssistantClient,
+) -> None:
     """`hassio` absent → False, CACHED (definitive non-supervised signal).
 
     A successful /api/config response that doesn't list hassio is a
@@ -164,7 +209,9 @@ async def test_is_supervised_returns_false_when_hassio_absent_and_caches(client)
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_caches_positive_result(client):
+async def test_is_supervised_caches_positive_result(
+    client: HomeAssistantClient,
+) -> None:
     """One probe per session once True — repeated calls don't re-GET /config."""
     client._request = AsyncMock(return_value={"components": ["hassio"]})
     assert await client._is_supervised_install() is True
@@ -174,7 +221,9 @@ async def test_is_supervised_caches_positive_result(client):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_fails_open_on_probe_error(client):
+async def test_is_supervised_fails_open_on_probe_error(
+    client: HomeAssistantClient,
+) -> None:
     """Probe transport-layer error → False, NOT cached (next call re-probes)."""
     client._request = AsyncMock(side_effect=httpx.ConnectError("boom"))
     assert await client._is_supervised_install() is False
@@ -182,7 +231,9 @@ async def test_is_supervised_fails_open_on_probe_error(client):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_fails_open_on_ha_api_error(client):
+async def test_is_supervised_fails_open_on_ha_api_error(
+    client: HomeAssistantClient,
+) -> None:
     """Probe HomeAssistantAPIError (non-2xx) → False, not cached."""
     client._request = AsyncMock(
         side_effect=HomeAssistantAPIError("503 Service Unavailable")
@@ -192,7 +243,7 @@ async def test_is_supervised_fails_open_on_ha_api_error(client):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_propagates_auth_error(client):
+async def test_is_supervised_propagates_auth_error(client: HomeAssistantClient) -> None:
     """A 401 on the probe must NOT fail open — it is a verdict, not a glitch.
 
     Failing open here sends a Supervised install down the Container
@@ -209,7 +260,9 @@ async def test_is_supervised_propagates_auth_error(client):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_propagates_runtime_bugs(client):
+async def test_is_supervised_propagates_runtime_bugs(
+    client: HomeAssistantClient,
+) -> None:
     """Programming errors (TypeError, etc.) must NOT be swallowed by fail-open.
 
     Narrow-except contract: only catch HTTP/transport layer errors;
@@ -223,7 +276,9 @@ async def test_is_supervised_propagates_runtime_bugs(client):
 
 
 @pytest.mark.asyncio
-async def test_is_supervised_handles_unexpected_response_shape(client):
+async def test_is_supervised_handles_unexpected_response_shape(
+    client: HomeAssistantClient,
+) -> None:
     """Probe returns dict without `components` key → False (cached).
 
     ``_request`` returns ``{}`` on a JSON-empty response (rest_client.py
@@ -247,7 +302,9 @@ async def test_is_supervised_handles_unexpected_response_shape(client):
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_addon_branch(client, supervisor_http):
+async def test_get_error_log_addon_branch(
+    client: HomeAssistantClient, supervisor_http: MagicMock
+) -> None:
     """Addon (`is_running_in_addon()` True) → Supervisor REST, windowed.
 
     Asserted on the wire rather than on ``_supervisor_logs_get``'s signature:
@@ -275,8 +332,8 @@ async def test_get_error_log_addon_branch(client, supervisor_http):
 
 @pytest.mark.asyncio
 async def test_get_error_log_addon_branch_never_requests_the_old_fixed_window(
-    client, supervisor_http
-):
+    client: HomeAssistantClient, supervisor_http: MagicMock
+) -> None:
     """The 20,000-line window is gone — the request carries the caller's."""
     with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
         await client.get_error_log(lines=_WINDOW)
@@ -287,7 +344,9 @@ async def test_get_error_log_addon_branch_never_requests_the_old_fixed_window(
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_supervised_external_branch(client):
+async def test_get_error_log_supervised_external_branch(
+    client: HomeAssistantClient,
+) -> None:
     """External + hassio loaded → `/hassio/core/logs` via _raw_request.
 
     HA Core's hassio proxy forwards the ``Range`` header for log paths
@@ -323,7 +382,9 @@ async def test_get_error_log_supervised_external_branch(client):
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
 @pytest.mark.parametrize("route", ["addon_logs", "system_service"])
-async def test_proxied_log_routes_share_the_overall_deadline(client, route):
+async def test_proxied_log_routes_share_the_overall_deadline(
+    client: HomeAssistantClient, route: str
+) -> None:
     """The hassio-proxy log routes are hang-proof for the same reason.
 
     ``get_addon_logs`` and ``_get_system_service_logs`` proxy branches ride the
@@ -332,7 +393,7 @@ async def test_proxied_log_routes_share_the_overall_deadline(client, route):
     """
     client.timeout = 0.01
 
-    async def _hang_forever(*_args, **_kwargs):
+    async def _hang_forever(*_args: Any, **_kwargs: Any) -> None:
         await asyncio.Event().wait()
 
     client._raw_request = AsyncMock(side_effect=_hang_forever)
@@ -352,7 +413,9 @@ async def test_proxied_log_routes_share_the_overall_deadline(client, route):
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
 @pytest.mark.parametrize("supervised", [True, False])
-async def test_get_error_log_has_one_overall_deadline(client, supervised):
+async def test_get_error_log_has_one_overall_deadline(
+    client: HomeAssistantClient, supervised: bool
+) -> None:
     """A server that stalls mid-body must fail fast on every route.
 
     ``httpx.Timeout`` applies per I/O operation, so a peer trickling bytes
@@ -365,7 +428,7 @@ async def test_get_error_log_has_one_overall_deadline(client, supervised):
     components = ["hassio"] if supervised else ["sun"]
     client._request = AsyncMock(return_value={"components": components})
 
-    async def _hang_forever(*_args, **_kwargs):
+    async def _hang_forever(*_args: Any, **_kwargs: Any) -> None:
         await asyncio.Event().wait()
 
     client._raw_request = AsyncMock(side_effect=_hang_forever)
@@ -381,14 +444,16 @@ async def test_get_error_log_has_one_overall_deadline(client, supervised):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_get_error_log_deadline_covers_the_install_class_probe(client):
+async def test_get_error_log_deadline_covers_the_install_class_probe(
+    client: HomeAssistantClient,
+) -> None:
     """The probe is inside the deadline, not before it.
 
     A stalled ``/api/config`` is the same hang with an earlier trigger.
     """
     client.timeout = 0.01
 
-    async def _hang_forever(*_args, **_kwargs):
+    async def _hang_forever(*_args: Any, **_kwargs: Any) -> None:
         await asyncio.Event().wait()
 
     client._request = AsyncMock(side_effect=_hang_forever)
@@ -406,7 +471,9 @@ async def test_get_error_log_deadline_covers_the_install_class_probe(client):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_get_error_log_deadline_allows_a_gateway_retry(client):
+async def test_get_error_log_deadline_allows_a_gateway_retry(
+    client: HomeAssistantClient,
+) -> None:
     """A transient 502 must still recover, not become a hard timeout.
 
     ``_raw_request`` backs off and retries 502/503/504 for safe methods. That
@@ -431,7 +498,9 @@ async def test_get_error_log_deadline_allows_a_gateway_retry(client):
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_container_external_branch(client):
+async def test_get_error_log_container_external_branch(
+    client: HomeAssistantClient,
+) -> None:
     """External + hassio NOT loaded → ``/error_log`` via _raw_request.
 
     The Container/pip branch must use ``_raw_request`` so the plain-text
@@ -464,39 +533,47 @@ class TestContainerBranchWindowing:
     install-agnostic."""
 
     @pytest.fixture
-    def container_client(self, client):
+    def container_client(self, client: HomeAssistantClient) -> HomeAssistantClient:
         whole_file = "".join(f"line{i}\n" for i in range(10))
         client._request = AsyncMock(return_value={"components": ["sun"]})
         client._raw_request = AsyncMock(return_value=SimpleNamespace(text=whole_file))
         return client
 
-    async def _fetch(self, container_client, **kwargs):
+    async def _fetch(
+        self, container_client: HomeAssistantClient, **kwargs: Any
+    ) -> ErrorLogPage:
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
             return await container_client.get_error_log(**kwargs)
 
     @pytest.mark.asyncio
-    async def test_offset_window_is_taken_from_the_tail(self, container_client):
+    async def test_offset_window_is_taken_from_the_tail(
+        self, container_client: HomeAssistantClient
+    ) -> None:
         """lines=3, offset=2 → the 3 lines ending 2 back from the newest."""
         page = await self._fetch(container_client, lines=3, offset=2)
         assert page.text == "line5\nline6\nline7"
         assert page.has_more is True
 
     @pytest.mark.asyncio
-    async def test_zero_offset_returns_the_newest_lines(self, container_client):
+    async def test_zero_offset_returns_the_newest_lines(
+        self, container_client: HomeAssistantClient
+    ) -> None:
         page = await self._fetch(container_client, lines=3)
         assert page.text == "line7\nline8\nline9"
         assert page.has_more is True
 
     @pytest.mark.asyncio
-    async def test_window_larger_than_the_file_returns_all(self, container_client):
+    async def test_window_larger_than_the_file_returns_all(
+        self, container_client: HomeAssistantClient
+    ) -> None:
         page = await self._fetch(container_client, lines=500)
         assert page.text.splitlines() == [f"line{i}" for i in range(10)]
         assert page.has_more is False
 
     @pytest.mark.asyncio
     async def test_offset_past_the_start_of_the_file_returns_nothing(
-        self, container_client
-    ):
+        self, container_client: HomeAssistantClient
+    ) -> None:
         """The page after the last one is empty, not a wrapped-around window."""
         for offset in (10, 99):
             page = await self._fetch(container_client, lines=3, offset=offset)
@@ -504,15 +581,17 @@ class TestContainerBranchWindowing:
             assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_partial_last_page_returns_what_remains(self, container_client):
+    async def test_partial_last_page_returns_what_remains(
+        self, container_client: HomeAssistantClient
+    ) -> None:
         page = await self._fetch(container_client, lines=5, offset=8)
         assert page.text == "line0\nline1"
         assert page.has_more is False
 
     @pytest.mark.asyncio
     async def test_window_landing_exactly_on_the_file_start_ends_paging(
-        self, container_client
-    ):
+        self, container_client: HomeAssistantClient
+    ) -> None:
         """The exact-fit page is the last one: nothing precedes it.
 
         Off by one here either loops forever on an empty page or drops the
@@ -523,155 +602,152 @@ class TestContainerBranchWindowing:
         assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_one_line_short_of_the_start_still_has_more(self, container_client):
+    async def test_one_line_short_of_the_start_still_has_more(
+        self, container_client: HomeAssistantClient
+    ) -> None:
         page = await self._fetch(container_client, lines=4, offset=5)
         assert page.text == "line1\nline2\nline3\nline4"
         assert page.has_more is True
 
 
-class TestJournaldHasMoreProbe:
-    """``has_more`` on the Supervisor-backed routes.
-
-    systemd's journal-gatewayd does not guard its negative-skip branch
-    (``sd_journal_previous_skip(-n_skip + 1)`` never reports END_OF_STREAM the
-    way the positive branch does), so an offset past the start of the journal
-    CLAMPS to the oldest entry and still answers with a full window. A
-    count-based ``has_more`` therefore never goes false once the offset
-    overshoots, and an agent following the pagination hint loops on identical
-    pages — on exactly the install class #2279 is about.
-    """
+class TestJournaldCursorPaging:
+    """``X-First-Cursor`` anchors paging, so lines logged between calls cannot
+    shift a page: the token names the entry the next page ends at."""
 
     @pytest.fixture
-    def addon_client(self, client):
+    def addon_client(self, client: HomeAssistantClient) -> HomeAssistantClient:
         client._request = AsyncMock()
         client._raw_request = AsyncMock()
         return client
 
     @staticmethod
-    def _serve(client, *bodies):
-        """Answer successive Supervisor fetches with the given bodies."""
-        client._supervisor_logs_get = AsyncMock(side_effect=list(bodies))
+    def _page(text: str, cursor: str | None = "c0") -> SimpleNamespace:
+        headers = {"X-First-Cursor": cursor} if cursor else {}
+        return SimpleNamespace(text=text, headers=headers)
 
-    async def _fetch(self, client, **kwargs):
+    @staticmethod
+    def _serve(client: HomeAssistantClient, *pages: Any) -> None:
+        client._supervisor_logs_response = AsyncMock(side_effect=list(pages))
+
+    async def _fetch(self, client: HomeAssistantClient, **kwargs: Any) -> ErrorLogPage:
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
             return await client.get_error_log(**kwargs)
 
     @pytest.mark.asyncio
-    async def test_short_window_needs_no_probe(self, addon_client):
-        """Nothing clamps a window smaller than asked, so short means done."""
-        self._serve(addon_client, "a\nb\n")
+    async def test_short_window_needs_no_probe(
+        self, addon_client: HomeAssistantClient
+    ) -> None:
+        """Nothing clamps a window smaller than asked for, so short means done."""
+        self._serve(addon_client, self._page("a\nb\n"))
         page = await self._fetch(addon_client, lines=10)
         assert page.has_more is False
-        assert addon_client._supervisor_logs_get.await_count == 1
+        assert addon_client._supervisor_logs_response.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_empty_window_needs_no_probe(self, addon_client):
-        self._serve(addon_client, "")
+    async def test_empty_window_needs_no_probe(
+        self, addon_client: HomeAssistantClient
+    ) -> None:
+        self._serve(addon_client, self._page(""))
         page = await self._fetch(addon_client, lines=10)
         assert page.has_more is False
-        assert addon_client._supervisor_logs_get.await_count == 1
+        assert addon_client._supervisor_logs_response.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_saturated_window_probes_the_block_behind_it(self, addon_client):
-        """A differing block one step further back proves deeper history."""
-        self._serve(addon_client, "a\nb\nc\n", "older entry\n")
+    async def test_saturated_window_probes_behind_its_cursor(
+        self, addon_client: HomeAssistantClient
+    ) -> None:
+        """A probe starting behind the cursor proves there is history behind it."""
+        self._serve(
+            addon_client,
+            self._page("a\nb\nc\n", "c-win"),
+            self._page("older\nb\n", "c-old"),
+        )
         page = await self._fetch(addon_client, lines=3, offset=6)
         assert page.text == "a\nb\nc\n"
         assert page.has_more is True
-        probe = addon_client._supervisor_logs_get.await_args
-        assert probe.args == ("core",)
-        assert probe.kwargs == {"lines": 8, "offset": 9}
+        assert page.first_cursor == "c-win"
+        probe = addon_client._supervisor_logs_response.await_args
+        assert probe.kwargs["headers"]["Range"] == "entries=c-win:-2:2"
 
     @pytest.mark.asyncio
-    async def test_clamped_probe_matching_the_window_ends_paging(self, addon_client):
-        """The clamp's signature: the probe returns the window's own first entry.
+    async def test_oldest_cursor_ends_paging(
+        self, addon_client: HomeAssistantClient
+    ) -> None:
+        """At the journal's start Supervisor clamps the probe onto the cursor.
 
-        Past the start of the journal the gateway hands back the oldest entry
-        instead of nothing, so identity — not emptiness — is what says stop.
+        The clamped block still has its full length, so only the returned
+        first cursor can tell it apart from real history.
         """
-        self._serve(addon_client, "oldest\nb\nc\n", "oldest\n")
-        page = await self._fetch(addon_client, lines=3, offset=900)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_empty_probe_ends_paging(self, addon_client):
-        self._serve(addon_client, "a\nb\nc\n", "")
+        self._serve(
+            addon_client,
+            self._page("a\nb\nc\n", "c-oldest"),
+            self._page("c-oldest\nc-2\n", "c-oldest"),
+        )
         page = await self._fetch(addon_client, lines=3)
         assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_stripped_range_header_terminates_paging(self, addon_client):
-        """An intermediary may drop ``Range`` (RFC 7233 allows it).
-
-        Supervisor then serves its default window for every request, so window
-        and probe come back identical — and the identity check stops paging
-        instead of handing the agent the same page forever.
-        """
-        default_window = "".join(f"line{i}\n" for i in range(100))
-        self._serve(addon_client, default_window, default_window)
-        page = await self._fetch(addon_client, lines=100, offset=400)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_probe_compares_entries_not_counts(self, addon_client):
-        """A multi-line traceback must not read as 'more history'.
-
-        The line count over-estimates entries, so it can only over-trigger the
-        probe; the probe's identity check is what answers.
-        """
-        window = "oldest\n  frame one\n  frame two\n"
-        self._serve(addon_client, window, "oldest\n  frame one\n")
-        page = await self._fetch(addon_client, lines=2, offset=10)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_boundary_duplicate_line_does_not_end_paging(self, addon_client):
-        """One duplicated line at the window boundary must not read as done.
-
-        The entry just behind the window renders identically to the window's
-        oldest line ("dup"), which false-matched a one-line probe; the block
-        probe sees the differing context behind it.
-        """
-        window = "dup\n" + "".join(f"w{i}\n" for i in range(1, 4))
-        probe = "".join(f"x{i}\n" for i in range(7)) + "dup\n"
-        self._serve(addon_client, window, probe)
-        page = await self._fetch(addon_client, lines=4, offset=0)
+    async def test_cursor_token_returns_the_entries_behind_its_resume_point(
+        self, addon_client: HomeAssistantClient
+    ) -> None:
+        """The token's skip is where the next block ends, not its own anchor."""
+        self._serve(
+            addon_client,
+            self._page("o1\no2\no3\n", "c-old"),
+            self._page("p1\np2\n", "c-older"),
+        )
+        page = await self._fetch(addon_client, lines=3, offset="cursor:anchor-c:7")
+        assert page.text.splitlines() == ["o1", "o2", "o3"]
         assert page.has_more is True
+        assert page.first_cursor == "c-old"
+        first = addon_client._supervisor_logs_response.await_args_list[0]
+        assert first.kwargs["headers"]["Range"] == "entries=anchor-c:4:3"
 
     @pytest.mark.asyncio
-    async def test_uniform_duplicate_run_reads_as_end_of_history(self, addon_client):
-        """Accepted imprecision: _PROBE_ENTRIES identical lines straddling the
-        boundary stop paging — and what a false stop skips there is more of
-        the same duplicates, so nothing distinguishable is lost."""
-        window = "dup\n" * 10
-        probe = "dup\n" * 8
-        self._serve(addon_client, window, probe)
-        page = await self._fetch(addon_client, lines=10, offset=0)
-        assert page.has_more is False
+    async def test_a_clamped_cursor_page_stops_at_the_resume_point(self) -> None:
+        """A block clamped to the journal's head must stop at the resume point.
 
-    @pytest.mark.asyncio
-    async def test_small_window_clamp_still_ends_paging(self, addon_client):
-        """A probe longer than the window must not read the clamp as "more".
-
-        With lines < _PROBE_ENTRIES and an offset past the journal start,
-        both requests clamp to the oldest entry and the probe comes back
-        LONGER than the window; comparing full lengths would report more
-        history forever. The shared-prefix compare says done.
+        The window starts at ``e2`` and the page returned five of its entries,
+        so the resume point is seven entries in. Gatewayd clamps the request to
+        the head and reads ten entries forward, which runs past the resume
+        point: returning that block whole would repeat the five returned
+        entries and hide the two older ones behind them.
         """
-        window = "j0\nj1\n"
-        probe = "".join(f"j{i}\n" for i in range(8))
-        self._serve(addon_client, window, probe)
-        page = await self._fetch(addon_client, lines=2, offset=500)
+        entries = [f"line{index}" for index in range(20)]
+        fresh = journald_fetch(entries)
+        headers: list[str] = []
+
+        async def recorded(range_header: str) -> JournaldPage:
+            headers.append(range_header)
+            return await fresh(range_header)
+
+        page = await journald_page(10, "cursor:e2:5", recorded)
+
+        assert page.text.splitlines() == entries[:7]
+        assert page.has_more is False
+        assert headers[0] == "entries=e2:-5:10"
+        assert len(headers) > 2, "the resume point is located by probing the head"
+
+    @pytest.mark.asyncio
+    async def test_a_cursor_page_at_the_head_returns_nothing(self) -> None:
+        """Resuming before the journal's first entry has nothing to serve."""
+        page = await journald_page(
+            5, "cursor:e0:0", journald_fetch([f"line{index}" for index in range(10)])
+        )
+
+        assert page.text == ""
         assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_proxied_route_probes_the_same_way(self, client):
-        """The supervised proxy route runs the identical protocol."""
+    async def test_proxied_route_uses_the_same_protocol(
+        self, client: HomeAssistantClient
+    ) -> None:
+        """The supervised proxy route pages and probes identically."""
         client._request = AsyncMock(return_value={"components": ["hassio"]})
         client._raw_request = AsyncMock(
             side_effect=[
-                SimpleNamespace(text="a\nb\n"),
-                SimpleNamespace(text="older\n"),
+                self._page("a\nb\n", "c-win"),
+                self._page("older\nb\n", "c-old"),
             ]
         )
 
@@ -680,13 +756,12 @@ class TestJournaldHasMoreProbe:
 
         assert page.has_more is True
         probe_headers = client._raw_request.await_args.kwargs["headers"]
-        # Probe block: 8 entries ending just behind the window (offset 4 +
-        # window 2 -> skip 13, count 8).
-        assert probe_headers["Range"] == "entries=:-13:8"
+        assert probe_headers["Range"] == "entries=c-win:-2:2"
 
 
-@pytest.mark.asyncio
-async def test_get_error_log_probe_401_never_reaches_the_container_branch(client):
+async def test_get_error_log_probe_401_never_reaches_the_container_branch(
+    client: HomeAssistantClient,
+) -> None:
     """A dead token surfaces as an auth error, not as a 404 from /error_log.
 
     This is the whole chain the probe's fail-open used to break: an
@@ -709,7 +784,9 @@ async def test_get_error_log_probe_401_never_reaches_the_container_branch(client
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_uses_cached_supervised_flag(client):
+async def test_get_error_log_uses_cached_supervised_flag(
+    client: HomeAssistantClient,
+) -> None:
     """Second `get_error_log` call on a supervised install reuses the cache."""
     response = SimpleNamespace(text="cached-call-log")
     client._raw_request = AsyncMock(return_value=response)
@@ -728,7 +805,9 @@ async def test_get_error_log_uses_cached_supervised_flag(client):
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_caches_negative_supervised_flag(client):
+async def test_get_error_log_caches_negative_supervised_flag(
+    client: HomeAssistantClient,
+) -> None:
     """Container HA: probe runs once across N get_error_log calls.
 
     Definitive non-supervised signal is cached, so subsequent calls go
@@ -751,7 +830,9 @@ async def test_get_error_log_caches_negative_supervised_flag(client):
 
 
 @pytest.mark.asyncio
-async def test_get_error_log_supervised_probe_failure_falls_to_container(client):
+async def test_get_error_log_supervised_probe_failure_falls_to_container(
+    client: HomeAssistantClient,
+) -> None:
     """Probe transport failure on first call drops to the Container branch.
 
     Fail-open contract: a transient /api/config failure must not break

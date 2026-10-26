@@ -286,31 +286,40 @@ class TestSystemMalformedEntries:
 class TestRawTextOrder:
     """error_log / supervisor / system_service — reversible most-recent window."""
 
+    @staticmethod
+    def _records() -> str:
+        return "\n".join(
+            f"2026-05-27 10:00:0{i}.000 ERROR (MainThread) [a.b.c] l{i}"
+            for i in range(4)
+        )
+
     @pytest.mark.asyncio
-    async def test_error_log_newest_reverses_recent_window(self):
+    async def test_error_log_newest_reverses_recent_records(self):
         client = AsyncMock()
         client.get_error_log = AsyncMock(
-            return_value=ErrorLogPage(text="l0\nl1\nl2\nl3", has_more=False)
+            return_value=ErrorLogPage(text=self._records(), has_more=False)
         )
         tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="error_log", limit=2))
         assert result["order"] == "newest"
-        assert result["log"] == "l3\nl2"  # newest line first
+        assert [ln.split()[-1] for ln in result["log"].splitlines()] == ["l3", "l2"]
         assert result["returned_lines"] == 2
+        assert result["returned_records"] == 2
         assert result["total_lines"] == 4
+        assert result["total_records"] == 4
 
     @pytest.mark.asyncio
     async def test_error_log_oldest_keeps_chronological_window(self):
         client = AsyncMock()
         client.get_error_log = AsyncMock(
-            return_value=ErrorLogPage(text="l0\nl1\nl2\nl3", has_more=False)
+            return_value=ErrorLogPage(text=self._records(), has_more=False)
         )
         tools = LogTools(client)
         result = await tools.get_logs(
             **_call_kwargs(source="error_log", limit=2, order="oldest")
         )
         assert result["order"] == "oldest"
-        assert result["log"] == "l2\nl3"  # recent window, ascending
+        assert [ln.split()[-1] for ln in result["log"].splitlines()] == ["l2", "l3"]
 
     @pytest.mark.asyncio
     async def test_supervisor_newest_reverses(self):

@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple
 
+from ..client.error_log_journald import cursor_token
 from ..client.rest_client import MIN_LOG_WINDOW_LINES
 from .log_common import (
     DEFAULT_LOG_LIMIT,
@@ -29,8 +30,6 @@ from .log_common import (
 
 # Full HA log line, e.g.
 # "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
-# Distinct from `_LOG_LEVEL_RE` in `log_common`, which only sniffs the level
-# out of a line for the raw path's filter.
 # The thread field is matched lazily instead of as `\([^)]*\)`: since Python 3.10
 # an unnamed thread is called "Thread-1 (target_fn)", so the field itself can
 # contain parentheses, and a class that cannot cross them drops every line those
@@ -215,6 +214,171 @@ def _extract_log_entries(
         blank=blank,
         window_start=window_start,
         window_end=window_end,
+    )
+
+
+# Extra old lines fetched behind the caller's limit so a record whose header
+# sits just outside the visible window still arrives whole. The wider fetch is
+# paid on every raw read; a traceback longer than this is caught by the
+# refetch-on-leading-continuation path instead.
+_ERROR_LOG_HEADER_LOOKBACK_LINES = 200
+
+
+@dataclass(frozen=True)
+class _LogRecord:
+    """One log record: a header line plus its continuation lines.
+
+    ``header`` is ``None`` for a leading partial record — lines at the oldest
+    edge of a window whose header fell outside it. ``start_index`` is the
+    record's first line in the fetched window; paging resumes from it, which
+    keeps a record whole across pages where ``offset`` counts lines.
+    """
+
+    lines: list[str]
+    start_index: int
+    header: str | None
+    level: str | None
+
+    @property
+    def line_count(self) -> int:
+        """Number of raw lines in the record."""
+        return len(self.lines)
+
+
+@dataclass(frozen=True)
+class _TruncatedRecord:
+    """The one over-long record a page had to cut, with its original size."""
+
+    total_lines: int
+    returned_lines: int
+
+
+@dataclass(frozen=True)
+class _RecordPage:
+    """Records selected for one response, in display order."""
+
+    records: list[_LogRecord]
+    lines: list[str]
+    oldest_index: int | None
+    truncated: _TruncatedRecord | None
+    leading_partial: bool
+
+
+def _split_log_records(lines: list[str]) -> list[_LogRecord]:
+    """Group window lines into records: a header plus its continuation lines.
+
+    Blank lines stay inside the record: Python prints chained exceptions with
+    blank lines around the separator, so a blank boundary would cut a
+    traceback. Lines before the first header are one leading partial record.
+    """
+    records: list[_LogRecord] = []
+    current: list[str] = []
+    start = 0
+    header: str | None = None
+    level: str | None = None
+    for index, line in enumerate(lines):
+        clean = _strip_ansi(line).strip()
+        match = _HA_LOG_LINE_RE.match(clean)
+        if match:
+            if current:
+                records.append(_LogRecord(current, start, header, level))
+            current = [line]
+            start = index
+            header = clean
+            level = match.group(2).upper()
+        else:
+            if not current:
+                start = index
+            current.append(line)
+    if current:
+        records.append(_LogRecord(current, start, header, level))
+    if (
+        records
+        and records[0].header is None
+        and all(not _strip_ansi(line).strip() for line in records[0].lines)
+    ):
+        # A leading partial made only of separator blanks carries nothing.
+        records.pop(0)
+    return records
+
+
+def _filter_log_records(
+    records: list[_LogRecord], search: str | None, level: str | None
+) -> tuple[list[_LogRecord], dict[str, str]]:
+    """Filter records as units: level on the header, search on any line."""
+    filtered = records
+    filters_applied: dict[str, str] = {}
+    if level:
+        target = level.upper()
+        filtered = [record for record in filtered if record.level == target]
+        filters_applied["level"] = level
+    if search:
+        needle = search.lower()
+        filtered = [
+            record
+            for record in filtered
+            if any(needle in _strip_ansi(line).lower() for line in record.lines)
+        ]
+        filters_applied["search"] = search
+    return filtered, filters_applied
+
+
+def _cut_record_lines(record: _LogRecord, limit: int) -> list[str]:
+    """The ``limit`` lines of an over-long record that a page keeps.
+
+    The header carries the logger and the message, and the last line carries
+    the exception; the frames between them are the least informative part, so
+    a cut record keeps both ends instead of just its top.
+    """
+    if limit <= 1:
+        return record.lines[:limit]
+    return [record.lines[0], *record.lines[-(limit - 1) :]]
+
+
+def _select_error_log_page(
+    records: list[_LogRecord],
+    limit: int,
+    order: Literal["newest", "oldest"],
+) -> _RecordPage:
+    """Take the most recent records that fit ``limit`` lines.
+
+    Records are never split to fit, apart from the single newest record when
+    it alone exceeds the limit. That one keeps its header plus the last
+    ``limit - 1`` lines, so a match in the exception line survives the cut.
+    ``order`` controls display direction only, as before: newest-first, or
+    chronological within the selected window.
+    """
+    selected: list[_LogRecord] = []
+    used = 0
+    truncated: _TruncatedRecord | None = None
+    for record in reversed(records):
+        if used + record.line_count <= limit:
+            selected.append(record)
+            used += record.line_count
+            continue
+        if not selected and limit > 0:
+            selected.append(
+                _LogRecord(
+                    _cut_record_lines(record, limit),
+                    record.start_index,
+                    record.header,
+                    record.level,
+                )
+            )
+            truncated = _TruncatedRecord(record.line_count, limit)
+        break
+
+    if order == "oldest":
+        selected.reverse()
+    lines = [line for record in selected for line in record.lines]
+    oldest_index = min((record.start_index for record in selected), default=None)
+    leading_partial = any(record.header is None for record in selected)
+    return _RecordPage(
+        records=selected,
+        lines=lines,
+        oldest_index=oldest_index,
+        truncated=truncated,
+        leading_partial=leading_partial,
     )
 
 
@@ -404,19 +568,19 @@ class _ErrorLogWindow:
     establish it (a full journald window proves nothing on its own — see
     ``_journald_error_log_page``).
 
-    ``offset`` addresses journald ENTRIES on Supervisor-backed installs and
-    text LINES on container/pip ones; the two coincide only while every entry
-    is a single line, which a traceback is not. Paging is therefore exact on
-    container and approximate on journald, where a step derived from line
-    counts can land inside an entry — hence the cap at ``fetch_lines``, which
-    bounds the error to re-reading part of a window rather than skipping past
-    one.
+    ``offset`` is the caller's paging anchor: an integer on container/pip
+    installs (text LINES back from the newest one), and either an integer or
+    the opaque cursor token a previous journald page returned. A token page is
+    anchored on Supervisor's ``X-First-Cursor`` plus the entries a page
+    consumed, so lines logged between two calls cannot shift it;
+    ``first_cursor`` carries the raw cursor that the next token is built from.
     """
 
-    offset: int
+    offset: int | str
     fetch_lines: int
     raw_line_count: int
     has_more: bool
+    first_cursor: str | None = None
 
     def __post_init__(self) -> None:
         # Guards the two shapes that make paging non-terminating or
@@ -424,7 +588,7 @@ class _ErrorLogWindow:
         # can only fire on a code bug, never on caller input.
         if self.fetch_lines < 1:
             raise ValueError(f"fetch_lines must be at least 1, got {self.fetch_lines}")
-        if self.offset < 0:
+        if isinstance(self.offset, int) and self.offset < 0:
             raise ValueError(f"offset must not be negative, got {self.offset}")
 
 
@@ -437,11 +601,12 @@ def _error_log_window_lines(
     """Number of raw log lines a single error-log fetch requests.
 
     Bounded on every path (#2279). The structured summary reads a fixed
-    deep window; the raw path reads the caller's limit, widened to the
-    search window when ``level`` or ``search`` is set, since both filter
-    client-side over the fetched text and need history behind the limit to
-    find matches in (the same widening ``_get_supervisor_log`` applies for
-    ``search``; it has no ``level`` parameter). Floored at the client's
+    deep window; the raw path reads the caller's limit plus a header lookback
+    (``_ERROR_LOG_HEADER_LOOKBACK_LINES``), widened to the search window when
+    ``level`` or ``search`` is set, since both filter client-side over the
+    fetched text and need history behind the limit to find matches in (the
+    same widening ``_get_supervisor_log`` applies for ``search``; it has no
+    ``level`` parameter). Floored at the client's
     minimum window so the recorded size matches the one actually served.
     """
     if structured:
@@ -456,27 +621,47 @@ def _error_log_window_lines(
     )
     if search or level:
         return max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
-    return max(effective_limit, MIN_LOG_WINDOW_LINES)
+    # Raw reads group lines into records, so the window must reach behind the
+    # caller's limit for the header of the oldest visible record.
+    return max(effective_limit + _ERROR_LOG_HEADER_LOOKBACK_LINES, MIN_LOG_WINDOW_LINES)
 
 
-def _next_page_step(window: _ErrorLogWindow, shown: list[tuple[int, str]]) -> int:
+def _next_page_step(window: _ErrorLogWindow, oldest_index: int | None) -> int:
     """How far back the next page's ``offset`` sits from this one's.
 
-    The window text runs oldest-first, so the oldest line shown sits
-    ``raw_line_count - index`` lines back from the window's newest edge;
-    resuming there is what keeps a filtered read from skipping the matches
-    it did not show. Capped at the window size because on journald the step
-    is spent in ENTRY units, where an uncapped line-derived step could
-    overshoot the window that produced it. Nothing shown means nothing to
-    resume before, so the whole window is consumed.
+    The next page resumes just before the oldest returned record's first line
+    (its header when whole). On container and pip installs, where ``offset``
+    counts lines, that keeps every record whole across pages. On journald
+    ``offset`` counts entries, so a line-counted step is spent faster than it
+    was measured and can overshoot past part of the history — the mismatch
+    described on ``_ErrorLogWindow``. Stepping by *record* count instead was
+    tried and rejected: one journald entry can carry several records and one
+    record can span entries, so the count under-reached and pages repeated.
+    The cap at the window size bounds the overshoot to one window. Nothing
+    shown means nothing to resume before, so the whole window is consumed.
     """
-    if not shown:
+    if oldest_index is None:
         return window.fetch_lines
-    return min(window.raw_line_count - shown[0][0], window.fetch_lines)
+    return min(window.raw_line_count - oldest_index, window.fetch_lines)
+
+
+def _reopen_at_record_end(window: _ErrorLogWindow, record: _LogRecord) -> int:
+    """Step that puts the next page's newest edge on ``record``'s last line.
+
+    A held-back leading tail has to be re-fetched with its header, and the
+    window width never changes, so the next page must start at the record's
+    own last line rather than just before the oldest record returned. Capped
+    like every other step; a record spanning the whole window leaves nothing
+    to anchor to, so the window is consumed instead.
+    """
+    reanchor = window.raw_line_count - record.start_index - record.line_count
+    if reanchor <= 0:
+        return window.fetch_lines
+    return min(reanchor, window.fetch_lines)
 
 
 def _build_error_log_pagination_hint(
-    next_offset: int,
+    next_offset: int | str,
     limit: int | None,
     search: str | None,
     level: str | None,
@@ -502,7 +687,7 @@ def _build_error_log_pagination_hint(
         parts.append(f"level={level!r}")
     if search:
         parts.append(f"search={search!r}")
-    parts.append(f"offset={next_offset}")
+    parts.append(f"offset={next_offset!r}")
     return (
         "Older entries remain behind this window. To read further back, "
         f"use: ha_get_logs({', '.join(parts)})"
@@ -520,25 +705,60 @@ def _attach_error_log_pagination(
     structured: bool,
     top_n: int | None,
     unreturned_matches: int = 0,
+    cursor_skip: int | None = None,
+    older_matches_remain: bool = False,
 ) -> None:
     """Add the offset/has_more contract to an error-log response in place.
 
-    ``has_more`` speaks only about history behind this window. Matches the
-    ``limit`` slice left unreturned INSIDE a terminal window get a raise-the-
-    limit hint instead of a ``next_offset``: they sit in a window the caller
-    has already addressed, so a larger ``limit`` retrieves them exactly,
-    whereas paging deeper for them cannot advance once the window is the whole
-    journal (a Supervisor fetch past the start clamps to the same oldest
-    window every time, which would loop). On a non-terminal window the step
-    already resumes just before the oldest returned line, so those matches are
-    covered by the next page and need no hint.
+    Two anchors are possible and the window decides which one is used. A
+    journald page carries Supervisor's cursor for the oldest entry it fetched,
+    so ``cursor_skip`` (the entries this page consumed from that cursor) turns
+    into a token naming the exact resume point: every page resumes exactly,
+    whether or not it returned its whole window. The structured summary
+    consumes its whole window, so it passes a skip of zero and its token
+    resumes behind the window; it accepts those tokens back on the next call.
+    Installs that read a whole log file keep the integer line step.
+
+    ``has_more`` means "matches remain"; it is not limited to history behind
+    this window. On a token page that returned only part of its window, the
+    remaining matches are older records inside that same window: ``has_more``
+    stays true and the token resumes just behind the oldest returned record, so
+    the next window is strictly shorter and the walk ends. An integer offset
+    cannot express that (a fetch past the journal's start clamps onto the same
+    oldest window forever), so there the unreturned matches get a raise-the-
+    limit hint instead. The hint never promises more than one response can
+    deliver: past ``MAX_LIMIT`` it names the cap and asks the caller to narrow
+    the match set.
     """
     data["offset"] = window.offset
     data["has_more"] = window.has_more
-    if window.has_more:
-        data["next_offset"] = window.offset + step
+    # A token page that returned only part of its window still has matches
+    # behind it. Its resume token names an entry inside this window rather than
+    # a point past the journal's start, so the next page is strictly shorter and
+    # the walk terminates: it can page on, unlike an integer offset, which would
+    # clamp onto the same oldest window forever.
+    continues_inside_window = (
+        not window.has_more
+        and older_matches_remain
+        and isinstance(window.offset, str)
+        and cursor_skip is not None
+        and bool(window.first_cursor)
+    )
+    if window.has_more or continues_inside_window:
+        next_offset: int | str
+        if cursor_skip is not None and window.first_cursor:
+            next_offset = cursor_token(window.first_cursor, cursor_skip)
+        elif isinstance(window.offset, int):
+            next_offset = window.offset + step
+        else:
+            # A token page always carries the block's cursor, so this is
+            # unreachable in practice; repeating the caller's token would loop
+            # forever on the same page, which is worse than failing loudly.
+            raise ValueError("a page with older history must carry its block's cursor")
+        data["has_more"] = True
+        data["next_offset"] = next_offset
         data["pagination_hint"] = _build_error_log_pagination_hint(
-            window.offset + step,
+            next_offset,
             limit,
             search,
             level,
@@ -547,24 +767,27 @@ def _attach_error_log_pagination(
             top_n,
         )
         return
-    if window.offset and window.raw_line_count:
+    if isinstance(window.offset, int) and window.offset and window.raw_line_count:
+        # Integer offsets clamp to the oldest entries, so a terminal page can
+        # repeat an earlier one. A cursor token names the exact resume point and
+        # is trimmed at the journal's head, so it never overlaps.
         data["note"] = f"{data.get('note', '')} {_HISTORY_START_NOTE}".strip()
     if unreturned_matches > 0:
         total = data.get("total_lines", unreturned_matches)
-        suggested = min(total, MAX_LIMIT)
-        if limit is not None and limit >= suggested:
-            # Raising the limit cannot help: it is already at (or past) the
-            # ceiling, so recommending it would repeat the same request.
+        if total > MAX_LIMIT:
+            # No limit can return this window in one response, so promising one
+            # would send the caller back with the same unsatisfiable request.
             data["pagination_hint"] = (
                 f"{unreturned_matches} more matching lines remain inside this "
-                f"window (no older history exists behind it), but 'limit' is "
-                f"already at its maximum ({MAX_LIMIT}). Narrow the match set — "
-                "a more specific 'search' or a 'level' filter — so the "
-                "remainder fits in one response."
+                f"window (no older history exists behind it), which holds "
+                f"{total} in total. A single response is capped at limit="
+                f"{MAX_LIMIT}, so that call returns {MAX_LIMIT} of them; narrow "
+                "the match set — a more specific 'search' or a 'level' filter — "
+                "to read the rest."
             )
         else:
             data["pagination_hint"] = (
                 f"{unreturned_matches} more matching lines remain inside this "
                 f"window (no older history exists behind it). Repeat the call "
-                f"with limit={suggested} to retrieve them in one response."
+                f"with limit={total} to retrieve them in one response."
             )
