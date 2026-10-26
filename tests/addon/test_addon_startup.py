@@ -374,7 +374,9 @@ class TestAppOptions:
             f"app option {key!r} has invalid value {raw!r}" in capsys.readouterr().err
         )
 
-    def test_value_outside_the_choices_warns_and_uses_the_default(self, capsys):
+    def test_value_outside_the_choices_warns_and_uses_the_default(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Driven with a synthetic option so the choices check stays covered
         whether or not a real app option declares choices."""
         option = {

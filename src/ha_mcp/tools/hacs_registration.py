@@ -277,9 +277,16 @@ async def _poll_queue_for_registration(
             return await _last_chance_lookup_after_shutdown(ws_client, full_name_lower)
 
         if event is not None:
-            repo = await _repo_from_matching_dispatch(
-                ws_client, event, full_name, full_name_lower
-            )
+            try:
+                repo = await _repo_from_matching_dispatch(
+                    ws_client, event, full_name, full_name_lower
+                )
+            except HomeAssistantConnectionError as e:
+                # A close keeps the dispatches that arrived before it, and the
+                # lookup they lead to then meets the dead socket: report "not
+                # found", as the queue-shutdown path does.
+                logger.debug("Lookup after a dispatch failed: %s", e)
+                return None
             if repo is not None:
                 return repo
             # Unrelated dispatch, no-payload nudge, or a lookup that

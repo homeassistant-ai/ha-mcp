@@ -455,6 +455,41 @@ class TestRestore:
         ws.release_subscription.assert_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("states", "accepted"),
+        [
+            pytest.param(["in_progress", "core_restart"], True, id="accepted"),
+            pytest.param(["in_progress", "failed"], False, id="failed-last"),
+        ],
+    )
+    async def test_restore_events_read_only_after_the_close_still_count(
+        self, states, accepted
+    ) -> None:
+        """The close can come before the collector read Home Assistant's events."""
+        ws = FakeWS(password=None, details=_entry("b1"), events=[])
+        reply = ws.send_command
+
+        async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
+            if command != "backup/restore":
+                return await reply(command, **kwargs)
+            ws.calls.append((command, kwargs))
+            for state in states:
+                event = {"manager_state": "restore_backup", "state": state}
+                ws.queue.put_nowait({"event": event})
+            ws.queue.shutdown()
+            raise HomeAssistantConnectionError("closed")
+
+        ws.send_command = _send
+        if accepted:
+            result = await _run(restore_backup, ws, _client(), "b1")
+            assert result["warnings"][-1].startswith(
+                "Home Assistant accepted the restore but did not confirm it"
+            )
+        else:
+            with pytest.raises(ToolError):
+                await _run(restore_backup, ws, _client(), "b1")
+
+    @pytest.mark.asyncio
     async def test_restore_home_assistant_answered_carries_no_unconfirmed_warning(
         self,
     ) -> None:

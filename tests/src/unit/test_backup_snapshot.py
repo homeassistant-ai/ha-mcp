@@ -14,11 +14,13 @@ connection and heartbeat tests here also cover restore.
 """
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools import backup_snapshot
 from ha_mcp.tools.backup_snapshot import create_backup, list_backups
@@ -516,6 +518,25 @@ class TestWaitingForTheBackup:
             await _run(tool, ws, _client(), *args, ctx=ctx, **kwargs)
             await asyncio.gather(finisher)
         assert ctx.report_progress.await_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_close_right_after_the_backup_finished_says_to_check_the_list(
+        self,
+    ) -> None:
+        """The backup may exist; a retry without checking would make a second one."""
+        ws = FakeWS()
+        reply = ws.send_command
+
+        async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
+            if command == "backup/info" and ws.generated():
+                raise HomeAssistantConnectionError("closed")
+            return await reply(command, **kwargs)
+
+        ws.send_command = _send
+        with pytest.raises(ToolError) as exc_info:
+            await _run(create_backup, ws, _client())
+        assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
+        assert "Check the snapshot list" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_subscription_is_released_when_the_backup_cannot_start(

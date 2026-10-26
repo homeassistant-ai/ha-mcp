@@ -299,6 +299,38 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
+    async def test_dispatch_read_after_the_close_swallows_transport_error(self):
+        """A close keeps the matching dispatch queued; its lookup meets a dead WS."""
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await queue.put(
+            {
+                "id": 7,
+                "type": "event",
+                "event": {
+                    "action": "registration",
+                    "repository": WATCHED_REPO,
+                    "repository_id": 42,
+                },
+            }
+        )
+        queue.shutdown(immediate=False)
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            # What reset_connection fails a list call already in flight with.
+            side_effect=[_list_response_empty(), HomeAssistantConnectionError("closed")]
+        )
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        assert (
+            await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
+            is None
+        )
+
+    @pytest.mark.asyncio
     async def test_last_chance_lookup_swallows_transport_error(self):
         """QueueShutDown + dead WS: list call fails → return None, no propagation."""
         from ha_mcp.client.rest_client import HomeAssistantConnectionError

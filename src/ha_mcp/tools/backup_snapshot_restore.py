@@ -57,6 +57,14 @@ def _restore_agent(target: dict[str, Any]) -> str:
     )
 
 
+def _drain_events(
+    queue: asyncio.Queue[dict[str, Any]], events: list[dict[str, Any]]
+) -> None:
+    """Move the events still in ``queue`` into ``events``."""
+    while not queue.empty():
+        events.append(queue.get_nowait().get("event") or {})
+
+
 async def _send_restore(
     ws_client: HomeAssistantWebSocketClient,
     params: dict[str, Any],
@@ -112,6 +120,8 @@ async def _send_restore(
         # Another client's restore event must not read as this one's.
         raise
     except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as err:
+        # The close can come before the collector read the last events.
+        _drain_events(queue, events)
         restore = [e for e in events if e.get("manager_state") == "restore_backup"]
         if not restore or restore[-1].get("state") == "failed":
             raise
