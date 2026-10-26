@@ -21,6 +21,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.client.service_errors import HomeAssistantWebSocketServiceError
 from ha_mcp.tools.tools_system import SystemTools
 
 
@@ -156,7 +157,9 @@ class TestHaRestartErrorHandling:
             ),
             (HomeAssistantAuthError("Invalid token"), "AUTH_INVALID_TOKEN"),
             (
-                HomeAssistantAPIError("Restart refused by Core", status_code=400),
+                HomeAssistantWebSocketServiceError(
+                    "Restart refused by Core", code="invalid_format"
+                ),
                 "VALIDATION_FAILED",
             ),
         ],

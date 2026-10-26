@@ -98,7 +98,7 @@ async def test_embedded_connect_error_keeps_traceback(
         await _run_failing_restart(monkeypatch, error)
 
     (record,) = caplog.records
-    assert "failed" in record.getMessage()
+    assert "outcome is unknown" in record.getMessage()
     assert record.exc_info is not None
 
 

@@ -466,7 +466,11 @@ async def test_unknown_status_service_calls_let_one_401_out(client):
 
     client.httpx_client.request = AsyncMock(side_effect=slow_401)
     client.send_websocket_message = AsyncMock(
-        return_value={"success": False, "error": "Command failed: Unauthorized"}
+        return_value={
+            "success": False,
+            "error": "Command failed: Unauthorized",
+            "error_code": "home_assistant_error",
+        }
     )
     results = await asyncio.gather(
         *(client.call_service("automation", "reload") for _ in range(4)),
@@ -486,7 +490,11 @@ async def test_service_401_latches_future_calls_without_replaying_the_first(clie
     client._current_user = AsyncMock(return_value=_current_user(True))
     client.httpx_client.request = AsyncMock(return_value=_response(401))
     client.send_websocket_message = AsyncMock(
-        return_value={"success": False, "error": "Command failed: Unauthorized"}
+        return_value={
+            "success": False,
+            "error": "Command failed: Unauthorized",
+            "error_code": "home_assistant_error",
+        }
     )
     with pytest.raises(HomeAssistantServiceAuthOutcomeUnknown) as caught:
         await client.call_service("automation", "reload")
