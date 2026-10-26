@@ -8,10 +8,14 @@ callers — e.g. the fail-closed registry validation of issue #2159 — classify
 it as AUTH_* instead of CONNECTION_FAILED.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
 from ha_mcp.client.websocket_client import (
@@ -85,3 +89,36 @@ async def test_non_auth_connect_failure_still_raises_connection_error(manager):
 
     with pytest.raises(HomeAssistantConnectionError):
         await manager.get_client(url="http://ha.local", token="t")
+
+
+@pytest.mark.parametrize("detail", ["Invalid token", "403 Forbidden: Invalid token"])
+async def test_bridge_preserves_pool_auth_refusal_before_dispatch(
+    manager: WebSocketManager, monkeypatch: pytest.MonkeyPatch, detail: str
+) -> None:
+    """A parsed auth refusal before acquisition is neither an unknown write nor retried."""
+    ws = HomeAssistantWebSocketClient("http://auth.test", "test-token", verify_ssl=True)
+
+    async def refuse_auth() -> bool:
+        await ws._process_message({"type": "auth_invalid", "message": detail})
+        ws._last_connect_error = detail
+        return False
+
+    connect = AsyncMock(side_effect=refuse_auth)
+    send = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(ws, "connect", connect)
+    monkeypatch.setattr(ws, "send_json_message", send)
+    monkeypatch.setattr(websocket_client, "websocket_manager", manager)
+    monkeypatch.setattr("ha_mcp.client.rest_client.asyncio.sleep", sleep)
+    manager.configure(client_factory=lambda *args, **kwargs: ws)
+
+    async with HomeAssistantClient(
+        "http://auth.test", "test-token", verify_ssl=True, is_admin=True
+    ) as client:
+        with pytest.raises(HomeAssistantAuthError, match="Invalid token"):
+            await client.send_websocket_message({"type": "call_service"})
+
+    connect.assert_awaited_once()
+    send.assert_not_awaited()
+    sleep.assert_not_awaited()
+    assert not ws._state._pending_requests

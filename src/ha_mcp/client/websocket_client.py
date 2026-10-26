@@ -809,27 +809,27 @@ class HomeAssistantWebSocketClient:
             logger.debug(f"WebSocket response for id {message_id}: {response}")
 
             # Process standard Home Assistant WebSocket response
-            if response.get("type") == "result":
+            if response.get("type") == "result" and isinstance(
+                response.get("success"), bool
+            ):
                 if response.get("success") is False:
                     error_msg, error_code = _extract_ws_error(response.get("error", {}))
                     raise HomeAssistantCommandError(
                         f"Command failed: {error_msg}", error_code
                     )
 
-                # Return success response according to HA WebSocket format
                 return {
-                    "success": response.get("success", True),
+                    "success": True,
                     "result": response.get("result"),
                 }
-            elif response.get("type") == "pong":
+            elif response.get("type") == "pong" and command_type == "ping":
                 # Pong responses are normal keep-alive messages, handle silently
                 return {"success": True, "type": "pong"}
             else:
-                # Log unexpected response format
-                logger.warning(
-                    f"Unexpected WebSocket response type: {response.get('type')}"
+                # A reply outside the command contract cannot establish its outcome.
+                raise HomeAssistantConnectionError(
+                    f"Unexpected or malformed WebSocket response for {command_type}"
                 )
-                return {"success": True, **response}
 
         except TimeoutError as e:
             self.cancel_pending_response(message_id)

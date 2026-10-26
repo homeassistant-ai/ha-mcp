@@ -1984,6 +1984,8 @@ class HomeAssistantClient:
                 return result
 
             except Exception as e:
+                if acquiring and isinstance(e, HomeAssistantAuthError):
+                    raise
                 error_str = str(e)
                 is_403 = "403" in error_str and "Forbidden" in error_str
 
@@ -1997,15 +1999,8 @@ class HomeAssistantClient:
                     await asyncio.sleep(retry_delay)
                     continue
 
-                # Phase first, type second. Failing before a client exists is
-                # evidence about the transport whatever class was raised.
-                # Past acquisition only the no-answer classes count:
-                # ``send_command`` deliberately re-raises the original
-                # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
-                # rather than wrapping it, to keep at-most-once semantics for
-                # write callers, so those arrive here untranslated. Anything
-                # else (a ``ValueError`` from building the message, say) is a
-                # bug rather than evidence about the connection.
+                # A pool failure precedes dispatch. Afterwards, socket/no-answer
+                # errors may follow a partial write and must never become NotSent.
                 if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
                     # One error channel for "no answer came back" (#1947): the
                     # caller decides the policy, rather than every consumer
