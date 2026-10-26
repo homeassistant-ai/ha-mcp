@@ -1,7 +1,7 @@
 """Unit tests for tools_system module.
 
-Regression tests for https://github.com/homeassistant-ai/ha-mcp/issues/612
-ha_restart reports failure when a reverse proxy returns 504 during restart.
+Restart acknowledgement can be lost behind a proxy (#612/#1666).
+That is an unknown outcome, not evidence that Core restarted.
 """
 
 import asyncio
@@ -15,7 +15,9 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantClient,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -104,106 +106,83 @@ class TestGetSystemHealthHaMcpUpdate:
 class TestHaRestartErrorHandling:
     """Tests for ha_restart handling of expected errors during restart."""
 
-    @pytest.mark.asyncio
-    async def test_504_gateway_timeout_treated_as_success(self):
-        """A 504 from a reverse proxy after restart initiated should be success.
-
-        Reproduces issue #612: user behind a reverse proxy gets 504 when HA
-        shuts down, but HA actually restarted successfully.
-
-        Also pins the post-#1332 warnings-list contract on the
-        restart-initiated-but-connection-dropped branch
-        (``tools_system.py`` ~L208-214).
-        """
-        error = HomeAssistantAPIError("API error: 504 - ", status_code=504)
-        client = _make_client_that_fails_on_restart(error)
-        tools = SystemTools(client)
-
-        result = await tools.ha_restart(confirm=True)
-
-        assert result["success"] is True
-        warnings = result.get("warnings")
-        assert isinstance(warnings, list) and warnings, (
-            f"Expected non-empty warnings list, got: {result!r}"
-        )
-        assert any("Wait 1-5 minutes" in w for w in warnings), (
-            f"Expected wait-for-restart warning content; got: {warnings!r}"
-        )
-
     @pytest.mark.parametrize(
-        ("error", "pattern"),
+        "error",
         [
-            (
-                HomeAssistantAPIError("API error: 502 - ", status_code=502),
-                "502",
-            ),
-            (
-                HomeAssistantAPIError("API error: 503 - ", status_code=503),
-                "503",
-            ),
-            (
-                HomeAssistantConnectionError("Proxy returned: Bad Gateway"),
-                "gateway",
-            ),
-            (
-                HomeAssistantConnectionError("Upstream Service Unavailable"),
-                "unavailable",
-            ),
+            HomeAssistantAPIError("API error: 502", status_code=502),
+            HomeAssistantAPIError("API error: 503", status_code=503),
+            HomeAssistantAPIError("API error: 504", status_code=504),
+            HomeAssistantConnectionError("Proxy returned: Bad Gateway"),
+            HomeAssistantConnectionError("Upstream Service Unavailable"),
+            HomeAssistantConnectionError("Connection closed"),
+            HomeAssistantCommandTimeout("No acknowledgement"),
         ],
     )
-    @pytest.mark.asyncio
-    async def test_proxy_5xx_during_restart_treated_as_success(self, error, pattern):
-        """Reverse-proxy 502/503/'gateway'/'unavailable' responses after the
-        restart was initiated should be treated as the expected connection drop,
-        not a failure.
-
-        Reproduces issue #1666: behind nginx/Traefik/Cloudflare the proxy often
-        returns a 502/503 (or a 'Bad Gateway'/'Service Unavailable' body) while
-        HA is shutting down, even though the restart succeeded. Extends the #612
-        (504) fix to the broader set of known-good patterns in
-        ``tools_system.py`` (~L199-211).
-
-        Each case isolates a single newly added pattern so a future narrowing of
-        the match list fails loudly here.
-        """
+    async def test_lost_restart_acknowledgement_is_unknown_and_never_retried(
+        self, error: Exception
+    ) -> None:
+        """A proxy error or closed connection cannot prove the requested restart happened."""
         client = _make_client_that_fails_on_restart(error)
-        tools = SystemTools(client)
-
-        result = await tools.ha_restart(confirm=True)
-
-        assert result["success"] is True, (
-            f"Proxy '{pattern}' error should be treated as the expected restart "
-            f"connection drop; got: {result!r}"
+        with pytest.raises(ToolError) as caught:
+            await SystemTools(client).ha_restart(confirm=True)
+        outcome = json.loads(str(caught.value))
+        assert outcome["execution_status"] == "outcome_unknown"
+        assert outcome["write_outcome_unknown"] is True
+        assert outcome["success"] is False
+        assert outcome["error"]["code"] == "SERVICE_CALL_FAILED"
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "restart", {"safe_mode": False}
         )
-        warnings = result.get("warnings")
-        assert isinstance(warnings, list) and warnings, (
-            f"Expected non-empty warnings list, got: {result!r}"
-        )
-        assert any("Wait 1-5 minutes" in w for w in warnings), (
-            f"Expected wait-for-restart warning content; got: {warnings!r}"
-        )
+        client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_proxy_error_before_restart_dispatch_still_fails(self):
-        """A matching proxy error raised *before* the restart is dispatched must
-        still fail loudly.
-
-        The known-good branch is gated on ``restart_initiated and any(pattern ...)``.
-        The other tests all run with ``restart_initiated`` already True (the
-        failure comes from ``call_service``); this pins the ``restart_initiated
-        is False`` half of that guard. Here ``check_config`` raises a
-        ``Bad Gateway`` (which would otherwise match the ``gateway`` pattern),
-        but since the restart was never sent it must raise a ``ToolError`` rather
-        than be reported as a successful restart. Guards against a future change
-        that weakens the guard and lets a pre-restart proxy error masquerade as
-        success.
-        """
+    async def test_proxy_error_before_restart_dispatch_still_fails(self) -> None:
+        """A preflight failure has no mutation to retry or reconcile."""
         error = HomeAssistantConnectionError("Bad Gateway")
         client = _make_client_that_fails_on_check_config(error)
         tools = SystemTools(client)
 
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as caught:
             await tools.ha_restart(confirm=True)
+        assert json.loads(str(caught.value))["execution_status"] == "not_started"
+        client.call_service.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("error", "code"),
+        [
+            (
+                HomeAssistantCommandNotSent("WebSocket not authenticated"),
+                "CONNECTION_FAILED",
+            ),
+            (HomeAssistantAuthError("Invalid token"), "AUTH_INVALID_TOKEN"),
+            (
+                HomeAssistantAPIError("Restart refused by Core", status_code=400),
+                "VALIDATION_FAILED",
+            ),
+        ],
+    )
+    async def test_authoritative_refusal_preserves_error_and_reports_not_started(
+        self, error: Exception, code: str
+    ) -> None:
+        client = _make_client_that_fails_on_restart(error)
+        with pytest.raises(ToolError) as caught:
+            await SystemTools(client).ha_restart(confirm=True)
+        outcome = json.loads(str(caught.value))
+        assert outcome["execution_status"] == "not_started"
+        assert outcome["error"]["code"] == code
+        assert outcome["error"]["message"] == str(error)
+        assert not outcome.get("write_outcome_unknown")
+        client.call_service.assert_awaited_once()
+
+    async def test_missing_confirmation_never_checks_or_restarts(self) -> None:
+        client = AsyncMock()
+        with pytest.raises(ToolError) as caught:
+            await SystemTools(client).ha_restart()
+        outcome = json.loads(str(caught.value))
+        assert outcome["execution_status"] == "not_started"
+        assert outcome["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.check_config.assert_not_awaited()
+        client.call_service.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_unrelated_error_still_fails(self):
@@ -216,19 +195,19 @@ class TestHaRestartErrorHandling:
             await tools.ha_restart(confirm=True)
 
     @pytest.mark.asyncio
-    async def test_success_path_returns_connection_lost_warning(self):
-        """Successful restart (no exception from call_service) surfaces a top-level
-        warnings list with the "connection will be lost" note. Pins the
-        post-#1332 contract on ``tools_system.py`` ~L188-194 (the first return
-        in ha_restart, previously emitting singular ``warning``)."""
+    async def test_acknowledged_restart_is_not_reported_as_completed(self) -> None:
+        """Core's acknowledgement keeps the restart warning, without claiming completion."""
         client = AsyncMock()
         client.check_config.return_value = {"result": "valid"}
-        client.call_service.return_value = None  # restart fires, no error
+        client.call_service.return_value = []  # Core acknowledged the service call.
         tools = SystemTools(client)
 
         result = await tools.ha_restart(confirm=True)
 
         assert result["success"] is True
+        assert result["requested"] is True
+        assert not result.get("verified") and not result.get("restarted")
+        assert "not confirmed" in result["message"]
         warnings = result.get("warnings")
         assert isinstance(warnings, list) and warnings, (
             f"Expected non-empty warnings list, got: {result!r}"
