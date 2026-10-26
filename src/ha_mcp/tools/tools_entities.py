@@ -2138,9 +2138,9 @@ class EntityTools:
         or stale entity entries: if the underlying device, integration or
         stored helper is still there, the entity may be re-added on the next HA
         restart or reload; for a stored helper's entity a single-id removal
-        names the tool that removes the helper. An entity added again while its
-        config entry exists, or within 30 days, gets back the registry settings
-        it had. For most use cases, consider disabling instead:
+        names the tool that removes the helper. Added again, it gets back its registry
+        settings while its config entry exists, and for 30 days after that entry, or an
+        entity without one, was removed. For most use cases, consider disabling instead:
         ha_set_entity(entity_id="sensor.old", enabled=False).
 
         BULK MODE:

@@ -1,12 +1,15 @@
 """Entity backups restore the registry settings ``ha_set_entity`` changes.
 
-The fake registry follows Core's ``config/entity_registry/update``: only the
-category scopes it is sent change, hidden_by/disabled_by take only None or
-"user", and a rename keeps the entry's ``id``. Each edit below is the update
+The fake registry follows Core 2026.10's ``config/entity_registry/update``:
+only the category scopes it is sent change, hidden_by/disabled_by take only
+None or "user", an update carrying disabled_by None asks for a restart (as for
+an entity without a config entry), options are set one domain at a time, and
+a rename keeps the entry's ``id``. Each edit below is an update
 ``ha_set_entity`` sends; restoring the backup taken before it must give back
 the snapshot exactly.
 """
 
+import asyncio
 import copy
 from pathlib import Path
 from typing import Any
@@ -14,7 +17,8 @@ from typing import Any
 import pytest
 
 from ha_mcp import backup_manager
-from ha_mcp.backup_entities import _NOT_RESTORED, current_entity_id
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.backup_entities import _NOT_RESTORED, current_entity_id, restore_entity
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools.tools_entities import _single_entity_target
 
@@ -35,16 +39,38 @@ DESK = {
     "categories": {"automation": "cat-a"},
     "hidden_by": None,
     "disabled_by": None,
-    "options": {"light": {"favorite_colors": []}},
+    "options": {
+        "light": {"favorite_colors": []},
+        "conversation": {"should_expose": False},
+        "cloud.alexa": {"should_expose": True},
+    },
 }
 # Core lists entries without these; config/entity_registry/get includes them.
 _GET_ONLY = ("aliases", "device_class")
 
 
 class FakeRegistry:
+    """The entity registry, and the client the restore reads the area, label
+    and category registries and the states through."""
+
     def __init__(self, *entries: dict[str, Any]) -> None:
         self.entries = {e["entity_id"]: copy.deepcopy(e) for e in entries}
         self.sent: list[dict[str, Any]] = []
+        self.ids = {
+            "area": {"office", "kitchen"},
+            "label": {"work"},
+            "category": {"cat-a", "cat-b", "cat-s"},
+        }
+        self.unreadable: set[str] = set()
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> Any:
+        name = msg["type"].split("/")[1].removesuffix("_registry")
+        if name in self.unreadable:
+            raise ConnectionError(f"{name} registry unavailable")
+        return [{f"{name}_id": item} for item in self.ids[name]]
+
+    async def get_states(self) -> list[dict[str, Any]]:
+        return [{"entity_id": entity_id} for entity_id in self.entries]
 
     async def ws(self, _client: Any, msg: dict[str, Any]) -> Any:
         self.sent.append(copy.deepcopy(msg))
@@ -53,6 +79,15 @@ class FakeRegistry:
                 {k: v for k, v in e.items() if k not in _GET_ONLY}
                 for e in self.entries.values()
             ]
+        if msg["type"] == "homeassistant/expose_entity":
+            for entity_id in msg["entity_ids"]:
+                options = self.entries[entity_id]["options"]
+                for assistant in msg["assistants"]:
+                    options[assistant] = {
+                        **options.get(assistant, {}),
+                        "should_expose": msg["should_expose"],
+                    }
+            return None
         # Core's schema refuses a missing or malformed entity_id outright.
         assert isinstance(msg["entity_id"], str)
         entry = self.entries.get(msg["entity_id"])
@@ -63,9 +98,32 @@ class FakeRegistry:
         if msg["type"] == "config/entity_registry/get":
             return copy.deepcopy(entry)
         assert msg["type"] == "config/entity_registry/update"
-        return {"entity_entry": self._update(entry, msg)}
+        result: dict[str, Any] = {"entity_entry": self._update(entry, msg)}
+        if "disabled_by" in msg and msg["disabled_by"] is None:
+            result["require_restart"] = True
+        return result
 
     def _update(self, entry: dict[str, Any], msg: dict[str, Any]) -> dict[str, Any]:
+        self._refuse(entry, msg)
+        for key, value in msg.items():
+            if key == "categories":
+                merged = {**entry["categories"], **value}
+                entry["categories"] = {s: c for s, c in merged.items() if c is not None}
+            elif key == "options_domain":
+                options = {d: o for d, o in entry["options"].items() if d != value}
+                if msg["options"] is not None:
+                    options[value] = msg["options"]
+                entry["options"] = options
+            elif key not in ("type", "entity_id", "new_entity_id", "options"):
+                entry[key] = value
+        if (new := msg.get("new_entity_id")) is not None:
+            del self.entries[entry["entity_id"]]
+            entry["entity_id"] = new
+            self.entries[new] = entry
+        return copy.deepcopy(entry)
+
+    def _refuse(self, entry: dict[str, Any], msg: dict[str, Any]) -> None:
+        """The updates Core's handler refuses before it writes anything."""
         if msg.get("new_entity_id") in self.entries:
             raise HomeAssistantCommandError(
                 "Command failed: Entity with this ID is already registered",
@@ -76,17 +134,14 @@ class FakeRegistry:
                 raise HomeAssistantCommandError(
                     "Command failed: invalid", "invalid_format"
                 )
-        for key, value in msg.items():
-            if key == "categories":
-                merged = {**entry["categories"], **value}
-                entry["categories"] = {s: c for s, c in merged.items() if c is not None}
-            elif key not in ("type", "entity_id", "new_entity_id"):
-                entry[key] = value
-        if (new := msg.get("new_entity_id")) is not None:
-            del self.entries[entry["entity_id"]]
-            entry["entity_id"] = new
-            self.entries[new] = entry
-        return copy.deepcopy(entry)
+        if (
+            "disabled_by" in msg
+            and msg["disabled_by"] is None
+            and entry.get("device_disabled")
+        ):
+            raise HomeAssistantCommandError(
+                "Command failed: Device is disabled", "invalid_info"
+            )
 
     def edit(self, entity_id: str, **fields: Any) -> None:
         self._update(self.entries[entity_id], fields)
@@ -99,12 +154,20 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> FakeRegistry:
     return fake
 
 
-def _manager(tmp_path: Path) -> backup_manager.BackupManager:
+def _manager(tmp_path: Path, client: Any) -> backup_manager.BackupManager:
     mgr = backup_manager.BackupManager(
-        _StubSettings(auto_backup_dir=str(tmp_path)), object()
+        _StubSettings(auto_backup_dir=str(tmp_path)), client
     )
     backup_manager.register_default_handlers(mgr, None)
     return mgr
+
+
+def _writes(registry: FakeRegistry) -> list[dict[str, Any]]:
+    return [
+        m
+        for m in registry.sent
+        if m["type"] in ("config/entity_registry/update", "homeassistant/expose_entity")
+    ]
 
 
 class TestEntityBackup:
@@ -126,6 +189,18 @@ class TestEntityBackup:
             {"disabled_by": "user"},
             {"new_entity_id": "light.lamp"},
             {"new_entity_id": "light.lamp", "name": "Lamp", "hidden_by": "user"},
+            {"options_domain": "light", "options": {"favorite_colors": [[1, 2]]}},
+            {"options_domain": "light", "options": None},
+            {"options_domain": "sensor", "options": {"display_precision": 2}},
+            # What expose_to={"conversation": True} leaves in the registry.
+            {"options_domain": "conversation", "options": {"should_expose": True}},
+            {"options_domain": "cloud.alexa", "options": {"should_expose": False}},
+            # Writes after the rename go to the entity_id it gave back.
+            {
+                "new_entity_id": "light.lamp",
+                "options_domain": "conversation",
+                "options": {"should_expose": True},
+            },
         ],
     )
     async def test_restore_gives_back_the_snapshot(
@@ -135,21 +210,20 @@ class TestEntityBackup:
         snapshot = await handler.fetch(None, "light.desk")
         registry.edit("light.desk", **edit)
 
-        result = await handler.restore(None, "light.desk", snapshot)
+        result = await handler.restore(registry, "light.desk", snapshot)
 
         assert await handler.fetch(None, "light.desk") == snapshot
         assert result["warnings"] == [_NOT_RESTORED]
+        # The reply carries the entry as the last write left it.
+        assert result["entity_entry"] == registry.entries["light.desk"]
 
-    async def test_snapshot_holds_the_registry_fields_only(
+    async def test_snapshot_holds_the_registry_fields_and_options(
         self, registry: FakeRegistry
     ) -> None:
-        """Options are not restored, so a diff must not show them either."""
         snapshot = await _handler("entity").fetch(None, "light.desk")
 
         assert snapshot == {
-            k: v
-            for k, v in DESK.items()
-            if k not in ("platform", "unique_id", "options")
+            k: v for k, v in DESK.items() if k not in ("platform", "unique_id")
         }
 
     async def test_an_entity_without_a_registry_entry_has_no_snapshot(
@@ -158,41 +232,172 @@ class TestEntityBackup:
         assert await _handler("entity").fetch(None, "light.yaml_only") is None
 
     @pytest.mark.parametrize(
-        ("saved", "now", "warning"),
-        [
-            (
-                "integration",
-                None,
-                "hidden_by stays None: only Home Assistant itself sets 'integration'",
-            ),
-            (
-                None,
-                "integration",
-                "hidden_by stays 'integration': only Home Assistant itself sets 'integration'",
-            ),
-            ("integration", "integration", None),
-        ],
+        ("edit", "restart"),
+        [({"name": "Desk"}, False), ({"disabled_by": "user"}, True)],
     )
-    async def test_a_hider_only_core_sets_is_left_and_named(
-        self,
-        registry: FakeRegistry,
-        saved: str | None,
-        now: str | None,
-        warning: str | None,
+    async def test_only_re_enabling_asks_for_a_restart(
+        self, registry: FakeRegistry, edit: dict[str, Any], restart: bool
     ) -> None:
-        """Core rejects any other value than None or "user", which would fail
-        the whole restore."""
-        registry.entries["light.desk"]["hidden_by"] = saved
+        """Core asks for one when an update carries disabled_by None for an
+        entity without a config entry, also one that was never disabled."""
         handler = _handler("entity")
         snapshot = await handler.fetch(None, "light.desk")
-        registry.entries["light.desk"]["hidden_by"] = now
+        registry.edit("light.desk", **edit)
+
+        result = await handler.restore(registry, "light.desk", snapshot)
+
+        assert ("require_restart" in result) is restart
+
+    async def test_a_hider_only_core_sets_is_left_with_cores_refusal(
+        self, registry: FakeRegistry
+    ) -> None:
+        """Core refuses it; the other settings are still restored."""
+        registry.entries["light.desk"]["hidden_by"] = "integration"
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.entries["light.desk"]["hidden_by"] = None
         registry.edit("light.desk", name="Desk")
 
-        result = await handler.restore(None, "light.desk", snapshot)
+        result = await handler.restore(registry, "light.desk", snapshot)
 
         entry = registry.entries["light.desk"]
-        assert (entry["hidden_by"], entry["name"]) == (now, None)
-        assert result["warnings"] == [_NOT_RESTORED, *([warning] if warning else [])]
+        assert (entry["hidden_by"], entry["name"]) == (None, None)
+        assert result["warnings"] == [
+            _NOT_RESTORED,
+            "hidden_by stays None: Home Assistant refused 'integration': "
+            "Command failed: invalid",
+        ]
+
+    async def test_an_entity_of_a_disabled_device_is_left_with_cores_refusal(
+        self, registry: FakeRegistry
+    ) -> None:
+        """Core refuses to enable it; the settings written before stay."""
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.entries["light.desk"].update(
+            disabled_by="device", device_disabled=True
+        )
+        registry.edit("light.desk", name="Desk")
+
+        result = await handler.restore(registry, "light.desk", snapshot)
+
+        entry = registry.entries["light.desk"]
+        assert (entry["disabled_by"], entry["name"]) == ("device", None)
+        assert result["warnings"] == [
+            _NOT_RESTORED,
+            "disabled_by stays 'device': Home Assistant refused None: "
+            "Command failed: Device is disabled",
+        ]
+
+    async def test_an_entity_its_integration_hid_since_is_shown_again(
+        self, registry: FakeRegistry
+    ) -> None:
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.entries["light.desk"]["hidden_by"] = "integration"
+
+        await handler.restore(registry, "light.desk", snapshot)
+
+        assert registry.entries["light.desk"]["hidden_by"] is None
+
+    async def test_exposure_is_set_before_the_options_write(
+        self, registry: FakeRegistry
+    ) -> None:
+        """Core tells the voice assistant about an exposure change only when
+        homeassistant/expose_entity is the command that makes it."""
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.edit(
+            "light.desk",
+            options_domain="conversation",
+            options={"should_expose": True},
+        )
+
+        await handler.restore(registry, "light.desk", snapshot)
+
+        writes = [
+            (m["type"], m.get("options_domain"), m.get("should_expose"))
+            for m in _writes(registry)
+        ]
+        assert writes[1:] == [
+            ("homeassistant/expose_entity", None, False),
+            ("config/entity_registry/update", "conversation", None),
+        ]
+
+    async def test_an_assistant_the_backup_holds_nothing_for_is_reset(
+        self, registry: FakeRegistry
+    ) -> None:
+        """Its options go; no exposure value is sent, since the backup has
+        none to send, and Core works out the default on the next read."""
+        del registry.entries["light.desk"]["options"]["conversation"]
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.edit(
+            "light.desk", options_domain="conversation", options={"should_expose": True}
+        )
+
+        await handler.restore(registry, "light.desk", snapshot)
+
+        assert "conversation" not in registry.entries["light.desk"]["options"]
+        assert "homeassistant/expose_entity" not in [
+            m["type"] for m in _writes(registry)
+        ]
+
+    async def test_an_unreadable_area_registry_refuses_the_restore(
+        self, registry: FakeRegistry
+    ) -> None:
+        """A deleted area could otherwise pass unchecked."""
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.ids["area"].discard("office")
+        registry.unreadable.add("area")
+
+        with pytest.raises(ToolError):
+            await handler.restore(registry, "light.desk", snapshot)
+
+        assert _writes(registry) == []
+
+    async def test_an_unexpected_core_error_on_a_hider_fails_the_restore(
+        self, registry: FakeRegistry, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only Core's refusals become warnings; anything else is reported."""
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.edit("light.desk", hidden_by="user")
+        sent = registry.ws
+
+        async def failing_hider(client: Any, msg: dict[str, Any]) -> Any:
+            if "hidden_by" in msg:
+                raise HomeAssistantCommandError("Command failed: boom", "unknown_error")
+            return await sent(client, msg)
+
+        monkeypatch.setattr(backup_manager, "_ws_send", failing_hider)
+
+        with pytest.raises(HomeAssistantCommandError):
+            await handler.restore(registry, "light.desk", snapshot)
+
+    @pytest.mark.parametrize(
+        ("kind", "deleted"),
+        [("area", "office"), ("label", "work"), ("category", "cat-a")],
+    )
+    async def test_a_deleted_area_label_or_category_refuses_the_restore(
+        self, registry: FakeRegistry, kind: str, deleted: str
+    ) -> None:
+        """Core would store the area or category ID as sent and drop the label
+        without an error, and report success."""
+        handler = _handler("entity")
+        snapshot = await handler.fetch(None, "light.desk")
+        registry.edit("light.desk", name="Desk")
+        registry.ids[kind].remove(deleted)
+
+        with pytest.raises(backup_manager.BackupRestoreError) as err:
+            await handler.restore(registry, "light.desk", snapshot)
+
+        assert err.value.outcome["reason"] == "missing_reference"
+        assert err.value.outcome["apply_status"] == "not_applied"
+        assert repr(deleted) in str(err.value)
+        assert _writes(registry) == []
+        assert registry.entries["light.desk"]["name"] == "Desk"
 
     async def test_a_registry_read_error_fails_the_snapshot(
         self, registry: FakeRegistry, monkeypatch: pytest.MonkeyPatch
@@ -208,19 +413,20 @@ class TestEntityBackup:
         with pytest.raises(HomeAssistantCommandError):
             await _handler("entity").fetch(None, "light.desk")
 
-    async def test_a_removed_entity_points_to_reloading_its_integration(
+    async def test_a_removed_entity_points_to_restarting_home_assistant(
         self, registry: FakeRegistry
     ) -> None:
+        """A reload does not add a stored helper's entity again; a restart does."""
         handler = _handler("entity")
         snapshot = await handler.fetch(None, "light.desk")
         del registry.entries["light.desk"]
 
         with pytest.raises(backup_manager.BackupRestoreError) as err:
-            await handler.restore(None, "light.desk", snapshot)
+            await handler.restore(registry, "light.desk", snapshot)
 
         assert err.value.outcome["reason"] == "entry_deleted"
-        assert "Reload the integration" in err.value.outcome["suggestions"][0]
-        assert not [m for m in registry.sent if m["type"].endswith("update")]
+        assert err.value.outcome["suggestions"][0].startswith("Restart Home Assistant")
+        assert _writes(registry) == []
 
     @pytest.mark.parametrize(
         "legacy",
@@ -232,11 +438,55 @@ class TestEntityBackup:
         """It holds no registry settings; re-posting its state would only
         overwrite what Home Assistant shows for the entity."""
 
-        with pytest.raises(backup_manager.BackupRestoreError) as err:
-            await _handler("entity").restore(None, "light.desk", legacy)
+        with pytest.raises(backup_manager.InvalidBackupSnapshotError):
+            await _handler("entity").restore(registry, "light.desk", legacy)
 
-        assert err.value.outcome["reason"] == "invalid_snapshot"
         assert registry.sent == []
+
+
+def _files(path: Path) -> list[Path]:
+    return sorted(path.rglob("*"))
+
+
+class TestStateSnapshotFromAnEarlierVersion:
+    """Refused before the safety backup and in the diff: there is nothing to
+    restore, so neither may report a change."""
+
+    @pytest.fixture
+    async def legacy(
+        self, registry: FakeRegistry, tmp_path: Path
+    ) -> tuple[backup_manager.BackupManager, str]:
+        mgr = _manager(tmp_path, registry)
+
+        async def state_snapshot(_client: Any, entity_id: str) -> Any:
+            return {"entity_id": entity_id, "state": "on", "attributes": {}}
+
+        mgr.register(
+            backup_manager.DomainHandler("entity", state_snapshot, restore_entity)
+        )
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        backup_manager.register_default_handlers(mgr, None)
+        return mgr, path.name
+
+    async def test_restore_writes_no_safety_backup(
+        self, legacy: tuple[backup_manager.BackupManager, str], tmp_path: Path
+    ) -> None:
+        mgr, name = legacy
+        files = await asyncio.to_thread(_files, tmp_path)
+
+        with pytest.raises(backup_manager.InvalidBackupSnapshotError):
+            await mgr.restore_snapshot(name)
+
+        assert await asyncio.to_thread(_files, tmp_path) == files
+
+    async def test_diff_is_refused(
+        self, legacy: tuple[backup_manager.BackupManager, str]
+    ) -> None:
+        mgr, name = legacy
+
+        with pytest.raises(backup_manager.InvalidBackupSnapshotError):
+            await mgr.snapshot_comparison(name)
 
 
 class TestRenamedWhileWaiting:
@@ -261,10 +511,10 @@ class TestRenamedWhileWaiting:
         monkeypatch.setattr(backup_manager, "_ws_send", rename_after_list)
 
         with pytest.raises(backup_manager.BackupRestoreError) as err:
-            await handler.restore(None, "light.desk", snapshot)
+            await handler.restore(registry, "light.desk", snapshot)
 
         assert err.value.outcome["reason"] == "entity_identity_mismatch"
-        assert not [m for m in registry.sent if m["type"].endswith("update")]
+        assert _writes(registry) == []
 
     async def test_a_rename_back_holds_both_entity_locks_in_order(
         self, registry: FakeRegistry, monkeypatch: pytest.MonkeyPatch
@@ -281,7 +531,7 @@ class TestRenamedWhileWaiting:
 
         monkeypatch.setattr(backup_manager, "registry_update_lock", recording_lock)
 
-        await handler.restore(None, "light.desk", snapshot)
+        await handler.restore(registry, "light.desk", snapshot)
 
         assert held == ["entity:light.desk", "entity:light.lamp"]
 
@@ -289,13 +539,14 @@ class TestRenamedWhileWaiting:
 async def test_the_current_entity_id_follows_the_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A snapshot without an entry id keeps its entity_id; a gone entry has none."""
+    """A gone entry has none; a state snapshot has no entry to follow."""
     fake = FakeRegistry({**DESK, "entity_id": "light.lamp"})
     monkeypatch.setattr(backup_manager, "_ws_send", fake.ws)
 
     assert await current_entity_id(None, "light.desk", DESK) == "light.lamp"
-    assert await current_entity_id(None, "light.desk", {"state": "on"}) == "light.desk"
     assert await current_entity_id(None, "light.desk", {**DESK, "id": "x"}) is None
+    with pytest.raises(backup_manager.InvalidBackupSnapshotError):
+        await current_entity_id(None, "light.desk", {"state": "on"})
 
 
 class TestRenamedEntity:
@@ -305,7 +556,7 @@ class TestRenamedEntity:
     async def test_restore_backs_up_the_renamed_entity_first(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
-        mgr = _manager(tmp_path)
+        mgr = _manager(tmp_path, registry)
         path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
         assert path is not None
         registry.edit("light.desk", new_entity_id="light.lamp", area_id="kitchen")
@@ -322,7 +573,7 @@ class TestRenamedEntity:
     async def test_diff_compares_with_the_renamed_entity(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
-        mgr = _manager(tmp_path)
+        mgr = _manager(tmp_path, registry)
         path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
         assert path is not None
         registry.edit("light.desk", new_entity_id="light.lamp")
@@ -331,34 +582,42 @@ class TestRenamedEntity:
 
         assert current is not None and current["entity_id"] == "light.lamp"
 
-    async def test_diff_of_a_removed_entity_has_no_current_entry(
+    async def test_a_removed_entity_is_named_by_its_entity_id(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
-        mgr = _manager(tmp_path)
+        """The diff has no current entry, and the restore's warning names the
+        entity, not its registry entry id."""
+        mgr = _manager(tmp_path, registry)
         path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
         assert path is not None
         del registry.entries["light.desk"]
 
         _, current = await mgr.snapshot_comparison(path.name)
+        with pytest.raises(backup_manager.BackupRestoreError) as err:
+            await mgr.restore_snapshot(path.name)
 
         assert current is None
+        [warning] = err.value.outcome["warnings"]
+        assert "light.desk" in warning and "reg-desk" not in warning
 
     async def test_an_entity_now_holding_the_old_id_stops_the_rename_back(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
-        """Core refuses the rename onto a taken ID before it writes anything, so
-        neither entity changes."""
-        mgr = _manager(tmp_path)
+        """Checked under the lock, so the error names that entity and neither
+        entity changes."""
+        mgr = _manager(tmp_path, registry)
         path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
         assert path is not None
         registry.edit("light.desk", new_entity_id="light.lamp", area_id="kitchen")
         registry.entries["light.desk"] = {**DESK, "id": "reg-other"}
 
-        with pytest.raises(HomeAssistantCommandError):
+        with pytest.raises(backup_manager.BackupRestoreError) as err:
             await mgr.restore_snapshot(path.name)
 
-        assert registry.entries["light.lamp"]["area_id"] == "kitchen"
-        assert registry.entries["light.desk"]["id"] == "reg-other"
+        assert err.value.outcome["reason"] == "entity_id_collision"
+        assert err.value.outcome["conflicting_entity_id"] == "light.desk"
+        assert "light.desk" in str(err.value)
+        assert _writes(registry) == []
 
 
 def test_a_bulk_call_backs_up_no_entity() -> None:
@@ -368,9 +627,3 @@ def test_a_bulk_call_backs_up_no_entity() -> None:
     assert _single_entity_target({"entity_id": ["light.a", "light.b"]}) == ""
     assert _single_entity_target({"entity_id": "light.a"}) == "light.a"
     assert _single_entity_target({"entity_id": ["light.a"]}) == "light.a"
-    src = (
-        Path(__file__).resolve().parents[3] / "src/ha_mcp/tools/tools_entities.py"
-    ).read_text(encoding="utf-8")
-    for tool in ("ha_set_entity", "ha_remove_entity"):
-        head = src[: src.index(f"async def {tool}(")][-200:]
-        assert "id_fn=_single_entity_target" in head, tool

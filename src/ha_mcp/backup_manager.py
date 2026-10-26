@@ -3463,7 +3463,7 @@ async def _check_entity_collision(
     occupied = {row["entity_id"] for row in registry} | state_ids
     if target in occupied and target not in owned_ids:
         raise BackupRestoreError(
-            "The saved entity ID is occupied; it will not be overwritten",
+            f"The saved entity ID {target} is occupied; it will not be overwritten",
             reason="entity_id_collision",
             conflicting_entity_id=target,
         )
