@@ -1,6 +1,7 @@
 """Unit tests for the usage logger with ring buffer."""
 
 import asyncio
+import os
 import stat
 import sys
 import tempfile
@@ -462,5 +463,80 @@ class TestLogFileMode:
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
             assert logger._enabled is False
+        finally:
+            logger.shutdown()
+
+
+class TestLogPathControlledByOthers:
+    """Another local user must not be able to redirect or read the usage log."""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
+    def test_log_directory_owned_by_another_user_disables_logging(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        real_euid = os.geteuid()
+        monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+        logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
+        try:
+            assert logger._enabled is False
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
+    def test_world_writable_log_directory_is_closed_to_other_writers(
+        self, tmp_path: Path
+    ) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log_dir.chmod(0o777)
+        logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
+        try:
+            assert logger._enabled is True
+            assert log_dir.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+    def test_symlink_planted_before_startup_is_refused(self, tmp_path: Path) -> None:
+        target = tmp_path / "victim.txt"
+        target.write_text("")
+        target.chmod(0o644)
+        log_path = tmp_path / "usage.jsonl"
+        log_path.symlink_to(target)
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            assert logger._enabled is False
+            assert stat.S_IMODE(target.stat().st_mode) == 0o644
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX links")
+    @pytest.mark.parametrize("link", ["symlink", "hardlink"])
+    def test_log_swapped_after_startup_receives_no_tool_data(
+        self, tmp_path: Path, link: str
+    ) -> None:
+        log_path = tmp_path / "usage.jsonl"
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            target = tmp_path / "planted.jsonl"
+            fd = os.open(target, os.O_CREAT | os.O_WRONLY, 0o600)
+            os.close(fd)
+            if link == "symlink":
+                log_path.symlink_to(target)
+            else:
+                os.link(target, log_path)
+            logger.log_tool_usage(
+                tool_name="ha_get_state",
+                parameters={"entity_id": "sun.sun"},
+                execution_time_ms=1.0,
+                success=True,
+            )
+            deadline = time.monotonic() + 3.0
+            while logger._enabled and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert logger._enabled is False
+            assert target.read_text() == ""
         finally:
             logger.shutdown()

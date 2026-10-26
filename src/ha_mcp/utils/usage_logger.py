@@ -3,6 +3,7 @@ Usage logging for MCP tool calls to track usage patterns and performance metrics
 """
 
 import copy
+import errno
 import json
 import logging
 import os
@@ -23,10 +24,64 @@ from .data_paths import get_data_dir
 # The usage log records tool arguments and results, so it is created owner-only.
 _PRIVATE_FILE_MODE = 0o600
 
+# O_NOFOLLOW refuses a symlink planted at the log path. O_NONBLOCK keeps a
+# planted FIFO from hanging the writer thread on open; it has no effect on a
+# regular file, and the fstat check below refuses the FIFO anyway.
+_PRIVATE_OPEN_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+
+class UnsafeLogPathError(PermissionError):
+    """The log path is not a private file and directory owned by this process."""
+
+
+def _check_private_fd(fd: int) -> None:
+    """Raise ``UnsafeLogPathError`` unless ``fd`` is our own owner-only regular file.
+
+    Checked on the opened descriptor, not the path, so a file swapped in
+    between the directory check and the open is still caught.
+    """
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        raise UnsafeLogPathError("the usage log is not a regular file")
+    if not hasattr(os, "geteuid"):
+        return  # POSIX owner and mode bits do not apply on Windows.
+    if st.st_uid != os.geteuid():
+        raise UnsafeLogPathError("the usage log is owned by another user")
+    if st.st_nlink != 1:
+        raise UnsafeLogPathError("the usage log has another hard link")
+    if st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise UnsafeLogPathError("the usage log is accessible to other users")
+
 
 def _private_opener(path: str, flags: int) -> int:
-    """``open()`` opener that creates the file with ``_PRIVATE_FILE_MODE``."""
-    return os.open(path, flags, _PRIVATE_FILE_MODE)
+    """``open()`` opener: creates the file owner-only and opens only our own private file."""
+    try:
+        fd = os.open(path, flags | _PRIVATE_OPEN_FLAGS, _PRIVATE_FILE_MODE)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise UnsafeLogPathError("the usage log path is a symlink") from e
+        raise
+    try:
+        _check_private_fd(fd)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _make_private_dir(path: Path) -> None:
+    """Refuse a log directory another user controls; drop group/other write from our own.
+
+    ``mkdir(mode=0o700)`` does not touch a directory that already exists, and
+    whoever can write to it can replace the log file.
+    """
+    if not hasattr(os, "geteuid"):
+        return  # POSIX owner and mode bits do not apply on Windows.
+    st = path.stat()
+    if st.st_uid != os.geteuid():
+        raise UnsafeLogPathError(f"{path} is owned by another user")
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        path.chmod(stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH))
 
 
 def _make_private(path: Path) -> None:
@@ -37,9 +92,11 @@ def _make_private(path: Path) -> None:
     appending to a file that stays readable by others.
     """
     try:
-        mode = path.stat().st_mode
+        mode = path.lstat().st_mode
     except FileNotFoundError:
         return
+    if not stat.S_ISREG(mode):
+        raise UnsafeLogPathError(f"{path} is not a regular file")
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
         path.chmod(_PRIVATE_FILE_MODE)
 
@@ -342,7 +399,16 @@ class UsageLogger:
 
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _make_private_dir(self.log_file_path.parent)
             _make_private(self.log_file_path)
+        except UnsafeLogPathError as e:
+            logger.warning(
+                "Usage logging disabled — %s is not private (%s). "
+                "Set HA_MCP_CONFIG_DIR to a directory only this user can write.",
+                self.log_file_path,
+                e,
+            )
+            self._enabled = False
         except OSError as e:
             # Directory creation failed (e.g., read-only filesystem). Surface
             # the reason instead of silently dropping every log — operators
@@ -398,6 +464,16 @@ class UsageLogger:
             ) as f:
                 json.dump(asdict(log_entry), f, ensure_ascii=False)
                 f.write("\n")
+        except UnsafeLogPathError as e:
+            # The file was swapped after startup. Stop writing instead of
+            # retrying a path someone else controls on every tool call.
+            if self._enabled:
+                self._enabled = False
+                logger.warning(
+                    "Usage logging disabled — %s is not private (%s).",
+                    self.log_file_path,
+                    e,
+                )
         except Exception:  # noqa: BLE001
             # Silent error handling
             pass
