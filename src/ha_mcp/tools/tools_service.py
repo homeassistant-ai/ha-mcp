@@ -2007,7 +2007,7 @@ class ServiceTools:
 
             return response
         except HomeAssistantConnectionError as error:
-            self._handle_connection_error(
+            return self._handle_connection_error(
                 error,
                 domain=domain,
                 service=service,
