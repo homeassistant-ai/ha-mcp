@@ -502,6 +502,47 @@ class TestRecordLimitAndPaging:
         )
 
     @pytest.mark.asyncio
+    async def test_a_filtered_head_window_with_more_matches_than_the_cap_is_exhaustive(
+        self,
+    ) -> None:
+        """Matches behind a token page at the head must stay pageable.
+
+        The head window holds more matches than one response may carry, and
+        raising ``limit`` cannot reach them because the window's count exceeds
+        the cap. The token has to keep the walk going until every match comes
+        back exactly once.
+        """
+        entries = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
+            for i in range(2600)
+        ]
+        tools = LogTools(journald_page_client(entries))
+
+        seen: list[int] = []
+        offset: int | str = 0
+        pages = 0
+        for _ in range(30):
+            page = await tools.get_logs(
+                **_kwargs(limit=300, search="issue", offset=offset)
+            )
+            pages += 1
+            for line in page["log"].splitlines():
+                match = re.search(r"issue (\d+)$", line)
+                if match:
+                    seen.append(int(match.group(1)))
+            if not page["has_more"]:
+                break
+            offset = page["next_offset"]
+            assert isinstance(offset, str), "the head window must hand out a token"
+        else:
+            raise AssertionError("the filtered head window did not finish paging")
+
+        assert pages > 2, "the fixture must force several pages"
+        assert seen == list(range(len(entries) - 1, -1, -1)), (
+            "every match in the head window must come back exactly once"
+        )
+
+    @pytest.mark.asyncio
     async def test_numeric_string_offsets_keep_working(self) -> None:
         """The offset union admits strings now; a stringified integer still works."""
         client = _client(_ERROR_RECORD)

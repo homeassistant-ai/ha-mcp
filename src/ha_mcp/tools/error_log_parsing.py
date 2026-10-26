@@ -706,6 +706,7 @@ def _attach_error_log_pagination(
     top_n: int | None,
     unreturned_matches: int = 0,
     cursor_skip: int | None = None,
+    older_matches_remain: bool = False,
 ) -> None:
     """Add the offset/has_more contract to an error-log response in place.
 
@@ -718,19 +719,32 @@ def _attach_error_log_pagination(
     resumes behind the window; it accepts those tokens back on the next call.
     Installs that read a whole log file keep the integer line step.
 
-    ``has_more`` speaks only about history behind this window. Matches the
-    ``limit`` slice left unreturned INSIDE a terminal window get a raise-the-
-    limit hint instead of a ``next_offset``: they sit in a window the caller
-    has already addressed, so a larger ``limit`` retrieves them exactly,
-    whereas paging deeper for them cannot advance once the window is the whole
-    journal (a Supervisor fetch past the start clamps to the same oldest
-    window every time, which would loop). On a non-terminal window the step
-    already resumes just before the oldest returned line, so those matches are
-    covered by the next page and need no hint.
+    ``has_more`` means "matches remain"; it is not limited to history behind
+    this window. On a token page that returned only part of its window, the
+    remaining matches are older records inside that same window: ``has_more``
+    stays true and the token resumes just behind the oldest returned record, so
+    the next window is strictly shorter and the walk ends. An integer offset
+    cannot express that (a fetch past the journal's start clamps onto the same
+    oldest window forever), so there the unreturned matches get a raise-the-
+    limit hint instead. The hint never promises more than one response can
+    deliver: past ``MAX_LIMIT`` it names the cap and asks the caller to narrow
+    the match set.
     """
     data["offset"] = window.offset
     data["has_more"] = window.has_more
-    if window.has_more:
+    # A token page that returned only part of its window still has matches
+    # behind it. Its resume token names an entry inside this window rather than
+    # a point past the journal's start, so the next page is strictly shorter and
+    # the walk terminates: it can page on, unlike an integer offset, which would
+    # clamp onto the same oldest window forever.
+    continues_inside_window = (
+        not window.has_more
+        and older_matches_remain
+        and isinstance(window.offset, str)
+        and cursor_skip is not None
+        and bool(window.first_cursor)
+    )
+    if window.has_more or continues_inside_window:
         next_offset: int | str
         if cursor_skip is not None and window.first_cursor:
             next_offset = cursor_token(window.first_cursor, cursor_skip)
@@ -741,6 +755,7 @@ def _attach_error_log_pagination(
             # unreachable in practice; repeating the caller's token would loop
             # forever on the same page, which is worse than failing loudly.
             raise ValueError("a page with older history must carry its block's cursor")
+        data["has_more"] = True
         data["next_offset"] = next_offset
         data["pagination_hint"] = _build_error_log_pagination_hint(
             next_offset,
@@ -759,20 +774,20 @@ def _attach_error_log_pagination(
         data["note"] = f"{data.get('note', '')} {_HISTORY_START_NOTE}".strip()
     if unreturned_matches > 0:
         total = data.get("total_lines", unreturned_matches)
-        suggested = min(total, MAX_LIMIT)
-        if limit is not None and limit >= suggested:
-            # Raising the limit cannot help: it is already at (or past) the
-            # ceiling, so recommending it would repeat the same request.
+        if total > MAX_LIMIT:
+            # No limit can return this window in one response, so promising one
+            # would send the caller back with the same unsatisfiable request.
             data["pagination_hint"] = (
                 f"{unreturned_matches} more matching lines remain inside this "
-                f"window (no older history exists behind it), but 'limit' is "
-                f"already at its maximum ({MAX_LIMIT}). Narrow the match set — "
-                "a more specific 'search' or a 'level' filter — so the "
-                "remainder fits in one response."
+                f"window (no older history exists behind it), which holds "
+                f"{total} in total. A single response is capped at limit="
+                f"{MAX_LIMIT}, so that call returns {MAX_LIMIT} of them; narrow "
+                "the match set — a more specific 'search' or a 'level' filter — "
+                "to read the rest."
             )
         else:
             data["pagination_hint"] = (
                 f"{unreturned_matches} more matching lines remain inside this "
                 f"window (no older history exists behind it). Repeat the call "
-                f"with limit={suggested} to retrieve them in one response."
+                f"with limit={total} to retrieve them in one response."
             )

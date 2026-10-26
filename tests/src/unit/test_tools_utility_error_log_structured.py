@@ -1029,17 +1029,23 @@ class TestErrorLogPagination:
         assert "limit=50" in result["pagination_hint"]
 
     @pytest.mark.asyncio
-    async def test_terminal_window_at_max_limit_hints_narrowing_instead(self):
-        """At limit=MAX_LIMIT the raise-the-limit hint would repeat the same
-        request verbatim; the hint switches to narrowing the match set."""
+    async def test_terminal_window_past_the_cap_names_the_shortfall(self):
+        """One response cannot return this window, so the hint must say so.
+
+        The old wording promised a single call would retrieve every remaining
+        line while capping the suggested limit at ``MAX_LIMIT``, so the caller
+        came back with the same unsatisfiable request.
+        """
         client = _make_client(_numbered_log(MAX_LIMIT + 100), has_more=False)
         tools = _register_and_collect(client)
         result = await tools["ha_get_logs"](
             source="error_log", limit=MAX_LIMIT, search="issue"
         )
         assert result["has_more"] is False
-        assert "already at its maximum" in result["pagination_hint"]
-        assert f"limit={MAX_LIMIT} to retrieve" not in result["pagination_hint"]
+        hint = result["pagination_hint"]
+        assert f"returns {MAX_LIMIT} of them" in hint
+        assert "narrow" in hint
+        assert "in one response" not in hint
 
     @pytest.mark.asyncio
     async def test_next_offset_advances_from_the_current_offset(self):

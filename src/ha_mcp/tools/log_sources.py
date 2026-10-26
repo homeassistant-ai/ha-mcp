@@ -456,7 +456,7 @@ class CoreLogSourcesMixin:
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
         refetch_failed: bool = False,
-    ) -> tuple[dict[str, Any], int, int]:
+    ) -> tuple[dict[str, Any], int, int, bool]:
         """Return the most recent matching records, plus both next-page anchors.
 
         Records are the unit: ``search`` matches any line of a record and
@@ -509,6 +509,14 @@ class CoreLogSourcesMixin:
             cursor_skip = page.oldest_index or 0
 
         total_lines = sum(record.line_count for record in matches)
+        # Matches older than the oldest returned record are reachable by paging
+        # again from a token; the ones this page cut out of a single over-long
+        # record are not, they need a larger limit.
+        older_matches_remain = (
+            any(record.start_index < page.oldest_index for record in matches)
+            if page.oldest_index is not None
+            else bool(matches)
+        )
 
         data: dict[str, Any] = {
             "success": True,
@@ -546,7 +554,7 @@ class CoreLogSourcesMixin:
             data["warnings"] = warnings
         if filters_applied:
             data["filters_applied"] = filters_applied
-        return data, step, cursor_skip
+        return data, step, cursor_skip, older_matches_remain
 
     @staticmethod
     def _apply_empty_window_warning(
@@ -631,6 +639,7 @@ class CoreLogSourcesMixin:
             # sets the skip from the records it returned. Container installs
             # have no cursor, so both fall back to the integer line step.
             cursor_skip: int | None = None
+            older_matches_remain = False
             if structured:
                 data = self._build_structured_error_log(
                     raw_text,
@@ -650,14 +659,16 @@ class CoreLogSourcesMixin:
                 effective_limit = _coerce_limit(
                     limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
                 )
-                data, step, cursor_skip = self._build_raw_error_log(
-                    raw_text,
-                    search=search,
-                    level=level,
-                    effective_limit=effective_limit,
-                    order=order,
-                    window=window,
-                    refetch_failed=refetch_failed,
+                data, step, cursor_skip, older_matches_remain = (
+                    self._build_raw_error_log(
+                        raw_text,
+                        search=search,
+                        level=level,
+                        effective_limit=effective_limit,
+                        order=order,
+                        window=window,
+                        refetch_failed=refetch_failed,
+                    )
                 )
             self._apply_empty_window_warning(data, raw_text, offset, structured)
             _attach_error_log_pagination(
@@ -676,6 +687,7 @@ class CoreLogSourcesMixin:
                     0 if structured else data["total_lines"] - data["returned_lines"]
                 ),
                 cursor_skip=cursor_skip,
+                older_matches_remain=(False if structured else older_matches_remain),
             )
             return data
 
