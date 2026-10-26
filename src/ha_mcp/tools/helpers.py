@@ -25,6 +25,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..client.service_errors import (
+    HomeAssistantServiceAPIOutcomeUnknown,
     HomeAssistantServiceAuthOutcomeUnknown,
     HomeAssistantServiceConnectionOutcomeUnknown,
     HomeAssistantWebSocketServiceError,
@@ -370,6 +371,7 @@ def _classify_exception(
     if isinstance(
         error,
         (
+            HomeAssistantServiceAPIOutcomeUnknown,
             HomeAssistantServiceAuthOutcomeUnknown,
             HomeAssistantServiceConnectionOutcomeUnknown,
         ),

@@ -16,6 +16,10 @@ class HomeAssistantServiceConnectionOutcomeUnknown(HomeAssistantCommandOutcomeUn
     """A service command's transport failed after it may have reached HA."""
 
 
+class HomeAssistantServiceAPIOutcomeUnknown(HomeAssistantAPIError):
+    """A service HTTP error response that does not establish absence of an effect."""
+
+
 class HomeAssistantServiceAuthOutcomeUnknown(HomeAssistantAuthError):
     """An auth diagnostic after a service attempt, not proof it had no effect."""
 

@@ -4,6 +4,7 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantCommandError
 from ..client.service_errors import (
+    HomeAssistantServiceAPIOutcomeUnknown,
     HomeAssistantServiceAuthOutcomeUnknown,
     HomeAssistantWebSocketServiceError,
 )
@@ -33,7 +34,13 @@ def create_service_outcome_unknown_error(
         ),
     )
     if (
-        isinstance(error, HomeAssistantServiceAuthOutcomeUnknown)
+        isinstance(
+            error,
+            (
+                HomeAssistantServiceAuthOutcomeUnknown,
+                HomeAssistantServiceAPIOutcomeUnknown,
+            ),
+        )
         and error.status_code is not None
     ):
         details["http_status"] = error.status_code

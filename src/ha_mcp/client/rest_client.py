@@ -90,18 +90,12 @@ class HomeAssistantConnectionError(HomeAssistantError):
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
     """A WS command that provably never left the process.
 
-    Raised by ``HomeAssistantWebSocketClient.send_command`` ONLY at its single
-    provably-never-sent site: the entry-guard reject (socket not authenticated), where
-    nothing is transmitted. Subclass of ``HomeAssistantConnectionError`` so every
-    existing broad handler is unaffected, yet a write consumer can catch this type
-    FIRST to fall back to the legacy path safely — the write provably never happened,
-    so a legacy first fire cannot double-apply. A ``send_json_message`` failure is NOT
-    this type: ``websocket.send()`` raising does not prove the frame was untransmitted
-    (bytes may already be on the socket when the close surfaces), so send_command
-    re-raises the original exception and the consumer treats it as ambiguous. A
-    post-send socket close (mid-await) likewise raises a plain
-    ``HomeAssistantConnectionError`` (the close handler sets it on the pending future),
-    so type alone distinguishes never-sent from sent-then-dropped/ambiguous.
+    Raised only by send_command's readiness guard, before transmission. Existing
+    connection-error catches still apply; a consumer may use a safe first fallback
+    when no earlier attempt could have acted. A socket send failure can follow
+    transmission and must retain uncertainty. The bridge preserves this subtype
+    and separately types post-send ambiguity; acquisition failures keep their
+    original connection/auth error channel.
     """
 
 
@@ -732,20 +726,21 @@ class HomeAssistantClient:
         payload: dict[str, Any],
         return_response: bool,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """POST once; a 401 latches WS for later calls without replaying this one."""
-        from .service_errors import HomeAssistantServiceAuthOutcomeUnknown
+        """POST once, retaining typed uncertainty for an unsuccessful service attempt."""
+        from .service_errors import (
+            HomeAssistantServiceAPIOutcomeUnknown,
+            HomeAssistantServiceAuthOutcomeUnknown,
+            HomeAssistantServiceConnectionOutcomeUnknown,
+        )
 
-        # Build query params for return_response
-        params = {}
-        if return_response:
-            params["return_response"] = "true"
+        params = {"return_response": "true"} if return_response else None
 
         try:
             result = await self._request(
                 "POST",
                 f"/services/{domain}/{service}",
                 json=payload,
-                params=params if params else None,
+                params=params,
             )
         except HomeAssistantAuthError as exc:
             self._is_admin = None
@@ -755,6 +750,19 @@ class HomeAssistantClient:
             raise HomeAssistantServiceAuthOutcomeUnknown(
                 f"HTTP 401 after requesting {domain}.{service}: {exc}", status_code=401
             ) from exc
+        except HomeAssistantAPIError as exc:
+            raise HomeAssistantServiceAPIOutcomeUnknown(
+                str(exc), status_code=exc.status_code, response_data=exc.response_data
+            ) from exc
+        except HomeAssistantConnectionError as exc:
+            if isinstance(
+                exc.__cause__,
+                (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout),
+            ):
+                raise
+            # Reading, writing or decoding a transport reply can fail after an
+            # effect. Preserve this at the service boundary for every consumer.
+            raise HomeAssistantServiceConnectionOutcomeUnknown(str(exc)) from exc
 
         # When return_response is True, HA returns a dict with service_response key
         if return_response:
@@ -762,11 +770,7 @@ class HomeAssistantClient:
                 return result
             return {"service_response": result}
 
-        # Normal behavior: return list of affected states
-        if isinstance(result, list):
-            return result
-        else:
-            return []
+        return result if isinstance(result, list) else []
 
     async def _call_service_over_websocket(
         self,
