@@ -20,7 +20,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools import backup_snapshot
 from ha_mcp.tools.backup_snapshot import create_backup, list_backups
@@ -520,8 +523,15 @@ class TestWaitingForTheBackup:
         assert ctx.report_progress.await_count >= 3
 
     @pytest.mark.asyncio
-    async def test_close_right_after_the_backup_finished_says_to_check_the_list(
-        self,
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(HomeAssistantConnectionError("closed"), id="closed"),
+            pytest.param(HomeAssistantCommandTimeout("no reply"), id="no-answer"),
+        ],
+    )
+    async def test_listing_failure_after_the_backup_finished_says_to_check_the_list(
+        self, error
     ) -> None:
         """The backup may exist; a retry without checking would make a second one."""
         ws = FakeWS()
@@ -529,7 +539,7 @@ class TestWaitingForTheBackup:
 
         async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
             if command == "backup/info" and ws.generated():
-                raise HomeAssistantConnectionError("closed")
+                raise error
             return await reply(command, **kwargs)
 
         ws.send_command = _send

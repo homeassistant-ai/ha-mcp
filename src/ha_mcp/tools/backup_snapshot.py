@@ -17,6 +17,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantClient,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
@@ -241,12 +242,13 @@ async def _generate_backup(
         await ws_client.release_subscription(sub_id)
     try:
         listing = await _backup_info(ws_client)
-    except HomeAssistantConnectionError:
-        # The close kept the job's last event, so the backup may exist.
+    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
+        # The job finished, so the backup may exist although it is not listed.
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
-                "Connection to Home Assistant closed right after the backup finished",
+                "The backup finished, but Home Assistant did not answer the "
+                "listing that names it",
                 context={"backup_job_id": job_id, "event": outcome},
                 suggestions=[_CHECK_LIST_SUGGESTION],
             )
