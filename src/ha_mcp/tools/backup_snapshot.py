@@ -18,6 +18,7 @@ from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
 from ..client.rest_client import (
     HomeAssistantClient,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -238,8 +239,16 @@ async def _generate_backup(
             params["name"] = name
         try:
             job = await ws_client.send_command(command, **params)
-        except (OSError, ConnectionClosed):
-            # A failed send does not prove Home Assistant did not get it.
+        except HomeAssistantCommandNotSent:
+            raise
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantCommandTimeout,
+            OSError,
+            ConnectionClosed,
+        ):
+            # Once sent, a lost connection or a missing reply does not prove
+            # Home Assistant did not start the backup.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.CONNECTION_FAILED,

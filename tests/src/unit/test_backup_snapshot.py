@@ -22,6 +22,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ha_mcp.client.rest_client import (
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -557,6 +558,8 @@ class TestWaitingForTheBackup:
         [
             pytest.param(OSError("broken pipe"), id="send-failed"),
             pytest.param(ConnectionClosed(None, None), id="closed-mid-write"),
+            pytest.param(HomeAssistantConnectionError("closed"), id="closed"),
+            pytest.param(HomeAssistantCommandTimeout("no reply"), id="no-answer"),
         ],
     )
     async def test_failed_send_of_the_backup_request_says_to_check_the_list(
@@ -569,6 +572,16 @@ class TestWaitingForTheBackup:
         assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
         assert "Check the snapshot list" in str(exc_info.value)
         ws.release_subscription.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_request_never_sent_is_not_reported_as_possibly_started(
+        self,
+    ) -> None:
+        """Nothing reached Home Assistant, so there is no backup to look for."""
+        ws = FakeWS(errors={"backup/generate": HomeAssistantCommandNotSent("closed")})
+        with pytest.raises(ToolError) as exc_info:
+            await _run(create_backup, ws, _client())
+        assert "may have started the backup" not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_subscription_is_released_when_the_backup_cannot_start(
