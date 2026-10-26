@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import io
 import json
@@ -10,6 +11,7 @@ import urllib.error
 from pathlib import Path
 from types import ModuleType
 from typing import Any, NoReturn
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -135,6 +137,7 @@ def test_complete_archive_provides_importable_frontend_and_releases_lock(
     spec.loader.exec_module(module)
     assert module.VERSION == "fixture"
     assert not (state / ".hacs_frontend.lock").exists()
+    assert list(_frontend(state).parent.iterdir()) == [_frontend(state)]
 
 
 def test_absent_hacs_component_needs_no_frontend(
@@ -215,3 +218,93 @@ def test_waiter_uses_frontend_only_after_owner_publishes_and_releases(
     assert waited
     assert not lock.exists()
     assert (_frontend(state) / "__init__.py").is_file()
+
+
+def test_failed_cross_filesystem_publication_leaves_no_frontend_to_accept(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = _frontend(state)
+    payload = _archive(
+        {
+            "hacs_frontend/__init__.py": b"VERSION = 'fixture'",
+            "hacs_frontend/entrypoint.js": b"import './z-asset.js';",
+            "hacs_frontend/z-asset.js": b"export {};",
+        }
+    )
+    _serve_archive(seed, monkeypatch, payload)
+    real_rename = seed.os.rename
+    real_scandir = seed.os.scandir
+    real_copyfile = seed.shutil.copyfile
+    real_move = seed.shutil.move
+
+    def cross_filesystem(src: Any, dst: Any) -> None:
+        if Path(dst) == frontend:
+            assert (state / ".hacs_frontend.lock").is_dir()
+            raise OSError(errno.EXDEV, "fixture cross-filesystem rename")
+        real_rename(src, dst)
+
+    def ordered_scandir(path: Any) -> MagicMock:
+        with real_scandir(path) as entries:
+            ordered = iter(sorted(entries, key=lambda entry: entry.name))
+        scan = MagicMock()
+        scan.__enter__.return_value = ordered
+        scan.__iter__.side_effect = lambda: ordered
+        scan.__next__.side_effect = ordered.__next__
+        return scan
+
+    def copy_asset(src: Any, dst: Any) -> str:
+        if Path(src).name == "z-asset.js":
+            assert (frontend / "__init__.py").is_file()
+            assert (frontend / "entrypoint.js").is_file()
+            raise OSError("fixture asset copy failed")
+        return str(real_copyfile(src, dst))
+
+    def move(src: str, dst: str) -> str:
+        return str(real_move(src, dst, copy_function=copy_asset))
+
+    with monkeypatch.context() as publication:
+        publication.setattr(seed.os, "rename", cross_filesystem)
+        publication.setattr(seed.os, "scandir", ordered_scandir)
+        publication.setattr(seed.shutil, "move", move)
+        with pytest.raises(OSError):
+            seed._ensure_hacs_frontend(state)
+
+    assert not frontend.exists()
+    assert not (state / ".hacs_frontend.lock").exists()
+    assert list(frontend.parent.iterdir()) == []
+    _serve_archive(seed, monkeypatch, payload)
+    seed._ensure_hacs_frontend(state)
+    assert (frontend / "z-asset.js").read_bytes() == b"export {};"
+
+
+def test_failed_rename_preserves_concurrent_destination_and_cleans_staging(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = _frontend(state)
+    _serve_archive(
+        seed,
+        monkeypatch,
+        _archive(
+            {
+                "hacs_frontend/__init__.py": b"VERSION = 'fixture'",
+                "hacs_frontend/entrypoint.js": b"export {};",
+            }
+        ),
+    )
+    real_rename = seed.os.rename
+
+    def competing_publication(src: Any, dst: Any) -> None:
+        if Path(dst) == frontend:
+            assert (state / ".hacs_frontend.lock").is_dir()
+            frontend.mkdir()
+            (frontend / "other-owner.txt").write_text("preserve me", encoding="utf-8")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(seed.os, "rename", competing_publication)
+    with pytest.raises(OSError):
+        seed._ensure_hacs_frontend(state)
+
+    assert (frontend / "other-owner.txt").read_text(encoding="utf-8") == "preserve me"
+    assert list(frontend.iterdir()) == [frontend / "other-owner.txt"]
+    assert list(frontend.parent.iterdir()) == [frontend]
+    assert not (state / ".hacs_frontend.lock").exists()

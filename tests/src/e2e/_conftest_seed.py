@@ -226,10 +226,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
     import tarfile
 
     if frontend_dir.exists():
-        # Partial/corrupt directory from a prior interrupted
-        # session. Clear it so ``shutil.move`` below replaces it
-        # cleanly — moving onto an existing directory nests the
-        # fresh ``hacs_frontend/`` inside the stale one.
+        # Discard an incomplete frontend before publishing a replacement.
         logger.warning(
             f"HACS frontend at {frontend_dir} is partial or corrupt; "
             f"removing before re-download."
@@ -251,10 +248,10 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
         with (
             urllib.request.urlopen(tarball_url, timeout=120) as response,
             tarfile.open(fileobj=response, mode="r:gz") as tar,
-            tempfile.TemporaryDirectory() as temp_dir_str,
+            tempfile.TemporaryDirectory(dir=frontend_dir.parent) as temp_dir_str,
         ):
-            # Extract to temp location first; the context manager
-            # cleans up even if extractall or shutil.move raises.
+            # Stage on the destination filesystem so publication cannot fall
+            # back to a partial copy. Failed extraction/rename is cleaned up.
             temp_extract = Path(temp_dir_str)
             tar.extractall(temp_extract, filter="data")
 
@@ -267,7 +264,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
                     f"Incomplete HACS frontend archive for {tag_name}: "
                     "missing __init__.py or entrypoint.js"
                 )
-            shutil.move(str(extracted_frontend), str(frontend_dir))
+            extracted_frontend.rename(frontend_dir)
             logger.info(f"HACS frontend installed at {frontend_dir}")
 
     except (
@@ -288,7 +285,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     This is not committed to git to keep the repo size manageable.
 
     Uses a directory-based atomic lock so concurrent xdist workers don't race
-    on ``shutil.move`` into the shared ``initial_test_state`` path. One worker
+    when publishing into the shared ``initial_test_state`` path. One worker
     wins ``mkdir(exist_ok=False)`` and performs the download; the losers poll
     on the lock and exit when the winner releases it.
     """
@@ -299,14 +296,8 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
 
     _clear_stale_hacs_lock(lock_dir)
 
-    # Fast path: HACS not installed (nothing to do), or frontend present
-    # AND no lock held. The lock-held check rules out the window where
-    # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
-    # exists then but its contents are partial. On the success path the
-    # move commits in the inner ``try`` before the winner's ``finally``
-    # runs ``rmdir`` — waiters observing lock-gone-and-frontend-present
-    # see a complete frontend. After a failed download, waiters must reject
-    # the missing frontend instead of staging an unusable HACS component.
+    # The lock still belongs to the publisher even when sentinels exist.
+    # Accept publication only after release; a failed owner leaves no frontend.
     if not hacs_dir.exists() or (
         _is_valid_hacs_frontend(frontend_dir) and not lock_dir.exists()
     ):
