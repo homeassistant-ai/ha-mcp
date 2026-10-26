@@ -37,7 +37,6 @@ class Scenario:
                 "initial": initial,
             },
         )
-        # Both locations are documented helper-create forms in the original API.
         entity_id = created.get("entity_id") or f"{helper_type}.{created['data']['id']}"
         self.remove_after(
             "ha_remove_helpers_integrations",

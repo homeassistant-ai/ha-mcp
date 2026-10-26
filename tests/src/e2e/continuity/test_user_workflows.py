@@ -1,8 +1,4 @@
-"""Observe user effects through the same public MCP calls on both versions.
-
-No backend selection, raw WebSocket commands, implementation patching, or
-qualification-fixture services participate in these scenarios.
-"""
+"""User-visible MCP behavior across the supported deployment modes."""
 
 import asyncio
 from copy import deepcopy

@@ -1,4 +1,4 @@
-"""Public options-flow and snapshot behavior shared by both embedded servers."""
+"""Helper-edit and script-restore contracts exercised through public MCP tools."""
 
 from copy import deepcopy
 from typing import Any
@@ -13,7 +13,10 @@ pytestmark = pytest.mark.asyncio
 async def test_template_options_edit_changes_output_and_preserves_unit_and_name(
     mcp_client: Any,
 ) -> None:
-    """Editing only a template expression must preserve its neighboring options."""
+    """ha_config_set_helper must retain omitted options in a partial template edit.
+
+    Cover the helper entry point, including installs without the custom component.
+    """
     async with public_scenario(mcp_client) as case:
         name = case.unique_name()
         created = await case.mcp.call_tool_success(
@@ -130,8 +133,6 @@ async def test_script_snapshot_restores_saved_behavior_after_explicit_reload(
         )
         assert restored["config"] == original["config"]
         assert restored["config_hash"] == original["config_hash"]
-        # Original restore persists first; its automatic reload can be asynchronous.
-        # The contract here is usable restored content after an explicit reload.
         await case.mcp.call_tool_success(
             "ha_call_service", {"domain": "script", "service": "reload"}
         )
