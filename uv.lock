@@ -8,6 +8,13 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'win32'",
 ]
 
+[options]
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+certifi = "2026-10-21T00:00:00Z"
+
 [[package]]
 name = "aiofile"
 version = "3.9.0"
@@ -682,6 +689,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "authlib" },
+    { name = "certifi" },
     { name = "cryptography" },
     { name = "cyclopts" },
     { name = "exceptiongroup" },
@@ -751,6 +759,7 @@ requires-dist = [
     { name = "anyio", marker = "python_full_version < '3.14'", specifier = ">=4.9" },
     { name = "anyio", marker = "python_full_version >= '3.14'", specifier = ">=4.10" },
     { name = "authlib", specifier = ">=1.6.11" },
+    { name = "certifi", specifier = ">=2026.10.19" },
     { name = "cryptography", specifier = ">=48.0.0,<51" },
     { name = "cyclopts", specifier = ">=4.0.0" },
     { name = "exceptiongroup", specifier = ">=1.2.2" },

@@ -89,7 +89,7 @@ jobs:
         timeout-minutes: 2
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.0"
+          version: "0.13.4"
       - name: Prepare instructions
         timeout-minutes: 1
         env:
