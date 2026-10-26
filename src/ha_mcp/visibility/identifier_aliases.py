@@ -19,6 +19,7 @@ in template text or a message never triggers it.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 BARE_IDENTIFIER_ARGS: dict[str, tuple[str, str]] = {
@@ -38,23 +39,42 @@ _SERVICE_TOOL = "ha_call_service"
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
 
 
-def _normalize(value: str) -> str:
-    return value.strip().casefold()
+@dataclass(frozen=True)
+class IdentifierAliases:
+    """Identifiers, per domain, that address a hidden script, scene or automation.
+
+    ``object_ids`` are casefolded: a tool that cannot resolve a key falls back to
+    ``<domain>.<key>``, which Home Assistant lowercases. ``storage_keys`` (the
+    registry ``unique_id``) match exactly, like the tools' registry lookup, so a
+    visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
+    are the casefolded service names (storage keys) of hidden scripts.
+    """
+
+    object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    storage_keys: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    script_services: frozenset[str] = frozenset()
+
+    def addresses_hidden(self, domain: str, value: str) -> bool:
+        key = value.strip().removeprefix(f"{domain}.")
+        if key in self.storage_keys.get(domain, frozenset()):
+            return True
+        folded = key.casefold().removeprefix(f"{domain}.")
+        return folded in self.object_ids.get(domain, frozenset())
 
 
 def build_identifier_aliases(
     hidden: Collection[str], registry_result: Any
-) -> dict[str, frozenset[str]]:
-    """Map each aliased domain to the object IDs and unique_ids of its hidden entities."""
-    aliases: dict[str, set[str]] = {}
-
-    def add(entity_id: str, alias: str) -> None:
-        domain = entity_id.partition(".")[0]
-        if domain in _ALIASED_DOMAINS and alias:
-            aliases.setdefault(domain, set()).add(_normalize(alias))
-
+) -> IdentifierAliases:
+    """Collect the object IDs and registry unique_ids of hidden aliased entities."""
+    object_ids: dict[str, set[str]] = {}
+    storage_keys: dict[str, set[str]] = {}
+    hidden_scripts: dict[str, str] = {}
     for hidden_id in hidden:
-        add(hidden_id, hidden_id.partition(".")[2])
+        domain, _, object_id = hidden_id.partition(".")
+        if domain in _ALIASED_DOMAINS and object_id:
+            object_ids.setdefault(domain, set()).add(object_id.casefold())
+            if domain == "script":
+                hidden_scripts[hidden_id] = object_id
     entries = (
         registry_result.get("result") if isinstance(registry_result, dict) else None
     )
@@ -63,19 +83,27 @@ def build_identifier_aliases(
             continue
         entity_id = entry.get("entity_id")
         unique_id = entry.get("unique_id")
-        if (
+        if not (
             isinstance(entity_id, str)
             and entity_id in hidden
             and isinstance(unique_id, str)
+            and unique_id
         ):
-            add(entity_id, unique_id)
-    return {domain: frozenset(values) for domain, values in aliases.items()}
+            continue
+        domain = entity_id.partition(".")[0]
+        if domain in _ALIASED_DOMAINS:
+            storage_keys.setdefault(domain, set()).add(unique_id)
+            if domain == "script":
+                hidden_scripts[entity_id] = unique_id
+    return IdentifierAliases(
+        object_ids={d: frozenset(v) for d, v in object_ids.items()},
+        storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
+        script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
+    )
 
 
 def hidden_identifier_argument(
-    tool_name: str,
-    args: Mapping[str, Any],
-    aliases: Mapping[str, frozenset[str]],
+    tool_name: str, args: Mapping[str, Any], aliases: IdentifierAliases
 ) -> str | None:
     """Return the caller's identifier argument when it addresses a hidden entity."""
     if tool_name == _SERVICE_TOOL:
@@ -87,20 +115,18 @@ def hidden_identifier_argument(
     value = args.get(arg_name)
     if not isinstance(value, str):
         return None
-    key = _normalize(value).removeprefix(f"{domain}.")
-    return value if key in aliases.get(domain, frozenset()) else None
+    return value if aliases.addresses_hidden(domain, value) else None
 
 
 def _hidden_script_service(
-    args: Mapping[str, Any], aliases: Mapping[str, frozenset[str]]
+    args: Mapping[str, Any], aliases: IdentifierAliases
 ) -> str | None:
     # Home Assistant registers every script as a ``script.<storage key>`` service.
     domain = args.get("domain")
     service = args.get("service")
     if not (isinstance(domain, str) and isinstance(service, str)):
         return None
-    if _normalize(domain) != "script":
+    if domain.strip().casefold() != "script":
         return None
-    return (
-        service if _normalize(service) in aliases.get("script", frozenset()) else None
-    )
+    hit = service.strip().casefold() in aliases.script_services
+    return service if hit else None

@@ -53,7 +53,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
@@ -70,7 +70,11 @@ from ..renamed_tools import current_tool_name
 from ..tool_dispatch import CALL_PROXY_META_TOOLS
 from ..tools.helpers import raise_tool_error
 from . import resolver
-from .identifier_aliases import build_identifier_aliases, hidden_identifier_argument
+from .identifier_aliases import (
+    IdentifierAliases,
+    build_identifier_aliases,
+    hidden_identifier_argument,
+)
 from .model import VisibilityConfig
 from .resolver import (
     VisibilityDataUnavailable,
@@ -253,23 +257,27 @@ class _HiddenMatcher:
 
     Built only through :meth:`from_hidden`, so ``regex`` is ``None`` exactly when
     ``hidden`` is empty and every scan sees a consistent pair.
-    ``identifier_aliases`` holds, per script/scene/automation domain, the bare
-    keys that address a hidden entity (see ``identifier_aliases``).
+    ``identifier_aliases`` holds the bare keys that address a hidden script,
+    scene or automation (see ``identifier_aliases``).
     """
 
     hidden: frozenset[str]
     regex: re.Pattern[str] | None
-    identifier_aliases: Mapping[str, frozenset[str]] = field(
-        default_factory=dict, hash=False
+    identifier_aliases: IdentifierAliases = field(
+        default_factory=IdentifierAliases, hash=False
     )
 
     @classmethod
     def from_hidden(
         cls,
         hidden: set[str],
-        aliases: Mapping[str, frozenset[str]] | None = None,
+        aliases: IdentifierAliases | None = None,
     ) -> _HiddenMatcher:
-        return cls(frozenset(hidden), _build_hidden_regex(hidden), aliases or {})
+        return cls(
+            frozenset(hidden),
+            _build_hidden_regex(hidden),
+            aliases or IdentifierAliases(),
+        )
 
     def exact(self, text: str) -> bool:
         """Whether ``text`` is a hidden entity_id."""
