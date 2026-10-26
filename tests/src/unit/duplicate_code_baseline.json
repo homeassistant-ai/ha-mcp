@@ -504,7 +504,7 @@
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_fetch_pinned_cimd"
   ],
   "7e1bb324591b": [
-    "tests/src/unit/test_tools_utility_error_log_structured.py::_register_and_collect",
+    "tests/src/unit/_error_log_test_helpers.py::register_and_collect",
     "tests/src/unit/test_tools_utility_supervisor_logs.py::_register_and_collect"
   ],
   "8197824bfe64": [
