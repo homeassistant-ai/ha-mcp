@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -69,9 +70,10 @@ def _stub_container_tools(tmp_path: Path, pip_status: int) -> tuple[Path, Path]:
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
     calls = tmp_path / "calls.log"
+    log = shlex.quote(str(calls))
     stubs = {
-        "pip": f'#!/bin/sh\necho "pip $*" >> {calls}\nexit {pip_status}\n',
-        "chown": f'#!/bin/sh\necho "chown $*" >> {calls}\nexit 0\n',
+        "pip": f'#!/bin/sh\necho "pip $*" >> {log}\nexit {pip_status}\n',
+        "chown": f'#!/bin/sh\necho "chown $*" >> {log}\nexit 0\n',
         "stat": "#!/bin/sh\necho 1000:1000\n",
     }
     for name, body in stubs.items():
@@ -270,9 +272,11 @@ def test_a_successful_preinstall_still_boots_home_assistant(
     stub_bin, calls = _stub_container_tools(tmp_path, pip_status=0)
     booted = tmp_path / "booted"
     init_stub = tmp_path / "init"
-    init_stub.write_text(f"#!/bin/sh\ntouch {booted}\nexit 7\n", encoding="utf-8")
+    init_stub.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(booted))}\nexit 7\n", encoding="utf-8"
+    )
     init_stub.chmod(0o755)
-    script = script.replace("exec /init", f"exec {init_stub}")
+    script = script.replace("exec /init", f"exec {shlex.quote(str(init_stub))}")
 
     result = _run_entrypoint(script, stub_bin)
 
