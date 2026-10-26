@@ -49,10 +49,10 @@ fallback says so.
 
 Component and server releases are paired: every release stamps both with one
 version and the component pins the server build it runs. A bridge and its
-consumer therefore ship together, and the capability handshake and
-`MIN_COMPONENT_VERSION` floor cover an external server that meets another
-component version. Version skew is the gate's job, never a reason to avoid the
-component.
+consumer therefore ship together. For an external server that meets another
+component version, the capability handshake is the gate for every bridge; only
+the filesystem and YAML path adds its `MIN_COMPONENT_VERSION` floor. Version
+skew is the gate's job, never a reason to avoid the component.
 
 Both routes are native, in this order: the component bridge when its
 capability is advertised, Core's REST/WebSocket API otherwise, and either one
