@@ -1958,9 +1958,8 @@ class HomeAssistantClient:
 
         for attempt in range(max_retries):
             # Whether the failure happened before a usable connection existed.
-            # Failing to obtain one is transport death whatever class the
-            # manager raises, and it raises a bare ``Exception`` when
-            # ``connect()`` returns False, so this cannot be decided by type.
+            # Failing to obtain one means no command was sent, regardless of
+            # the exception class the pool or connection setup raises.
             acquiring = True
             try:
                 # Use per-client WebSocket keyed to this client's credentials
@@ -1999,10 +1998,8 @@ class HomeAssistantClient:
                     continue
 
                 # Phase first, type second. Failing before a client exists is
-                # evidence about the transport whatever class was raised, and
-                # the pooled manager raises a bare ``Exception`` when
-                # ``connect()`` returns False, so that case cannot be decided
-                # by type. Past acquisition only the no-answer classes count:
+                # evidence about the transport whatever class was raised.
+                # Past acquisition only the no-answer classes count:
                 # ``send_command`` deliberately re-raises the original
                 # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
                 # rather than wrapping it, to keep at-most-once semantics for
@@ -2033,8 +2030,8 @@ class HomeAssistantClient:
                 # reverse-proxy suggestions below. The 403 text survives in the
                 # message, and returning a soft envelope there instead would
                 # put a blocked transport back on the degrade path this change
-                # exists to close. Past acquisition the socket is alive and HA
-                # (or a proxy) answered, so the tailored suggestions apply.
+                # exists to close. Other failures retain the suggestions below;
+                # their text alone does not prove a write was refused before acting.
                 if is_403:
                     logger.error(
                         f"WebSocket request blocked (403 Forbidden): {error_str}"

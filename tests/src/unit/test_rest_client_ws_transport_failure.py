@@ -92,7 +92,7 @@ async def test_write_is_not_repeated_after_effect_and_403_transport_failure(
             "ha_mcp.client.websocket_client.get_websocket_client",
             new=AsyncMock(return_value=ws_client),
         ) as acquire,
-        pytest.raises(HomeAssistantConnectionError, match="403 Forbidden"),
+        pytest.raises(HomeAssistantConnectionError, match="403 Forbidden") as exc_info,
     ):
         await client.send_websocket_message(
             {
@@ -103,8 +103,34 @@ async def test_write_is_not_repeated_after_effect_and_403_transport_failure(
         )
 
     assert effects == [{"entity_id": "light.test", "name": "Updated"}]
+    assert not isinstance(exc_info.value, HomeAssistantCommandNotSent)
     acquire.assert_awaited_once()
     no_retry_sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refused_connection_can_recover_before_a_single_write(
+    client: HomeAssistantClient, no_retry_sleep: Any
+) -> None:
+    """A transient acquisition refusal must not prevent a safe first dispatch."""
+    ws_client = MagicMock()
+    ws_client.send_command = AsyncMock(return_value={"success": True, "result": None})
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=AsyncMock(
+            side_effect=[HomeAssistantConnectionError("403 Forbidden"), ws_client]
+        ),
+    ) as acquire:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/update", "entity_id": "light.test"}
+        )
+
+    assert result == {"success": True, "result": None}
+    assert acquire.await_count == 2
+    ws_client.send_command.assert_awaited_once_with(
+        "config/entity_registry/update", entity_id="light.test"
+    )
+    no_retry_sleep.assert_awaited_once()
 
 
 class TestNoAnswerRaises:
