@@ -10,32 +10,41 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
-from ha_mcp.client.rest_client import HomeAssistantAuthError, HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandNotSent
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools.tools_system import SystemTools
+
+type RestartClient = tuple[
+    HomeAssistantClient, HomeAssistantWebSocketClient, list[dict[str, Any]]
+]
 
 
 @pytest.fixture
 async def restart_client(
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
-) -> AsyncIterator[tuple[HomeAssistantClient, HomeAssistantWebSocketClient]]:
-    """A valid config check followed by REST refusal selects the real WS path."""
+) -> AsyncIterator[RestartClient]:
+    """Exercise WS directly, or one REST service attempt when parametrized."""
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     requests: list[str] = []
-    status_code, body = getattr(
-        request, "param", (401, {"message": "Service call failed"})
-    )
+    effects: list[dict[str, Any]] = []
+    response = getattr(request, "param", None)
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request.url.path)
         if request.url.path == "/api/config/core/check_config":
             return httpx.Response(200, json={"result": "valid"})
         assert request.url.path == "/api/services/homeassistant/restart"
+        assert response is not None
+        effects.append(json.loads(request.content))
+        status_code, body = response
         return httpx.Response(status_code, json=body)
 
     async with HomeAssistantClient(
-        "http://restart.test", "test-token", verify_ssl=True, is_admin=True
+        "http://restart.test",
+        "test-token",
+        verify_ssl=True,
+        is_admin=response is not None,
     ) as client:
         await client.httpx_client.aclose()
         client.httpx_client = httpx.AsyncClient(
@@ -48,11 +57,21 @@ async def restart_client(
         monkeypatch.setattr(
             websocket_client, "get_websocket_client", AsyncMock(return_value=ws)
         )
-        yield client, ws
-        assert requests == [
-            "/api/config/core/check_config",
-            "/api/services/homeassistant/restart",
-        ]
+        if response is None:
+            # The config gate is covered separately; select WS without first
+            # dispatching the service over REST, which must never replay a write.
+            monkeypatch.setattr(
+                client, "check_config", AsyncMock(return_value={"result": "valid"})
+            )
+        yield client, ws, effects
+        assert requests == (
+            [
+                "/api/config/core/check_config",
+                "/api/services/homeassistant/restart",
+            ]
+            if response is not None
+            else []
+        )
 
 
 class _LocalErrorWithCode(RuntimeError):
@@ -70,12 +89,12 @@ class _LocalErrorWithCode(RuntimeError):
     ],
 )
 async def test_ws_conversion_cannot_turn_ambiguous_dispatch_into_a_refusal(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
     """A synthetic API 400 does not prove Core refused a dispatched restart."""
-    client, ws = restart_client
+    client, ws, _ = restart_client
     send = AsyncMock(side_effect=error)
     monkeypatch.setattr(ws, "send_json_message", send)
 
@@ -93,11 +112,11 @@ async def test_ws_conversion_cannot_turn_ambiguous_dispatch_into_a_refusal(
     "restart_client", [(400, {"message": "Service validation failed"})], indirect=True
 )
 async def test_rest_400_after_dispatch_does_not_prove_restart_never_started(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Core also uses HTTP 400 for ServiceValidationError raised inside a service."""
-    client, ws = restart_client
+    client, ws, _ = restart_client
     send = AsyncMock()
     monkeypatch.setattr(ws, "send_json_message", send)
 
@@ -124,10 +143,10 @@ async def test_rest_400_after_dispatch_does_not_prove_restart_never_started(
     indirect=True,
 )
 async def test_rest_refusal_diagnostic_survives_conservative_unknown_classification(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
 ) -> None:
     """Do not hide Core's actionable refusal behind the lost-acknowledgement message."""
-    client, _ = restart_client
+    client, _, _ = restart_client
     with pytest.raises(ToolError) as caught:
         await SystemTools(client).ha_restart(confirm=True)
 
@@ -147,13 +166,13 @@ async def test_rest_refusal_diagnostic_survives_conservative_unknown_classificat
     ],
 )
 async def test_ws_native_error_distinguishes_preflight_from_handler_failure(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
     code: object,
     expected_status: str,
 ) -> None:
     """Core's structured rejection survives send_command and the REST adapter."""
-    client, ws = restart_client
+    client, ws, _ = restart_client
 
     async def respond(message: dict[str, Any]) -> None:
         await ws._process_message(
@@ -187,13 +206,13 @@ async def test_ws_native_error_distinguishes_preflight_from_handler_failure(
     ],
 )
 async def test_native_service_error_after_effect_cannot_prove_restart_not_started(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
     code: str,
     message: str,
 ) -> None:
     """Core catches these exceptions around async_call, including stop-handler work."""
-    client, ws = restart_client
+    client, ws, _ = restart_client
     effects = 0
 
     async def respond(command: dict[str, Any]) -> None:
@@ -220,11 +239,11 @@ async def test_native_service_error_after_effect_cannot_prove_restart_not_starte
 
 
 async def test_restart_success_payload_cannot_replace_its_protocol_envelope(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Error-looking payload fields do not override Core's successful result frame."""
-    client, ws = restart_client
+    client, ws, _ = restart_client
     effects = 0
 
     async def respond(message: dict[str, Any]) -> None:
@@ -250,11 +269,11 @@ async def test_restart_success_payload_cannot_replace_its_protocol_envelope(
 
 
 async def test_unexpected_ws_frame_cannot_assert_native_error_provenance(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unrecognized remote frame must not supply an authoritative refusal code."""
-    client, ws = restart_client
+    client, ws, _ = restart_client
 
     async def respond(message: dict[str, Any]) -> None:
         await ws._process_message(
@@ -276,13 +295,16 @@ async def test_unexpected_ws_frame_cannot_assert_native_error_provenance(
     send.assert_awaited_once()
 
 
-async def test_ws_authentication_refusal_after_rest_dispatch_is_unknown(
-    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+@pytest.mark.parametrize(
+    "restart_client", [(401, {"message": "Unauthorized"})], indirect=True
+)
+async def test_rest_effect_then_401_stays_unknown_without_ws_replay(
+    restart_client: RestartClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A refused WS handshake cannot establish the prior REST call's outcome."""
-    client, ws = restart_client
-    acquire = AsyncMock(side_effect=HomeAssistantAuthError("Invalid token"))
+    """A potential WS pre-send refusal must not erase an earlier REST effect."""
+    client, ws, effects = restart_client
+    acquire = AsyncMock(side_effect=HomeAssistantCommandNotSent("WS unavailable"))
     monkeypatch.setattr(websocket_client, "get_websocket_client", acquire)
     send = AsyncMock()
     monkeypatch.setattr(ws, "send_json_message", send)
@@ -290,6 +312,31 @@ async def test_ws_authentication_refusal_after_rest_dispatch_is_unknown(
     with pytest.raises(ToolError) as caught:
         await SystemTools(client).ha_restart(confirm=True)
 
-    assert json.loads(str(caught.value))["execution_status"] == "outcome_unknown"
-    acquire.assert_awaited_once()
+    result = json.loads(str(caught.value))
+    assert result["execution_status"] == "outcome_unknown"
+    assert result["write_outcome_unknown"] is True
+    assert "401" in result["error"]["details"]
+    assert effects == [{"safe_mode": False}]
+    acquire.assert_not_awaited()
     send.assert_not_awaited()
+
+
+async def test_direct_ws_not_sent_proves_restart_never_started(
+    restart_client: RestartClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real WS readiness guard can prove no service frame was dispatched."""
+    client, ws, effects = restart_client
+    ws._state.authenticated = False
+    send = AsyncMock()
+    monkeypatch.setattr(ws, "send_json_message", send)
+
+    with pytest.raises(ToolError) as caught:
+        await SystemTools(client).ha_restart(confirm=True)
+
+    result = json.loads(str(caught.value))
+    assert result["execution_status"] == "not_started"
+    assert not result.get("write_outcome_unknown")
+    assert effects == []
+    send.assert_not_awaited()
+    assert not ws._state._pending_requests
