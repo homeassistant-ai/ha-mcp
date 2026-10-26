@@ -10,7 +10,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantAuthError, HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools.tools_system import SystemTools
 
@@ -143,19 +143,20 @@ async def test_rest_refusal_diagnostic_survives_conservative_unknown_classificat
         ("invalid_format", "not_started"),
         ("unknown_error", "outcome_unknown"),
         ("home_assistant_error", "outcome_unknown"),
+        ([], "outcome_unknown"),
     ],
 )
 async def test_ws_native_error_distinguishes_preflight_from_handler_failure(
     restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
     monkeypatch: pytest.MonkeyPatch,
-    code: str,
+    code: object,
     expected_status: str,
 ) -> None:
     """Core's structured rejection survives send_command and the REST adapter."""
     client, ws = restart_client
 
     async def respond(message: dict[str, Any]) -> None:
-        ws._state._pending_requests[message["id"]].set_result(
+        await ws._process_message(
             {
                 "id": message["id"],
                 "type": "result",
@@ -175,3 +176,49 @@ async def test_ws_native_error_distinguishes_preflight_from_handler_failure(
         expected_status == "outcome_unknown"
     )
     send.assert_awaited_once()
+
+
+async def test_unexpected_ws_frame_cannot_assert_native_error_provenance(
+    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecognized remote frame must not supply an authoritative refusal code."""
+    client, ws = restart_client
+
+    async def respond(message: dict[str, Any]) -> None:
+        await ws._process_message(
+            {
+                "id": message["id"],
+                "type": "unexpected_proxy_reply",
+                "success": False,
+                "error": "Acknowledgement missing",
+                "error_code": "invalid_format",
+            }
+        )
+
+    send = AsyncMock(side_effect=respond)
+    monkeypatch.setattr(ws, "send_json_message", send)
+    with pytest.raises(ToolError) as caught:
+        await SystemTools(client).ha_restart(confirm=True)
+
+    assert json.loads(str(caught.value))["execution_status"] == "outcome_unknown"
+    send.assert_awaited_once()
+
+
+async def test_ws_authentication_refusal_before_dispatch_is_not_started(
+    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve the pool's authentication refusal when no command could be sent."""
+    client, ws = restart_client
+    acquire = AsyncMock(side_effect=HomeAssistantAuthError("Invalid token"))
+    monkeypatch.setattr(websocket_client, "get_websocket_client", acquire)
+    send = AsyncMock()
+    monkeypatch.setattr(ws, "send_json_message", send)
+
+    with pytest.raises(ToolError) as caught:
+        await SystemTools(client).ha_restart(confirm=True)
+
+    assert json.loads(str(caught.value))["execution_status"] == "not_started"
+    acquire.assert_awaited_once()
+    send.assert_not_awaited()
