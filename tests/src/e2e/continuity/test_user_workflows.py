@@ -94,8 +94,22 @@ def _responding_script(*, parallel: bool = False) -> dict[str, Any]:
         "alias": "Continuity response script",
         "mode": "parallel" if parallel else "single",
         "sequence": [
-            # Keep invocations in flight together without a timing assertion.
-            *([{"delay": {"milliseconds": 250}}] if parallel else []),
+            *(
+                [
+                    {
+                        "action": "input_boolean.turn_on",
+                        "target": {"entity_id": "{{ ready_entity }}"},
+                    },
+                    {
+                        # Readiness stays on until cleanup, even if the peer finishes.
+                        "wait_template": "{{ is_state(peer_ready_entity, 'on') }}",
+                        "timeout": {"seconds": 10},
+                        "continue_on_timeout": False,
+                    },
+                ]
+                if parallel
+                else []
+            ),
             {
                 "action": "input_text.set_value",
                 "target": {"entity_id": "{{ target_entity }}"},
@@ -116,14 +130,25 @@ def _responding_script(*, parallel: bool = False) -> dict[str, Any]:
 
 
 async def _call_response(
-    case: Scenario, script_id: str, target: str, value: str
+    case: Scenario,
+    script_id: str,
+    target: str,
+    value: str,
+    *,
+    ready_entity: str | None = None,
+    peer_ready_entity: str | None = None,
 ) -> dict[str, Any]:
+    data = {"target_entity": target, "requested_value": value}
+    if ready_entity is not None:
+        data["ready_entity"] = ready_entity
+    if peer_ready_entity is not None:
+        data["peer_ready_entity"] = peer_ready_entity
     return await case.mcp.call_tool_success(
         "ha_call_service",
         {
             "domain": "script",
             "service": script_id,
-            "data": {"target_entity": target, "requested_value": value},
+            "data": data,
             "return_response": True,
             "result_fields": ["entity_id", "state"],
         },
@@ -165,11 +190,27 @@ async def test_concurrent_script_calls_keep_each_response_with_its_own_effect(
     async with public_scenario(mcp_client) as case:
         left = await case.helper("input_text", "idle")
         right = await case.helper("input_text", "idle")
+        left_ready = await case.helper("input_boolean", False)
+        right_ready = await case.helper("input_boolean", False)
         script_id = await case.script(_responding_script(parallel=True))
 
         results = await asyncio.gather(
-            _call_response(case, script_id, left, "left invocation"),
-            _call_response(case, script_id, right, "right invocation"),
+            _call_response(
+                case,
+                script_id,
+                left,
+                "left invocation",
+                ready_entity=left_ready,
+                peer_ready_entity=right_ready,
+            ),
+            _call_response(
+                case,
+                script_id,
+                right,
+                "right invocation",
+                ready_entity=right_ready,
+                peer_ready_entity=left_ready,
+            ),
             return_exceptions=True,
         )
         # Join both invocations before cleanup even when one call fails.
