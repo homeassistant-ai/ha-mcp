@@ -20,8 +20,9 @@ import os
 import time
 
 import pytest
+from haos_runtime import HA_MCP_DEV_ADDON_SLUG, is_haos_backend_selected
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,27 @@ class TestBackupTools:
         except Exception as e:
             logger.error(f"❌ Backup restore validation test failed: {e}")
             raise
+
+    async def test_backup_of_an_app_that_is_not_installed_is_refused(self, mcp_client):
+        """Supervisor leaves a slug it does not have out of a backup without an
+        error, so the request is refused before a backup starts; a Core install
+        refuses any app. The installed dev app must not be named: an app list
+        read as empty would name it too."""
+        expected = (
+            "apps not installed: e2e_not_installed"
+            if is_haos_backend_selected()
+            else "need a Supervisor install"
+        )
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_backup",
+                {
+                    "scope": "snapshot",
+                    "action": "create",
+                    "include_addons": [HA_MCP_DEV_ADDON_SLUG, "e2e_not_installed"],
+                },
+                expected_error=expected,
+            )
 
     async def test_snapshot_list(self, mcp_client):
         """
