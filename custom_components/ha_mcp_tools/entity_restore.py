@@ -141,9 +141,9 @@ def write_entry(
     if disabled_by in ("device", "config_entry") and not _parent_disabled(
         hass, entry, disabled_by
     ):
-        # Core keeps these in step with the parent and clears them on its next
-        # update while it is enabled; written now, the entity would stay
-        # disabled until some unrelated update cleared it.
+        # Core sets and clears these itself as the device or config entry
+        # changes; written while it is enabled, the entity would stay
+        # disabled for a reason that no longer holds.
         warnings.append(
             f"disabled_by stays {_value(entry.disabled_by)!r}: the backup holds "
             f"{disabled_by!r}, and the {disabled_by.replace('_', ' ')} is not disabled now"
