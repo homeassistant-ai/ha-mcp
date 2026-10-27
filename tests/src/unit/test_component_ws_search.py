@@ -67,26 +67,18 @@ for _mod in (
 
 
 class _StubHomeAssistantError(Exception):
-    """Stand-in for core's ``HomeAssistantError`` (raised by ``_do_backup_prep``).
+    """Stand-in for core's ``HomeAssistantError``.
 
     ``websocket_api.system`` imports ``homeassistant.exceptions.HomeAssistantError``
-    function-locally when a backup read fails; the module is MagicMock-stubbed
-    like the rest of ``homeassistant.*``, so pin a real exception class as its
-    ``HomeAssistantError`` attribute (mirrors the ``homeassistant.components.
-    backup`` DATA_MANAGER stub below) so the raise path is exercisable.
+    function-locally when a read fails; the module is MagicMock-stubbed like the
+    rest of ``homeassistant.*``, so pin a real exception class as its
+    ``HomeAssistantError`` attribute so the raise path is exercisable.
     """
 
 
 _exceptions_stub = MagicMock()
 _exceptions_stub.HomeAssistantError = _StubHomeAssistantError
 sys.modules.setdefault("homeassistant.exceptions", _exceptions_stub)
-
-# ``_do_backup_prep`` reads ``hass.data[DATA_MANAGER]`` where DATA_MANAGER is
-# core's ``HassKey("backup")`` (a str subclass equal to "backup"); the stub
-# supplies the literal so the function-local import resolves in the fake env.
-_backup_stub = MagicMock()
-_backup_stub.DATA_MANAGER = "backup"
-sys.modules.setdefault("homeassistant.components.backup", _backup_stub)
 
 # Server-side scoring path the component must stay in parity with.
 from ha_mcp.tools.search.entities import _match_exact_search_entity  # noqa: E402
@@ -413,21 +405,6 @@ class FakeCategoryReg:
 
     def async_list_categories(self, *, scope):
         return list(self._by_scope.get(scope, []))
-
-
-def _fake_backup_agent(name):
-    """A backup agent stand-in with just the ``.name`` the local-agent probe reads."""
-    return SimpleNamespace(name=name)
-
-
-def _fake_backup_manager(agents=None, password=None):
-    """Stand-in for the backup ``BackupManager`` (``backup_agents`` + config chain)."""
-    return SimpleNamespace(
-        backup_agents=dict(agents or {}),
-        config=SimpleNamespace(
-            data=SimpleNamespace(create_backup=SimpleNamespace(password=password))
-        ),
-    )
 
 
 class FakeDevice:
@@ -1839,7 +1816,6 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/registry_lookup",
     "ha_mcp_tools/system_snapshot",
     "ha_mcp_tools/entity_lookup",
-    "ha_mcp_tools/backup_prep",
     "ha_mcp_tools/registries",
 ]
 
@@ -1858,20 +1834,7 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     # a neither-present request raises HomeAssistantError (issue #1813 M2).
     "ha_mcp_tools/registry_lookup": {"entity_ids": ["light.x"]},
     # config_entries / system_snapshot need no required params.
-    # backup_prep needs a hass carrying a backup manager (see _admin_gate_hass).
 }
-
-
-def _admin_gate_hass(command):
-    """The hass for the admin-gate probe of ``command``.
-
-    Most commands read empty registries out of a bare FakeHass. ``backup_prep``
-    must find a backup manager or it (correctly) raises — so hand it one with no
-    agents, which returns a well-formed empty result the gate probe can assert on.
-    """
-    if command == wsapi.WS_BACKUP_PREP:
-        return FakeHass(data={"backup": _fake_backup_manager()})
-    return FakeHass()
 
 
 class TestRegistrationAndAdminGate:
@@ -1891,7 +1854,6 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_REGISTRY_LOOKUP,
             wsapi.WS_SYSTEM_SNAPSHOT,
             wsapi.WS_ENTITY_LOOKUP,
-            wsapi.WS_BACKUP_PREP,
             wsapi.WS_REGISTRIES,
             # Task-3 async-prep commands; their admin-gate/probe coverage lives in
             # test_component_ws_phase2_async.py (this set only guards drift).
@@ -1950,9 +1912,9 @@ class TestRegistrationAndAdminGate:
             # provably admitted the call because the raise comes from the pure
             # handler; result-shape coverage lives in TestEntityLookup.
             with pytest.raises(_StubHomeAssistantError):
-                handler(_admin_gate_hass(command), conn, msg)
+                handler(FakeHass(), conn, msg)
             return
-        handler(_admin_gate_hass(command), conn, msg)
+        handler(FakeHass(), conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)
 
@@ -2223,16 +2185,6 @@ class TestNewCommandSchemas:
         schema = self._schema(monkeypatch, wsapi._entity_lookup_schema)
         with pytest.raises(_REAL_VOL.Invalid):
             schema(bad)
-
-    # --- backup_prep ------------------------------------------------------------
-    def test_backup_prep_valid_no_params(self, monkeypatch):
-        schema = self._schema(monkeypatch, wsapi._backup_prep_schema)
-        assert schema({"type": wsapi.WS_BACKUP_PREP}) == {"type": wsapi.WS_BACKUP_PREP}
-
-    def test_backup_prep_rejects_extra_keys(self, monkeypatch):
-        schema = self._schema(monkeypatch, wsapi._backup_prep_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
-            schema({"type": wsapi.WS_BACKUP_PREP, "agent_id": "x"})
 
     # --- registries -------------------------------------------------------------
     def test_registries_valid(self, monkeypatch):
@@ -4168,95 +4120,6 @@ class TestEntityLookup:
         monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_entity_lookup(FakeHass(), {"unique_id": "x"})
-
-
-# =============================================================================
-# backup_prep — agents + local-agent preference + password; manager-absent raises
-# =============================================================================
-class TestBackupPrep:
-    """``ha_mcp_tools/backup_prep`` — the backup identity, mirroring the server's
-    hassio-over-core local-agent preference; a missing manager raises."""
-
-    def _hass(self, agents=None, password=None):
-        return FakeHass(
-            data={"backup": _fake_backup_manager(agents=agents, password=password)}
-        )
-
-    def test_happy_path_prefers_hassio_local(self):
-        agents = {
-            "hassio.local": _fake_backup_agent("local"),
-            "backup.local": _fake_backup_agent("local"),
-            "remote.s3": _fake_backup_agent("S3"),
-        }
-        res = wsapi._do_backup_prep(self._hass(agents=agents, password="pw"), {})
-        assert set(res["agent_ids"]) == {"hassio.local", "backup.local", "remote.s3"}
-        assert res["local_agent_id"] == "hassio.local"
-        assert res["default_password"] == "pw"
-
-    def test_prefers_backup_local_when_no_hassio(self):
-        agents = {
-            "backup.local": _fake_backup_agent("local"),
-            "remote.s3": _fake_backup_agent("S3"),
-        }
-        res = wsapi._do_backup_prep(self._hass(agents=agents), {})
-        assert res["local_agent_id"] == "backup.local"
-
-    def test_falls_back_to_first_local_agent(self):
-        # A non-standard local agent (name "local", id neither hassio/backup).
-        agents = {"custom.local": _fake_backup_agent("local")}
-        res = wsapi._do_backup_prep(self._hass(agents=agents), {})
-        assert res["local_agent_id"] == "custom.local"
-
-    def test_no_local_agent_yields_none(self):
-        agents = {"remote.s3": _fake_backup_agent("S3")}
-        res = wsapi._do_backup_prep(self._hass(agents=agents), {})
-        assert res["local_agent_id"] is None
-        assert res["agent_ids"] == ["remote.s3"]
-
-    def test_password_absent_is_none(self):
-        agents = {"backup.local": _fake_backup_agent("local")}
-        res = wsapi._do_backup_prep(self._hass(agents=agents, password=None), {})
-        assert res["default_password"] is None
-
-    def test_manager_absent_raises(self, monkeypatch):
-        # A hass with no backup manager raises so the server's command-error path
-        # falls back (not a silent empty result mistaken for "no agents").
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
-            wsapi._do_backup_prep(FakeHass(), {})
-
-    def test_import_error_raises(self, monkeypatch):
-        # The backup integration not being importable also raises.
-        monkeypatch.setitem(sys.modules, "homeassistant.components.backup", None)
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
-            wsapi._do_backup_prep(self._hass(), {})
-
-    def test_non_mapping_agents_raises(self, monkeypatch):
-        # Core drift: manager.backup_agents is not a Mapping. This must RAISE (so the
-        # server falls back to legacy), not return a well-formed "no agents" the
-        # server would hard-fail create/restore on.
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        manager = SimpleNamespace(
-            backup_agents=["not", "a", "mapping"],
-            config=SimpleNamespace(
-                data=SimpleNamespace(create_backup=SimpleNamespace(password="pw"))
-            ),
-        )
-        with pytest.raises(_StubHomeAssistantError):
-            wsapi._do_backup_prep(FakeHass(data={"backup": manager}), {})
-
-    def test_broken_password_chain_raises(self, monkeypatch):
-        # Core drift: a structurally broken config chain (config.data is None) must
-        # RAISE, not return a None password the server reads as "not configured"
-        # (which silently drops the restore safety backup).
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        manager = SimpleNamespace(
-            backup_agents={"backup.local": _fake_backup_agent("local")},
-            config=SimpleNamespace(data=None),
-        )
-        with pytest.raises(_StubHomeAssistantError):
-            wsapi._do_backup_prep(FakeHass(data={"backup": manager}), {})
 
 
 # =============================================================================

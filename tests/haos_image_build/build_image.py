@@ -46,7 +46,7 @@ LOG = logging.getLogger("haos_image_build")
 # Stable image inputs are Renovate-managed; changing any pin invalidates the
 # shared image cache. Beta lanes explicitly override all three at build time.
 # renovate: datasource=custom.ha-os-stable depName=home-assistant/operating-system
-STABLE_HAOS_VERSION = "18.3"
+STABLE_HAOS_VERSION = "18.4"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
 STABLE_SUPERVISOR_VERSION = "2026.10.4"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
@@ -1624,16 +1624,13 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     # external-HAOS branch). The schema in homeassistant-addon-dev/config.yaml
     # lists every flag we toggle here.
     LOG.info("Setting ha-mcp dev addon options (preset secret_path + all dev flags on)")
-    # Supervisor's options POST replaces the full options dict, so we must
-    # include every field with a non-optional schema entry in the dev addon's
-    # homeassistant-addon-dev/config.yaml. Verified live: omitting
-    # ``backup_hint`` returns "Missing option 'backup_hint' in root".
+    # Supervisor's options POST replaces the full options dict: a field left
+    # out here falls back to its default in homeassistant-addon-dev/config.yaml.
     ws.supervisor_api(
         f"/addons/{slug}/options",
         method="post",
         data={
             "options": {
-                "backup_hint": "normal",
                 "secret_path": HA_MCP_TEST_SECRET_PATH,
                 "enable_tool_search": False,
                 "enable_yaml_config_editing": True,

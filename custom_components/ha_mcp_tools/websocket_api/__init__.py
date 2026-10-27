@@ -233,14 +233,6 @@ the info handshake carries no capability entry:
   categories, disabled_by, hidden_by}]}``. Multiple matches across platforms are
   all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
-* ``ha_mcp_tools/backup_prep`` — the backup identity the server needs before a
-  create: ``{agent_ids, local_agent_id, default_password}`` read from the backup
-  integration's in-process ``DATA_MANAGER``. ``local_agent_id`` uses the SAME
-  preference the server's ``_get_local_backup_agent_id`` does (``hassio.local``
-  over ``backup.local``). A missing backup integration / manager raises
-  ``HomeAssistantError`` so the server's command-error fallback fires. The
-  password is sensitive but the legacy ``backup/config/info`` already serves it
-  to the same admin connection — parity, not new exposure.
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
   the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
   legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
@@ -296,7 +288,7 @@ code lives in the submodules:
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries``,
   ``dashboards`` and ``logbook``: the read commands.
-* ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
+* ``system``: ``info``, ``system_snapshot``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
 * ``call_service`` and ``bulk``: the write commands.
 * ``oauth_callbacks``: read and replace the none-mode OAuth callback allowlist.
 
@@ -344,7 +336,6 @@ from .oauth_callbacks import command_specs as _oauth_callback_specs
 from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
 from .registries import _do_registries
 from .schemas import (
-    _backup_prep_schema,
     _blueprint_get_schema,
     _bulk_call_service_schema,
     _call_service_schema,
@@ -375,7 +366,6 @@ from .seam import PreSerializedResult
 from .search import _do_search, _search_prep
 from .services import _do_reference_data, _do_services_list, _services_list_prep
 from .system import (
-    _do_backup_prep,
     _do_info,
     _do_server_entry,
     _do_server_entry_update,
@@ -456,7 +446,6 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_registry_lookup_schema(), _do_registry_lookup, None),
         (_system_snapshot_schema(), _do_system_snapshot, None),
         (_entity_lookup_schema(), _do_entity_lookup, None),
-        (_backup_prep_schema(), _do_backup_prep, None),
         (_registries_schema(), _do_registries, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),

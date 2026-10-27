@@ -14,11 +14,6 @@ configuration:
       alle Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
       bleibt unverändert. 0 belässt das Verhalten unbegrenzt. Ein Aufruf, der auf
       Kapazität wartet, schlägt nach 60 Sekunden fehl. Bereich 0–32.
-  backup_hint:
-    name: Backup-Hinweisstufe
-    description: Wie nachdrücklich KI-Assistenten angewiesen werden, vor riskanten
-      Änderungen ein vollständiges Home Assistant-Backup vorzuschlagen. Ändert nur
-      diesen Hinweis; automatische Bearbeitungs-Backups haben ihre eigene Einstellung.
   custom_instructions:
     name: Eigene Server-Anweisungen
     description: Text, den jeder verbundene KI-Assistent als Teil der MCP-Server-Anweisungen

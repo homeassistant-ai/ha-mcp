@@ -1,6 +1,6 @@
 """Unit tests for LiteDocstringsTransform and the server-side wiring.
 
-Covers three layers:
+Covers five layers:
 
 1. ``LiteDocstringsTransform`` itself — empty-mapping no-op, mapped
    replacement, unmapped passthrough, on both ``list_tools`` and
@@ -16,8 +16,8 @@ Covers three layers:
    that the guidance each entry defers to actually exists. Layer 3 checks
    the pointer text; layer 4 checks the two things that can be wrong
    without the text being malformed (#2153 review §2/§5).
-5. ``BACKUP_HINT`` interpolation and the hand-copied prose tool lists in
-   ``docs/beta.md`` / ``en.json`` (#2153 review §3/§4/§6).
+5. The hand-copied prose tool lists in ``docs/beta.md`` / ``en.json``
+   (#2153 review §4/§6).
 """
 
 from __future__ import annotations
@@ -204,11 +204,6 @@ class TestApplyLiteDocstrings:
 
         stub = MagicMock()
         stub._LITE_DOCSTRINGS = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS
-        # Bound classmethod — the real resolver, so the stub exercises
-        # placeholder interpolation instead of handing back a MagicMock.
-        stub._resolve_lite_docstrings = (
-            HomeAssistantSmartMCPServer._resolve_lite_docstrings
-        )
         stub.settings = MagicMock(enable_lite_docstrings=enable_lite_docstrings)
         stub.mcp = MagicMock()
         return stub
@@ -223,12 +218,7 @@ class TestApplyLiteDocstrings:
         stub.mcp.add_transform.assert_not_called()
 
     def test_installs_transform_when_flag_enabled(self) -> None:
-        """When on, install a LiteDocstringsTransform with the real mapping.
-
-        Compares keys and not identity: the installed mapping is the
-        *resolved* one (``{backup_hint_text}`` filled in), so it is a fresh
-        dict rather than ``_LITE_DOCSTRINGS`` itself.
-        """
+        """When on, install a LiteDocstringsTransform with the real mapping."""
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
         stub = self._make_server_stub(enable_lite_docstrings=True)
@@ -237,16 +227,13 @@ class TestApplyLiteDocstrings:
         stub.mcp.add_transform.assert_called_once()
         installed = stub.mcp.add_transform.call_args.args[0]
         assert isinstance(installed, LiteDocstringsTransform)
-        assert set(installed._replacements) == set(
-            HomeAssistantSmartMCPServer._LITE_DOCSTRINGS
-        )
+        assert installed._replacements is HomeAssistantSmartMCPServer._LITE_DOCSTRINGS
 
-    def test_installed_descriptions_carry_no_unresolved_placeholders(self) -> None:
-        """The catalog must never advertise a literal ``{token}``.
+    def test_lite_descriptions_carry_no_format_tokens(self) -> None:
+        """Lite values are static strings.
 
-        The failure this guards is user-visible: a renamed or typo'd token
-        leaves ``{backup_hint_text}`` sitting in the tool description an
-        LLM reads.
+        A ``{name}`` token copied from an f-string full description would
+        reach the LLM verbatim.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -259,7 +246,7 @@ class TestApplyLiteDocstrings:
             for name, lite in installed._replacements.items()
             if _PLACEHOLDER_RE.search(lite)
         ]
-        assert not offenders, f"Unresolved placeholders in: {offenders}"
+        assert not offenders, f"Format tokens in: {offenders}"
 
     def test_logs_warning_when_enabled(self, caplog) -> None:
         """The trade-off WARNING must be emitted so env-var users see it."""
@@ -521,60 +508,6 @@ class TestLiteDocstringsKeysAndDestinations:
         assert not mismatches, "\n".join(mismatches)
 
 
-class TestBackupHintInterpolation:
-    """``BACKUP_HINT`` must survive the lite swap (#2153 review §3).
-
-    ``_LITE_DOCSTRINGS`` is a static ``ClassVar`` while the full
-    ``ha_manage_backup`` description is an f-string built per registration.
-    Pinning one wording would leave a user setting Backup-hint to Strong,
-    the UI confirming it, and nothing changing.
-    """
-
-    @pytest.mark.parametrize("level", ["strong", "normal", "weak", "auto"])
-    def test_configured_hint_text_reaches_the_lite_description(
-        self, level: str, monkeypatch
-    ) -> None:
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-        from ha_mcp.tools.backup import _get_backup_hint_text
-
-        monkeypatch.setenv("BACKUP_HINT", level)
-        expected = _get_backup_hint_text()
-
-        resolved = HomeAssistantSmartMCPServer._resolve_lite_docstrings()
-
-        assert expected in resolved["ha_manage_backup"]
-
-    def test_hint_levels_produce_different_lite_text(self, monkeypatch) -> None:
-        """Guards the no-op failure directly, not just the mechanism."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        monkeypatch.setenv("BACKUP_HINT", "strong")
-        strong = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[
-            "ha_manage_backup"
-        ]
-        monkeypatch.setenv("BACKUP_HINT", "weak")
-        weak = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[
-            "ha_manage_backup"
-        ]
-
-        assert strong != weak
-
-    def test_every_placeholder_in_the_map_is_resolvable(self) -> None:
-        """A typo'd token would otherwise ship verbatim in the catalog."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        known = set(HomeAssistantSmartMCPServer._lite_docstring_tokens())
-        unknown: list[str] = []
-        for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
-            unknown.extend(
-                f"{name}: {{{token}}}"
-                for token in (m.group(0)[1:-1] for m in _PLACEHOLDER_RE.finditer(lite))
-                if token not in known
-            )
-
-        assert not unknown, f"Placeholders with no resolver: {unknown}"
-
-
 class TestBackupLiteDescriptionSize:
     """The claim the comments used to make as a number, made as a test.
 
@@ -583,44 +516,40 @@ class TestBackupLiteDescriptionSize:
     cannot: it fails if someone re-inflates the lite value toward the full
     one, and it does not need touching when the wording changes.
 
-    ``ha_manage_backup``'s advertised text is the ``description=`` f-string
+    ``ha_manage_backup``'s advertised text is the ``description=`` string
     built in ``register_backup_tools()``, not a docstring (``__doc__`` is 73
-    chars), so the full side is measured by extracting that template and
-    substituting the hint the same way registration does.
+    chars), so the full side is measured by extracting that string.
     """
 
-    def _full_description(self, hint_level: str, monkeypatch) -> str:
-        monkeypatch.setenv("BACKUP_HINT", hint_level)
-        from ha_mcp.tools.backup import _get_backup_hint_text
-
+    def _full_description(self) -> str:
         source = (REPO_ROOT / "src" / "ha_mcp" / "tools" / "backup.py").read_text(
             encoding="utf-8"
         )
-        opener = 'manage_backup_description = f"""'
+        opener = 'manage_backup_description = """'
         start = source.index(opener) + len(opener)
-        template = source[start : source.index('"""', start)]
-        return template.replace("{backup_hint_text}", _get_backup_hint_text())
+        return source[start : source.index('"""', start)]
 
-    @pytest.mark.parametrize("hint_level", ["strong", "normal", "weak"])
-    def test_backup_lite_description_stays_substantially_smaller(
-        self, hint_level: str, monkeypatch
-    ) -> None:
+    def test_full_description_carries_no_format_tokens(self) -> None:
+        """The full description is a plain string; a ``{name}`` token in it
+        would reach the LLM verbatim."""
+        assert not _PLACEHOLDER_RE.search(self._full_description())
+
+    def test_backup_lite_description_stays_substantially_smaller(self) -> None:
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        full = self._full_description(hint_level, monkeypatch)
-        lite = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[
-            "ha_manage_backup"
-        ]
+        full = self._full_description()
+        lite = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS["ha_manage_backup"]
         assert len(lite) < 0.45 * len(full), (
-            f"[BACKUP_HINT={hint_level}] lite is {len(lite)} chars against a "
+            f"lite is {len(lite)} chars against a "
             f"full {len(full)} ({100 * len(lite) / len(full):.0f}%) — the "
             "entry is meant to be a fraction of the full description, and "
             "the whole point of mapping it was catalog size"
         )
         # And it must not be trimmed back to uselessness: the safety content
-        # is why this entry accepts ~70% instead of ~82%.
+        # kept inline is why this entry accepts a smaller cut than pure
+        # compression would give.
         assert len(lite) > 900, (
-            f"[BACKUP_HINT={hint_level}] lite is only {len(lite)} chars — "
+            f"lite is only {len(lite)} chars — "
             "check the irreversibility markers below are still inline"
         )
 
@@ -632,7 +561,7 @@ class TestBackupLiteDescriptionSize:
             "snapshot_delete_min_age_days",
             "restarts HA",
             "enable_auto_backup",
-            "safety snapshot",
+            "per-entity backup first",
             "heartbeats",
         ],
     )
@@ -648,9 +577,7 @@ class TestBackupLiteDescriptionSize:
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        lite = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[
-            "ha_manage_backup"
-        ]
+        lite = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS["ha_manage_backup"]
         assert marker in lite, (
             f"{marker!r} dropped from the ha_manage_backup lite description; "
             "it has no fallback in the skill pack or the input schema"
@@ -799,7 +726,7 @@ def _tool_response_has_field(tool_name: str, field: str) -> bool:
 def test_lite_dashboard_descriptions_expose_patch(tool_name):
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
-    description = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[tool_name]
+    description = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS[tool_name]
     assert "patch" in description
     assert "config_hash" in description
     assert "python_transform" in description

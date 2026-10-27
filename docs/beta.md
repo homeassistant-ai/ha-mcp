@@ -139,8 +139,6 @@ Both lists above are checked against `_LITE_DOCSTRINGS` by `test_documented_tool
 
 There is no exemption list: every entry is checked against the form it declares.
 
-**`BACKUP_HINT` still applies.** `ha_manage_backup`'s lite description interpolates the same `BACKUP_HINT`-derived sentence (strong/normal/weak) that its full description does, so tuning that setting is not silently cancelled by turning lite mode on.
-
 **The trade-off.** This reduces idle tool-catalog token usage but relies on the LLM actually calling the skill tool (or reading the skill resource) when it needs detail. Some models will skip the extra tool call and produce worse output than they would have with the full docstrings in front of them.
 
 **Search discoverability shrinks too.** Clients that BM25-search the tool catalog (claude.ai's native deferred-tool search, ha-mcp's own `enable_tool_search` index) see fewer tokens per lite-mapped tool, so natural-language queries that previously matched on words in the full docstring may rank lower or miss. ha-mcp's explicit `_SEARCH_KEYWORDS` boosts still apply on top of the lite text, but coverage outside those boosts will be thinner.

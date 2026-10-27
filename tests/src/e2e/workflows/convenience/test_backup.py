@@ -20,8 +20,9 @@ import os
 import time
 
 import pytest
+from haos_runtime import HA_MCP_DEV_ADDON_SLUG, is_haos_backend_selected
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +74,21 @@ class TestBackupTools:
                     raise AssertionError(f"Backup creation failed: {error_msg}")
 
             # Verify backup was created successfully
-            assert "backup_job_id" in data, "No backup_job_id returned"
+            assert "backup_id" in data, "No backup_id returned"
             assert "name" in data, "No backup name returned"
             assert data["name"].startswith("MCP_Backup_"), (
                 f"Unexpected backup name: {data['name']}"
             )
-
-            backup_job_id = data["backup_job_id"]
-            backup_name = data["name"]
-            backup_id = data.get("backup_id")
-
-            logger.info(
-                f"✅ Backup created: {backup_name} (ID: {backup_id}, job: {backup_job_id})"
+            # The seed configures no automatic-backup agents, so the backup
+            # lands on Home Assistant's default agent: local storage.
+            assert set(data["agents"]) & {"backup.local", "hassio.local"}, (
+                f"Backup not on the local agent: {data['agents']}"
             )
+
+            backup_name = data["name"]
+            backup_id = data["backup_id"]
+
+            logger.info(f"✅ Backup created: {backup_name} (ID: {backup_id})")
 
             # Verify backup completed (tool waits for completion)
             assert "status" in data, "No status returned"
@@ -96,9 +99,6 @@ class TestBackupTools:
             # Log backup details
             if "duration_seconds" in data:
                 logger.info(f"⏱️ Backup duration: {data['duration_seconds']} seconds")
-            if "size_bytes" in data:
-                size_mb = data["size_bytes"] / (1024 * 1024)
-                logger.info(f"📦 Backup size: {size_mb:.2f} MB")
 
             logger.info("✅ Backup test completed successfully")
 
@@ -145,18 +145,14 @@ class TestBackupTools:
                     raise AssertionError(f"Backup creation failed: {error_msg}")
 
             # Verify backup was created successfully
-            assert "backup_job_id" in data, "No backup_job_id returned"
             assert "backup_id" in data, "No backup_id returned"
             assert data["name"] == custom_name, (
                 f"Backup name mismatch: {data['name']} != {custom_name}"
             )
 
-            backup_job_id = data["backup_job_id"]
             backup_id = data["backup_id"]
 
-            logger.info(
-                f"✅ Backup created: {custom_name} (ID: {backup_id}, job: {backup_job_id})"
-            )
+            logger.info(f"✅ Backup created: {custom_name} (ID: {backup_id})")
 
             # Verify backup completed (tool waits for completion)
             assert "completed" in data["status"].lower(), (
@@ -226,6 +222,27 @@ class TestBackupTools:
         except Exception as e:
             logger.error(f"❌ Backup restore validation test failed: {e}")
             raise
+
+    async def test_backup_of_an_app_that_is_not_installed_is_refused(self, mcp_client):
+        """Supervisor leaves a slug it does not have out of a backup without an
+        error, so the request is refused before a backup starts; a Core install
+        refuses any app. The installed dev app must not be named: an app list
+        read as empty would name it too."""
+        expected = (
+            "apps not installed: e2e_not_installed"
+            if is_haos_backend_selected()
+            else "need a Supervisor install"
+        )
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_backup",
+                {
+                    "scope": "snapshot",
+                    "action": "create",
+                    "include_addons": [HA_MCP_DEV_ADDON_SLUG, "e2e_not_installed"],
+                },
+                expected_error=expected,
+            )
 
     async def test_snapshot_list(self, mcp_client):
         """
@@ -378,7 +395,7 @@ class TestSnapshotDelete:
 
         A second, newer backup is created after the target so the target
         is NOT also the single newest snapshot — otherwise the newest-
-        snapshot guard (checked first; see backup.py) would fire instead
+        snapshot guard (checked first; see backup_snapshot.py) would fire instead
         of the age-floor guard this test is meant to isolate, since a
         freshly created backup with nothing after it is trivially "newest"
         in a shared test container.

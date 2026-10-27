@@ -53,6 +53,25 @@ class TestTeardown:
         # A reload must keep the provisioned token.
         fake_manager.async_revoke_credentials.assert_not_awaited()
 
+    async def test_closes_the_webhook_and_llm_api_before_stopping_the_server(
+        self, fake_manager: type
+    ) -> None:
+        # Both forward calls to the server over loopback. Stopped first, they
+        # would stay routed to a server that is going away, and a call in that
+        # window fails (a 502 on the webhook, an error to the conversation
+        # agent) instead of finding no endpoint.
+        hass = _make_hass()
+        await esetup.async_bring_up_server(hass, _make_entry())
+        calls: list[str] = []
+        esetup.async_unregister_llm_api.side_effect = lambda *_: calls.append("llm")
+        esetup.async_unregister_webhook.side_effect = lambda *_: calls.append("webhook")
+        fake_manager.async_stop.side_effect = lambda *_: calls.append("stop")
+
+        await esetup.async_teardown_server(hass)
+
+        assert set(calls[:2]) == {"llm", "webhook"}
+        assert calls[2:] == ["stop"]
+
     async def test_teardown_is_noop_when_not_running(self, fake_manager: type) -> None:
         hass = _make_hass()
         await esetup.async_teardown_server(hass)  # must not raise

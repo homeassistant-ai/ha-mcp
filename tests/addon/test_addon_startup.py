@@ -121,7 +121,7 @@ class TestPersistAddonOptions:
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
 
         options = {
-            "backup_hint": "normal",
+            "verify_ssl": True,
             "secret_path": "/private_abc12345",
         }
         # Returns None on success — helper communicates failure via exceptions.
@@ -181,10 +181,8 @@ class TestMaybePersistSecretPath:
     def test_skips_when_config_is_empty(self, monkeypatch):
         """If /data/options.json was missing/corrupt, don't try to persist.
 
-        Sending a bare `{"secret_path": ...}` without required fields would
-        trip schema validation on the Supervisor side and produce a second,
-        misleading error line on top of the "Failed to read config" we
-        already logged upstream.
+        The options POST replaces the stored options in full, so a bare
+        `{"secret_path": ...}` would reset every other option the user has set.
         """
         calls: list = []
         monkeypatch.setattr(
@@ -203,7 +201,7 @@ class TestMaybePersistSecretPath:
             "persist_addon_options",
             lambda *args, **kwargs: calls.append(args),
         )
-        config = {"backup_hint": "normal", "secret_path": "/private_same"}
+        config = {"verify_ssl": True, "secret_path": "/private_same"}
         self.addon.maybe_persist_secret_path(config, "/private_same", "test-token")
         assert calls == []
 
@@ -216,14 +214,14 @@ class TestMaybePersistSecretPath:
 
         monkeypatch.setattr(self.addon, "persist_addon_options", fake_persist)
         config = {
-            "backup_hint": "normal",
+            "verify_ssl": True,
             "secret_path": "/private_old",
         }
         self.addon.maybe_persist_secret_path(config, "/private_new", "test-token")
         assert captured == [
             (
                 {
-                    "backup_hint": "normal",
+                    "verify_ssl": True,
                     "secret_path": "/private_new",
                 },
                 "test-token",
@@ -246,7 +244,7 @@ class TestMaybePersistSecretPath:
         monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
         # Should not raise.
         self.addon.maybe_persist_secret_path(
-            {"backup_hint": "normal", "secret_path": "/private_old"},
+            {"verify_ssl": True, "secret_path": "/private_old"},
             "/private_new",
             "test-token",
         )
@@ -265,7 +263,7 @@ class TestMaybePersistSecretPath:
 
         monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
         self.addon.maybe_persist_secret_path(
-            {"backup_hint": "normal", "secret_path": "/private_old"},
+            {"verify_ssl": True, "secret_path": "/private_old"},
             "/private_new",
             "test-token",
         )
@@ -355,14 +353,12 @@ class TestAppOptions:
             ("ha_tool_concurrency", True),
             ("ha_tool_concurrency", 33),
             ("disabled_tools", 5),
-            ("backup_hint", "loud"),
         ],
         ids=[
             "bool as text",
             "bool as int",
             "out of range",
             "int as text",
-            "no such choice",
         ],
     )
     def test_invalid_value_warns_and_uses_the_default(self, key, raw, capsys):
@@ -378,10 +374,31 @@ class TestAppOptions:
             f"app option {key!r} has invalid value {raw!r}" in capsys.readouterr().err
         )
 
+    def test_value_outside_the_choices_warns_and_uses_the_default(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Driven with a synthetic option so the choices check stays covered
+        whether or not a real app option declares choices."""
+        option = {
+            "key": "test_choice",
+            "type": "str",
+            "default": "normal",
+            "range": None,
+            "choices": ["strong", "normal"],
+        }
+
+        value = self.addon.resolve_option({"test_choice": "loud"}, option)
+
+        assert value == "normal"
+        assert "app option 'test_choice' has invalid value 'loud'" in (
+            capsys.readouterr().err
+        )
+
     def test_option_missing_from_a_flavor_is_exported_only_when_present(self):
         """The stable flavor does not declare the beta keys. Exporting them
         there would mark them app-managed in the web UI, and Supervisor
-        would reject the save of a key the stable schema lacks."""
+        drops a key the stable schema lacks, so the save would silently not
+        persist."""
         beta = next(o for o in self.options if not o["always"])
 
         assert beta["key"] not in self.addon.export_app_options({}, [beta])
@@ -651,7 +668,6 @@ class TestAddonStartup:
     def addon_config(self, tmp_path):
         """Create a test add-on configuration file."""
         config = {
-            "backup_hint": "normal",
             "secret_path": "",  # Auto-generate
         }
         config_file = tmp_path / "options.json"
@@ -686,7 +702,6 @@ class TestAddonStartup:
 
             # Verify expected log messages
             assert "[INFO] Starting Home Assistant MCP Server..." in logs
-            assert "[INFO] Backup hint mode: normal" in logs
             assert "[INFO] Generated new secret path with 128-bit entropy" in logs
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
             assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
@@ -722,7 +737,6 @@ class TestAddonStartup:
         """Test that add-on uses custom secret path when configured."""
         # Create config with custom secret path
         config = {
-            "backup_hint": "strong",
             "secret_path": "/my_custom_secret",
         }
         config_file = tmp_path / "options.json"
@@ -748,7 +762,6 @@ class TestAddonStartup:
             logs = container.get_logs()[0].decode("utf-8")
 
             # Verify custom config is used
-            assert "[INFO] Backup hint mode: strong" in logs
             assert "[INFO] Using custom secret path from configuration" in logs
             assert (
                 "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret"
@@ -770,7 +783,7 @@ class TestAddonStartup:
         """
         config_file = tmp_path / "options.json"
         with open(config_file, "w") as f:
-            json.dump({"backup_hint": "normal", "secret_path": ""}, f)
+            json.dump({"secret_path": ""}, f)
         with open(tmp_path / "feature_flags.json", "w") as f:
             json.dump({"log_level": "DEBUG"}, f)
 
@@ -858,7 +871,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         ENABLE_BETA_FEATURES=true written to env."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
-            {"backup_hint": "normal", "enable_yaml_config_editing": True},
+            {"verify_ssl": True, "enable_yaml_config_editing": True},
             self.subflags,
         )
         assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
@@ -907,7 +920,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         UI master toggle remains the gate."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
-            {"backup_hint": "normal", "enable_tool_search": True}, self.subflags
+            {"verify_ssl": True, "enable_tool_search": True}, self.subflags
         )
         assert "ENABLE_BETA_FEATURES" not in os.environ
 

@@ -14,11 +14,6 @@ configuration:
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
       unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
       0–32.
-  backup_hint:
-    name: Backup hint level
-    description: How strongly AI assistants are told to suggest a full Home Assistant
-      backup before risky changes. It changes only this hint; automatic edit backups
-      have their own setting.
   custom_instructions:
     name: Custom server instructions
     description: Text sent to every AI assistant that connects, as part of the MCP

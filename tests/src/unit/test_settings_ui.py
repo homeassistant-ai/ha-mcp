@@ -1616,13 +1616,10 @@ class TestSaveBackupConfigEndpoint:
 class TestSupervisorOptionsHelpers:
     """Module-level helpers for the addon-mode Supervisor options flow.
 
-    Supervisor's ``/addons/<slug>/options`` POST is a *full* replacement
-    validated against the addon schema, so a partial body (e.g. only the
-    auto-backup fields the user changed) is rejected with
-    ``addon_configuration_invalid_error`` when a required key like
-    ``backup_hint`` is omitted. These tests pin the merge contract that
-    ``_save_backup_config`` and ``_save_feature_flags`` now rely on in
-    addon mode.
+    Supervisor's ``/addons/<slug>/options`` POST is a *full* replacement,
+    so a partial body (e.g. only the auto-backup fields the user changed)
+    resets every option it leaves out to its default. These tests pin the
+    merge contract every addon-mode save handler relies on.
     """
 
     def _patch_supervisor_client(
@@ -1668,7 +1665,7 @@ class TestSupervisorOptionsHelpers:
                 "result": "ok",
                 "data": {
                     "options": {
-                        "backup_hint": "normal",
+                        "verify_ssl": True,
                         "enable_tool_search": True,
                     }
                 },
@@ -1678,7 +1675,7 @@ class TestSupervisorOptionsHelpers:
         with patcher:
             options, err = await _supervisor_fetch_current_options(verify_ssl=True)
         assert err is None
-        assert options == {"backup_hint": "normal", "enable_tool_search": True}
+        assert options == {"verify_ssl": True, "enable_tool_search": True}
 
     @pytest.mark.asyncio
     async def test_fetch_current_options_accepts_bare_options_dict(self, monkeypatch):
@@ -1694,13 +1691,13 @@ class TestSupervisorOptionsHelpers:
         response = MagicMock()
         response.status_code = 200
         response.json = MagicMock(
-            return_value={"options": {"backup_hint": "normal", "verify_ssl": True}}
+            return_value={"options": {"ha_tool_concurrency": 4, "verify_ssl": True}}
         )
         patcher, _ = self._patch_supervisor_client(get_response=response)
         with patcher:
             options, err = await _supervisor_fetch_current_options(verify_ssl=True)
         assert err is None
-        assert options == {"backup_hint": "normal", "verify_ssl": True}
+        assert options == {"ha_tool_concurrency": 4, "verify_ssl": True}
 
     @pytest.mark.asyncio
     async def test_fetch_current_options_supervisor_4xx_returns_transport_error(
@@ -1768,15 +1765,9 @@ class TestSupervisorOptionsHelpers:
 
     @pytest.mark.asyncio
     async def test_merge_and_post_options_preserves_existing_keys(self, monkeypatch):
-        """The merge must preserve untouched required keys (most importantly
-        ``backup_hint``, which has no ``?`` in the addon schema and would
-        cause supervisor to reject the entire POST with 400 if omitted).
-
-        Pins the fix for the bug where ``_save_backup_config`` was POSTing
-        only the auto-backup fields and dropping ``backup_hint`` in the
-        process — exact reproduction of the user-reported failure:
-        ``addon_configuration_invalid_error: Missing option 'backup_hint'
-        in root``.
+        """The merge must preserve every untouched key: the POST replaces
+        the stored options in full, so a key left out falls back to its
+        default.
         """
         from ha_mcp.settings_ui import _supervisor_merge_and_post_options
 
@@ -1787,7 +1778,7 @@ class TestSupervisorOptionsHelpers:
             return_value={
                 "data": {
                     "options": {
-                        "backup_hint": "normal",
+                        "ha_tool_concurrency": 4,
                         "enable_tool_search": False,
                         "verify_ssl": True,
                         "auto_backup_throttle_minutes": 0,
@@ -1813,13 +1804,13 @@ class TestSupervisorOptionsHelpers:
 
         assert ok is True
         assert err is None
-        # The POST body must contain backup_hint (unchanged) + the new values.
+        # The POST body must keep the untouched options + the new values.
         mock_client.post.assert_awaited_once()
         post_call = mock_client.post.call_args
         assert post_call.args[0] == "/addons/self/options"
         body = post_call.kwargs["json"]
         merged = body["options"]
-        assert merged["backup_hint"] == "normal"  # preserved
+        assert merged["ha_tool_concurrency"] == 4  # preserved
         assert merged["verify_ssl"] is True  # preserved
         assert merged["enable_tool_search"] is False  # preserved
         assert merged["auto_backup_retain_per_entity"] == 100  # preserved
@@ -1846,7 +1837,8 @@ class TestSupervisorOptionsHelpers:
         post_response = MagicMock()
         post_response.status_code = 400
         post_response.text = (
-            "App has invalid options: Missing option 'backup_hint' in root"
+            "App has invalid options: value must be at most 32 for dictionary "
+            "value @ data['ha_tool_concurrency']"
         )
         patcher, _ = self._patch_supervisor_client(
             get_response=get_response, post_response=post_response
@@ -1859,7 +1851,7 @@ class TestSupervisorOptionsHelpers:
         assert err is not None
         assert err.kind == "validation"
         assert err.status_code == 400  # supervisor's status, NOT 502
-        assert "backup_hint" in err.message
+        assert "ha_tool_concurrency" in err.message
 
     @pytest.mark.asyncio
     async def test_merge_and_post_transport_error_returns_transport_kind(
@@ -1972,12 +1964,10 @@ class TestSupervisorOptionsHelpers:
 class TestSaveBackupConfigAddonMode:
     """Addon-mode ``POST /api/settings/backup-config`` flow.
 
-    Pins the fix for the user-reported supervisor 400 — the old code
-    POSTed only the three auto-backup fields, dropping ``backup_hint``
-    (the addon schema's only required key) and producing
-    ``addon_configuration_invalid_error``. The new flow merges through
-    ``_supervisor_merge_and_post_options`` and schedules a restart via
-    ``_schedule_supervisor_self_restart``.
+    The handler merges the posted fields into the current options via
+    ``_supervisor_merge_and_post_options`` (a partial POST would reset every
+    other option to its default) and returns ``restart_required=True``
+    without restarting the app itself.
     """
 
     def _make_request(self, body):
@@ -2211,9 +2201,8 @@ class TestSaveFeatureFlagsAddonMode:
     ):
         """Mirror of the backup-config test: supervisor schema rejection
         must surface as CONFIG_VALIDATION_FAILED with supervisor's real
-        status code, not a generic 502. (e.g. attempting to set a
-        beta-only flag on the production addon channel where the schema
-        doesn't include it.)
+        status code, not a generic 502 (e.g. a value outside the range the
+        schema allows).
         """
         from ha_mcp.settings_ui import _SupervisorOptionsError
 
@@ -3017,12 +3006,12 @@ class TestGetHandlersAddonLiveOptions:
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        monkeypatch.setenv("BACKUP_HINT", "normal")  # boot-time value
+        monkeypatch.setenv("HA_TOOL_CONCURRENCY", "8")  # boot-time value
         monkeypatch.setenv("HA_VERIFY_SSL", "true")  # boot-time value
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
-            return {"backup_hint": "weak", "verify_ssl": False}, None
+            return {"ha_tool_concurrency": 4, "verify_ssl": False}, None
 
         monkeypatch.setattr(
             "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
@@ -3033,13 +3022,13 @@ class TestGetHandlersAddonLiveOptions:
         handlers = build_settings_handlers(server=server)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
-        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        cc_row = next(f for f in body["fields"] if f["field"] == "ha_tool_concurrency")
         verify_row = next(f for f in body["fields"] if f["field"] == "verify_ssl")
-        assert backup_row["value"] == "weak"  # live options win
+        assert cc_row["value"] == 4  # live options win
         assert verify_row["value"] is False
         # origin/editable semantics are unchanged by the live-value surfacing.
-        assert backup_row["origin"] == "addon"
-        assert backup_row["editable"] is True
+        assert cc_row["origin"] == "addon"
+        assert cc_row["editable"] is True
         _reset_global_settings()
 
     @pytest.mark.asyncio
@@ -3053,7 +3042,7 @@ class TestGetHandlersAddonLiveOptions:
         )
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        monkeypatch.setenv("BACKUP_HINT", "normal")  # boot-time value
+        monkeypatch.setenv("HA_TOOL_CONCURRENCY", "8")  # boot-time value
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
@@ -3069,8 +3058,8 @@ class TestGetHandlersAddonLiveOptions:
         resp = await handlers["get_advanced_settings"](MagicMock())
         assert resp.status_code == 200  # never crashes on fetch failure
         body = json.loads(resp.body)
-        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
-        assert backup_row["value"] == "normal"  # boot-env fallback, never blank
+        cc_row = next(f for f in body["fields"] if f["field"] == "ha_tool_concurrency")
+        assert cc_row["value"] == 8  # boot-env fallback, never blank
         _reset_global_settings()
 
     @pytest.mark.asyncio
@@ -3568,7 +3557,7 @@ class TestAdvancedSettingsEndpoints:
     async def test_save_advanced_addon_synced_routes_through_supervisor(
         self, monkeypatch
     ):
-        """``backup_hint`` and ``verify_ssl`` are addon-synced. In
+        """``ha_tool_concurrency`` and ``verify_ssl`` are addon-synced. In
         addon mode, their saves must POST to Supervisor via
         ``_supervisor_merge_and_post_options`` and return
         ``mode='addon'``, NOT write to the override file. Without this
@@ -3579,7 +3568,7 @@ class TestAdvancedSettingsEndpoints:
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_TOOL_CONCURRENCY", "0")
         monkeypatch.setenv("HA_VERIFY_SSL", "true")
         _reset_global_settings()
         merge_mock = AsyncMock(return_value=(True, None))
@@ -3591,14 +3580,14 @@ class TestAdvancedSettingsEndpoints:
         server.settings.verify_ssl = True
         handlers = build_settings_handlers(server=server)
         req = MagicMock()
-        req.json = AsyncMock(return_value={"backup_hint": "weak"})
+        req.json = AsyncMock(return_value={"ha_tool_concurrency": 4})
         resp = await handlers["save_advanced_settings"](req)
         assert resp.status_code == 200, json.loads(resp.body)
         body = json.loads(resp.body)
         assert body["mode"] == "addon"
-        assert body["applied"] == {"backup_hint": "weak"}
+        assert body["applied"] == {"ha_tool_concurrency": 4}
         assert body["restart_required"] is True
-        merge_mock.assert_awaited_once_with(True, {"backup_hint": "weak"})
+        merge_mock.assert_awaited_once_with(True, {"ha_tool_concurrency": 4})
         _reset_global_settings()
 
     @pytest.mark.asyncio
@@ -3617,7 +3606,7 @@ class TestAdvancedSettingsEndpoints:
         )
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_TOOL_CONCURRENCY", "0")
         _reset_global_settings()
         merge_mock = AsyncMock(
             return_value=(
@@ -3637,7 +3626,7 @@ class TestAdvancedSettingsEndpoints:
         server.settings.verify_ssl = True
         handlers = build_settings_handlers(server=server)
         req = MagicMock()
-        req.json = AsyncMock(return_value={"backup_hint": "weak"})
+        req.json = AsyncMock(return_value={"ha_tool_concurrency": 4})
         resp = await handlers["save_advanced_settings"](req)
         assert resp.status_code == 400
         body = json.loads(resp.body)
@@ -3658,19 +3647,19 @@ class TestAdvancedSettingsEndpoints:
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_TOOL_CONCURRENCY", "0")
         monkeypatch.setenv("HA_VERIFY_SSL", "true")
         _reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
-        # backup_hint + verify_ssl come back addon-routed (editable).
-        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        # ha_tool_concurrency + verify_ssl come back addon-routed (editable).
+        cc_row = next(f for f in body["fields"] if f["field"] == "ha_tool_concurrency")
         verify_row = next(f for f in body["fields"] if f["field"] == "verify_ssl")
-        assert backup_row["origin"] == "addon", (
-            f"expected addon-routed backup_hint, got {backup_row}"
+        assert cc_row["origin"] == "addon", (
+            f"expected addon-routed ha_tool_concurrency, got {cc_row}"
         )
-        assert backup_row["editable"] is True
+        assert cc_row["editable"] is True
         assert verify_row["origin"] == "addon", (
             f"expected addon-routed verify_ssl, got {verify_row}"
         )
@@ -4142,7 +4131,7 @@ class TestBetaMasterGateInSave:
             "enable_beta_features": False,
             "enable_yaml_config_editing": True,
             "enable_filesystem_tools": True,
-            "backup_hint": "normal",
+            "verify_ssl": True,
         }
         # Mock the fetch+post path so we can inspect what gets POSTed.
         fetch_mock = AsyncMock(return_value=(current_options, None))

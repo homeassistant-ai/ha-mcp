@@ -14,12 +14,6 @@ configuration:
       məhdudiyyət. Daxili REST, WebSocket və hər alət üzrə paylanma eynizmətliliyi
       (concurrency) dəyişməz qalır. 0 məhdudiyyətsiz davranışı qoruyur. Tutum üçün
       gözləyən çağırış 60 saniyədən sonra uğursuz olur. Aralıq 0–32.
-  backup_hint:
-    name: Ehtiyat nüsxə ipucu səviyyəsi
-    description: Riskli dəyişikliklərdən əvvəl süni intellekt köməkçilərinə tam Home
-      Assistant ehtiyat nüsxəsini təklif etməyin nə qədər güclü şəkildə bildirildiyi.
-      O, yalnız bu ipucunu dəyişdirir; avtomatik redaktə ehtiyat nüsxələrinin öz parametrləri
-      var.
   custom_instructions:
     name: Xüsusi server təlimatları
     description: Qoşulan hər bir süni intellekt köməkçisinə MCP server təlimatlarının

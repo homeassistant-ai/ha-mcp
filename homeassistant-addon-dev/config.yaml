@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "9.0.0.dev3199"
+version: "9.0.0.dev3208"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -31,7 +31,6 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
 options:
   verify_ssl: true
   ha_tool_concurrency: 0
-  backup_hint: "normal"
   custom_instructions: ""
   enable_beta_features: true
   enable_tool_search: false
@@ -64,7 +63,6 @@ options:
 schema:
   verify_ssl: bool?
   ha_tool_concurrency: int(0,32)?
-  backup_hint: list(strong|normal|weak|auto)
   custom_instructions: str?
   enable_beta_features: bool?
   enable_tool_search: bool?

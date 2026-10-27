@@ -11,10 +11,6 @@ configuration:
     name: Home Assistant 도구 동시성
     description: '모든 세션에 걸친 외부 Home Assistant 도구 호출의 선택적 제한. 내부 REST, WebSocket 및
       도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 대기 중인 호출은 60초 후에 실패합니다. 범위: 0–32.'
-  backup_hint:
-    name: 백업 힌트 수준
-    description: 위험한 변경 전에 전체 Home Assistant 백업을 제안하도록 AI 어시스턴트에 지시하는 강도입니다. 이 힌트만
-      변경하며 자동 편집 백업에는 자체 설정이 있습니다.
   custom_instructions:
     name: 사용자 정의 서버 지침
     description: MCP 서버 지침의 일부로 연결되는 모든 AI 어시스턴트에게 전송되는 텍스트입니다. 예를 들어 가족 메모가 보관되는
