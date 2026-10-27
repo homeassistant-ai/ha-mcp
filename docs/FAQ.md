@@ -895,6 +895,26 @@ dimension. What it covers:
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
   entity by trying to control it.
+- **Bare script, scene and automation keys are concealed as well.** The
+  script, scene and automation config tools also accept a bare storage key
+  (`unlock_house`) or config `id` (`1727266720448`) instead of the entity_id,
+  and Home Assistant exposes every script as a `script.<storage key>` service.
+  When such a key belongs to a hidden script, scene or automation — including
+  a renamed one whose key no longer matches its entity_id — the
+  `ha_config_get_*` / `ha_config_set_*` / `ha_config_remove_*` call, a
+  `ha_get_automation_traces` call for `script.<storage key>`, or a
+  `ha_call_service` with `domain: script` and that key as `service`, is
+  concealed as not-found too. A script or automation body that calls
+  `script.<storage key>`, a raw `trace/*` command or result naming the key,
+  and an `ha_read_file` / `ha_config_get_yaml` read of a file that defines a
+  hidden item are refused. A file defines one through a top-level key of
+  `scripts.yaml`, an `id` in `scenes.yaml` / `automations.yaml`, or a
+  `script:` / `scene:` / `automation:` section elsewhere (a package). The
+  whole file is checked, even when only a `tail_lines` or `yaml_path` slice
+  is asked for. A helper that merely shares a hidden script's key stays
+  readable. Because keys and ids now count, enforce mode can also refuse a
+  read that only shares a hidden entity's key or id.
+  An automation's bare `identifier` is only ever read as its config `id`.
 
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
 code execution via `ha_manage_custom_tool` (`code` / `run_saved` — pure

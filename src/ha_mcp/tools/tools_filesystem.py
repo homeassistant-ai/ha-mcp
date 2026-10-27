@@ -702,17 +702,17 @@ class FilesystemTools:
         EXAMPLE: ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
         """
         try:
-            # Check if custom component is available
-            await _assert_mcp_tools_available(self._client)
+            from .config_file_visibility import refuse_reading_hidden_definitions
 
-            # Build service data
+            await _assert_mcp_tools_available(self._client)
+            await refuse_reading_hidden_definitions(
+                self._client, "ha_read_file", [path]
+            )
             service_data: dict[str, Any] = {"path": path}
             if tail_lines is not None:
                 service_data["tail_lines"] = tail_lines
             if yaml_path is not None:
                 service_data["yaml_path"] = yaml_path
-
-            # Call the custom component service
             result = await call_mcp_tools_service(
                 self._client,
                 "read_file",

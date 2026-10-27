@@ -27,6 +27,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
+from .config_file_visibility import refuse_reading_hidden_definitions
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -441,6 +442,9 @@ class YamlReadTools:
             # Strictness is a property of each target, not of the request, so
             # the resolver reports which targets were named rather than expanded.
             targets, resolve_warnings = await _resolve_target_files(self._client, file)
+            await refuse_reading_hidden_definitions(
+                self._client, "ha_config_get_yaml", [target for target, _ in targets]
+            )
 
             extra: dict[str, Any] = {"include_parsed": True} if include_parsed else {}
             # The reads are independent, so fan them out rather than paying N
