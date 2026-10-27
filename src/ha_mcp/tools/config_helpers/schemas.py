@@ -350,10 +350,7 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "duration",
             "required": False,
             "selector": {"text": {}},
-            "description": (
-                "Default duration as 'HH:MM:SS' or seconds. Default '00:00:00' "
-                "(timer must be started with explicit duration)."
-            ),
+            "description": "Default duration as 'HH:MM:SS' or seconds. Default '00:00:00'.",
         },
         {
             "name": "restore",
