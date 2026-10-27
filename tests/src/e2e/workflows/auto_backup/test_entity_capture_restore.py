@@ -68,6 +68,15 @@ class TestEntityCaptureRestore:
                 backup_name = await _wait_for_backup(
                     mcp_client, domain="entity", entity_id=entity_id
                 )
+                # The edit took, so each read-back below tests the restore.
+                edited = await mcp.call_tool_success(
+                    "ha_get_entity", {"entity_id": renamed}
+                )
+                assert edited["entity_entry"]["hidden"] is True
+                exposure = await mcp.call_tool_success(
+                    "ha_get_entity_exposure", {"entity_id": renamed}
+                )
+                assert exposure["exposed_to"]["conversation"] is (not exposed)
 
                 restore = await mcp.call_tool_success(
                     "ha_manage_backup",
