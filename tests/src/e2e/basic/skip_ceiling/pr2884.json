@@ -1,0 +1,11 @@
+{
+  "reason": "#2884 adds one container_only test (tests/src/e2e/workflows/config/test_helper_domains_match_frontend.py): it reads the frontend bundle inside the Home Assistant container, so every HAOS lane gains one collection-time skip.",
+  "deltas": {
+    "haos": 1,
+    "haos_stdio": 1,
+    "haos_inaddon": 1,
+    "haos_embedded": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}
