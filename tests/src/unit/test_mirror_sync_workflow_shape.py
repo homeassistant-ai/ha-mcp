@@ -204,7 +204,7 @@ class TestMirrorSyncShape:
         shutil.copytree(_COMPONENT, clone / "custom_components" / "ha_mcp_tools")
         steps = {s.get("name"): s for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]}
         env = {
-            "PATH": "/usr/bin:/bin",
+            "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
             "HOME": str(tmp_path),
             "CHANNEL": "dev",
             "GITHUB_REPOSITORY": "o/r",
