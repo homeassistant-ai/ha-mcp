@@ -1038,39 +1038,39 @@ class EntityTools:
             (
                 entity_id,
                 entity_entry,
-                has_registry_updates,
+                registry_updated,
             ) = await self._execute_registry_update(
                 entity_id, message, updates_made, new_entity_id
             )
 
-        # Phase 4: Per-domain options
-        entity_entry, options_succeeded = await self._apply_options_updates(
-            entity_id, parsed_options, entity_entry, has_registry_updates, updates_made
-        )
-
-        # Phase 5: Device rename
-        device_rename_result: dict[str, Any] | None = None
-        if device_name_blank:
-            device_name_warning: str | None = _CLEAR_DEVICE_NAME_HINT
-        else:
-            device_name_warning = None
-            device_rename_result, entity_entry = await self._apply_device_rename(
-                entity_id, entity_entry, new_device_name
+            # Phase 4: Per-domain options; Phases 3-6 run under one hold of the lock
+            entity_entry, options_succeeded = await self._apply_options_updates(
+                entity_id, parsed_options, entity_entry, registry_updated, updates_made
             )
-        if device_rename_result and device_rename_result.get("success"):
-            updates_made.append(f"device_name -> {new_device_name}")
 
-        # Phase 6: Expose to assistants
-        exposure_result, entity_entry = await self._apply_expose_to(
-            entity_id,
-            parsed_expose_to,
-            entity_entry,
-            has_registry_updates,
-            options_succeeded,
-            device_rename_result,
-        )
-        if parsed_expose_to is not None:
-            updates_made.append(f"expose_to={parsed_expose_to}")
+            # Phase 5: Device rename
+            device_rename_result: dict[str, Any] | None = None
+            if device_name_blank:
+                device_name_warning: str | None = _CLEAR_DEVICE_NAME_HINT
+            else:
+                device_name_warning = None
+                device_rename_result, entity_entry = await self._apply_device_rename(
+                    entity_id, entity_entry, new_device_name
+                )
+            if device_rename_result and device_rename_result.get("success"):
+                updates_made.append(f"device_name -> {new_device_name}")
+
+            # Phase 6: Expose to assistants
+            exposure_result, entity_entry = await self._apply_expose_to(
+                entity_id,
+                parsed_expose_to,
+                entity_entry,
+                registry_updated,
+                options_succeeded,
+                device_rename_result,
+            )
+            if parsed_expose_to is not None:
+                updates_made.append(f"expose_to={parsed_expose_to}")
 
         # Phase 7: Build response
         return self._build_entity_response(

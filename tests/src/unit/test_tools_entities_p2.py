@@ -7,6 +7,7 @@ Covers:
 - ha_get_entity unique_id -> entity_id resolver mode
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,6 +15,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_entities import register_entity_tools
+from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 
 def _make_client():
@@ -600,3 +602,53 @@ class TestUniqueIdResolver:
         body = _error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "resolver filter" in body["error"]["message"]
+
+
+# --------------------------------------------------------------------------
+# A single-entity ha_set_entity keeps the entity lock through all its writes
+# --------------------------------------------------------------------------
+class TestSingleSetHoldsEntityLock:
+    @pytest.mark.asyncio
+    async def test_restore_waits_for_every_write_of_the_set(self):
+        """An entity restore takes this entity's lock. Queued while the
+        registry update is in flight, it gets the lock only after the options,
+        device-rename and expose writes, not between them."""
+        entry = {"entity_id": "sensor.temp", "device_id": "d1", "options": {}}
+        order: list[str] = []
+        in_update = asyncio.Event()
+        restore_queued = asyncio.Event()
+
+        async def send(message):
+            await asyncio.sleep(0)
+            order.append(message["type"])
+            if message["type"] == "config/entity_registry/update" and "name" in message:
+                in_update.set()
+                await restore_queued.wait()
+            return {"success": True, "result": {"entity_entry": entry, **entry}}
+
+        async def restore():
+            await in_update.wait()
+            lock = registry_update_lock("entity", "sensor.temp")
+            restore_queued.set()
+            await lock.acquire()
+            order.append("restore")
+            lock.release()
+
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(side_effect=send)
+        tool = _register(client)["ha_set_entity"]
+        waiter = asyncio.ensure_future(restore())
+
+        await tool(
+            entity_id="sensor.temp",
+            name="N",
+            options={"sensor": {"display_precision": 2}},
+            new_device_name="Dev X",
+            expose_to={"conversation": True},
+        )
+        await waiter
+
+        before = order[: order.index("restore")]
+        assert before.count("config/entity_registry/update") == 2, order
+        assert "config/device_registry/update" in before, order
+        assert "homeassistant/expose_entity" in before, order
