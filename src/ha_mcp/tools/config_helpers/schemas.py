@@ -197,9 +197,7 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "step",
             "required": False,
             "selector": {"number": {}},
-            "description": (
-                "Step/increment. Must be > 0 and ≤ (max-min). Default 1.0."
-            ),
+            "description": "Step/increment. Must be > 0. Default 1.0.",
         },
         {
             "name": "unit_of_measurement",
@@ -329,7 +327,7 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "step",
             "required": False,
             "selector": {"number": {}},
-            "description": "Increment. Must be > 0. Default 1.",
+            "description": "Increment, 0 or more. Default 1.",
         },
         {
             "name": "restore",
