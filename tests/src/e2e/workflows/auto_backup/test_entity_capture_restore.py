@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 from .test_capture_and_restore import (
     _delete_leftover_backup,
@@ -92,4 +94,56 @@ class TestEntityCaptureRestore:
                     await safe_call_tool(
                         mcp_client, "ha_remove_helpers_integrations", {"target": target}
                     )
+                await _delete_leftover_backup(mcp_client, backup_name)
+
+    async def test_a_removed_entity_says_what_core_keeps(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Core keeps a removed helper entity's registry settings for 30 days.
+        The component reads that from Core's deleted entries; without it the
+        restore can only point to a restart."""
+        _enable_auto_backup(monkeypatch)
+        helper_id = f"e2e_bk_gone_{uuid.uuid4().hex[:8]}"
+        entity_id = f"input_boolean.{helper_id}"
+        backup_name = None
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {"helper_type": "input_boolean", "name": helper_id},
+            )
+            try:
+                await wait_for_tool_result(
+                    mcp_client,
+                    tool_name="ha_get_entity",
+                    arguments={"entity_id": entity_id},
+                    predicate=lambda d: d["entity_entry"]["hidden"] is False,
+                    description=f"{entity_id} in the entity registry",
+                )
+                await mcp.call_tool_success(
+                    "ha_set_entity", {"entity_id": entity_id, "icon": "mdi:test-tube"}
+                )
+                backup_name = await _wait_for_backup(
+                    mcp_client, domain="entity", entity_id=entity_id
+                )
+                await mcp.call_tool_success(
+                    "ha_remove_helpers_integrations", {"target": entity_id}
+                )
+
+                result = await mcp.call_tool_failure(
+                    "ha_manage_backup",
+                    {"scope": "edits", "action": "restore", "backup_name": backup_name},
+                )
+
+                text = json.dumps(result)
+                assert "entry_deleted" in text
+                if component_surface_available():
+                    assert (
+                        f"keeps the registry settings of {entity_id} until " in text
+                    ), text
+                else:
+                    assert "Restart Home Assistant: if what provides" in text, text
+            finally:
+                await safe_call_tool(
+                    mcp_client, "ha_remove_helpers_integrations", {"target": entity_id}
+                )
                 await _delete_leftover_backup(mcp_client, backup_name)
