@@ -1637,6 +1637,11 @@ class BackupManager:
                 f"{_flow_label(_flow_type(domain))} helper no longer exists; "
                 "restore was not attempted"
             )
+        if path is None and target is not None and domain == "entity":
+            # Renamed since the lookup: the restore finds the entity by its
+            # entry id and would overwrite it without a safety backup.
+            message = "the entity was renamed while its safety backup was taken; retry"
+            raise MandatoryBackupError(message, safe_detail=message)
         if checked and path is None:
             _note_no_safety_backup(outcome, domain, target, config)
         return path

@@ -657,6 +657,35 @@ class TestRenamedEntity:
         )
         assert registry.entries["light.desk"]["area_id"] == "office"
 
+    async def test_a_rename_during_the_safety_backup_stops_the_restore(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The restore would find the entity by its entry id and overwrite it
+        with no safety backup taken."""
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        registry.edit("light.desk", area_id="kitchen")
+        sent = registry.ws
+
+        async def rename_before_get(client: Any, msg: dict[str, Any]) -> Any:
+            if msg["type"] == "config/entity_registry/get" and "light.desk" in (
+                registry.entries
+            ):
+                registry.edit("light.desk", new_entity_id="light.lamp")
+            return await sent(client, msg)
+
+        monkeypatch.setattr(backup_manager, "_ws_send", rename_before_get)
+
+        with pytest.raises(backup_manager.MandatoryBackupError):
+            await mgr.restore_snapshot(path.name)
+
+        assert _writes(registry) == []
+        assert registry.entries["light.lamp"]["area_id"] == "kitchen"
+
     async def test_diff_compares_with_the_renamed_entity(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
