@@ -109,6 +109,7 @@ from .client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .storage_helper_types import SIMPLE_HELPER_TYPES
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
 
@@ -2730,20 +2731,7 @@ async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
 # endpoints (fetch: backup_helper_target.py). The decorator
 # constructs the domain key as ``helper_<type>`` so files group naturally.
 
-_HELPER_LIST_TYPES = {
-    "input_boolean",
-    "input_text",
-    "input_number",
-    "input_select",
-    "input_datetime",
-    "input_button",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-}
+_HELPER_LIST_TYPES = SIMPLE_HELPER_TYPES
 
 
 async def _restore_helper(

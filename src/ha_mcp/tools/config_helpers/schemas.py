@@ -1,8 +1,9 @@
 """Helper type constants, per-type field schemas and the helper response shape."""
 
 from contextvars import ContextVar
-from typing import Any, Literal, TypedDict, get_args
+from typing import Any, TypedDict
 
+from ...storage_helper_types import SIMPLE_HELPER_TYPES, StorageHelperType
 from ..config_write_helpers import attach_skill_content
 
 __all__ = [
@@ -39,26 +40,6 @@ def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
         referenced_files=None,
     )
 
-
-# Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
-# (not Config Entry Flow). The helper tools' schemas spell them out as an enum.
-# Any other value must be a helper flow type Core lists, checked at call time
-# (``helper_flows``), except config_subentry and ha_config_list_helpers' "all".
-StorageHelperType = Literal[
-    "input_button",
-    "input_boolean",
-    "input_select",
-    "input_number",
-    "input_text",
-    "input_datetime",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-]
-SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(get_args(StorageHelperType))
 
 # Stateful HA input helpers skip last-state restore when `initial` is stored in config
 # (including false/0). See input_boolean/input_number async_added_to_hass in HA core.
