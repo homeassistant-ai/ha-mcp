@@ -4131,7 +4131,7 @@
         "name": {
           "type": "str | None",
           "default": null,
-          "description": "(snapshot.create) Tarball name. Auto-generated if not provided."
+          "description": "(snapshot.create) Tarball name. Auto-generated if not provided. Home Assistant names a full backup made with its automatic-backup settings itself."
         },
         "backup_id": {
           "type": "str | None",
@@ -4139,9 +4139,49 @@
           "description": "(snapshot.restore / snapshot.delete) Tarball ID (e.g. 'dd7550ed')."
         },
         "restore_database": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.restore) Include the database in the restore. Default: restore it when the backup contains it. Must be false for a backup without one; on Supervisor installs it must match the backup."
+        },
+        "restore_addons": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.restore) Slugs of apps (add-ons) in the backup to restore, from its `addons` in the snapshot list. Default: none. Supervisor installs only."
+        },
+        "restore_folders": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.restore) Folders in the backup to restore, from its `folders` in the snapshot list (`share`, `addons/local`, `ssl`, `media`). Default: none. Supervisor installs only."
+        },
+        "include_homeassistant": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: include Home Assistant's configuration."
+        },
+        "include_database": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: include the database (history); needs include_homeassistant=True."
+        },
+        "include_addons": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: slugs of the installed apps (add-ons) to include. Supervisor installs only."
+        },
+        "include_all_addons": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: include every app (add-on); not together with include_addons. Supervisor installs only."
+        },
+        "include_folders": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: folders to include (`share`, `addons/local`, `ssl`, `media`). Supervisor installs only."
+        },
+        "safety_backup": {
           "type": "bool",
           "default": false,
-          "description": "(snapshot.restore) Include the database in the restore; otherwise config only."
+          "description": "(snapshot.restore) Back up what the restore replaces (configuration, plus the database, apps and folders it restores) first, as a manual backup on the default location. Off by default; offer it to the user, who decides. Needs the default backup password."
         },
         "confirm": {
           "type": "bool",
