@@ -374,10 +374,7 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "monday",
             "required": False,
             "selector": {"object": {"multiple": True}},
-            "description": (
-                "List of {'from': 'HH:MM', 'to': 'HH:MM'} time ranges. At least "
-                "one day across monday–sunday must contain a non-empty range."
-            ),
+            "description": "List of {'from': 'HH:MM', 'to': 'HH:MM'} time ranges.",
         },
         {
             "name": "tuesday",

@@ -214,11 +214,18 @@ async def _dashboard_get_config(
 
     ``url_path`` ``None``/absent resolves to the default dashboard. A YAML-mode
     dashboard returns ``status="yaml_excluded"`` with no body (its config may
-    carry resolved ``!secret`` plaintext — storage-only emission). A missing
-    dashboard or a load error returns ``status="not_found"``. Storage freshness is
-    safe: ``LovelaceStorage.async_save`` mutates the in-memory object
-    synchronously, so this read never lags a save (audit-verified).
+    carry resolved ``!secret`` plaintext — storage-only emission). A dashboard
+    with no saved config (Core's ``ConfigNotFound``) returns
+    ``status="no_config"``. A missing dashboard or another load error returns
+    ``status="not_found"``. Storage freshness is safe: ``LovelaceStorage.async_save``
+    mutates the in-memory object synchronously, so this read never lags a save
+    (audit-verified).
     """
+    try:
+        from homeassistant.components.lovelace.const import ConfigNotFound
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
+        ConfigNotFound = None
+
     dash = dashboards_map.get(url_path)
     resolved = getattr(dash, "url_path", None) if dash is not None else url_path
     if dash is None:
@@ -230,7 +237,9 @@ async def _dashboard_get_config(
         return {"status": "not_found", "url_path": resolved, "config": None}
     try:
         config = await loader(False)
-    except Exception:  # noqa: BLE001  # any load failure degrades to not_found (fail-soft)
+    except Exception as err:  # noqa: BLE001  # any other load failure degrades to not_found (fail-soft)
+        if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
+            return {"status": "no_config", "url_path": resolved, "config": None}
         return {"status": "not_found", "url_path": resolved, "config": None}
     if not isinstance(config, dict):
         return {"status": "not_found", "url_path": resolved, "config": None}
