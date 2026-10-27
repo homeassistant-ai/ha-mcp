@@ -9,7 +9,8 @@ name: Sync Integration Mirror
 #   vX.Y.Z once PyPI serves that ha-mcp build.
 # - dev: after "Publish Dev Channel", the snapshot of the commit it built is
 #   stamped with the next release number and pinned to the exact build it
-#   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N. Server-only
+#   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N on a commit
+#   off main, so main always carries the latest stable component. Server-only
 #   changes therefore reach pre-release users too, not just component changes.
 #
 # HACS keys on the GitHub prerelease flag, so stable users never see dev
@@ -307,7 +308,15 @@ jobs:
             echo "mirror already current"
           else
             git commit -m "Component snapshot from ${GITHUB_REPOSITORY}@${SOURCE_SHA} (${CHANNEL})"
-            git push origin main
+            if [ "$CHANNEL" = dev ]; then
+              # Like the main repository's dev builds, the dev snapshot lives
+              # on a commit only its tag references, pushed by the tag step.
+              # main keeps the stable component: HACS installs the default
+              # branch when no stable release is among the 30 it reads.
+              echo "dev snapshot stays off main"
+            else
+              git push origin main
+            fi
           fi
 
       - name: Wait for the pinned server build on PyPI

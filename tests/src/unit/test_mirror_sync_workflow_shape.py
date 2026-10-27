@@ -22,6 +22,9 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOWS = _REPO_ROOT / ".github" / "workflows"
 _MIRROR = _WORKFLOWS / "sync-integration-mirror.yml"
+_RELEASE_ON_TAG = (
+    _REPO_ROOT / ".github" / "integration-mirror-workflows" / "release-on-tag.yml"
+)
 _COMPONENT = _REPO_ROOT / "custom_components" / "ha_mcp_tools"
 _STAMP = _REPO_ROOT / "scripts" / "stamp_component_version.py"
 _DEV_VERSION = _REPO_ROOT / "scripts" / "dev_version.sh"
@@ -179,6 +182,101 @@ class TestMirrorSyncShape:
             if step.get("name") == "Stage snapshot"
         )
         assert "scripts/stamp_component_version.py" in stage["run"]
+
+    @pytest.mark.parametrize(
+        ("channel", "main_after"), [("dev", "stable"), ("stable", "snapshot")]
+    )
+    def test_only_a_stable_sync_moves_the_mirror_main(
+        self, tmp_path: Path, channel: str, main_after: str
+    ) -> None:
+        # HACS installs the default branch when none of the 30 releases it
+        # reads is stable, so a dev snapshot on main reaches stable users.
+        def git(*args: str, cwd: Path = tmp_path) -> str:
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        remote = tmp_path / "remote.git"
+        seed = tmp_path / "seed"
+        clone = tmp_path / "mirror"
+        git("init", "-q", "--bare", "-b", "main", str(remote))
+        git("init", "-q", "-b", "main", str(seed))
+        (seed / "component").write_text("stable")
+        git("add", "component", cwd=seed)
+        git("commit", "-q", "-m", "stable", cwd=seed)
+        git("push", "-q", str(remote), "main", cwd=seed)
+        git("clone", "-q", "--depth", "1", f"file://{remote}", str(clone))
+        (clone / "component").write_text("snapshot")
+
+        commit = next(
+            s
+            for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]
+            if s.get("name") == "Commit and push"
+        )
+        result = subprocess.run(
+            ["bash", "-e", "-c", commit["run"].replace("/tmp/mirror", str(clone))],
+            env={
+                "PATH": "/usr/bin:/bin",
+                "HOME": str(tmp_path),
+                "CHANNEL": channel,
+                "GITHUB_REPOSITORY": "o/r",
+                "SOURCE_SHA": "abc",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert git("show", "main:component", cwd=remote) == main_after
+        # The tag step tags the snapshot commit whether or not main moved.
+        assert (clone / "component").read_text() == "snapshot"
+        assert git("log", "-1", "--format=%s", cwd=clone).endswith(f"({channel})")
+
+
+class TestMirrorReleaseOnTag:
+    def test_keeps_the_newest_five_dev_pre_releases(self, tmp_path: Path) -> None:
+        # The main repository keeps five (publish-dev.yml); beyond 30 HACS
+        # no longer sees the stable release behind them.
+        tags = [f"v9.0.0-dev.{n}" for n in (996, 997, 998, 999, 1000, 1001)]
+        tags += ["v9.0.1-dev.1", "v2.2.3-dev.423"]
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        deleted = tmp_path / "deleted"
+        fake_gh = bin_dir / "gh"
+        fake_gh.write_text(
+            "#!/bin/sh\n"
+            'case "$1 $2" in\n'
+            f'  "api --paginate") printf "%s\\n" {" ".join(tags)} ;;\n'
+            f'  "release delete") echo "$3" >> {deleted} ;;\n'
+            "esac\n"
+        )
+        fake_gh.chmod(0o755)
+        prune = next(
+            s
+            for s in _workflow(_RELEASE_ON_TAG)["jobs"]["release"]["steps"]
+            if s.get("name") == "Keep the newest five dev pre-releases"
+        )
+
+        result = subprocess.run(
+            ["bash", "-e", "-c", prune["run"]],
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin", "GITHUB_REPOSITORY": "o/r"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert sorted(deleted.read_text().split()) == [
+            "v2.2.3-dev.423",
+            "v9.0.0-dev.996",
+            "v9.0.0-dev.997",
+        ]
+        assert "-dev." in prune["if"]
 
 
 class TestDevVersionScript:
