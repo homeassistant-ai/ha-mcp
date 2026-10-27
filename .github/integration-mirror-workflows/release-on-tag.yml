@@ -144,7 +144,7 @@ jobs:
           # this tag explicitly. Newest first by version, so dev.1000 sorts
           # above dev.999.
           OLD=$(printf '%s\n' "$GITHUB_REF_NAME" $TAGS | grep -e '-dev\.' \
-            | sort -rV | uniq | tail -n +6 || true)
+            | sort -rV | uniq | tail -n +6)
           FAILED=0
           for TAG in $OLD; do
             echo "pruning old pre-release ${TAG}"

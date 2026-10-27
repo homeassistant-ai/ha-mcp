@@ -227,7 +227,13 @@ class TestMirrorReleaseOnTag:
                 True,
                 id="listing-misses-the-new-release",
             ),
-            pytest.param([], {}, [], True, id="no-pre-releases"),
+            pytest.param(
+                [],
+                {"GITHUB_REF_NAME": _DEV_TAGS[0]},
+                [],
+                True,
+                id="first-dev-release",
+            ),
             pytest.param(
                 _DEV_TAGS,
                 {"FAIL_DELETE": "v9.0.0-dev.996"},
