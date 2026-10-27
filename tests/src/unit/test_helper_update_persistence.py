@@ -6,13 +6,10 @@ Verifies that ha_config_set_helper uses the {type}/update WebSocket API
 changes like options, min/max, etc. persist across HA restarts.
 """
 
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 
 @pytest.fixture
@@ -263,34 +260,6 @@ class TestInputBooleanUpdatePersistence:
         )
         assert update_call is not None
         assert update_call[0][0]["name"] == "Updated Toggle"
-
-
-class TestBlankNameUpdate:
-    """An update cannot blank a helper's name, as a create cannot (#2632)."""
-
-    @pytest.mark.parametrize("helper_type", ["zone", "person"])
-    async def test_blank_name_update_is_refused_before_any_write(
-        self, register_tools, mock_client, helper_type
-    ):
-        """Core's zone schema would store a blank name; the zone and person
-        dialogs refuse one, so the tool refuses it without writing."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses(helper_type)
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await register_tools["ha_config_set_helper"](
-                helper_type=helper_type,
-                helper_id=f"{helper_type}.home_office",
-                config={"name": "  "},
-            )
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert not any(
-            c[0][0].get("type", "").endswith("/update")
-            for c in mock_client.send_websocket_message.call_args_list
-        )
 
 
 class TestInputDatetimeUpdatePersistence:

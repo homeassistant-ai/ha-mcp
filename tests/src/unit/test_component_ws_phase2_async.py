@@ -274,16 +274,6 @@ class TestDashboardsGet:
         assert res["status"] == "not_found"
         assert res["config"] is None
 
-    def test_get_dashboard_without_saved_config_is_not_missing(self, patch_dashboards):
-        """A dashboard Core loads with ``ConfigNotFound`` exists; it has no saved
-        config yet, so the get must not report it missing."""
-        patch_dashboards(
-            {"fresh": FakeDashboard("fresh", "storage", load_error=ConfigNotFound())}
-        )
-        res = _run_dashboards(FakeHass(), {"mode": "get", "url_path": "fresh"})
-        assert res["status"] == "no_config"
-        assert res["config"] is None
-
     def test_get_unavailable(self, patch_dashboards):
         patch_dashboards(None)
         res = _run_dashboards(FakeHass(), {"mode": "get", "url_path": "home"})

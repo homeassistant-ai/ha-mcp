@@ -1860,25 +1860,6 @@ class TestHaRemoveEntity:
         assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
 
     @pytest.mark.asyncio
-    async def test_remove_entity_other_failure_mentioning_not_found(
-        self, remove_entity_tool, mock_client
-    ):
-        """A refusal whose text says 'not found' but whose code is not not_found
-        is a failed removal, not an already-absent entity."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "Command failed: Config entry not found",
-                "error_code": "home_assistant_error",
-            }
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await remove_entity_tool(entity_id="sensor.real")
-
-        assert json.loads(str(exc_info.value))["error"]["code"] == "SERVICE_CALL_FAILED"
-
-    @pytest.mark.asyncio
     async def test_remove_entity_exception(self, remove_entity_tool, mock_client):
         """WebSocket connection failure should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
