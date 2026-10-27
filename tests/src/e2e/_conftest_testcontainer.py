@@ -33,6 +33,7 @@ from ._conftest_embedded import (
     _is_no_tools_entry_selected,
     _wait_for_embedded_webhook_ready,
 )
+from ._conftest_knobs import pip_cache_flags, pip_cache_mount, resolve_ready_timeout
 from ._conftest_readiness import (
     _dump_ha_readiness_diagnostics,
     _log_readiness_timing,
@@ -60,8 +61,19 @@ logger = logging.getLogger(__name__)
 # much larger API-ready timeout than the default 60s. ``_EMBEDDED_BRINGUP_TIMEOUT``
 # then covers the background bring-up (force-install of the local wheel with deps
 # already satisfied, token provisioning, server thread start, webhook register).
+# Both API-ready budgets are overridable through ``HA_E2E_READY_TIMEOUT``
+# (see ``_conftest_knobs``); the bring-up budget is deliberately not, because
+# that force-install runs against an already-populated environment and is not
+# the pip window a slow network stretches.
 _EMBEDDED_API_READY_TIMEOUT = 480
+_CONTAINER_API_READY_TIMEOUT = 60
 _EMBEDDED_BRINGUP_TIMEOUT = 300
+
+
+def _container_api_ready_timeout(embedded: bool) -> int:
+    """API-ready budget for the testcontainer lanes, honoring the env override."""
+    default = _EMBEDDED_API_READY_TIMEOUT if embedded else _CONTAINER_API_READY_TIMEOUT
+    return resolve_ready_timeout(default)
 
 
 def _reset_ha_in_process_caches() -> None:
@@ -263,6 +275,34 @@ def _prepare_testcontainer_config(
     return config_path, temp_dir, local_blueprint, embedded_wheel_name
 
 
+def _claim_pip_cache_command(container_dir: str) -> str:
+    """Make the mounted cache root-owned inside the container, or say why not.
+
+    pip run as root only caches into a directory owned by uid 0. Guarded
+    because a bind mount whose file-sharing layer refuses ``chown`` (some
+    macOS and ``/mnt/c`` setups) would otherwise fail the whole lane; pip then
+    prints its own "cache has been disabled" warning and the run still boots.
+    """
+    return (
+        f"(chown 0:0 {container_dir} || echo '⚠️ could not claim "
+        f"{container_dir} for root; pip will disable the cache' >&2)"
+    )
+
+
+def _hand_back_pip_cache_command(container_dir: str) -> str:
+    """Return the mount to the ``/config`` owner, which is the invoking host user.
+
+    ``/config`` is bind-mounted from a directory the fixture created, so its
+    owner is the host uid; without this the host-side cache stays root-owned
+    and a developer cannot clean it up. Guarded for the same reason as the
+    claim: a failed hand-back must not fail a lane that already installed.
+    """
+    return (
+        f'(chown -R "$(stat -c %u:%g /config)" {container_dir} '
+        f"|| echo '⚠️ could not hand {container_dir} back to the /config owner' >&2)"
+    )
+
+
 def _build_ha_testcontainer(
     config_path: Path, embedded: bool, embedded_wheel_name: str | None
 ) -> DockerContainer:
@@ -288,6 +328,23 @@ def _build_ha_testcontainer(
         str(config_path), "/config", "rw"
     )  # Ensure read-write mount
     container = container.with_env("TZ", "UTC")
+    # Opt-in pip cache reuse (``HA_E2E_PIP_CACHE``): bind a host directory over
+    # the image's pip cache so the preinstalls below stop paying for the same
+    # wheel tree on every run. Unset leaves the container's cache ephemeral.
+    # The directory is created here so the mount always has a host-side owner;
+    # the entrypoint then hands it to root for pip, because pip run as root
+    # only uses a cache directory owned by uid 0 (``check_path_owner`` in
+    # ``pip/_internal/utils/filesystem.py``) while a bind mount carries the
+    # invoking user's uid.
+    cache_mount = pip_cache_mount()
+    cache_dir_in_container: str | None = None
+    if cache_mount is not None:
+        host_cache_dir, cache_dir_in_container = cache_mount
+        host_cache_dir.mkdir(parents=True, exist_ok=True)
+        container = container.with_volume_mapping(
+            str(host_cache_dir), cache_dir_in_container, "rw"
+        )
+        logger.info(f"♻️ Reusing the pip cache at {host_cache_dir}")
     # Add privileged mode for Home Assistant hardware access.
     container_kwargs: dict = {"privileged": True}
 
@@ -305,6 +362,10 @@ def _build_ha_testcontainer(
     # ``&&``-chained so a failure surfaces as container-exit-non-zero rather than
     # an HA boot with missing dependencies.
     preinit_cmds: list[str] = []
+    # ``--no-cache-dir `` unless ``HA_E2E_PIP_CACHE`` supplies a cache to fill,
+    # in which case an explicit ``--cache-dir`` overrides the image's
+    # ``no-cache-dir = false`` pip.conf (see ``pip_cache_flags``).
+    cache_flags = pip_cache_flags()
 
     # The embedded lane's wheel supplies the server; see is_server_requirement.
     manifest_reqs = _collect_manifest_requirements(
@@ -326,9 +387,9 @@ def _build_ha_testcontainer(
         # ever moves into pip.conf, attempt 1 silently reverts to hitting the
         # wheels index — the ``||`` fallback still keeps installs working.
         preinit_cmds.append(
-            f"(env -u PIP_EXTRA_INDEX_URL pip install --no-cache-dir "
+            f"(env -u PIP_EXTRA_INDEX_URL pip install {cache_flags}"
             f"--only-binary=:all: {quoted} "
-            f"|| pip install --no-cache-dir {quoted})"
+            f"|| pip install {cache_flags}{quoted})"
         )
         logger.info(
             f"📦 Pre-installing {len(manifest_reqs)} custom-component "
@@ -365,8 +426,8 @@ def _build_ha_testcontainer(
             f"{constraints_probe} && "
             f'if [ -f "$HACONS" ]; then '
             f'cp "$HACONS" /config/{EMBEDDED_HA_CONSTRAINTS_COPY} && '
-            f'pip install --no-cache-dir --constraint "$HACONS" {quoted_wheel}; '
-            f"else pip install --no-cache-dir {quoted_wheel}; fi && "
+            f'pip install {cache_flags}--constraint "$HACONS" {quoted_wheel}; '
+            f"else pip install {cache_flags}{quoted_wheel}; fi && "
             f"pip list --format=freeze > /config/{EMBEDDED_FREEZE_AFTER}"
         )
         logger.info(
@@ -376,10 +437,25 @@ def _build_ha_testcontainer(
         )
 
     if preinit_cmds:
+        installs = " && ".join(preinit_cmds)
+        if cache_dir_in_container is None:
+            script = f"{installs} && exec /init"
+        else:
+            # The hand-back must run on failure too: the host directory belongs
+            # to the developer, and a failed install would otherwise leave it
+            # root-owned and undeletable. ``_rc`` carries the installs' status
+            # past the hand-back so the lane still fails on a failed preinstall.
+            script = (
+                f"{_claim_pip_cache_command(cache_dir_in_container)} "
+                f"&& {installs}; "
+                f"_rc=$?; "
+                f"{_hand_back_pip_cache_command(cache_dir_in_container)}; "
+                f'if [ "$_rc" -eq 0 ]; then exec /init; fi; exit "$_rc"'
+            )
         container_kwargs["entrypoint"] = [
             "sh",
             "-c",
-            " && ".join(preinit_cmds) + " && exec /init",
+            script,
         ]
 
     container = container.with_kwargs(**container_kwargs)
@@ -467,7 +543,8 @@ def _wait_for_testcontainer_ready(
     # The embedded backend's entrypoint preinstalls the ha-mcp wheel + its
     # dependency tree before HA's /init, so /api/ liveness is delayed by that
     # pip window and needs a much larger budget than the default 60s.
-    api_ready_timeout = _EMBEDDED_API_READY_TIMEOUT if embedded else 60
+    # ``HA_E2E_READY_TIMEOUT`` overrides either lane's budget.
+    api_ready_timeout = _container_api_ready_timeout(embedded)
     logger.info("🔄 Waiting for Home Assistant API to become ready...")
     if not _wait_for_ha_api_ready(base_url, headers, timeout=api_ready_timeout):
         _dump_ha_readiness_diagnostics(
