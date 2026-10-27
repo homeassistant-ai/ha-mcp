@@ -235,6 +235,16 @@ async def _execute_update_simple_helper(
                 context=_simple_helper_error_context(helper_type),
             )
         )
+    # Create refuses a blank name for every type; the zone and person dialogs
+    # refuse one on edit too, where Core's zone schema would store it.
+    if name is not None and not name.strip():
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "name cannot be blank. Omit it to keep the current name.",
+                context=_simple_helper_error_context(helper_type),
+            )
+        )
 
     warnings: list[str] = []
     native = await _update_via_component(
