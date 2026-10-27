@@ -134,7 +134,9 @@ async def test_screenshot_request_on_dashboard_without_config_is_answered() -> N
     [RoutingClient(no_config=frozenset({"fresh"})), _FlatEnvelopeClient()],
     ids=["nested-error", "flat-envelope"],
 )
-async def test_card_search_on_dashboard_without_config_says_why(client) -> None:
+async def test_card_search_on_dashboard_without_config_says_why(
+    client: RoutingClient,
+) -> None:
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     get_dashboard = _build_get_dashboard(client)
 

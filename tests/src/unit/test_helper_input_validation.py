@@ -240,8 +240,8 @@ class TestTagAutoGeneratesTagId:
 
 class TestInputNumberStepReachesCore:
     async def test_step_wider_than_range_reaches_core(
-        self, register_tools, mock_client
-    ):
+        self, register_tools: dict[str, Any], mock_client: MagicMock
+    ) -> None:
         # Core and the frontend accept this, so the tool sends it on (#2632).
         _wire_default_ws(mock_client, "input_number")
         with patch(

@@ -8,6 +8,7 @@ beta lane fails when a frontend release adds or drops a helper type.
 """
 
 import json
+from typing import Any
 
 import pytest
 
@@ -30,7 +31,9 @@ print(json.dumps(sorted(json.loads(m) for m in found)))
 _OWN_PAGE_TYPES = {"zone", "person", "tag"}
 
 
-def test_helper_types_match_the_installed_frontend(ha_container_with_fresh_config):
+def test_helper_types_match_the_installed_frontend(
+    ha_container_with_fresh_config: dict[str, Any],
+) -> None:
     """A helper type the frontend adds is a type ha-mcp cannot yet route."""
     container = ha_container_with_fresh_config["container"]
     result = container.get_wrapped_container().exec_run(

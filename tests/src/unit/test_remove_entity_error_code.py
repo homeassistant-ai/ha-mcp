@@ -11,7 +11,7 @@ from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from .test_tools_entities_p2 import _make_client, _register
 
 
-async def test_failure_mentioning_not_found_is_not_an_absent_entity():
+async def test_failure_mentioning_not_found_is_not_an_absent_entity() -> None:
     """A refusal whose text says 'not found' but whose code is not not_found
     is a failed removal, not an already-absent entity."""
     client = _make_client()
@@ -30,7 +30,7 @@ async def test_failure_mentioning_not_found_is_not_an_absent_entity():
     assert json.loads(str(exc_info.value))["error"]["code"] == "SERVICE_CALL_FAILED"
 
 
-async def test_bulk_failure_mentioning_not_found_is_an_error_not_a_skip():
+async def test_bulk_failure_mentioning_not_found_is_an_error_not_a_skip() -> None:
     client = _make_client()
     client.send_websocket_message = AsyncMock(
         return_value={
@@ -47,7 +47,7 @@ async def test_bulk_failure_mentioning_not_found_is_an_error_not_a_skip():
     assert [e["entity_id"] for e in result["errors"]] == ["sensor.a"]
 
 
-async def test_lost_connection_keeps_what_the_bulk_run_already_removed():
+async def test_lost_connection_keeps_what_the_bulk_run_already_removed() -> None:
     """The removals that went through are reported, and the ids never reached
     are named so the caller can retry them."""
     client = _make_client()
