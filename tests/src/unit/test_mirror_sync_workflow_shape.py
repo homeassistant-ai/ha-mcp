@@ -193,8 +193,9 @@ def _release_on_tag_step(name: str) -> dict[Any, Any]:
 
 
 # Newest first, as the releases API lists them.
-_DEV_TAGS = [f"v9.0.0-dev.{n}" for n in (1001, 1000, 999, 998, 997, 996)]
-_DEV_TAGS += ["v9.0.1-dev.1", "v2.2.3-dev.423"]
+_DEV_TAGS = ["v9.0.1-dev.1"]
+_DEV_TAGS += [f"v9.0.0-dev.{n}" for n in (1001, 1000, 999, 998, 997, 996)]
+_DEV_TAGS += ["v2.2.3-dev.423"]
 _OLD_DEV_TAGS = ["v2.2.3-dev.423", "v9.0.0-dev.996", "v9.0.0-dev.997"]
 
 
@@ -219,6 +220,13 @@ class TestMirrorReleaseOnTag:
         ("tags", "fail", "attempted", "succeeds"),
         [
             pytest.param(_DEV_TAGS, {}, _OLD_DEV_TAGS, True, id="older-builds-pruned"),
+            pytest.param(
+                _DEV_TAGS[1:],
+                {"GITHUB_REF_NAME": _DEV_TAGS[0]},
+                _OLD_DEV_TAGS,
+                True,
+                id="listing-misses-the-new-release",
+            ),
             pytest.param([], {}, [], True, id="no-pre-releases"),
             pytest.param(
                 _DEV_TAGS,

@@ -140,8 +140,11 @@ jobs:
         run: |
           TAGS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
             --jq '.[] | select(.prerelease) | .tag_name')
-          # Newest first by version, so dev.1000 sorts above dev.999.
-          OLD=$(printf '%s\n' $TAGS | grep -e '-dev\.' | sort -rV | tail -n +6 || true)
+          # The listing can miss the release created moments ago, so count
+          # this tag explicitly. Newest first by version, so dev.1000 sorts
+          # above dev.999.
+          OLD=$(printf '%s\n' "$GITHUB_REF_NAME" $TAGS | grep -e '-dev\.' \
+            | sort -rV | uniq | tail -n +6 || true)
           FAILED=0
           for TAG in $OLD; do
             echo "pruning old pre-release ${TAG}"
