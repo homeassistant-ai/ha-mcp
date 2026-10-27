@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -34,6 +34,8 @@ from .theme_guard import EngineCredential, addon_credential_from_options
 
 logger = logging.getLogger(__name__)
 
+EngineKind = Literal["puppet", "wpe"]
+
 
 @dataclass(frozen=True, slots=True)
 class EngineTarget:
@@ -42,13 +44,17 @@ class EngineTarget:
     ``addon_credential`` authenticates as Puppet's user (extracted from its
     Supervisor options during discovery, so the theme guard needs no second
     round-trip and the raw secret-bearing options dict never leaves this
-    module). WPE temporarily applies frontend preferences and does not need
-    this guard credential. An explicit engine URL may still carry Puppet's
-    credential when Supervisor discovery finds it. The token never leaves the
-    server process — it must not be logged or surfaced in responses.
+    module). ``engine_kind`` and ``engine_version`` are populated only when
+    Supervisor verifies the selected app. An explicit URL does not prove which
+    engine or version it targets. WPE temporarily applies frontend preferences
+    and does not need the guard credential. An explicit URL may still carry
+    Puppet's credential when Supervisor discovery finds it. The token never
+    leaves the server process — it must not be logged or surfaced in responses.
     """
 
     url: str
+    engine_kind: EngineKind | None = None
+    engine_version: str | None = None
     addon_credential: EngineCredential | None = None
 
 
@@ -57,6 +63,7 @@ class _EngineProfile:
     """Supervisor identity and network details for a supported renderer."""
 
     name: str
+    kind: EngineKind
     slug_suffix: str
     port: int
     required_schema_options: frozenset[str]
@@ -65,6 +72,7 @@ class _EngineProfile:
 
 _PUPPET = _EngineProfile(
     name="Puppet",
+    kind="puppet",
     slug_suffix="_puppet",
     port=10000,
     required_schema_options=frozenset(
@@ -74,6 +82,7 @@ _PUPPET = _EngineProfile(
 )
 _WPE = _EngineProfile(
     name="WPE Screenshot Engine",
+    kind="wpe",
     slug_suffix="_wpe_screenshot_engine",
     port=8080,
     required_schema_options=frozenset(
@@ -344,8 +353,15 @@ async def _discover_engine_via_supervisor(
                     )
                 )
             options = data.get("options")
+            app_version = data.get("version")
             return EngineTarget(
                 url=f"http://{hostname}:{profile.port}",
+                engine_kind=profile.kind,
+                engine_version=(
+                    app_version.strip()
+                    if isinstance(app_version, str) and app_version.strip()
+                    else None
+                ),
                 addon_credential=(
                     addon_credential_from_options(
                         options if isinstance(options, dict) else None

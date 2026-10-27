@@ -287,9 +287,11 @@ Engine uses its configured full-page height limit (default 12000 px,
 configurable from 1000 to 12000 px), with a width-dependent effective cap. It
 tiles tall documents; vertically scrolling inner containers return an error.
 For the backwards-compatible
-`full_page=true` alias only, an HTTP 400 from Puppet versions older than 2.5.0
-triggers the legacy 4096 px fixed-height retry and reports
-`legacy_full_page_fallback=true`; explicit `height="auto"` remains strict.
+`full_page=true` alias only, an HTTP 400 from a Supervisor-identified Puppet
+app below version 2.5.0 triggers the legacy 4096 px fixed-height retry and
+reports `legacy_full_page_fallback=true`. WPE and engines without verified
+Puppet version information return the original error; explicit
+`height="auto"` remains strict.
 
 **Current engine limits.** Neither engine exposes a device-pixel-ratio control
 or returns applied-context metadata to ha-mcp. ha-mcp also cannot observe an

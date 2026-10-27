@@ -24,6 +24,7 @@ def _wpe_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
     info: dict[str, Any] = {
         "name": "WPE Screenshot Engine",
         "state": state,
+        "version": "0.3.0",
         "schema": _WPE_SCHEMA,
         "options": {
             "home_assistant_url": "http://homeassistant:8123",
@@ -63,6 +64,8 @@ class TestWpeSupervisorDiscovery:
         # Supervisor-network discovery uses the app's internal port, not the
         # configurable host port used by clients outside the app network.
         assert target.url == "http://def-wpe:8080"
+        assert target.engine_kind == "wpe"
+        assert target.engine_version == "0.3.0"
         assert target.addon_credential is None
 
     async def test_started_wpe_and_puppet_are_ambiguous(

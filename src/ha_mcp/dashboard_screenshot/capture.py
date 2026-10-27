@@ -24,7 +24,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
-from .provision import TOKEN_HINT, resolve_engine
+from .engine_compat import detect_engine_kind_from_capabilities, is_legacy_puppet
+from .provision import TOKEN_HINT, EngineKind, resolve_engine
 from .theme_guard import ThemeGuard
 
 logger = logging.getLogger(__name__)
@@ -615,7 +616,9 @@ async def _request_viewport_image(
     *,
     url: str,
     path: str,
-    engine: str,
+    engine_url: str,
+    engine_kind: EngineKind | None,
+    engine_version: str | None,
     params: dict[str, str],
     options: _CaptureOptions,
     viewport: _ViewportRequest,
@@ -635,19 +638,26 @@ async def _request_viewport_image(
                         response, MAX_ENGINE_ERROR_BODY_BYTES
                     )
                     error_text = error_body.decode(errors="replace")
+                    identified_engine_kind = engine_kind
                     if (
                         response.status_code == 400
                         and options.full_page
                         and viewport.height == "auto"
                         and not fallback_used
                     ):
-                        # Puppet <2.5.0 does not understand WIDTHxauto.
-                        fallback_used = True
-                        capture_height = MAX_VIEWPORT_DIMENSION
-                        params["viewport"] = (
-                            f"{viewport.width}x{MAX_VIEWPORT_DIMENSION}"
-                        )
-                        continue
+                        if identified_engine_kind is None:
+                            identified_engine_kind = (
+                                await detect_engine_kind_from_capabilities(
+                                    http_client, engine_url
+                                )
+                            )
+                        if is_legacy_puppet(identified_engine_kind, engine_version):
+                            fallback_used = True
+                            capture_height = MAX_VIEWPORT_DIMENSION
+                            params["viewport"] = (
+                                f"{viewport.width}x{MAX_VIEWPORT_DIMENSION}"
+                            )
+                            continue
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
@@ -657,6 +667,8 @@ async def _request_viewport_image(
                             context={
                                 **request_context,
                                 "status_code": response.status_code,
+                                "engine_kind": identified_engine_kind or "unknown",
+                                "engine_version": engine_version,
                                 "legacy_full_page_fallback_attempted": fallback_used,
                             },
                             suggestions=[
@@ -684,7 +696,7 @@ async def _request_viewport_image(
                     details=str(exc),
                     context={
                         **request_context,
-                        "engine_url": engine,
+                        "engine_url": engine_url,
                         "render_timeout_seconds": options.render_timeout_seconds,
                     },
                     suggestions=[
@@ -698,9 +710,9 @@ async def _request_viewport_image(
             raise_tool_error(
                 create_error_response(
                     ErrorCode.CONNECTION_FAILED,
-                    f"Could not reach the dashboard screenshot engine at {engine}.",
+                    f"Could not reach the dashboard screenshot engine at {engine_url}.",
                     details=str(exc),
-                    context={**request_context, "engine_url": engine},
+                    context={**request_context, "engine_url": engine_url},
                     suggestions=[
                         "Ensure the screenshot engine app or sidecar is installed and running",
                         "If it is running, its access token is likely "
@@ -717,7 +729,9 @@ async def _request_or_collect_failure(
     *,
     url: str,
     path: str,
-    engine: str,
+    engine_url: str,
+    engine_kind: EngineKind | None,
+    engine_version: str | None,
     params: dict[str, str],
     options: _CaptureOptions,
     viewport: _ViewportRequest,
@@ -733,7 +747,9 @@ async def _request_or_collect_failure(
             http_client,
             url=url,
             path=path,
-            engine=engine,
+            engine_url=engine_url,
+            engine_kind=engine_kind,
+            engine_version=engine_version,
             params=params,
             options=options,
             viewport=viewport,
@@ -879,8 +895,8 @@ async def capture_dashboard_images(
     viewports = _capture_viewports(options)
 
     engine_target = await resolve_engine()
-    engine = engine_target.url
-    url = f"{engine}/{path}"
+    engine_url = engine_target.url
+    url = f"{engine_url}/{path}"
     mime_type = _MIME_TYPES[options.image_format]
     captures: list[DashboardImageCapture] = []
 
@@ -933,7 +949,9 @@ async def capture_dashboard_images(
                     http_client,
                     url=url,
                     path=path,
-                    engine=engine,
+                    engine_url=engine_url,
+                    engine_kind=engine_target.engine_kind,
+                    engine_version=engine_target.engine_version,
                     params=params,
                     options=options,
                     viewport=viewport,

@@ -533,7 +533,7 @@ async def test_mislabeled_engine_body_is_rejected_through_mcp(
 async def test_full_page_requests_native_auto_height(
     screenshot_mcp_client: Client, fake_engine: _FakeEngine
 ) -> None:
-    """full_page=True uses Puppet's content-sized WIDTHxauto request."""
+    """full_page=True uses the content-sized WIDTHxauto request."""
     result = await screenshot_mcp_client.call_tool(
         "ha_get_dashboard_screenshot",
         {
@@ -551,8 +551,21 @@ async def test_full_page_requests_native_auto_height(
 
 
 async def test_legacy_full_page_retry_surfaces_warning_through_mcp(
-    screenshot_mcp_client: Client, fake_engine: _FakeEngine
+    screenshot_mcp_client: Client,
+    fake_engine: _FakeEngine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from ha_mcp.dashboard_screenshot import capture
+    from ha_mcp.dashboard_screenshot.provision import EngineTarget
+
+    async def resolve_legacy_puppet() -> EngineTarget:
+        return EngineTarget(
+            url=fake_engine.url,
+            engine_kind="puppet",
+            engine_version="2.4.9",
+        )
+
+    monkeypatch.setattr(capture, "resolve_engine", resolve_legacy_puppet)
     request_count = len(fake_engine.requests)
     result = await screenshot_mcp_client.call_tool(
         "ha_get_dashboard_screenshot",
