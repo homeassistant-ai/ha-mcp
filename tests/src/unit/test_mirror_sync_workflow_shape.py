@@ -184,9 +184,10 @@ class TestMirrorSyncShape:
         assert "scripts/stamp_component_version.py" in stage["run"]
 
     @pytest.mark.parametrize(
-        ("channel", "main_after"), [("dev", "stable"), ("stable", "snapshot")]
+        ("channel", "main_after"),
+        [("dev", "stable"), ("stable", "snapshot"), ("none", "snapshot")],
     )
-    def test_only_a_stable_sync_moves_the_mirror_main(
+    def test_only_stable_and_docs_syncs_move_the_mirror_main(
         self, tmp_path: Path, channel: str, main_after: str
     ) -> None:
         # HACS installs the default branch when none of the 30 releases it
@@ -211,72 +212,144 @@ class TestMirrorSyncShape:
         git("push", "-q", str(remote), "main", cwd=seed)
         git("clone", "-q", "--depth", "1", f"file://{remote}", str(clone))
         (clone / "component").write_text("snapshot")
-
-        commit = next(
-            s
-            for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]
-            if s.get("name") == "Commit and push"
+        # The release notes script needs the main repository's history.
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake_python = bin_dir / "python3"
+        fake_python.write_text(
+            '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && echo notes > "$2"'
+            "; shift; done\nexit 0\n"
         )
+        fake_python.chmod(0o755)
+        tag = "v9.0.1-dev.5" if channel == "dev" else "v9.0.1"
+        env = {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "CHANNEL": channel,
+            "GITHUB_REPOSITORY": "o/r",
+            "SOURCE_SHA": "abc",
+            "VER": "9.0.1",
+            "TAG": tag,
+        }
+        steps = {s.get("name"): s for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]}
+        names = ["Commit and push"]
+        if channel != "none":
+            assert channel in steps["Tag the mirror"]["if"]
+            names.append("Tag the mirror")
+
+        for name in names:
+            script = (
+                steps[name]["run"]
+                .replace("/tmp/mirror", str(clone))
+                .replace("${{ steps.release.outputs.pin }}", "9.0.1.dev5")
+                .replace("${{ steps.release.outputs.dist }}", "ha-mcp-dev")
+            )
+            result = subprocess.run(
+                ["bash", "-e", "-c", script],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert result.returncode == 0, f"{name}: {result.stderr}"
+
+        assert git("show", "main:component", cwd=remote) == main_after
+        if channel != "none":
+            # The tag push alone publishes a snapshot main does not carry.
+            assert git("show", f"{tag}:component", cwd=remote) == "snapshot"
+
+
+def _release_on_tag_step(name: str) -> dict[Any, Any]:
+    return next(
+        s
+        for s in _workflow(_RELEASE_ON_TAG)["jobs"]["release"]["steps"]
+        if s.get("name") == name
+    )
+
+
+# Newest first, as the releases API lists them.
+_DEV_TAGS = [f"v9.0.0-dev.{n}" for n in (1001, 1000, 999, 998, 997, 996)]
+_DEV_TAGS += ["v9.0.1-dev.1", "v2.2.3-dev.423"]
+_OLD_DEV_TAGS = ["v2.2.3-dev.423", "v9.0.0-dev.996", "v9.0.0-dev.997"]
+
+
+class TestMirrorReleaseOnTag:
+    def test_keeps_as_many_dev_pre_releases_as_the_main_repository(self) -> None:
+        # Past HACS's 30-release window a stable release behind the dev
+        # builds is no longer seen, so the mirror prunes like publish-dev.yml.
+        prune = _release_on_tag_step("Keep the newest five dev pre-releases")
+        retire = _release_on_tag_step("Retire superseded dev pre-releases")
+        main_cleanup = (_WORKFLOWS / "publish-dev.yml").read_text(encoding="utf-8")
+        keep = re.compile(r"tail -n \+(\d+)")
+        assert keep.findall(prune["run"]) == keep.findall(main_cleanup)
+        # Dev tags prune; stable tags retire.
+        assert prune["if"] == retire["if"].replace("!", "")
+        names = [
+            s.get("name")
+            for s in _workflow(_RELEASE_ON_TAG)["jobs"]["release"]["steps"]
+        ]
+        assert names.index("Create release for tag") < names.index(prune["name"])
+
+    @pytest.mark.parametrize(
+        ("tags", "fail", "attempted", "succeeds"),
+        [
+            pytest.param(_DEV_TAGS, {}, _OLD_DEV_TAGS, True, id="older-builds-pruned"),
+            pytest.param([], {}, [], True, id="no-pre-releases"),
+            pytest.param(
+                _DEV_TAGS,
+                {"FAIL_DELETE": "v9.0.0-dev.996"},
+                _OLD_DEV_TAGS,
+                False,
+                id="failed-delete-still-tries-the-rest",
+            ),
+            pytest.param(_DEV_TAGS, {"FAIL_API": "1"}, [], False, id="failed-listing"),
+        ],
+    )
+    def test_prunes_the_older_dev_pre_releases(
+        self,
+        tmp_path: Path,
+        tags: list[str],
+        fail: dict[str, str],
+        attempted: list[str],
+        succeeds: bool,
+    ) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        listing = tmp_path / "listing"
+        listing.write_text("".join(f"{t}\n" for t in tags))
+        deleted = tmp_path / "deleted"
+        deleted.touch()
+        fake_gh = bin_dir / "gh"
+        fake_gh.write_text(
+            "#!/bin/sh\n"
+            'case "$1 $2" in\n'
+            f'  "api --paginate") [ -n "$FAIL_API" ] && exit 1; cat {listing} ;;\n'
+            f'  "release delete") echo "$3" >> {deleted}\n'
+            '    [ "$3" = "$FAIL_DELETE" ] && exit 1 ;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        fake_gh.chmod(0o755)
+
         result = subprocess.run(
-            ["bash", "-e", "-c", commit["run"].replace("/tmp/mirror", str(clone))],
+            [
+                "bash",
+                "-e",
+                "-c",
+                _release_on_tag_step("Keep the newest five dev pre-releases")["run"],
+            ],
             env={
-                "PATH": "/usr/bin:/bin",
-                "HOME": str(tmp_path),
-                "CHANNEL": channel,
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
                 "GITHUB_REPOSITORY": "o/r",
-                "SOURCE_SHA": "abc",
+                **fail,
             },
             capture_output=True,
             text=True,
             check=False,
         )
 
-        assert result.returncode == 0, result.stderr
-        assert git("show", "main:component", cwd=remote) == main_after
-        # The tag step tags the snapshot commit whether or not main moved.
-        assert (clone / "component").read_text() == "snapshot"
-        assert git("log", "-1", "--format=%s", cwd=clone).endswith(f"({channel})")
-
-
-class TestMirrorReleaseOnTag:
-    def test_keeps_the_newest_five_dev_pre_releases(self, tmp_path: Path) -> None:
-        # The main repository keeps five (publish-dev.yml); beyond 30 HACS
-        # no longer sees the stable release behind them.
-        tags = [f"v9.0.0-dev.{n}" for n in (996, 997, 998, 999, 1000, 1001)]
-        tags += ["v9.0.1-dev.1", "v2.2.3-dev.423"]
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        deleted = tmp_path / "deleted"
-        fake_gh = bin_dir / "gh"
-        fake_gh.write_text(
-            "#!/bin/sh\n"
-            'case "$1 $2" in\n'
-            f'  "api --paginate") printf "%s\\n" {" ".join(tags)} ;;\n'
-            f'  "release delete") echo "$3" >> {deleted} ;;\n'
-            "esac\n"
-        )
-        fake_gh.chmod(0o755)
-        prune = next(
-            s
-            for s in _workflow(_RELEASE_ON_TAG)["jobs"]["release"]["steps"]
-            if s.get("name") == "Keep the newest five dev pre-releases"
-        )
-
-        result = subprocess.run(
-            ["bash", "-e", "-c", prune["run"]],
-            env={"PATH": f"{bin_dir}:/usr/bin:/bin", "GITHUB_REPOSITORY": "o/r"},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        assert result.returncode == 0, result.stderr
-        assert sorted(deleted.read_text().split()) == [
-            "v2.2.3-dev.423",
-            "v9.0.0-dev.996",
-            "v9.0.0-dev.997",
-        ]
-        assert "-dev." in prune["if"]
+        assert (result.returncode == 0) is succeeds, result.stderr
+        assert sorted(deleted.read_text().split()) == attempted
 
 
 class TestDevVersionScript:

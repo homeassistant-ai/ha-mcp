@@ -9,9 +9,9 @@ name: Sync Integration Mirror
 #   vX.Y.Z once PyPI serves that ha-mcp build.
 # - dev: after "Publish Dev Channel", the snapshot of the commit it built is
 #   stamped with the next release number and pinned to the exact build it
-#   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N on a commit
-#   off main, so main always carries the latest stable component. Server-only
+#   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N. Server-only
 #   changes therefore reach pre-release users too, not just component changes.
+#   The dev tag names a commit off main, so main keeps the stable component.
 #
 # HACS keys on the GitHub prerelease flag, so stable users never see dev
 # builds; users who enable the repository's HACS "Pre-release" switch entity
@@ -55,9 +55,10 @@ on:
         options: [stable, dev]
         default: stable
 
-# Serialize mirror syncs: a release and the dev build after it can both clone
-# the mirror and push to main at nearly the same time; without serialization
-# the second push is a non-fast-forward rejection. queue: max keeps a queued
+# Serialize mirror syncs: a release and a docs push can both clone the mirror
+# and push to main at nearly the same time, where the second push is a
+# non-fast-forward rejection, and a dev build after a release must see its
+# stable tag before deciding to tag. queue: max keeps a queued
 # release-tag run from being evicted by a later run (requires
 # cancel-in-progress: false).
 concurrency:
@@ -269,7 +270,7 @@ jobs:
         run: |
           if [ "$CHANNEL" = none ]; then
             # A docs-only push refreshes the README and repo files; the
-            # component stays exactly as the last tagged sync left it.
+            # component stays exactly as the last stable sync left it.
             cp hacs.json LICENSE /tmp/mirror/
           else
             # From the snapshot, so hacs.json's Home Assistant minimum always
