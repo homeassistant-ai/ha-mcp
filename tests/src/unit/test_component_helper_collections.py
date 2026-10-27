@@ -135,6 +135,15 @@ def test_describe_schemas_marks_unresolvable_types(monkeypatch) -> None:
     assert set(result["unavailable"]) == set(hc.SIMPLE_HELPER_TYPES) - {"input_number"}
 
 
+def test_server_and_component_list_the_same_storage_helpers() -> None:
+    """The server's fallback list routes the types the component serves; a
+    type in only one of them is described by one path and refused by the other.
+    The frontend's own list is pinned by test_helper_domains_match_frontend.py."""
+    from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
+
+    assert set(hc.SIMPLE_HELPER_TYPES) == SIMPLE_HELPER_TYPES
+
+
 def test_serialize_falls_back_per_field(monkeypatch) -> None:
     vol = _REAL_VOL  # sibling modules stub voluptuous in sys.modules
 
