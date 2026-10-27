@@ -1,114 +1,158 @@
 """Credential and user-management WS commands stay out of the raw escape hatches.
 
-``auth/long_lived_access_token`` answers with a new long-lived token in
-plain text, and ``auth/refresh_tokens`` / ``config/auth/list`` enumerate every
-session and user. Both raw WebSocket surfaces (ha_call_service's ``ws_command``
-and the Code Mode ``ws_send`` bridge) refuse them before dispatch, while the
-``auth/current_user`` whoami read stays available.
+``auth/long_lived_access_token`` answers with a new long-lived token in plain
+text, ``auth/refresh_tokens`` lists the connected user's sessions, and
+``config/auth/list`` enumerates every user. Through ``supervisor/api``,
+Supervisor's ``/auth`` endpoints list users and reset passwords, and
+``/os/ssh/authorized_keys`` adds a host SSH key. Both raw WebSocket surfaces
+(ha_call_service's ``ws_command`` and the Code Mode ``ws_send`` bridge) refuse
+them before dispatch, as a policy refusal rather than an input error, while the
+``auth/current_user`` whoami read and other ``supervisor/api`` calls stay
+available.
 """
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_code import _SandboxBridge
 from ha_mcp.tools.util_helpers import is_credential_ws_command
 
+from .test_call_service_snapshot_guard import _error, _make_bridge
 from .test_call_service_ws_command import _make_tools
 
-CREDENTIAL_COMMANDS = [
-    "auth/long_lived_access_token",
-    "auth/refresh_tokens",
-    "auth/delete_refresh_token",
-    "auth/delete_all_refresh_tokens",
-    "auth/refresh_token_set_expiry",
-    "auth/sign_path",
-    "config/auth/list",
-    "config/auth/create",
-    "config/auth/delete",
-    "config/auth/update",
-    "config/auth_provider/homeassistant/create",
-    "config/auth_provider/homeassistant/admin_change_password",
-    "AUTH/LONG_LIVED_ACCESS_TOKEN",
-    "  auth/long_lived_access_token  ",
-]
 
-
-@pytest.mark.parametrize("command", CREDENTIAL_COMMANDS)
-def test_credential_commands_are_classified(command: str) -> None:
-    assert is_credential_ws_command(command)
+def _supervisor(endpoint: str, method: str = "post") -> dict[str, Any]:
+    return {"endpoint": endpoint, "method": method}
 
 
 @pytest.mark.parametrize(
-    "command",
+    ("command", "params"),
     [
-        "auth/current_user",
-        "AUTH/CURRENT_USER",
-        "config/area_registry/list",
-        "config_entries/get",
-        "supervisor/api",
-        "authority/list",
+        ("auth/long_lived_access_token", None),
+        ("config/auth/list", None),
+        ("config/auth_provider/homeassistant/admin_change_password", None),
+        ("AUTH/LONG_LIVED_ACCESS_TOKEN", None),
+        ("  auth/long_lived_access_token  ", None),
+        # Reproduced against a live HAOS instance in the #2850 review.
+        ("supervisor/api", _supervisor("/auth/reset")),
+        ("supervisor/api", _supervisor("/auth/list", "get")),
+        ("supervisor/api", _supervisor("/os/ssh/authorized_keys")),
+        ("supervisor/api", _supervisor("/auth")),
+        ("supervisor/api", _supervisor("/addons/../%61uth/list", "get")),
     ],
 )
-def test_other_commands_are_not_classified(command: str) -> None:
-    assert not is_credential_ws_command(command)
+def test_token_minting_and_user_admin_commands_are_refused(
+    command: str, params: dict[str, Any] | None
+) -> None:
+    assert is_credential_ws_command(command, params)
 
 
-@pytest.mark.parametrize("command", CREDENTIAL_COMMANDS)
-async def test_call_service_rejects_credential_command(command: str) -> None:
+@pytest.mark.parametrize(
+    ("command", "params"),
+    [
+        ("auth/current_user", None),
+        ("config/area_registry/list", None),
+        ("authority/list", None),
+        ("supervisor/api", _supervisor("/core/info", "get")),
+        ("supervisor/api", _supervisor("/authentication", "get")),
+    ],
+)
+def test_whoami_and_unrelated_commands_stay_usable(
+    command: str, params: dict[str, Any] | None
+) -> None:
+    assert not is_credential_ws_command(command, params)
+
+
+@pytest.mark.parametrize(
+    ("command", "data"),
+    [
+        ("auth/long_lived_access_token", None),
+        ("config/auth/list", None),
+        ("config/auth_provider/homeassistant/admin_change_password", None),
+        ("supervisor/api", _supervisor("/auth/reset")),
+        ("supervisor/api", _supervisor("/os/ssh/authorized_keys")),
+    ],
+)
+async def test_call_service_cannot_mint_tokens_or_manage_users(
+    command: str, data: dict[str, Any] | None
+) -> None:
     tools = _make_tools({"success": True, "result": "should-never-be-returned"})
 
     with pytest.raises(ToolError) as excinfo:
-        await tools.ha_call_service(ws_command=command)
+        await tools.ha_call_service(ws_command=command, data=data)
 
-    assert "credentials or manages users" in str(excinfo.value)
+    error = _error(excinfo)
+    assert "refused by policy" in error["message"]
+    suggestions = " ".join(error["suggestions"])
+    assert "Home Assistant UI" in suggestions
+    assert "Check the parameter values" not in suggestions
     tools._client.send_websocket_message.assert_not_awaited()
 
 
-async def test_call_service_still_allows_current_user() -> None:
-    tools = _make_tools({"success": True, "result": {"id": "u1", "is_admin": True}})
+@pytest.mark.parametrize(
+    ("command", "data"),
+    [
+        ("auth/current_user", None),
+        ("supervisor/api", _supervisor("/core/info", "get")),
+    ],
+)
+async def test_call_service_still_sends_whoami_and_other_supervisor_calls(
+    command: str, data: dict[str, Any] | None
+) -> None:
+    tools = _make_tools({"success": True, "result": {"id": "u1"}})
 
-    result = await tools.ha_call_service(ws_command="auth/current_user")
+    result = await tools.ha_call_service(ws_command=command, data=data)
 
     tools._client.send_websocket_message.assert_awaited_once_with(
-        {"type": "auth/current_user"}
+        {"type": command, **(data or {})}
     )
     assert result["success"] is True
 
 
-def _bridge() -> tuple[_SandboxBridge, MagicMock]:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": "should-never-be-returned"}
-    )
-    return (
-        _SandboxBridge(
-            MagicMock(), client, SimpleNamespace(code_mode_max_invocations=10)
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            {"type": "auth/long_lived_access_token", "client_name": "x"},
+            "refused by policy",
         ),
-        client,
-    )
+        ({"type": "config/auth/list"}, "refused by policy"),
+        (
+            {"type": "supervisor/api", **_supervisor("/auth/list", "get")},
+            "refused by policy",
+        ),
+        (
+            {"type": "supervisor/api", **_supervisor("/os/ssh/authorized_keys")},
+            "refused by policy",
+        ),
+        # The blocked-write check matches case-insensitively, like ws_command.
+        ({"type": "LOVELACE/CONFIG/SAVE", "config": {}}, "blocked from the sandbox"),
+    ],
+)
+async def test_sandbox_ws_send_cannot_mint_tokens_or_bypass_wrapping_tools(
+    message: dict[str, Any], expected: str
+) -> None:
+    bridge = _make_bridge()
+
+    result = await bridge.ws_send(message)
+
+    assert expected in result.get("error", "")
+    bridge.client.send_websocket_message.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
-    "command",
-    ["auth/long_lived_access_token", "config/auth/list", "AUTH/REFRESH_TOKENS"],
+    "message",
+    [
+        {"type": "auth/current_user"},
+        {"type": "supervisor/api", **_supervisor("/core/info", "get")},
+    ],
 )
-async def test_sandbox_ws_send_rejects_credential_command(command: str) -> None:
-    bridge, client = _bridge()
+async def test_sandbox_ws_send_still_sends_whoami_and_other_supervisor_calls(
+    message: dict[str, Any],
+) -> None:
+    bridge = _make_bridge()
 
-    result = await bridge.ws_send(
-        {"type": command, "client_name": "x", "lifespan": 3650}
-    )
+    await bridge.ws_send(message)
 
-    assert "credentials" in result.get("error", "")
-    client.send_websocket_message.assert_not_awaited()
-
-
-async def test_sandbox_ws_send_still_allows_current_user() -> None:
-    bridge, client = _bridge()
-
-    await bridge.ws_send({"type": "auth/current_user"})
-
-    client.send_websocket_message.assert_awaited_once()
+    bridge.client.send_websocket_message.assert_awaited_once_with(message)

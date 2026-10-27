@@ -5,7 +5,10 @@ This module provides common helper functions used across multiple tool registrat
 """
 
 import logging
-from typing import Any
+import posixpath
+import urllib.parse
+from collections.abc import Mapping
+from typing import Any, NamedTuple
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -107,9 +110,8 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
 # wrapping MCP tool's validation (auto-backup, config-hash optimistic locking,
 # registry invariant checks), or that have no escape-hatch-appropriate use case
 # (`config/core/update` rewrites the installation's location/timezone/currency/
-# lat-long). Shared by the code sandbox's `ws_send` bridge (tools_code.py) and
-# ha_call_service's `ws_command` escape hatch (tools_service.py) so the two raw
-# WebSocket surfaces stay in lockstep. Registry deletion command names differ on
+# lat-long). Both raw WebSocket surfaces enforce it through `raw_ws_refusal()`
+# below, so they stay in lockstep. Registry deletion command names differ on
 # HA Core: device deletion is `remove_config_entry` and entity deletion is
 # `remove` (not `delete`) -- ha_remove_device / ha_remove_entity emit those.
 BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
@@ -157,50 +159,107 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
 # needs them, and their replies would land verbatim in the model context and its
 # transcript. Matched by prefix so a credential command added to HA Core later
 # is refused by default; `auth/current_user` (whoami) is the one read that stays
-# open. Shared by the same two raw WebSocket surfaces as the list above.
+# open.
 _CREDENTIAL_WS_PREFIXES: tuple[str, ...] = (
     "auth/",
     "config/auth/",
     "config/auth_provider/",
 )
 _CREDENTIAL_WS_ALLOWED: frozenset[str] = frozenset({"auth/current_user"})
+# Supervisor endpoints reachable through Core's `supervisor/api` relay with the
+# same effect: `/auth/*` lists users and resets their passwords, and
+# `/os/ssh/authorized_keys` adds a host SSH key. Each covers its subtree.
+_CREDENTIAL_SUPERVISOR_ENDPOINTS: tuple[str, ...] = (
+    "/auth",
+    "/os/ssh/authorized_keys",
+)
 
 
-def is_credential_ws_command(command: str) -> bool:
-    """True when ``command`` mints, lists or revokes credentials or manages users."""
+def normalized_path(path: str) -> str:
+    """Fold percent-escapes, ``//``, ``.`` and ``..`` so an equivalent spelling
+    cannot slip past (HTTP clients decode ``%62ackups`` to ``backups``).
+
+    Leading slashes are stripped first: POSIX normpath keeps exactly two.
+    """
+    decoded = urllib.parse.unquote(path.split("?", 1)[0])
+    stripped = decoded.strip().lower().lstrip("/")
+    return posixpath.normpath("/" + stripped)
+
+
+def is_credential_ws_command(
+    command: str, params: Mapping[str, Any] | None = None
+) -> bool:
+    """True when ``command`` (with its message ``params``) mints, lists or
+    revokes credentials, manages users, or adds host SSH keys."""
     normalized = command.strip().lower()
+    if normalized == "supervisor/api":
+        endpoint = (params or {}).get("endpoint")
+        if not isinstance(endpoint, str):
+            return False
+        path = normalized_path(endpoint)
+        return any(
+            path == root or path.startswith(root + "/")
+            for root in _CREDENTIAL_SUPERVISOR_ENDPOINTS
+        )
     if normalized in _CREDENTIAL_WS_ALLOWED:
         return False
     return normalized.startswith(_CREDENTIAL_WS_PREFIXES)
 
 
-def raw_ws_refusal(command: str, *, sandbox: bool = False) -> str | None:
+class WsRefusal(NamedTuple):
+    """Why a raw WebSocket surface refuses a command, and what to do instead."""
+
+    message: str
+    suggestions: list[str]
+
+    def as_text(self) -> str:
+        return " ".join([self.message, *self.suggestions])
+
+
+_POLICY_REFUSAL_SUGGESTIONS: list[str] = [
+    "This is a fixed policy refusal, not an input error: no other spelling, "
+    "parameter or ha-mcp tool sends it.",
+    "Ask the user to make the change in the Home Assistant UI (Profile > "
+    "Security for tokens, Settings > People for users and passwords).",
+]
+
+
+def raw_ws_refusal(
+    command: str,
+    params: Mapping[str, Any] | None = None,
+    *,
+    sandbox: bool = False,
+) -> WsRefusal | None:
     """Why a raw WebSocket surface refuses ``command``, or ``None`` to send it.
 
     One rule set for ha_call_service's ``ws_command`` (``sandbox=False``) and the
     Code Mode ``ws_send`` bridge (``sandbox=True``), worded for each surface.
+    ``params`` are the message fields besides ``type``; ``supervisor/api`` is
+    judged by its ``endpoint``.
     """
     if command.strip().lower() in BLOCKED_WS_WRITE_COMMANDS:
         if sandbox:
-            return (
-                f"WebSocket command {command!r} is blocked from the "
-                "sandbox. Use the corresponding wrapping tool via "
-                "call_tool (e.g. ha_config_set_dashboard, "
-                "ha_set_area_or_floor, ha_set_device, ha_set_entity) "
-                "so validation runs."
+            return WsRefusal(
+                f"WebSocket command {command!r} is blocked from the sandbox.",
+                [
+                    "Use the corresponding wrapping tool via call_tool (e.g. "
+                    "ha_config_set_dashboard, ha_set_area_or_floor, "
+                    "ha_set_device, ha_set_entity) so validation runs."
+                ],
             )
-        return (
+        return WsRefusal(
             f"ws_command '{command}' mutates persistent state that a "
-            "dedicated tool guards with backups and conflict checks. Use "
-            "the corresponding ha-mcp tool (e.g. ha_config_set_dashboard, "
-            "ha_set_area_or_floor, ha_remove_entity) instead."
+            "dedicated tool guards with backups and conflict checks.",
+            [
+                "Use the corresponding ha-mcp tool (e.g. ha_config_set_dashboard, "
+                "ha_set_area_or_floor, ha_remove_entity) instead."
+            ],
         )
-    if is_credential_ws_command(command):
-        where = "blocked from the sandbox" if sandbox else "not exposed by ws_command"
-        return (
-            f"WebSocket command {command!r} is {where}: it mints, lists or "
-            "revokes credentials or manages users. Manage tokens and users in "
-            "the Home Assistant UI (Profile > Security, Settings > People)."
+    if is_credential_ws_command(command, params):
+        return WsRefusal(
+            f"WebSocket command {command!r} is refused by policy: it mints, "
+            "lists or revokes credentials, manages users, or adds host SSH keys.",
+            list(_POLICY_REFUSAL_SUGGESTIONS),
         )
     return None
 

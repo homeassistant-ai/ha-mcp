@@ -1320,8 +1320,6 @@ class ServiceTools:
                     parameter="ws_command",
                 )
             )
-        if refusal := raw_ws_refusal(command_type):
-            raise_tool_error(create_validation_error(refusal, parameter="ws_command"))
         command_params = (
             _parse_json_dict_param(
                 data, type_error_message="ws_command data must be a JSON object"
@@ -1336,6 +1334,14 @@ class ServiceTools:
                     f"{', '.join(sorted(reserved))}; the command type is set by "
                     "ws_command, and the message id is managed by the transport.",
                     parameter="data",
+                )
+            )
+        if refusal := raw_ws_refusal(command_type, command_params):
+            raise_tool_error(
+                create_validation_error(
+                    refusal.message,
+                    parameter="ws_command",
+                    suggestions=refusal.suggestions,
                 )
             )
         # send_websocket_message returns a {"success": ...} dict for anything

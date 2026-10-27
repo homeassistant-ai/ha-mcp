@@ -835,12 +835,10 @@ class _SandboxBridge:
         code is dynamic and may pass non-dict values; the runtime guard
         below converts that into an error dict.
 
-        Commands in ``BLOCKED_WS_WRITE_COMMANDS`` are rejected: they rewrite
-        state with no sandbox use case (``config/core/update``) or skip their
-        wrapping tool's validation (dashboard collision, registry invariants).
-        So are credential and user-management commands (``auth/*`` except
-        ``auth/current_user``, ``config/auth/*``, ``config/auth_provider/*``).
-        Full-snapshot backup commands follow the backup controls.
+        Commands that ``raw_ws_refusal`` refuses are rejected: writes with no
+        sandbox use case or that skip their wrapping tool's validation, and
+        credential, user and host SSH-key management. Full-snapshot backup
+        commands follow the backup controls.
         """
         if self._over_invocation_limit():
             return {
@@ -851,9 +849,9 @@ class _SandboxBridge:
         msg_type = message.get("type")
         if not isinstance(msg_type, str):
             return {"error": "ws_send(message) requires a 'type' field"}
-        if refusal := raw_ws_refusal(msg_type, sandbox=True):
+        if ws_refusal := raw_ws_refusal(msg_type, message, sandbox=True):
             logger.info("sandbox.ws_send.blocked type=%r", msg_type)
-            return {"error": refusal}
+            return {"error": ws_refusal.as_text()}
         if refusal := snapshot_route_refusal(ws_command=msg_type, ws_params=message):
             return {"error": refusal}
         logger.debug("sandbox.ws_send type=%r", msg_type)
