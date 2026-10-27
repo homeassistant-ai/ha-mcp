@@ -8,7 +8,7 @@
 ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.13-slim@sha256:b3575dcf816cdacc5292df77a6e3e59b8941631078373a045efa2ac1e9c5c3b2
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.13.4-python3.13-trixie-slim@sha256:bd45432c1376a243b6761b3546b344caff2d6e2a2b9530354f99b609b1f10ef1 AS builder
+FROM ghcr.io/astral-sh/uv:0.13.6-python3.13-trixie-slim@sha256:e586c1c65b7071aec78f02c5587c76c5011159cd76b3d6f1255f40e48e850abc AS builder
 
 WORKDIR /app
 
