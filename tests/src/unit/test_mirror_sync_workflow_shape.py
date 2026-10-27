@@ -183,6 +183,65 @@ class TestMirrorSyncShape:
         )
         assert "scripts/stamp_component_version.py" in stage["run"]
 
+    def test_a_dev_build_leaves_main_on_masters_component(self, tmp_path: Path) -> None:
+        # The mirror's main matches master; only the dev tag's commit carries
+        # the dev stamp, as publish-dev.yml does here.
+        def git(*args: str, cwd: Path = tmp_path) -> str:
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        remote = tmp_path / "remote.git"
+        clone = tmp_path / "mirror"
+        git("init", "-q", "--bare", "-b", "main", str(remote))
+        git("clone", "-q", f"file://{remote}", str(clone))
+        git("commit", "-q", "--allow-empty", "-m", "previous", cwd=clone)
+        git("push", "-q", "origin", "main", cwd=clone)
+        shutil.copytree(_COMPONENT, clone / "custom_components" / "ha_mcp_tools")
+        steps = {s.get("name"): s for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]}
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "CHANNEL": "dev",
+            "GITHUB_REPOSITORY": "o/r",
+            "SOURCE_SHA": "abc",
+            "VER": "99.0.0",
+            "PIN": "99.0.0.dev7",
+            "DIST": "ha-mcp-dev",
+        }
+
+        for name in ("Commit and push", "Stamp the dev snapshot"):
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-e",
+                    "-c",
+                    steps[name]["run"].replace("/tmp/mirror", str(clone)),
+                ],
+                cwd=_REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert result.returncode == 0, f"{name}: {result.stderr}"
+
+        manifest = "custom_components/ha_mcp_tools/manifest.json"
+        on_main = json.loads(git("show", f"main:{manifest}", cwd=remote))
+        tagged = json.loads(git("show", f"HEAD:{manifest}", cwd=clone))
+        master = json.loads((_COMPONENT / "manifest.json").read_text())
+        assert on_main == master
+        assert tagged["version"] == "99.0.0"
+        assert "ha-mcp-dev==99.0.0.dev7" in tagged["requirements"]
+        # The tag step tags HEAD: one commit on top of what main received.
+        assert git("rev-parse", "HEAD~1", cwd=clone) == git(
+            "rev-parse", "main", cwd=remote
+        )
+
 
 def _release_on_tag_step(name: str) -> dict[Any, Any]:
     return next(
