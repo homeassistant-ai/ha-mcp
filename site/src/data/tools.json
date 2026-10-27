@@ -877,7 +877,7 @@
         },
         "full_page": {
           "type": "bool",
-          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Uses the engine's content-sized capture, capped at 4000 px; raise wait_ms for lazy cards.",
+          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Height limits are engine-specific: Puppet caps at 4000 px; WPE's configured limit can be up to 12000 px, with a width-dependent effective cap. Raise wait_ms for lazy cards.",
           "default": false
         },
         "theme": {

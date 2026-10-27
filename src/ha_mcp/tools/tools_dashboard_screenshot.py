@@ -185,8 +185,10 @@ class DashboardScreenshotTools:
             bool,
             Field(
                 description=f"{FULL_PAGE_PARAM_DESC[:1].upper()}"
-                f"{FULL_PAGE_PARAM_DESC[1:]}. Uses the engine's content-sized "
-                "capture, capped at 4000 px; raise wait_ms for lazy cards."
+                f"{FULL_PAGE_PARAM_DESC[1:]}. Height limits are engine-specific: "
+                "Puppet caps at 4000 px; WPE's configured limit can be up to "
+                "12000 px, with a width-dependent effective cap. Raise wait_ms "
+                "for lazy cards."
             ),
         ] = False,
         theme: Annotated[

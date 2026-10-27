@@ -283,8 +283,10 @@ explicitly marked as not confirmed.
 **Capturing below the fold.** By default the render is clipped to the viewport.
 Pass `height="auto"` or the backwards-compatible `full_page=true` to request
 content-sized capture. Puppet caps auto-height at 4000 px. WPE Screenshot
-Engine also caps capture at 4000 px and tiles tall documents; vertically
-scrolling inner containers return an error. For the backwards-compatible
+Engine uses its configured full-page height limit (default 12000 px,
+configurable from 1000 to 12000 px), with a width-dependent effective cap. It
+tiles tall documents; vertically scrolling inner containers return an error.
+For the backwards-compatible
 `full_page=true` alias only, an HTTP 400 from Puppet versions older than 2.5.0
 triggers the legacy 4096 px fixed-height retry and reports
 `legacy_full_page_fallback=true`; explicit `height="auto"` remains strict.
