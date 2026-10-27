@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -18,27 +19,28 @@ async def detect_engine_kind_from_capabilities(
 ) -> EngineKind | None:
     """Identify WPE at an explicit URL when its HTTP 400 makes it relevant."""
     try:
-        async with http_client.stream(
-            "GET",
-            f"{engine_url}/capabilities",
-            timeout=IDENTIFICATION_TIMEOUT_SECONDS,
-        ) as response:
-            if response.status_code != 200:
-                return None
-            content_type = response.headers.get("content-type", "")
-            if (
-                content_type.split(";", maxsplit=1)[0].strip().lower()
-                != "application/json"
-            ):
-                return None
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                remaining = MAX_IDENTIFICATION_BODY_BYTES - len(body)
-                if len(chunk) > remaining:
-                    body.extend(chunk[:remaining])
+        async with asyncio.timeout(IDENTIFICATION_TIMEOUT_SECONDS):
+            async with http_client.stream(
+                "GET",
+                f"{engine_url}/capabilities",
+                timeout=IDENTIFICATION_TIMEOUT_SECONDS,
+            ) as response:
+                if response.status_code != 200:
                     return None
-                body.extend(chunk)
-    except httpx.HTTPError:
+                content_type = response.headers.get("content-type", "")
+                if (
+                    content_type.split(";", maxsplit=1)[0].strip().lower()
+                    != "application/json"
+                ):
+                    return None
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    remaining = MAX_IDENTIFICATION_BODY_BYTES - len(body)
+                    if len(chunk) > remaining:
+                        body.extend(chunk[:remaining])
+                        return None
+                    body.extend(chunk)
+    except (httpx.HTTPError, TimeoutError):
         return None
 
     try:
