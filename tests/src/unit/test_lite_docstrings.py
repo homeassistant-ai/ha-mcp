@@ -561,7 +561,7 @@ class TestBackupLiteDescriptionSize:
             "snapshot_delete_min_age_days",
             "restarts HA",
             "enable_auto_backup",
-            "safety snapshot",
+            "per-entity backup first",
             "heartbeats",
         ],
     )

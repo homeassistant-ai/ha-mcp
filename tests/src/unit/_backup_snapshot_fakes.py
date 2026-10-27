@@ -174,15 +174,23 @@ async def _run(
     ws: FakeWS,
     *args: Any,
     mounts: dict[str, Any] | None = None,
+    addons_error: Exception | None = None,
     **kw: Any,
 ) -> dict[str, Any]:
-    supervisor = AsyncMock(return_value={"success": True, "result": mounts or {}})
+    async def _supervisor(_client: Any, endpoint: str, **_: Any) -> dict[str, Any]:
+        if endpoint == "/addons":
+            if addons_error is not None:
+                raise addons_error
+            apps = [{"slug": slug} for slug in ("core_mosquitto", "core_ssh")]
+            return {"success": True, "result": {"addons": apps}}
+        return {"success": True, "result": mounts or {}}
+
     with (
         patch.object(
             backup_snapshot,
             "get_connected_ws_client",
             AsyncMock(return_value=(ws, None)),
         ),
-        patch("ha_mcp.tools.tools_addons._supervisor_api_call", supervisor),
+        patch("ha_mcp.tools.tools_addons._supervisor_api_call", _supervisor),
     ):
         return await coro_fn(*args, **kw)

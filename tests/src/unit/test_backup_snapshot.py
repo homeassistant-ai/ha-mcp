@@ -146,6 +146,31 @@ class TestFullBackup:
         assert parts == {"include_homeassistant": True, **expected}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("agent_ids", "supervised", "apps", "no_apps"),
+        [
+            pytest.param([], True, [], True, id="manual-without-apps"),
+            pytest.param(["hassio.nas"], True, [], True, id="automatic-without-apps"),
+            pytest.param([], True, [{"slug": "core_ssh"}], False, id="with-an-app"),
+            pytest.param([], False, [], False, id="core-install"),
+        ],
+    )
+    async def test_note_says_when_a_full_backup_holds_no_apps(
+        self, agent_ids, supervised, apps, no_apps
+    ) -> None:
+        """Settings that select no apps give a full backup without apps."""
+        ws = FakeWS(agent_ids=agent_ids, new_backup={"addons": apps})
+        result = await _run(create_backup, ws, _client(supervised=supervised))
+        assert ("holds no apps" in result["note"]) is no_apps
+
+    @pytest.mark.asyncio
+    async def test_note_says_where_a_manual_full_backup_went(self) -> None:
+        ws = FakeWS()
+        result = await _run(create_backup, ws, _client())
+        assert "default location" in result["note"]
+        assert "automatic-backup settings" in result["note"]
+
+    @pytest.mark.asyncio
     async def test_failed_install_probe_fails_instead_of_guessing_the_install(
         self,
     ) -> None:
@@ -253,18 +278,67 @@ class TestCustomBackup:
                 ["need a Supervisor install"],
                 id="core-folders",
             ),
+            pytest.param(
+                False,
+                {"include_addons": ["core_ssh"]},
+                ["need a Supervisor install"],
+                id="core-apps",
+            ),
+            pytest.param(
+                True,
+                {"include_addons": ["core_mosquitto", "core_nope"]},
+                ["apps not installed: core_nope"],
+                id="app-not-installed",
+            ),
         ],
     )
-    async def test_backup_home_assistant_would_refuse_or_that_holds_nothing_is_refused(
+    async def test_selection_that_fails_holds_nothing_or_drops_an_app_is_refused(
         self, supervised, given, reasons
     ) -> None:
+        """Supervisor leaves an app that is not installed out without an error."""
         ws = FakeWS()
+        # A Core install has no Supervisor to ask for its apps.
+        no_supervisor = None if supervised else OSError("no Supervisor")
         with pytest.raises(ToolError) as exc_info:
-            await _run(create_backup, ws, _client(supervised=supervised), **given)
+            await _run(
+                create_backup,
+                ws,
+                _client(supervised=supervised),
+                addons_error=no_supervisor,
+                **given,
+            )
         assert ErrorCode.VALIDATION_INVALID_PARAMETER.value in str(exc_info.value)
         for reason in reasons:
             assert reason in str(exc_info.value)
         assert not ws.generated()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_app_list_starts_no_backup(self) -> None:
+        ws = FakeWS()
+        with pytest.raises(ToolError):
+            await _run(
+                create_backup,
+                ws,
+                _client(supervised=True),
+                include_addons=["core_ssh"],
+                addons_error=OSError("Supervisor unreachable"),
+            )
+        assert not ws.generated()
+
+    @pytest.mark.asyncio
+    async def test_note_of_a_custom_backup_names_only_the_password(self) -> None:
+        """No app list is read without include_addons, and the full-backup
+        sentences do not describe a custom backup."""
+        ws = FakeWS()
+        result = await _run(
+            create_backup,
+            ws,
+            _client(supervised=True),
+            include_homeassistant=True,
+            addons_error=OSError("Supervisor unreachable"),
+        )
+        assert "password" in result["note"]
+        assert "automatic-backup" not in result["note"]
 
 
 class TestConnection:

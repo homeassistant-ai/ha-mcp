@@ -427,7 +427,8 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "`scope='snapshot'` actions: `create` (a full backup with Home "
         "Assistant's automatic-backup settings, counted by their "
         "retention, or on the default location without automatic-backup "
-        "locations; any `include_*` makes a custom backup of just those "
+        "locations, holding the apps those settings select; any "
+        "`include_*` makes a custom backup of just those "
         "parts instead; slow on a large "
         "instance — progress heartbeats are sent while waiting, so a "
         "long wait is not a hang; retrying starts a SECOND backup), "
@@ -441,7 +442,7 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "remaining).\n\n"
         "`scope='edits'` actions: `create` (needs `domain` + "
         "`entity_id`), `list`, `view`, `diff`, `restore` (takes a fresh "
-        "safety snapshot first; no HA restart), `delete`. Automatic "
+        "per-entity backup first; no HA restart), `delete`. Automatic "
         "capture on write is gated by `enable_auto_backup`, so an empty "
         '`list` means "nothing saved" OR "the toggle is off" — check it '
         "before concluding there is nothing to restore. Either way "

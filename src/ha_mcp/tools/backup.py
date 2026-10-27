@@ -78,7 +78,7 @@ def register_backup_tools(
 
 | scope | action | What it does |
 |---|---|---|
-| `snapshot` | `create` | Without any `include_*`: a full Home Assistant backup, made as Home Assistant's own automatic backup (its contents and locations, Home Assistant Cloud included) and counted by its retention like a scheduled backup; with no automatic-backup locations configured, the same contents on the default location. With any `include_*`: a custom backup of just those parts (e.g. one app; on Supervisor installs Home Assistant's configuration brings the `ssl` folder along) on the default location. Needs the default backup password. Can take a while on a large instance; progress heartbeats are sent while waiting. |
+| `snapshot` | `create` | Without any `include_*`: a full Home Assistant backup, made as Home Assistant's own automatic backup (its contents and locations, Home Assistant Cloud included) and counted by its retention like a scheduled backup; with no automatic-backup locations configured, a manual backup on the default location with the contents of the automatic-backup settings. Either way it holds the apps those settings select: Home Assistant's backup setup selects every app, but settings that select none give a full backup with no apps (on a Supervisor install the configuration, usually its database, the `ssl` folder and any folders the settings select). The result's `addons` lists the apps it holds, and on a Supervisor install its `note` says when there are none. With any `include_*`: a custom backup of just those parts (e.g. one app; on Supervisor installs Home Assistant's configuration brings the `ssl` folder along) on the default location. Needs the default backup password. Can take a while on a large instance; progress heartbeats are sent while waiting. |
 | `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed; a non-empty `agent_errors` means the list is partial. |
 | `snapshot` | `restore` | Restore from a full HA tarball. Replaces Home Assistant's configuration plus what `restore_database` / `restore_addons` / `restore_folders` select; other apps and folders stay as they are. `safety_backup` first backs up what the restore replaces. **Restarts HA.** Last-resort recovery. |
 | `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
@@ -86,7 +86,7 @@ def register_backup_tools(
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
 | `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
-| `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …) and config subentries require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. A deleted integration config entry cannot be recreated: its snapshot holds only metadata and the enabled state. **No HA restart.** |
+| `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …) and config subentries require a fresh per-entity backup; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. A deleted integration config entry cannot be recreated: its snapshot holds only metadata and the enabled state. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
 **When to use which scope:**
@@ -213,8 +213,8 @@ survives an agent's own mistakes.
             JSON_STRING_COERCION,
             Field(
                 default=None,
-                description="(snapshot.create) Custom backup: slugs of the apps (add-ons) "
-                "to include. Supervisor installs only.",
+                description="(snapshot.create) Custom backup: slugs of the installed apps "
+                "(add-ons) to include. Supervisor installs only.",
             ),
         ] = None,
         include_all_addons: Annotated[

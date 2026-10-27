@@ -184,6 +184,17 @@ async def _default_agent(client: HomeAssistantClient, is_supervised: bool) -> st
     return f"hassio.{mounts.get('default_backup_mount') or 'local'}"
 
 
+async def _installed_apps(client: HomeAssistantClient) -> set[str]:
+    """Slugs of the installed apps.
+
+    Supervisor leaves any other slug out of a backup without reporting it.
+    """
+    from .tools_addons import _supervisor_api_call
+
+    result = (await _supervisor_api_call(client, "/addons")).get("result") or {}
+    return {app.get("slug") for app in result.get("addons") or []}
+
+
 def _require_idle(
     queue: asyncio.Queue[dict[str, Any]], context: dict[str, Any] | None = None
 ) -> None:
@@ -400,8 +411,11 @@ def _backup_warnings(entry: dict[str, Any]) -> list[str]:
     return warnings
 
 
-def _check_custom_parts(parts: dict[str, Any], is_supervised: bool) -> None:
-    """Refuse a custom backup Home Assistant would reject or that holds nothing."""
+async def _check_custom_parts(
+    client: HomeAssistantClient, parts: dict[str, Any], is_supervised: bool
+) -> None:
+    """Refuse a custom backup Home Assistant would reject, that holds nothing,
+    or that names an app Supervisor would leave out."""
     reasons = []
     if not any(parts.values()):
         reasons.append("nothing is selected")
@@ -419,6 +433,10 @@ def _check_custom_parts(parts: dict[str, Any], is_supervised: bool) -> None:
     )
     if not is_supervised and has_supervisor_parts:
         reasons.append("apps (add-ons) and folders need a Supervisor install")
+    elif parts["include_addons"]:
+        installed = await _installed_apps(client)
+        if missing := [a for a in parts["include_addons"] if a not in installed]:
+            reasons.append(f"apps not installed: {', '.join(missing)}")
     if reasons:
         raise_tool_error(
             create_error_response(
@@ -471,7 +489,7 @@ async def create_backup(
                 f"MCP_Backup_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}"
             )
             if custom:
-                _check_custom_parts(parts, is_supervised)
+                await _check_custom_parts(client, parts, is_supervised)
                 entry, seconds, warnings = await _generate_backup(
                     ws_client,
                     ctx,
@@ -491,24 +509,39 @@ async def create_backup(
                     is_supervised=is_supervised,
                     name=name,
                 )
+        if custom:
+            note = "Backup uses your Home Assistant's default backup password"
+        else:
+            if entry.get("with_automatic_settings"):
+                note = (
+                    "Made with Home Assistant's automatic-backup settings (contents, "
+                    "locations, name, password); their retention counts it like a "
+                    "scheduled backup"
+                )
+                if given_name:
+                    warnings.append(
+                        "Home Assistant names an automatic backup itself; "
+                        f"the name {given_name!r} was not used"
+                    )
+            else:
+                note = (
+                    "No automatic-backup locations are configured, so it was made "
+                    "on the default location with the contents of Home Assistant's "
+                    "automatic-backup settings and the default backup password"
+                )
+            if is_supervised and not entry.get("addons"):
+                note += (
+                    ". It holds no apps (add-ons); Home Assistant's automatic-backup "
+                    "settings choose the apps of a full backup. Back up an app with "
+                    "include_addons"
+                )
         result = {
             **entry,
             "success": True,
             "duration_seconds": seconds,
             "status": "Backup completed successfully",
-            "note": "Backup uses your Home Assistant's default backup password",
+            "note": note,
         }
-        if entry.get("with_automatic_settings"):
-            result["note"] = (
-                "Made with Home Assistant's automatic-backup settings (contents, "
-                "locations, name, password); their retention counts it like a "
-                "scheduled backup"
-            )
-            if given_name:
-                warnings.append(
-                    "Home Assistant names an automatic backup itself; "
-                    f"the name {given_name!r} was not used"
-                )
         if warnings:
             result["warnings"] = warnings
         return result
