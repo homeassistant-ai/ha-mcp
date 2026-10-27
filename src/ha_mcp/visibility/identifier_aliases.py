@@ -12,8 +12,8 @@ the aliases are derived from the registry the hidden-set refresh already fetched
 Home Assistant also registers every script as a ``script.<storage key>``
 service, so ``ha_call_service`` with ``domain: script`` is checked the same way,
 and ``script.<storage key>`` joins the terms the embedded scans match. Traces
-and ``scripts.yaml`` / ``scenes.yaml`` / ``automations.yaml`` are keyed by
-storage key too, so trace records and config-file reads are checked against it.
+are keyed by storage key too, so trace records are checked against it (config
+files are checked in ``config_files``).
 
 The argument check is scoped to these identifier arguments, so the same word
 appearing in template text or a message never triggers it.
@@ -22,7 +22,6 @@ appearing in template text or a message never triggers it.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,7 +45,6 @@ PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
 }
 
 _SERVICE_TOOL = "ha_call_service"
-_CONFIG_FILE_READ_TOOLS = frozenset({"ha_read_file", "ha_config_get_yaml"})
 
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
 # The automation tools read a bare ``identifier`` only as a config ``id``, so an
@@ -65,14 +63,11 @@ class IdentifierAliases:
     registry ``unique_id``) match exactly, like the tools' registry lookup, so a
     visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
     are the casefolded service names (storage keys) of hidden scripts.
-    ``config_file_pattern`` matches a hidden script's key or a hidden scene's or
-    automation's ``id`` as written in a YAML config file.
     """
 
     object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
     storage_keys: Mapping[str, frozenset[str]] = field(default_factory=dict)
     script_services: frozenset[str] = frozenset()
-    config_file_pattern: re.Pattern[str] | None = field(default=None, compare=False)
 
     def embedded_terms(self) -> frozenset[str]:
         """Strings that run a hidden script without naming its entity_id."""
@@ -120,34 +115,11 @@ def build_identifier_aliases(
             storage_keys.setdefault(domain, set()).add(unique_id)
             if domain == "script":
                 hidden_scripts[entity_id] = unique_id
-    script_keys = frozenset(hidden_scripts.values())
-    config_ids = storage_keys.get("scene", set()) | storage_keys.get(
-        "automation", set()
-    )
     return IdentifierAliases(
         object_ids={d: frozenset(v) for d, v in object_ids.items()},
         storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
-        script_services=frozenset(key.casefold() for key in script_keys),
-        config_file_pattern=_config_file_pattern(script_keys, config_ids),
+        script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
     )
-
-
-def _config_file_pattern(
-    script_keys: Collection[str], config_ids: Collection[str]
-) -> re.Pattern[str] | None:
-    """Match ``<script key>:`` and ``id: <config id>`` lines in YAML config text."""
-    alternatives = []
-    if script_keys:
-        keys = "|".join(re.escape(k) for k in sorted(script_keys))
-        alternatives.append(rf"[\"']?(?:{keys})[\"']?[ \t]*:(?:[ \t]|$)")
-    if config_ids:
-        ids = "|".join(re.escape(i) for i in sorted(config_ids))
-        alternatives.append(
-            rf"[\"']?id[\"']?[ \t]*:[ \t]*[\"']?(?:{ids})[\"']?[ \t]*(?:#.*)?$"
-        )
-    if not alternatives:
-        return None
-    return re.compile(rf"^[ \t]*(?:-[ \t]+)?(?:{'|'.join(alternatives)})", re.MULTILINE)
 
 
 def hidden_identifier_argument(
@@ -225,35 +197,11 @@ def _names_hidden_trace_item(value: Any, aliases: IdentifierAliases) -> bool:
     return False
 
 
-def _strings(value: Any) -> Iterable[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _strings(item)
-    elif isinstance(value, list | tuple):
-        for item in value:
-            yield from _strings(item)
-
-
-def result_reveals_hidden(
-    tool_name: str, payloads: Iterable[Any], aliases: IdentifierAliases
-) -> bool:
-    """Whether a tool result names a hidden entity by storage key.
+def result_reveals_hidden(payloads: Iterable[Any], aliases: IdentifierAliases) -> bool:
+    """Whether a result's trace records name a hidden script or automation.
 
     ``payloads`` are the result's JSON values (structured content and parsed
     text blocks). Trace records (``trace/list``, ``trace/contexts``) name their
-    target by ``domain`` + ``item_id``; a config-file read shows a hidden
-    script's key or a hidden scene's or automation's ``id``.
+    target by ``domain`` + ``item_id`` rather than by entity_id.
     """
-    pattern = (
-        aliases.config_file_pattern if tool_name in _CONFIG_FILE_READ_TOOLS else None
-    )
-    for payload in payloads:
-        if _names_hidden_trace_item(payload, aliases):
-            return True
-        if pattern is not None and any(
-            pattern.search(text) for text in _strings(payload)
-        ):
-            return True
-    return False
+    return any(_names_hidden_trace_item(payload, aliases) for payload in payloads)

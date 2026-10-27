@@ -285,49 +285,6 @@ class TestHiddenScriptStorageKeyInContent:
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
-class TestHiddenConfigFileContent:
-    @pytest.mark.parametrize(
-        ("hidden_entry", "content"),
-        [
-            pytest.param(
-                _RENAMED_HIDDEN_SCRIPT,
-                "wake_up:\n  sequence: []\ncome_home:\n  sequence: []\n",
-                id="scripts-yaml-keyed-by-storage-key",
-            ),
-            pytest.param(
-                _entry("scene.open_up", "1727266720448", "homeassistant"),
-                "- id: '1727266720448'\n  name: Open up\n  entities: {}\n",
-                id="scenes-yaml-keyed-by-config-id",
-            ),
-        ],
-    )
-    async def test_reading_a_config_file_with_a_hidden_body_is_refused(
-        self,
-        set_config: Callable[..., Any],
-        hidden_entry: dict[str, str],
-        content: str,
-    ) -> None:
-        mw = _enforce_hiding(set_config, hidden_entry["entity_id"], hidden_entry)
-        body = {"success": True, "content": content}
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                make_context("ha_read_file", {"path": "scripts.yaml"}),
-                _returns(text_result(json.dumps(body), body)),
-            )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
-    async def test_config_file_with_only_visible_bodies_stays_readable(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
-        body = {"success": True, "content": "wake_up:\n  alias: come home early\n"}
-        result = await mw.on_call_tool(
-            make_context("ha_read_file", {"path": "scripts.yaml"}),
-            _returns(text_result(json.dumps(body), body)),
-        )
-        assert result.structured_content == body
-
-
 class _NotFoundClient(FakeClient):
     """Answers every config fetch with a 404, as for a genuinely absent key."""
 

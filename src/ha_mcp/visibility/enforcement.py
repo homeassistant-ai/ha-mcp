@@ -146,6 +146,10 @@ def _state_content_warning(paths: list[str]) -> str:
     )
 
 
+_CONFIG_FILE_REASON = (
+    "The file defines a script, scene or automation restricted by the entity "
+    "visibility filter."
+)
 _CONFIG_LOAD_FAILED_REASON = (
     "The entity visibility config (entity_visibility.json) could not be loaded and "
     "no previously loaded config is available, so the server cannot determine "
@@ -806,7 +810,7 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                 )
                 _raise_enforced(name, _outbound_reason(name))
         if matcher.embeds(_serialize_result(result)) or result_reveals_hidden(
-            name, _result_payloads(result), matcher.identifier_aliases
+            _result_payloads(result), matcher.identifier_aliases
         ):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
@@ -947,6 +951,17 @@ async def active_hidden_entity_ids(client: Any) -> frozenset[str]:
     """
     matcher = await _active_matcher(client)
     return matcher.hidden if matcher is not None else frozenset()
+
+
+async def active_identifier_aliases(client: Any) -> IdentifierAliases | None:
+    """The hidden items' identifier aliases while enforce mode is active."""
+    matcher = await _active_matcher(client)
+    return matcher.identifier_aliases if matcher is not None else None
+
+
+def refuse_hidden_config_file(tool_name: str) -> NoReturn:
+    """Refuse a config-file read whose file defines a hidden item."""
+    _raise_enforced(tool_name, _CONFIG_FILE_REASON)
 
 
 async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:

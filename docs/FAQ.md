@@ -906,8 +906,14 @@ dimension. What it covers:
   `ha_call_service` with `domain: script` and that key as `service`, is
   concealed as not-found too. A script or automation body that calls
   `script.<storage key>`, a raw `trace/*` command or result naming the key,
-  and an `ha_read_file` / `ha_config_get_yaml` read of `scripts.yaml`,
-  `scenes.yaml` or `automations.yaml` that shows a hidden body are refused.
+  and an `ha_read_file` / `ha_config_get_yaml` read of a file that defines a
+  hidden item are refused. A file defines one through a top-level key of
+  `scripts.yaml`, an `id` in `scenes.yaml` / `automations.yaml`, or a
+  `script:` / `scene:` / `automation:` section elsewhere (a package). The
+  whole file is checked, even when only a `tail_lines` or `yaml_path` slice
+  is asked for. A helper that merely shares a hidden script's key stays
+  readable. Because keys and ids now count, enforce mode can also refuse a
+  read that only shares a hidden entity's key or id.
   An automation's bare `identifier` is only ever read as its config `id`.
 
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
