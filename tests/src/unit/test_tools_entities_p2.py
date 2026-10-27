@@ -345,7 +345,12 @@ class TestBulkRemove:
         client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True, "result": None},  # sensor.a removed
-                {"success": False, "error": "Entity not found"},  # sensor.b skipped
+                # sensor.b skipped on Core's not_found code
+                {
+                    "success": False,
+                    "error": "Entity missing",
+                    "error_code": "not_found",
+                },
                 {"success": False, "error": "Permission denied"},  # sensor.c error
             ]
         )

@@ -2088,9 +2088,8 @@ class EntityTools:
                 removed.append(eid)
                 continue
             error_msg = _extract_ws_error(result)
-            # Same not-found detection as the single path — HA surfaces the
-            # error as a plain string; already-absent is idempotent success.
-            if "not found" in error_msg.lower():
+            # Already absent (Core's not_found) is idempotent success.
+            if result.get("error_code") == "not_found":
                 skipped.append(eid)
             else:
                 errors.append(
@@ -2175,7 +2174,7 @@ class EntityTools:
 
             if not result.get("success"):
                 error_msg = _extract_ws_error(result)
-                if "not found" in error_msg.lower():
+                if result.get("error_code") == "not_found":
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.ENTITY_NOT_FOUND,
