@@ -11,7 +11,6 @@ name: Sync Integration Mirror
 #   stamped with the next release number and pinned to the exact build it
 #   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N. Server-only
 #   changes therefore reach pre-release users too, not just component changes.
-#   The dev tag names a commit off main, so main keeps the stable component.
 #
 # HACS keys on the GitHub prerelease flag, so stable users never see dev
 # builds; users who enable the repository's HACS "Pre-release" switch entity
@@ -55,10 +54,9 @@ on:
         options: [stable, dev]
         default: stable
 
-# Serialize mirror syncs: a release and a docs push can both clone the mirror
-# and push to main at nearly the same time, where the second push is a
-# non-fast-forward rejection, and a dev build after a release must see its
-# stable tag before deciding to tag. queue: max keeps a queued
+# Serialize mirror syncs: a release and the dev build after it can both clone
+# the mirror and push to main at nearly the same time; without serialization
+# the second push is a non-fast-forward rejection. queue: max keeps a queued
 # release-tag run from being evicted by a later run (requires
 # cancel-in-progress: false).
 concurrency:
@@ -270,7 +268,7 @@ jobs:
         run: |
           if [ "$CHANNEL" = none ]; then
             # A docs-only push refreshes the README and repo files; the
-            # component stays exactly as the last stable sync left it.
+            # component stays exactly as the last tagged sync left it.
             cp hacs.json LICENSE /tmp/mirror/
           else
             # From the snapshot, so hacs.json's Home Assistant minimum always
@@ -309,15 +307,7 @@ jobs:
             echo "mirror already current"
           else
             git commit -m "Component snapshot from ${GITHUB_REPOSITORY}@${SOURCE_SHA} (${CHANNEL})"
-            if [ "$CHANNEL" = dev ]; then
-              # Like the main repository's dev builds, the dev snapshot lives
-              # on a commit only its tag references, pushed by the tag step.
-              # main keeps the stable component: HACS installs the default
-              # branch when no stable release is among the 30 it reads.
-              echo "dev snapshot stays off main"
-            else
-              git push origin main
-            fi
+            git push origin main
           fi
 
       - name: Wait for the pinned server build on PyPI

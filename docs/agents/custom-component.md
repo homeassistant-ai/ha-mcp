@@ -31,11 +31,10 @@ receives the same releases (#2763). Releases follow from that:
   semantic-release would cut) and pins the exact build it uploaded,
   `ha-mcp-dev==<next>.dev<N>` (the version `scripts/dev_version.sh` gave
   that run, handed over as its `dev-version` artifact), and tags it
-  `v<next>-dev.<N>` as a HACS pre-release once PyPI serves that build. Like
-  master, the mirror's `main` keeps the stable component: the dev snapshot is
-  a commit only its tag references. Both repositories keep their newest five
-  dev pre-releases, because HACS reads a repository's 30 newest releases and
-  installs the default branch when none of them is stable (#2881).
+  `v<next>-dev.<N>` as a HACS pre-release once PyPI serves that build. Both
+  repositories keep their newest five dev pre-releases, because HACS reads a
+  repository's 30 newest releases and installs the default branch when none
+  of them is stable (#2881).
 
 The component never reports a dev suffix: released servers parse the version
 segment by segment as integers, so the suffix lives only in the pre-release tag
