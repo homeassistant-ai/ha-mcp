@@ -45,5 +45,9 @@ async def refuse_reading_hidden_definitions(
     for path, response in zip(targets, responses, strict=True):
         body = unwrap_service_response(response) if isinstance(response, dict) else {}
         content = body.get("content")
-        if isinstance(content, str) and defines_hidden_item(path, content, aliases):
+        # Off the event loop: the embedded server shares Home Assistant's loop,
+        # and a large file's pure-Python parse would stall it.
+        if isinstance(content, str) and await asyncio.to_thread(
+            defines_hidden_item, path, content, aliases
+        ):
             refuse_hidden_config_file(tool_name)

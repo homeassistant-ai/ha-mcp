@@ -9,7 +9,8 @@ is made on the whole file: the component applies ``tail_lines`` and
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+import posixpath
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,13 +18,11 @@ import pytest
 import yaml
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_filesystem import (
-    MIN_COMPONENT_VERSION,
-    FilesystemTools,
-    _reset_caller_token_cache,
-)
+from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION, FilesystemTools
 from ha_mcp.tools.tools_yaml_read import YamlReadTools
 
+# Autouse: each test starts with an empty per-client caller-token cache.
+from ..test_caller_token_auth import _reset_token_cache_between_tests  # noqa: F401
 from .test_enforcement import FakeClient, _error_body, make_context, make_mw
 
 _SCRIPTS_YAML = """\
@@ -94,8 +93,8 @@ class _ComponentClient(FakeClient):
 
 
 def _read_file(payload: dict[str, Any]) -> dict[str, Any]:
-    """Apply ``tail_lines`` / ``yaml_path`` the way the component does."""
-    content = _FILES[payload["path"]]
+    """Resolve the path and apply ``tail_lines`` / ``yaml_path`` like the component."""
+    content = _FILES[posixpath.normpath(payload["path"])]
     tail_lines = payload.get("tail_lines")
     if tail_lines:
         content = "".join(content.splitlines(keepends=True)[-tail_lines:])
@@ -111,13 +110,6 @@ def _read_file(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("include_parsed"):
         body["parsed"] = node
     return body
-
-
-@pytest.fixture(autouse=True)
-def _fresh_caller_token() -> Iterator[None]:
-    _reset_caller_token_cache()
-    yield
-    _reset_caller_token_cache()
 
 
 @pytest.fixture
@@ -193,6 +185,17 @@ async def _call_through_enforcement(
             _read_file_tool,
             {"path": "packages/door.yaml"},
             id="package-defining-hidden-script",
+        ),
+        # The component normalizes the path before reading it.
+        pytest.param(
+            _read_file_tool,
+            {"path": ".//scripts.yaml", "tail_lines": 3},
+            id="scripts-yaml-spelled-with-doubled-separator",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "www/../scripts.yaml", "tail_lines": 3},
+            id="scripts-yaml-spelled-through-parent-segment",
         ),
     ],
 )

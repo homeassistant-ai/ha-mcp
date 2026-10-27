@@ -12,6 +12,7 @@ shares a hidden script's key is not a definition and stays readable.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from typing import Any
 
@@ -50,7 +51,9 @@ def defines_hidden_item(path: str, content: str, aliases: IdentifierAliases) -> 
         document = yaml.load(content, Loader=_TagTolerantLoader)
     except yaml.YAMLError:
         return _mentions_hidden_key(content, aliases)
-    root_domain = _ROOT_FILE_DOMAINS.get(path.strip().removeprefix("./"))
+    # The component normalizes the path the same way before reading it, so
+    # ``.//scripts.yaml`` and ``www/../scripts.yaml`` are ``scripts.yaml``.
+    root_domain = _ROOT_FILE_DOMAINS.get(posixpath.normpath(path.strip()))
     if root_domain is not None and _section_defines_hidden(
         root_domain, document, aliases
     ):
