@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -451,7 +451,17 @@ class TestLogFileMode:
         finally:
             logger.shutdown()
 
+    @pytest.fixture
+    def permissive_umask(self) -> Iterator[None]:
+        """Run under the common ``022`` umask, which leaves new files ``0644``."""
+        previous = os.umask(0o022)
+        try:
+            yield
+        finally:
+            os.umask(previous)
+
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    @pytest.mark.usefixtures("permissive_umask")
     def test_new_log_file_is_owner_only(self, tmp_path: Path) -> None:
         log_path = tmp_path / "logs" / "usage.jsonl"
         self._write_one(log_path)
@@ -591,6 +601,28 @@ class TestLogPathControlledByOthers:
             _wait_for(lambda: not logger._disk_enabled)
             assert logger._disk_enabled is False
             assert target.read_text() == ""
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
+    @pytest.mark.parametrize("change", ["group_readable", "other_owner"])
+    def test_log_no_longer_private_after_startup_receives_no_tool_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+    ) -> None:
+        log_path = tmp_path / "usage.jsonl"
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            fd = os.open(log_path, os.O_CREAT | os.O_WRONLY, 0o600)
+            os.close(fd)
+            if change == "group_readable":
+                log_path.chmod(0o644)
+            else:
+                real_euid = os.geteuid()
+                monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+            _log_one(logger)
+            _wait_for(lambda: not logger._disk_enabled)
+            assert logger._disk_enabled is False
+            assert log_path.read_text() == ""
         finally:
             logger.shutdown()
 
