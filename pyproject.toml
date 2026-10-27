@@ -109,10 +109,6 @@ ha-mcp-oidc = "ha_mcp.__main__:main_oidc"
 
 [tool.uv]
 exclude-newer = "7 days"
-# Temporary CA-incident exception; this fixed cutoff does not expire automatically.
-# Remove after 2026-10-27T02:24:17Z to restore certifi's seven-day cooldown.
-# https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2
-exclude-newer-package = { certifi = "2026-10-21T00:00:00Z" }
 
 [tool.uv.build-backend]
 # Explicit because publish-dev.yml renames the project to ha-mcp-dev, which
