@@ -183,7 +183,9 @@ class TestMirrorSyncShape:
         )
         assert "scripts/stamp_component_version.py" in stage["run"]
 
-    def test_a_dev_build_leaves_main_on_masters_component(self, tmp_path: Path) -> None:
+    def test_a_dev_build_tags_its_stamp_and_leaves_main_on_masters_component(
+        self, tmp_path: Path
+    ) -> None:
         # The mirror's main matches master; only the dev tag's commit carries
         # the dev stamp, as publish-dev.yml does here.
         def git(*args: str, cwd: Path = tmp_path) -> str:
@@ -197,33 +199,54 @@ class TestMirrorSyncShape:
 
         remote = tmp_path / "remote.git"
         clone = tmp_path / "mirror"
+        src = tmp_path / "src"
         git("init", "-q", "--bare", "-b", "main", str(remote))
         git("clone", "-q", f"file://{remote}", str(clone))
         git("commit", "-q", "--allow-empty", "-m", "previous", cwd=clone)
         git("push", "-q", "origin", "main", cwd=clone)
-        shutil.copytree(_COMPONENT, clone / "custom_components" / "ha_mcp_tools")
-        steps = {s.get("name"): s for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]}
+        shutil.copytree(_COMPONENT, src / "custom_components" / "ha_mcp_tools")
+        for name in ("hacs.json", "LICENSE"):
+            shutil.copy(_REPO_ROOT / name, src / name)
+        # The tag step's release notes need the main repository's history.
+        stub = tmp_path / "stub"
+        stub.mkdir()
+        (stub / "python3").write_text(
+            '#!/bin/sh\nfor last; do :; done\necho notes > "$last"\n'
+        )
+        (stub / "python3").chmod(0o755)
         env = {
             "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
             "HOME": str(tmp_path),
             "CHANNEL": "dev",
             "GITHUB_REPOSITORY": "o/r",
             "SOURCE_SHA": "abc",
+            "SRC": str(src),
             "VER": "99.0.0",
             "PIN": "99.0.0.dev7",
             "DIST": "ha-mcp-dev",
+            "TAG": "v99.0.0-dev.7",
         }
+        steps = {s.get("name"): s for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]}
 
-        for name in ("Commit and push", "Stamp the dev snapshot"):
+        for name in (
+            "Stage snapshot",
+            "Commit and push",
+            "Stamp the dev snapshot",
+            "Tag the mirror",
+        ):
+            script = (
+                steps[name]["run"]
+                .replace("/tmp/mirror", str(clone))
+                .replace("${{ steps.release.outputs.pin }}", env["PIN"])
+                .replace("${{ steps.release.outputs.dist }}", env["DIST"])
+            )
+            step_env = env
+            if name == "Tag the mirror":
+                step_env = {**env, "PATH": f"{stub}:/usr/bin:/bin"}
             result = subprocess.run(
-                [
-                    "bash",
-                    "-e",
-                    "-c",
-                    steps[name]["run"].replace("/tmp/mirror", str(clone)),
-                ],
+                ["bash", "-e", "-c", script],
                 cwd=_REPO_ROOT,
-                env=env,
+                env=step_env,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -232,15 +255,10 @@ class TestMirrorSyncShape:
 
         manifest = "custom_components/ha_mcp_tools/manifest.json"
         on_main = json.loads(git("show", f"main:{manifest}", cwd=remote))
-        tagged = json.loads(git("show", f"HEAD:{manifest}", cwd=clone))
-        master = json.loads((_COMPONENT / "manifest.json").read_text())
-        assert on_main == master
+        tagged = json.loads(git("show", f"v99.0.0-dev.7:{manifest}", cwd=remote))
+        assert on_main == json.loads((_COMPONENT / "manifest.json").read_text())
         assert tagged["version"] == "99.0.0"
         assert "ha-mcp-dev==99.0.0.dev7" in tagged["requirements"]
-        # The tag step tags HEAD: one commit on top of what main received.
-        assert git("rev-parse", "HEAD~1", cwd=clone) == git(
-            "rev-parse", "main", cwd=remote
-        )
 
 
 def _release_on_tag_step(name: str) -> dict[Any, Any]:
