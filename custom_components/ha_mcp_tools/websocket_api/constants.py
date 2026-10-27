@@ -6,7 +6,7 @@ import re
 
 from homeassistant.generated.config_flows import FLOWS
 
-from .. import card_definitions, core_contract, helper_collections
+from .. import card_definitions, core_contract, entity_restore, helper_collections
 from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 from . import logbook as _logbook
 
@@ -194,6 +194,7 @@ CAPABILITIES: list[str] = [
     # settings panel offers the editor only when this is advertised.
     "oauth_callbacks",
     *helper_collections.CAPABILITIES,
+    *entity_restore.CAPABILITIES,
     core_contract.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]

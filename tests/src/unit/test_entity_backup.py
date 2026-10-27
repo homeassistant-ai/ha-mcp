@@ -7,19 +7,28 @@ an entity without a config entry), options are set one domain at a time, and
 a rename keeps the entry's ``id``. Each edit below is an update
 ``ha_set_entity`` sends; restoring the backup taken before it must give back
 the snapshot exactly.
+
+The ``registry`` fixture runs each test twice: on Core's commands alone, and
+with the component's ``entity_entry`` and ``entity_restore``, which the fake
+answers the way the component's in-process write does: hidden_by and
+disabled_by values other than "user", the whole categories dict, a device or
+config_entry disabler only while that parent is disabled, and no enable.
 """
 
 import asyncio
 import copy
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from ha_mcp import backup_manager
+from ha_mcp import backup_entities, backup_manager
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_entities import _NOT_RESTORED, current_entity_id, restore_entity
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+)
 from ha_mcp.tools.tools_entities import _single_entity_target
 
 from .test_backup_manager import _StubSettings
@@ -62,6 +71,14 @@ class FakeRegistry:
             "category": {"cat-a", "cat-b", "cat-s"},
         }
         self.unreadable: set[str] = set()
+        self.path = "websocket"
+        # What Core keeps of removed entries, by entry id.
+        self.deleted: dict[str, dict[str, Any] | None] = {}
+
+    async def caps(self, _client: Any) -> Any:
+        if self.path == "websocket":
+            return None
+        return SimpleNamespace(capabilities=["entity_entry", "entity_restore"])
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> Any:
         name = msg["type"].split("/")[1].removesuffix("_registry")
@@ -74,6 +91,8 @@ class FakeRegistry:
 
     async def ws(self, _client: Any, msg: dict[str, Any]) -> Any:
         self.sent.append(copy.deepcopy(msg))
+        if msg["type"].startswith("ha_mcp_tools/"):
+            return self._component(msg)
         if msg["type"] == "config/entity_registry/list":
             return [
                 {k: v for k, v in e.items() if k not in _GET_ONLY}
@@ -146,12 +165,67 @@ class FakeRegistry:
     def edit(self, entity_id: str, **fields: Any) -> None:
         self._update(self.entries[entity_id], fields)
 
+    def _component(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Stands in for the component: applies the settings, rename and
+        options to the fake entry in one step, refuses a taken new_entity_id,
+        and leaves out a device disabler, with a warning, unless
+        ``device_disabled`` is set on the entry."""
+        entry = next(
+            (e for e in self.entries.values() if e["id"] == msg["entry_id"]), None
+        )
+        deleted = self.deleted.get(msg["entry_id"])
+        if msg["type"] == "ha_mcp_tools/entity_entry":
+            if entry is None:
+                return {"entry": None, "deleted": deleted}
+            return {"entry": {"id": entry["id"], "entity_id": entry["entity_id"]}}
+        assert msg["type"] == "ha_mcp_tools/entity_restore"
+        assert "disabled_by" not in msg["settings"] or msg["settings"]["disabled_by"]
+        if entry is None:
+            error = {"code": "entry_deleted", "message": "gone", "deleted": deleted}
+            return {"success": False, "error": error}
+        if entry["entity_id"] != msg["entity_id"]:
+            error = {"code": "entity_identity_mismatch", "message": "renamed"}
+            return {"success": False, "error": error}
+        if msg.get("new_entity_id") in self.entries:
+            error = {"code": "invalid", "message": "Entity ID is already registered"}
+            return {"success": False, "error": error}
+        settings = copy.deepcopy(msg["settings"])
+        warnings = []
+        if settings.get("disabled_by") == "device" and not entry.get("device_disabled"):
+            del settings["disabled_by"]
+            warnings.append("disabled_by stays: the device is not disabled now")
+        entry.update(settings)
+        if (new := msg.get("new_entity_id")) is not None:
+            del self.entries[entry["entity_id"]]
+            entry["entity_id"] = new
+            self.entries[new] = entry
+        for domain, options in msg["options"].items():
+            entry["options"] = {
+                d: o for d, o in entry["options"].items() if d != domain
+            } | ({domain: options} if options is not None else {})
+        entity_entry = copy.deepcopy(entry)
+        return {"success": True, "entity_entry": entity_entry, "warnings": warnings}
+
+
+def _registry(monkeypatch: pytest.MonkeyPatch, path: str) -> FakeRegistry:
+    fake = FakeRegistry(DESK)
+    fake.path = path
+    monkeypatch.setattr(backup_manager, "_ws_send", fake.ws)
+    monkeypatch.setattr(backup_entities, "get_component_caps", fake.caps)
+    return fake
+
+
+@pytest.fixture(params=["websocket", "component"])
+def registry(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> FakeRegistry:
+    return _registry(monkeypatch, request.param)
+
 
 @pytest.fixture
-def registry(monkeypatch: pytest.MonkeyPatch) -> FakeRegistry:
-    fake = FakeRegistry(DESK)
-    monkeypatch.setattr(backup_manager, "_ws_send", fake.ws)
-    return fake
+def ws_registry(monkeypatch: pytest.MonkeyPatch) -> FakeRegistry:
+    """Core's commands alone, for what only they send."""
+    return _registry(monkeypatch, "websocket")
 
 
 def _manager(tmp_path: Path, client: Any) -> backup_manager.BackupManager:
@@ -166,7 +240,12 @@ def _writes(registry: FakeRegistry) -> list[dict[str, Any]]:
     return [
         m
         for m in registry.sent
-        if m["type"] in ("config/entity_registry/update", "homeassistant/expose_entity")
+        if m["type"]
+        in (
+            "config/entity_registry/update",
+            "homeassistant/expose_entity",
+            "ha_mcp_tools/entity_restore",
+        )
     ]
 
 
@@ -249,9 +328,10 @@ class TestEntityBackup:
         assert ("require_restart" in result) is restart
 
     async def test_a_hider_only_core_sets_is_left_with_cores_refusal(
-        self, registry: FakeRegistry
+        self, ws_registry: FakeRegistry
     ) -> None:
         """Core refuses it; the other settings are still restored."""
+        registry = ws_registry
         registry.entries["light.desk"]["hidden_by"] = "integration"
         handler = _handler("entity")
         snapshot = await handler.fetch(None, "light.desk")
@@ -301,10 +381,11 @@ class TestEntityBackup:
         assert registry.entries["light.desk"]["hidden_by"] is None
 
     async def test_exposure_is_set_before_the_options_write(
-        self, registry: FakeRegistry
+        self, ws_registry: FakeRegistry
     ) -> None:
         """Core tells the voice assistant about an exposure change only when
         homeassistant/expose_entity is the command that makes it."""
+        registry = ws_registry
         handler = _handler("entity")
         snapshot = await handler.fetch(None, "light.desk")
         registry.edit(
@@ -358,9 +439,10 @@ class TestEntityBackup:
         assert _writes(registry) == []
 
     async def test_an_unexpected_core_error_on_a_hider_fails_the_restore(
-        self, registry: FakeRegistry, monkeypatch: pytest.MonkeyPatch
+        self, ws_registry: FakeRegistry, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Only Core's refusals become warnings; anything else is reported."""
+        registry = ws_registry
         handler = _handler("entity")
         snapshot = await handler.fetch(None, "light.desk")
         registry.edit("light.desk", hidden_by="user")
@@ -414,9 +496,10 @@ class TestEntityBackup:
             await _handler("entity").fetch(None, "light.desk")
 
     async def test_a_removed_entity_points_to_restarting_home_assistant(
-        self, registry: FakeRegistry
+        self, ws_registry: FakeRegistry
     ) -> None:
         """A reload does not add a stored helper's entity again; a restart does."""
+        registry = ws_registry
         handler = _handler("entity")
         snapshot = await handler.fetch(None, "light.desk")
         del registry.entries["light.desk"]
@@ -502,7 +585,10 @@ class TestRenamedWhileWaiting:
 
         async def rename_after_list(client: Any, msg: dict[str, Any]) -> Any:
             result = await listed(client, msg)
-            if msg["type"] == "config/entity_registry/list":
+            if msg["type"] in (
+                "config/entity_registry/list",
+                "ha_mcp_tools/entity_entry",
+            ):
                 registry.edit("light.desk", new_entity_id="light.lamp")
                 if taken:
                     registry.entries["light.desk"] = {**DESK, "id": "reg-other"}
@@ -536,12 +622,13 @@ class TestRenamedWhileWaiting:
         assert held == ["entity:light.desk", "entity:light.lamp"]
 
 
+@pytest.mark.parametrize("path", ["websocket", "component"])
 async def test_the_current_entity_id_follows_the_entry(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
     """A gone entry has none; a state snapshot has no entry to follow."""
-    fake = FakeRegistry({**DESK, "entity_id": "light.lamp"})
-    monkeypatch.setattr(backup_manager, "_ws_send", fake.ws)
+    fake = _registry(monkeypatch, path)
+    fake.edit("light.desk", new_entity_id="light.lamp")
 
     assert await current_entity_id(None, "light.desk", DESK) == "light.lamp"
     assert await current_entity_id(None, "light.desk", {**DESK, "id": "x"}) is None
