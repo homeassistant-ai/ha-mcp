@@ -92,7 +92,9 @@ class TestEntityCaptureRestore:
             finally:
                 for target in (entity_id, renamed):
                     await safe_call_tool(
-                        mcp_client, "ha_remove_helpers_integrations", {"target": target}
+                        mcp_client,
+                        "ha_remove_helpers_integrations",
+                        {"target": target, "confirm": True},
                     )
                 await _delete_leftover_backup(mcp_client, backup_name)
 
@@ -126,7 +128,8 @@ class TestEntityCaptureRestore:
                     mcp_client, domain="entity", entity_id=entity_id
                 )
                 await mcp.call_tool_success(
-                    "ha_remove_helpers_integrations", {"target": entity_id}
+                    "ha_remove_helpers_integrations",
+                    {"target": entity_id, "confirm": True},
                 )
 
                 result = await mcp.call_tool_failure(
@@ -144,6 +147,8 @@ class TestEntityCaptureRestore:
                     assert "Restart Home Assistant: if what provides" in text, text
             finally:
                 await safe_call_tool(
-                    mcp_client, "ha_remove_helpers_integrations", {"target": entity_id}
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {"target": entity_id, "confirm": True},
                 )
                 await _delete_leftover_backup(mcp_client, backup_name)

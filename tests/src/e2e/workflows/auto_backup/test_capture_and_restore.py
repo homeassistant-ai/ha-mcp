@@ -668,7 +668,7 @@ class TestHelperCaptureRestore:
             await safe_call_tool(
                 mcp_client,
                 "ha_remove_helpers_integrations",
-                {"target": f"input_boolean.{helper_id}"},
+                {"target": f"input_boolean.{helper_id}", "confirm": True},
             )
             await _delete_leftover_backup(mcp_client, backup_name)
 
@@ -1091,7 +1091,7 @@ class TestComplexHelperCaptureRestore:
             await safe_call_tool(
                 mcp_client,
                 "ha_remove_helpers_integrations",
-                {"target": f"schedule.{helper_id}"},
+                {"target": f"schedule.{helper_id}", "confirm": True},
             )
             await _delete_leftover_backup(mcp_client, backup_name)
 

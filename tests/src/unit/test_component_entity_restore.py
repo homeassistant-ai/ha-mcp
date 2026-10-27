@@ -423,8 +423,11 @@ def test_each_command_runs_its_own_handler(parents: Any) -> None:
     write = handlers[er_mod.WS_ENTITY_RESTORE]
     msg = {"entry_id": "reg-desk", "entity_id": "light.desk", "settings": SETTINGS}
 
-    assert read(parents.hass, msg)["entry"]["entity_id"] == "light.desk"
-    assert write(parents.hass, msg)["success"] is True
+    found = read(parents.hass, msg)
+    written = write(parents.hass, msg)
+
+    assert found["entry"]["entity_id"] == "light.desk"
+    assert written["success"] is True
     assert registry.entities["light.desk"].icon == "mdi:lamp"
 
 
