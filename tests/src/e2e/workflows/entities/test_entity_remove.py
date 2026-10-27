@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +54,15 @@ class TestEntityRemove:
         logger.info("Entity removal verified — entity no longer exists")
 
     async def test_remove_entity_nonexistent(self, mcp_client):
-        """Removing a non-existent entity should fail gracefully."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_remove_entity",
-            {"entity_id": "sensor.definitely_not_real_12345"},
+        """A missing entity is ENTITY_NOT_FOUND alone and skipped in a bulk run,
+        classified on Core's not_found code."""
+        mcp = MCPAssertions(mcp_client)
+        data = await mcp.call_tool_failure(
+            "ha_remove_entity", {"entity_id": "sensor.definitely_not_real_12345"}
         )
-        assert not data.get("success"), (
-            f"Expected failure for non-existent entity, got: {data}"
+        assert data["error"]["code"] == "ENTITY_NOT_FOUND"
+        bulk = await mcp.call_tool_success(
+            "ha_remove_entity", {"entity_id": ["sensor.definitely_not_real_12345"]}
         )
+        assert bulk["skipped"] == ["sensor.definitely_not_real_12345"]
         logger.info("Non-existent entity removal error handling verified")

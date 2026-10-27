@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# The frontend's HELPER_DOMAINS (src/panels/config/helpers/const.ts), pinned
-# against the installed frontend by test_helper_domains_match_frontend.py.
+# The frontend's HELPER_DOMAINS (src/panels/config/helpers/const.ts); an E2E
+# test pins the server's copy to the installed frontend, a unit test this one.
 FRONTEND_HELPER_DOMAINS = (
     "input_boolean",
     "input_button",

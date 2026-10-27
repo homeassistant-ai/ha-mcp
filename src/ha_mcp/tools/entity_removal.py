@@ -9,9 +9,11 @@ item, so it gets no note.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from ..client.rest_client import HomeAssistantError
+from ..client.rest_client import HomeAssistantConnectionError, HomeAssistantError
+from ..errors import ErrorCode
 from .config_helpers.listing import listed_items
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 
@@ -73,3 +75,52 @@ async def remove_registry_entry(
         {"type": "config/entity_registry/remove", "entity_id": entity_id}
     )
     return result, notes
+
+
+async def remove_registry_entries(
+    client: Any, entity_ids: list[str], error_text: Callable[[dict[str, Any]], str]
+) -> dict[str, Any]:
+    """Remove each id in turn; each lands in ``removed``, ``skipped`` (Core's
+    not_found: already absent) or ``errors``. A lost connection stops the run
+    and lists the ids it never reached, which are safe to retry."""
+    removed: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict[str, str]] = []
+    not_attempted: list[str] = []
+    for index, eid in enumerate(entity_ids):
+        try:
+            result = await client.send_websocket_message(
+                {"type": "config/entity_registry/remove", "entity_id": eid}
+            )
+        except HomeAssistantConnectionError as exc:
+            errors.append(
+                {
+                    "entity_id": eid,
+                    "code": ErrorCode.CONNECTION_FAILED.value,
+                    "message": str(exc),
+                }
+            )
+            not_attempted = list(entity_ids[index + 1 :])
+            break
+        if result.get("success"):
+            removed.append(eid)
+        elif result.get("error_code") == "not_found":
+            skipped.append(eid)
+        else:
+            errors.append(
+                {
+                    "entity_id": eid,
+                    "code": ErrorCode.SERVICE_CALL_FAILED.value,
+                    "message": error_text(result),
+                }
+            )
+    response: dict[str, Any] = {
+        "success": not errors,
+        "total": len(entity_ids),
+        "removed": removed,
+        "skipped": skipped,
+        "errors": errors,
+    }
+    if not_attempted:
+        response["not_attempted"] = not_attempted
+    return response

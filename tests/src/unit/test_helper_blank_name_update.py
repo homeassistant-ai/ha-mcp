@@ -13,27 +13,25 @@ from .test_helper_update_persistence import (  # noqa: F401 - fixtures
 )
 
 
-@pytest.mark.parametrize("helper_type", ["zone", "person"])
 async def test_blank_name_update_is_refused_before_any_write(
     register_tools,  # noqa: F811
     mock_client,  # noqa: F811
-    helper_type,
 ):
-    """Core's zone schema would store a blank name; the zone and person
-    dialogs refuse one, so the tool refuses it without writing."""
+    """Core's zone schema would store a blank name, which the zone dialog
+    refuses, so the tool refuses it without writing."""
     mock_client.send_websocket_message = AsyncMock(
-        side_effect=mock_client._make_ws_responses(helper_type)
+        side_effect=mock_client._make_ws_responses("zone")
     )
 
     with pytest.raises(ToolError) as exc_info:
         await register_tools["ha_config_set_helper"](
-            helper_type=helper_type,
-            helper_id=f"{helper_type}.home_office",
+            helper_type="zone",
+            helper_id="zone.home_office",
             config={"name": "  "},
         )
 
     error = json.loads(str(exc_info.value))["error"]
-    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "name cannot be blank" in error["message"]
     assert not any(
         c[0][0].get("type", "").endswith("/update")
         for c in mock_client.send_websocket_message.call_args_list

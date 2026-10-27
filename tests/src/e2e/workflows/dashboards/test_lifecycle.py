@@ -322,6 +322,7 @@ class TestDashboardLifecycle:
                 "ha_config_get_dashboard", {"url_path": "test-no-config"}
             )
             assert empty_data["stored_config"] is False
+            assert empty_data["config"] is None
 
             update_data = await mcp.call_tool_success(
                 "ha_config_set_dashboard",

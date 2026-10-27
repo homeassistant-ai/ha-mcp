@@ -1,4 +1,5 @@
-"""Unit tests for the dashboard-resolver helpers in tools_config_dashboards.
+"""Unit tests for the dashboard-resolver helpers in tools_config_dashboards and
+dashboard_read_errors.
 
 The helpers under test (`is_unknown_dashboard`, `_resolve_dashboard`,
 `_lazy_resolve_and_retry`) hold the substring-trigger contract and the
@@ -60,7 +61,7 @@ def _success_response(payload: dict | None = None) -> dict:
 # -----------------------------------------------------------------------------
 
 
-class TestShouldLazyResolve:
+class TestIsUnknownDashboard:
     """The substring trigger is the only signal available at the tool
     layer. Pin the contract so an HA-side wording change is caught here
     rather than degrading to "lazy fallback never fires" silently."""

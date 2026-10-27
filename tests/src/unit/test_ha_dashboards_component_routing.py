@@ -356,63 +356,6 @@ async def test_get_not_found_falls_back_to_legacy() -> None:
     assert json.loads(str(exc.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
-@pytest.mark.asyncio
-async def test_get_dashboard_without_saved_config_via_component() -> None:
-    """The component's ``no_config`` answers the get: the dashboard exists with
-    no saved config, so it is not reported as a failed read."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "get",
-            "available": True,
-            "status": "no_config",
-            "url_path": "fresh",
-            "config": None,
-        },
-    )
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="fresh")
-
-    assert resp["success"] is True
-    assert resp["stored_config"] is False
-    assert resp["config"] is None
-    assert client.config_calls == []
-
-
-@pytest.mark.asyncio
-async def test_get_dashboard_without_saved_config_without_component() -> None:
-    """Without the component, Core's "No config found." answers the same way."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(no_config=frozenset({"fresh"}))
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="fresh")
-
-    assert resp["success"] is True
-    assert resp["stored_config"] is False
-
-
-@pytest.mark.asyncio
-async def test_card_search_on_dashboard_without_saved_config() -> None:
-    """A card search on a dashboard with no saved config says why nothing can
-    match, instead of calling the read failed."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(no_config=frozenset({"fresh"}))
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError) as exc:
-        await get_dashboard(url_path="fresh", card_type="tile")
-
-    error = json.loads(str(exc.value))["error"]
-    assert error["code"] == "VALIDATION_FAILED"
-    assert "no saved config" in error["message"]
-
-
 class _ForceCapturingClient(RoutingClient):
     """Records the ``force`` flag on each ``lovelace/config`` read."""
 

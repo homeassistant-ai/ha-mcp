@@ -3,8 +3,8 @@
 Home Assistant validates each storage-helper create and update itself, so the
 tool sends the caller's fields under Core's names. These tests cover what the
 tool still adds: the merge with the stored item that Core's whole-item update
-needs and the create defaults the tool documents. The zone icon rule (#2643) is covered through both
-write paths in test_helper_config_fold.py.
+needs and the create defaults the tool documents. The zone icon rule (#2643)
+is covered through both write paths in test_helper_config_fold.py.
 """
 
 from __future__ import annotations

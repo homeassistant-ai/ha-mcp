@@ -138,10 +138,13 @@ def test_describe_schemas_marks_unresolvable_types(monkeypatch) -> None:
 def test_server_and_component_list_the_same_storage_helpers() -> None:
     """The server's fallback list routes the types the component serves; a
     type in only one of them is described by one path and refused by the other.
-    The frontend's own list is pinned by test_helper_domains_match_frontend.py."""
+    test_helper_domains_match_frontend.py pins the frontend part to the bundle."""
     from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
 
     assert set(hc.SIMPLE_HELPER_TYPES) == SIMPLE_HELPER_TYPES
+    # The frontend part the E2E test compares with the bundle.
+    own_page = {"zone", "person", "tag"}
+    assert set(hc.FRONTEND_HELPER_DOMAINS) == SIMPLE_HELPER_TYPES - own_page
 
 
 def test_serialize_falls_back_per_field(monkeypatch) -> None:

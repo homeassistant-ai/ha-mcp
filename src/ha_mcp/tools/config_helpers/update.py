@@ -234,8 +234,8 @@ async def _execute_update_simple_helper(
                 context=_simple_helper_error_context(helper_type),
             )
         )
-    # Create refuses a blank name for every type; the zone and person dialogs
-    # refuse one on edit too, where Core's zone schema would store it.
+    # As create does: Core's zone schema stores a blank name, which the zone
+    # and person dialogs refuse.
     if name is not None and not name.strip():
         raise_tool_error(
             create_error_response(

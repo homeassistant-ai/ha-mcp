@@ -327,7 +327,7 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "step",
             "required": False,
             "selector": {"number": {}},
-            "description": "Increment, 0 or more. Default 1.",
+            "description": "Whole-number increment, 0 or more. Default 1.",
         },
         {
             "name": "restore",
