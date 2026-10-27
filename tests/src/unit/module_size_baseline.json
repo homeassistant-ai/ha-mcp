@@ -22,10 +22,10 @@
   "src/ha_mcp/tools/tools_addons.py": 4046,
   "src/ha_mcp/tools/tools_bug_report.py": 1345,
   "src/ha_mcp/tools/tools_code.py": 1429,
-  "src/ha_mcp/tools/tools_config_automations.py": 1975,
+  "src/ha_mcp/tools/tools_config_automations.py": 1949,
   "src/ha_mcp/tools/tools_config_dashboards.py": 3793,
   "src/ha_mcp/tools/tools_config_scenes.py": 1457,
-  "src/ha_mcp/tools/tools_config_scripts.py": 1183,
+  "src/ha_mcp/tools/tools_config_scripts.py": 1156,
   "src/ha_mcp/tools/tools_dev.py": 2363,
   "src/ha_mcp/tools/tools_entities.py": 2218,
   "src/ha_mcp/tools/tools_filesystem.py": 1085,
@@ -120,7 +120,7 @@
   "tests/src/unit/test_websocket_client.py": 2145,
   "tests/src/unit/test_yaml_dashboards.py": 1097,
   "tests/src/unit/test_yaml_read_tool.py": 1122,
-  "tests/src/unit/visibility/test_enforcement.py": 1613,
+  "tests/src/unit/visibility/test_enforcement.py": 1586,
   "tests/uat/run_uat.py": 1022,
   "tests/uat/stories/run_story.py": 1715
 }
