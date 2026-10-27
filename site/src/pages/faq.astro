@@ -731,47 +731,10 @@ nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code
                   <td class="py-2">Long-lived access token (or <code class="bg-slate-800 px-1 rounded">demo</code>)</td>
                   <td class="py-2 text-amber-400">Yes</td>
                 </tr>
-                <tr class="border-b border-slate-800">
-                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">BACKUP_HINT</code></td>
-                  <td class="py-2">Backup recommendation level</td>
-                  <td class="py-2 text-slate-500">No</td>
-                </tr>
                 <tr>
                   <td class="py-2"><code class="bg-slate-800 px-1 rounded">HA_MCP_DISABLE_SETTINGS_UI</code></td>
                   <td class="py-2">Set to <code class="bg-slate-800 px-1 rounded">1</code> to skip the localhost settings-page sidecar that stdio installs spawn by default (<a href="#tool-settings-page" class="text-blue-400 hover:underline">details</a>).</td>
                   <td class="py-2 text-slate-500">No</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div>
-          <h3 class="text-lg font-medium text-white mb-3">Backup Hint Modes</h3>
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead>
-                <tr class="border-b border-slate-700">
-                  <th class="text-left py-2 text-slate-300">Mode</th>
-                  <th class="text-left py-2 text-slate-300">Behavior</th>
-                </tr>
-              </thead>
-              <tbody class="text-slate-400">
-                <tr class="border-b border-slate-800">
-                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">strong</code></td>
-                  <td class="py-2">Suggests backup before first modification each day/session</td>
-                </tr>
-                <tr class="border-b border-slate-800">
-                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">normal</code></td>
-                  <td class="py-2">Suggests backup only before irreversible operations (recommended)</td>
-                </tr>
-                <tr class="border-b border-slate-800">
-                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">weak</code></td>
-                  <td class="py-2">Rarely suggests backups</td>
-                </tr>
-                <tr>
-                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">auto</code></td>
-                  <td class="py-2">Same as normal (future: auto-detection)</td>
                 </tr>
               </tbody>
             </table>

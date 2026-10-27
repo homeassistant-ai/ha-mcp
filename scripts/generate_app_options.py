@@ -57,7 +57,7 @@ def app_options() -> list[tuple[str, Any, Setting, AppOption]]:
     return found
 
 
-def _schema_type(field: Any, setting: Setting, app: AppOption) -> str:
+def _schema_type(field: Any, setting: Setting) -> str:
     if setting.choices is not None:
         kind = f"list({'|'.join(setting.choices)})"
     elif field.annotation is bool:
@@ -69,7 +69,7 @@ def _schema_type(field: Any, setting: Setting, app: AppOption) -> str:
         kind = "int"
     else:
         kind = "str"
-    return kind if app.required else f"{kind}?"
+    return f"{kind}?"
 
 
 def _default(field: Any, app: AppOption, flavor: str) -> Any:
@@ -92,7 +92,7 @@ def options_block(flavor: str) -> str:
     ]
     lines.append("schema:")
     lines += [
-        f"  {name}: {_schema_type(field, setting, app)}"
+        f"  {name}: {_schema_type(field, setting)}"
         for name, field, setting, app in options
     ]
     lines += [f"  {key}: {kind}" for key, kind in APP_ONLY_SCHEMA.items()]

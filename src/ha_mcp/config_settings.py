@@ -244,17 +244,6 @@ class Settings(BaseSettings):
         ),
     ] = Field(0, alias="HA_TOOL_CONCURRENCY")
 
-    # Backup tool configuration. The app requires this option.
-    backup_hint: Annotated[
-        str,
-        Setting(
-            surface="advanced",
-            section="operations",
-            app=AppOption(required=True),
-            choices=("strong", "normal", "weak", "auto"),
-        ),
-    ] = Field("normal", alias="BACKUP_HINT")
-
     # WebSocket configuration (essential for async operations)
     enable_websocket: Annotated[
         bool,
@@ -530,7 +519,7 @@ class Settings(BaseSettings):
     # generic Server Settings feature list, while /api/settings/features
     # still serves and persists it for the Policies-tab toggle. It is an app
     # option because that toggle routes its save through Supervisor in
-    # add-on mode, which rejects any option the schema does not declare.
+    # add-on mode, which drops any option the schema does not declare.
     enable_security_policy_tool: Annotated[
         bool, Setting(surface="feature", app=_ALL_FLAVORS)
     ] = Field(False, alias="ENABLE_SECURITY_POLICY_TOOL")
@@ -754,7 +743,7 @@ class Settings(BaseSettings):
     # snapshots before deleting old ones, but it cannot forge a backup's
     # HA-stamped creation date. 0 disables the age floor (still gated by
     # enable_snapshot_delete + the newest-snapshot / automatic-backup
-    # guards enforced in tools/backup.py).
+    # guards enforced in tools/backup_snapshot.py).
     snapshot_delete_min_age_days: Annotated[
         int, Setting(surface="backup", app=_ALL_FLAVORS, range=(0, 365))
     ] = Field(7, alias="SNAPSHOT_DELETE_MIN_AGE_DAYS")
@@ -885,12 +874,6 @@ class Settings(BaseSettings):
     def validate_log_level(cls, v: str) -> str:
         """Accept a log level in any case."""
         return _one_of(cls, "log_level", v.upper())
-
-    @field_validator("backup_hint")
-    @classmethod
-    def validate_backup_hint(cls, v: str) -> str:
-        """Accept a backup hint in any case."""
-        return _one_of(cls, "backup_hint", v.lower())
 
     model_config = SettingsConfigDict(
         # Absolute, and the same file load_dotenv already resolved above. A

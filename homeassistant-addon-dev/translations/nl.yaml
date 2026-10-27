@@ -14,11 +14,6 @@ configuration:
       alle sessies heen. Interne REST-, WebSocket- en per-tool fan-out-gelijktijdigheid
       blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
       mislukt na 60 seconden. Bereik 0–32.
-  backup_hint:
-    name: Niveau van back-uptip
-    description: Hoe sterk AI-assistenten worden aangespoord om een volledige Home
-      Assistant-back-up voor te stellen vóór risicovolle wijzigingen. Dit wijzigt
-      alleen deze tip; automatische bewerkingsback-ups hebben hun eigen instelling.
   custom_instructions:
     name: Aangepaste serverinstructies
     description: Tekst die naar elke verbindende AI-assistent wordt verzonden als

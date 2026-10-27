@@ -15,7 +15,6 @@ from .constants import (
     DEFAULT_LIMIT,
     REGISTRY_KINDS,
     SERVER_ENTRY_UPDATE_MAX_PIP_SPEC,
-    WS_BACKUP_PREP,
     WS_BLUEPRINT_GET,
     WS_BULK_CALL_SERVICE,
     WS_CALL_SERVICE,
@@ -230,10 +229,6 @@ def _entity_lookup_schema() -> dict[Any, Any]:
         vol.Optional("domain"): vol.Any(str, None),
         vol.Optional("platform"): vol.Any(str, None),
     }
-
-
-def _backup_prep_schema() -> dict[Any, Any]:
-    return {vol.Required("type"): WS_BACKUP_PREP}
 
 
 def _registries_schema() -> dict[Any, Any]:

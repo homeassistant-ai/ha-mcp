@@ -49,3 +49,13 @@ def test_regeneration_keeps_the_rest_of_config_yaml() -> None:
         "ports:\n"
         "  9583/tcp: 9583\n"
     )
+
+
+def test_a_choices_setting_becomes_an_optional_list_schema() -> None:
+    """No app option declares choices, so the branch is driven with stubs."""
+    from types import SimpleNamespace
+
+    field = SimpleNamespace(annotation=str)
+    setting = SimpleNamespace(choices=("strong", "normal"), range=None)
+
+    assert generate_app_options._schema_type(field, setting) == "list(strong|normal)?"

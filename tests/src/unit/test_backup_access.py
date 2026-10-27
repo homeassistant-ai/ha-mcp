@@ -22,7 +22,7 @@ from ha_mcp.config import (
 )
 from ha_mcp.read_only import read_only_request
 from ha_mcp.settings_ui import _handlers_backups as backup_ui
-from ha_mcp.tools import backup
+from ha_mcp.tools import backup, backup_snapshot
 from ha_mcp.tools.auto_backup import with_auto_backup
 from ha_mcp.tools.tools_dev import DevTools
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
@@ -47,7 +47,12 @@ def backup_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNames
         auto_backup_dir=str(tmp_path / "backups"),
     )
     settings = SimpleNamespace(**values)
-    for module in (backup, "ha_mcp.read_only", "ha_mcp.tools.auto_backup"):
+    for module in (
+        backup,
+        backup_snapshot,
+        "ha_mcp.read_only",
+        "ha_mcp.tools.auto_backup",
+    ):
         if isinstance(module, str):
             monkeypatch.setattr(f"{module}.get_global_settings", lambda: settings)
         else:
@@ -65,7 +70,7 @@ def backup_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNames
     )
     ws.disconnect = AsyncMock()
     connect = AsyncMock(return_value=(ws, None))
-    monkeypatch.setattr(backup, "get_connected_ws_client", connect)
+    monkeypatch.setattr(backup_snapshot, "get_connected_ws_client", connect)
     manager = BackupManager(settings, ha)
 
     async def fetch(_client: Any, _entity_id: str) -> dict[str, Any]:
@@ -245,6 +250,28 @@ async def test_registered_transport_and_categorized_proxies_enforce_backup_contr
     _assert_no_io(backup_world)
 
 
+async def test_restore_selection_reaches_the_restore_as_given(
+    backup_world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A selection lost on the way would restore no app and back none up.
+
+    Some MCP clients send arrays as JSON strings.
+    """
+    restore = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(backup, "restore_backup", restore)
+    arguments = {
+        "scope": "snapshot",
+        "action": "restore",
+        "backup_id": "b1",
+        "restore_addons": '["core_ssh"]',
+        "restore_folders": ["share"],
+    }
+    async with Client(backup_world.mcp) as client:
+        await client.call_tool("ha_manage_backup", arguments)
+    assert restore.await_args.kwargs["restore_addons"] == ["core_ssh"]
+    assert restore.await_args.kwargs["restore_folders"] == ["share"]
+
+
 async def test_backup_read_only_keeps_automatic_pre_edit_capture(
     backup_world: SimpleNamespace,
 ) -> None:
@@ -347,7 +374,55 @@ async def test_default_controls_preserve_snapshot_creation(
         backup_world, scope="snapshot", action="create", name="Before edit"
     )
     assert result["backup_id"] == "created"
-    create.assert_awaited_once_with(backup_world.ha, "Before edit", ctx=None)
+    create.assert_awaited_once_with(
+        backup_world.ha,
+        "Before edit",
+        ctx=None,
+        include_homeassistant=None,
+        include_database=None,
+        include_addons=None,
+        include_all_addons=None,
+        include_folders=None,
+    )
+
+
+async def test_create_parts_and_safety_backup_reach_their_handlers(
+    backup_world: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dropped or flipped safety_backup would make, or skip, a backup unasked."""
+    create = AsyncMock(return_value={"success": True})
+    restore = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(backup, "create_backup", create)
+    monkeypatch.setattr(backup, "restore_backup", restore)
+    await _direct(
+        backup_world,
+        scope="snapshot",
+        action="create",
+        include_homeassistant=True,
+        include_database=False,
+        include_addons=["core_ssh"],
+        include_all_addons=None,
+        include_folders=["share"],
+    )
+    assert create.await_args.kwargs == {
+        "ctx": None,
+        "include_homeassistant": True,
+        "include_database": False,
+        "include_addons": ["core_ssh"],
+        "include_all_addons": None,
+        "include_folders": ["share"],
+    }
+    await _direct(backup_world, scope="snapshot", action="restore", backup_id="b1")
+    assert restore.await_args.kwargs["safety_backup"] is False
+    await _direct(
+        backup_world,
+        scope="snapshot",
+        action="restore",
+        backup_id="b1",
+        safety_backup=True,
+    )
+    assert restore.await_args.kwargs["safety_backup"] is True
 
 
 async def test_snapshot_toggle_does_not_block_explicit_edit_capture(

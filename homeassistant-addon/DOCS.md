@@ -278,19 +278,6 @@ The app has minimal configuration - most settings are automatic.
 > tools are still missing after re-adding, delete the connector and create
 > a new one with a **different name**.
 
-### backup_hint (Advanced)
-
-**Default:** `normal`
-
-Controls when the AI assistant suggests creating backups before operations:
-
-- `normal` (recommended): Before irreversible operations only
-- `strong`: Before first modification of each session
-- `weak`: Rarely suggests backups
-- `auto`: Intelligent detection (future enhancement)
-
-**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
-
 ### enable_snapshot_actions
 
 **Default:** `true`

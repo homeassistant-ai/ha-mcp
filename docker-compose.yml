@@ -32,8 +32,6 @@ services:
       - HOMEASSISTANT_URL=http://homeassistant:8123
       # Set your Home Assistant long-lived access token
       - HOMEASSISTANT_TOKEN=${HA_TOKEN}
-      # Optional: Configure backup hint behavior
-      - BACKUP_HINT=normal
     restart: unless-stopped
     # If using same compose file as HA, add to HA's network:
     # networks:
