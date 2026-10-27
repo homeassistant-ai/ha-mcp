@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from testcontainers.core.container import DockerContainer
 
 from tests.src.e2e import _conftest_knobs, _conftest_testcontainer
 
@@ -46,7 +47,7 @@ def _config_dir(tmp_path: Path, requirements: list[str]) -> Path:
     return config
 
 
-def _entrypoint_script(container) -> str:
+def _entrypoint_script(container: DockerContainer) -> str:
     return container._kwargs["entrypoint"][-1]
 
 
@@ -61,7 +62,7 @@ def _preinstalls(script: str) -> list[str]:
     return script.split("pip install ")[1:]
 
 
-def _mount_targets(container) -> dict[str, str]:
+def _mount_targets(container: DockerContainer) -> dict[str, str]:
     return {str(host): mapping["bind"] for host, mapping in container.volumes.items()}
 
 

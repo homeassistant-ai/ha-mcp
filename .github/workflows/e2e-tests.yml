@@ -60,11 +60,6 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-extras --dev
 
-    - name: Cache testcontainer pip wheels
-      uses: ./.github/actions/ha-e2e-pip-cache
-      with:
-        ha-image: ${{ env.HA_IMAGE_GHCR }}
-
     - name: Cache HA Docker image
       id: cache-ha-image
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -147,11 +142,6 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
-
-    - name: Cache testcontainer pip wheels
-      uses: ./.github/actions/ha-e2e-pip-cache
-      with:
-        ha-image: ${{ env.HA_IMAGE_GHCR }}
 
     - name: Cache HA Docker image
       id: cache-ha-image
@@ -251,12 +241,6 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-extras --dev
 
-    - name: Cache testcontainer pip wheels
-      uses: ./.github/actions/ha-e2e-pip-cache
-      with:
-        ha-image: ${{ env.HA_IMAGE_GHCR }}
-        lane: embedded
-
     - name: Cache HA Docker image
       id: cache-ha-image
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -340,12 +324,6 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
-
-    - name: Cache testcontainer pip wheels
-      uses: ./.github/actions/ha-e2e-pip-cache
-      with:
-        ha-image: ${{ env.HA_IMAGE_GHCR }}
-        lane: embedded
 
     - name: Cache HA Docker image
       id: cache-ha-image
@@ -450,11 +428,6 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
-
-    - name: Cache testcontainer pip wheels
-      uses: ./.github/actions/ha-e2e-pip-cache
-      with:
-        ha-image: ${{ env.HA_IMAGE_GHCR }}
 
     - name: Cache HA Docker image
       id: cache-ha-image
