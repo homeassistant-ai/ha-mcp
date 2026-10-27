@@ -17,23 +17,58 @@ document describes, not by patching it so it keeps working the old way.
 
 ## Choose the authoritative path
 
-Use native REST/WebSocket APIs first. Preserve native response fields and
-forward payload fields instead of selecting a copied allowlist. Fetch metadata
-from the API that owns it; a current entity state is not a substitute for
-recorder metadata. Use the result or readback of a mutation when computing
-hashes, because Core may coerce values, add defaults or generate fields.
+The component is part of the native contract, not an exception to it. The
+`ha_mcp_tools` component runs inside Core, so a path through it reaches Core's
+own registries, schemas, collections, flows and processors directly, the way
+`ha_search` and the logbook read do. Prefer that path whenever the component
+gives in-process access to the Core object a tool wraps, and keep Core's
+REST/WebSocket API as the explicit fallback for an installation without the
+component. Gate the choice on the component's `capabilities` handshake, and
+update the component producer, server consumer, capability gate and fallback in
+the same pull request, on both component entry topologies.
+
+"The component" is the `ha_mcp_tools` integration's shared `ha_mcp_tools/*`
+command surface, which both of its config-entry types serve: the HA-MCP Server
+entry that runs the embedded server, and the File & YAML Tools entry. The
+embedded server reaches every bridge through its own Server entry; a bridge
+that works only while the File & YAML Tools entry is present is a bug: that
+entry exists as the user's opt-in to filesystem and YAML access for the agent,
+only the privileged filesystem and YAML services are tools-entry-only, and
+nothing else belongs behind it. An installation "without the component" has
+neither entry: a standalone, Docker or app server on a Home Assistant where
+the integration is not installed.
+
+A change that does not touch the component is held to the same rule. Where a
+Core rule or value is copied by hand on the server side, the fix is a component
+bridge to the actual Core schema, collection or flow, not a tidier copy. Do not
+translate Core's validator into another handwritten validator, and do not keep
+one because the WebSocket API cannot express what Core accepts: that is exactly
+the case the component exists for. "It works without the component" does not
+justify the copy; an installation without the component may get less, and the
+fallback says so.
+
+Component and server releases are paired: every release stamps both with one
+version and the component pins the server build it runs. A bridge and its
+consumer therefore ship together. For an external server that meets another
+component version, the capability handshake is the gate for every bridge; only
+the filesystem and YAML path adds its `MIN_COMPONENT_VERSION` floor. Version
+skew is the gate's job, never a reason to avoid the component.
+
+Both routes are native, in this order: the component bridge when its
+capability is advertised, Core's REST/WebSocket API otherwise, and either one
+over a copy in every case. Preserve native response fields and forward payload
+fields instead of selecting a copied allowlist. Fetch metadata from the API that owns it; a current entity state is
+not a substitute for recorder metadata. Use the result or readback of a
+mutation when computing hashes, because Core may coerce values, add defaults or
+generate fields.
 
 Preserve useful presentation behavior when removing copied schemas. Readable
 field names and local event timestamps can be retained without duplicate aliases
 or filtering out new Core fields. Decode compact omissions according to Core's
 semantics, and test both native-data preservation and the user-facing result.
 
-When the required contract is only available in process, add a narrow component
-bridge to the actual Core schema, collection or flow. Update its capability,
-consumer and explicit fallback together, on both component entry topologies.
-Do not translate Core's validator into another handwritten validator. Native
-schema serialization is discovery, not validation: callable validators cannot
-always be serialized. Label incomplete descriptions and call the original
+Native schema serialization is discovery, not validation: callable validators
+cannot always be serialized. Label incomplete descriptions and call the original
 validator when validating a proposal.
 
 `core_contract.py` demonstrates this for energy and recorder requests. Its

@@ -46,10 +46,10 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
-- **The component itself** (filesystem / registry tools) is installed on
-  every lane by `_install_custom_component` EXCEPT the no-tools lanes
-  (`E2E_NO_TOOLS_ENTRY=1`, see below), where the "File & YAML Tools" config
-  entry is absent and the privileged services never register. A test that
+- **The File & YAML Tools entry** (the privileged filesystem and YAML
+  services) is set up on every lane by `_install_custom_component` EXCEPT the
+  no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see below), where that config entry
+  is absent and the privileged services never register. A test that
   relies on tools-entry behaviour must carry `requires_tools_entry`;
   everywhere else a test may still rely on
   component-gated behaviour with no marker — e.g. a config entry's
