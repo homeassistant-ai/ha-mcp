@@ -223,7 +223,7 @@ async def _dashboard_get_config(
     """
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound
-    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
+    except ImportError:  # pragma: no cover - defensive; core drift
         ConfigNotFound = None
 
     dash = dashboards_map.get(url_path)
@@ -280,7 +280,7 @@ async def _dashboard_search_docs(
     """
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound
-    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
+    except ImportError:  # pragma: no cover - defensive; core drift
         ConfigNotFound = None
 
     docs: list[dict[str, Any]] = []

@@ -8,6 +8,7 @@ from typing import Any, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
+from .dashboard_read_errors import CONFIG_NOT_FOUND_CODE
 from .helpers import extract_tool_error_message, raise_tool_error
 
 _MODE_SUGGESTIONS = [
@@ -115,7 +116,7 @@ def raise_dashboard_edit_fetch_error(
         data = None
     reason = (
         "not_found"
-        if isinstance(data, dict) and data.get("ha_error_code") == "config_not_found"
+        if isinstance(data, dict) and data.get("ha_error_code") == CONFIG_NOT_FOUND_CODE
         else "load_failed"
     )
     raise_dashboard_edit_error(
@@ -137,7 +138,7 @@ def raise_known_dashboard_save_rejection(
     message = get_error_message(response) or "Dashboard save rejected"
     if code in {"unauthorized", "invalid_format"}:
         raise_dashboard_edit_error(url_path, code, message, False, action)
-    if code == "config_not_found":
+    if code == CONFIG_NOT_FOUND_CODE:
         raise_dashboard_edit_error(url_path, "not_found", message, False, action)
     if code == "error" and message.removeprefix("Command failed: ") == "Not supported":
         raise_dashboard_edit_error(

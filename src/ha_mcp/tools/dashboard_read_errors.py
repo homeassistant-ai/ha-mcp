@@ -34,8 +34,8 @@ DASHBOARD_FETCH_FAILED_PREFIX = "Dashboard fetch failed: "
 
 NO_STORED_CONFIG_NOTE = (
     "Home Assistant has no config for this dashboard (a storage dashboard with "
-    "nothing saved yet, or a YAML dashboard whose file is missing), so the "
-    "frontend shows its generated default view."
+    "nothing saved yet, a YAML dashboard whose file is missing, or recovery "
+    "mode), so the frontend shows its generated default view."
 )
 
 
