@@ -25,9 +25,14 @@ from .data_paths import get_data_dir
 _PRIVATE_FILE_MODE = 0o600
 
 # O_NOFOLLOW refuses a symlink planted at the log path. O_NONBLOCK keeps a
-# planted FIFO from hanging the writer thread on open; it has no effect on a
-# regular file, and the fstat check below refuses the FIFO anyway.
+# planted FIFO from hanging the writer thread on open and has no effect on a
+# regular file. A FIFO with no reader then fails the open with ENXIO; one that
+# has a reader opens, and the fstat check below refuses it.
 _PRIVATE_OPEN_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+# What open(path, "a") passes to its opener. The file is opened here, not by
+# open(), so an error from the open can be told apart from one from the write.
+_APPEND_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0)
 
 
 class UnsafeLogPathError(PermissionError):
@@ -69,6 +74,15 @@ def _private_opener(path: str, flags: int) -> int:
     return fd
 
 
+def _chmod_or_refuse(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except OSError as e:
+        raise UnsafeLogPathError(
+            f"could not restrict {path} to its owner ({type(e).__name__}: {e})"
+        ) from e
+
+
 def _make_private_dir(path: Path) -> None:
     """Refuse a log directory another user controls; drop group/other write from our own.
 
@@ -77,19 +91,23 @@ def _make_private_dir(path: Path) -> None:
     """
     if not hasattr(os, "geteuid"):
         return  # POSIX owner and mode bits do not apply on Windows.
-    st = path.stat()
+    st = path.lstat()
+    if not stat.S_ISDIR(st.st_mode):
+        raise UnsafeLogPathError(f"{path} is not a directory")
     if st.st_uid != os.geteuid():
         raise UnsafeLogPathError(f"{path} is owned by another user")
     if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        path.chmod(stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH))
+        _chmod_or_refuse(
+            path, stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH)
+        )
 
 
 def _make_private(path: Path) -> None:
     """Drop group/other access from a log file an older version created 0644.
 
     A missing file is fine: the opener creates it owner-only. Any other
-    ``OSError`` propagates, so the caller disables logging rather than keep
-    appending to a file that stays readable by others.
+    ``OSError`` propagates, so the caller stops writing to disk rather than
+    keep appending to a file that stays readable by others.
     """
     try:
         mode = path.lstat().st_mode
@@ -98,7 +116,7 @@ def _make_private(path: Path) -> None:
     if not stat.S_ISREG(mode):
         raise UnsafeLogPathError(f"{path} is not a regular file")
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
-        path.chmod(_PRIVATE_FILE_MODE)
+        _chmod_or_refuse(path, _PRIVATE_FILE_MODE)
 
 
 logger = logging.getLogger(__name__)
@@ -385,7 +403,9 @@ class UsageLogger:
         log_file_path: str | None = None,
         ring_buffer_size: int = DEFAULT_RING_BUFFER_SIZE,
     ):
-        self._enabled = True
+        # Only the file is gated: the in-memory ring buffer never touches disk
+        # and ha_report_issue reads it, so it keeps working when the file is off.
+        self._disk_enabled = True
 
         if log_file_path:
             self.log_file_path = Path(log_file_path)
@@ -399,28 +419,31 @@ class UsageLogger:
 
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            _make_private_dir(self.log_file_path.parent)
-            _make_private(self.log_file_path)
-        except UnsafeLogPathError as e:
-            logger.warning(
-                "Usage logging disabled — %s is not private (%s). "
-                "Set HA_MCP_CONFIG_DIR to a directory only this user can write.",
-                self.log_file_path,
-                e,
-            )
-            self._enabled = False
         except OSError as e:
             # Directory creation failed (e.g., read-only filesystem). Surface
             # the reason instead of silently dropping every log — operators
             # otherwise see an empty mcp_usage.jsonl with no clue why.
             logger.warning(
-                "Usage logging disabled — could not create %s (%s: %s). "
+                "Usage log file disabled — could not create %s (%s: %s). "
                 "Set HA_MCP_CONFIG_DIR to a writable path to enable persistence.",
                 self.log_file_path.parent,
                 type(e).__name__,
                 e,
             )
-            self._enabled = False
+            self._disk_enabled = False
+        else:
+            try:
+                _make_private_dir(self.log_file_path.parent)
+                _make_private(self.log_file_path)
+            except OSError as e:
+                logger.warning(
+                    "Usage log file disabled — %s is not private (%s: %s). "
+                    "Set HA_MCP_CONFIG_DIR to a directory only this user can write.",
+                    self.log_file_path,
+                    type(e).__name__,
+                    e,
+                )
+                self._disk_enabled = False
 
         # In-memory ring buffer for fast access to recent logs
         # Thread-safe: deque is thread-safe for append/pop operations
@@ -431,7 +454,7 @@ class UsageLogger:
         self._log_queue: Queue[ToolUsageLog] = Queue()
         self._logger_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        if self._enabled:
+        if self._disk_enabled:
             self._start_logger_thread()
 
     def _start_logger_thread(self) -> None:
@@ -458,22 +481,27 @@ class UsageLogger:
 
     def _write_log_entry(self, log_entry: ToolUsageLog) -> None:
         """Write single log entry to disk."""
+        if not self._disk_enabled:
+            return
         try:
-            with open(
-                self.log_file_path, "a", encoding="utf-8", opener=_private_opener
-            ) as f:
+            fd = _private_opener(str(self.log_file_path), _APPEND_FLAGS)
+        except OSError as e:
+            # The path was swapped after startup for something we will not or
+            # cannot open (a link, a FIFO, a file of another user). Stop writing
+            # instead of dropping every entry silently or retrying a path someone
+            # else controls on every tool call.
+            self._disk_enabled = False
+            logger.warning(
+                "Usage log file disabled — could not open %s privately (%s: %s).",
+                self.log_file_path,
+                type(e).__name__,
+                e,
+            )
+            return
+        try:
+            with open(fd, "a", encoding="utf-8") as f:
                 json.dump(asdict(log_entry), f, ensure_ascii=False)
                 f.write("\n")
-        except UnsafeLogPathError as e:
-            # The file was swapped after startup. Stop writing instead of
-            # retrying a path someone else controls on every tool call.
-            if self._enabled:
-                self._enabled = False
-                logger.warning(
-                    "Usage logging disabled — %s is not private (%s).",
-                    self.log_file_path,
-                    e,
-                )
         except Exception:  # noqa: BLE001
             # Silent error handling
             pass
@@ -489,8 +517,6 @@ class UsageLogger:
         user_context: str | None = None,
     ) -> None:
         """Log tool usage (non-blocking)."""
-        if not self._enabled:
-            return
         try:
             # Mask secrets (alarm/lock codes, tokens, passwords) before the entry
             # reaches the ring buffer or disk. Returns a copy — never mutates the
@@ -512,8 +538,8 @@ class UsageLogger:
             with self._buffer_lock:
                 self._ring_buffer.append(entry_dict)
 
-            # Queue for disk write
-            self._log_queue.put(log_entry)
+            if self._disk_enabled:
+                self._log_queue.put(log_entry)
         except Exception:  # noqa: BLE001
             # Silent error handling to never break MCP server
             pass
@@ -594,8 +620,4 @@ def get_recent_logs(max_entries: int = 20) -> list[dict[str, Any]]:
     Returns:
         List of log entries as dictionaries, ordered newest to oldest
     """
-    logger = get_usage_logger()
-    if not logger._enabled:
-        return []
-
-    return logger.get_recent_entries(max_entries)
+    return get_usage_logger().get_recent_entries(max_entries)

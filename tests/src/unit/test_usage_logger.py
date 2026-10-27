@@ -1,16 +1,19 @@
 """Unit tests for the usage logger with ring buffer."""
 
 import asyncio
+import logging
 import os
 import stat
 import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+import ha_mcp.utils.usage_logger as usage_logger_module
 from ha_mcp.utils.usage_logger import (
     _MAX_REDACT_DEPTH,
     _REDACTED_VALUE,
@@ -412,6 +415,30 @@ class TestParameterRedaction:
         assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE
 
 
+def _log_one(logger: UsageLogger, tool_name: str = "ha_get_state") -> None:
+    logger.log_tool_usage(
+        tool_name=tool_name,
+        parameters={"entity_id": "sun.sun"},
+        execution_time_ms=1.0,
+        success=True,
+    )
+
+
+def _wait_for(condition: Callable[[], bool], timeout: float = 3.0) -> None:
+    """Wait for the background disk writer to reach ``condition``."""
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def _disk_disabled_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "ha_mcp.utils.usage_logger" and r.levelno == logging.WARNING
+    ]
+
+
 class TestLogFileMode:
     """mcp_usage.jsonl records tool arguments and results, so only the owner reads it."""
 
@@ -419,17 +446,8 @@ class TestLogFileMode:
     def _write_one(log_path: Path) -> None:
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
-            logger.log_tool_usage(
-                tool_name="ha_get_state",
-                parameters={"entity_id": "sun.sun"},
-                execution_time_ms=1.0,
-                success=True,
-            )
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline:
-                if log_path.exists() and log_path.read_text().strip():
-                    break
-                time.sleep(0.05)
+            _log_one(logger)
+            _wait_for(lambda: log_path.exists() and bool(log_path.read_text().strip()))
         finally:
             logger.shutdown()
 
@@ -449,8 +467,11 @@ class TestLogFileMode:
         assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
-    def test_log_that_cannot_be_tightened_disables_logging(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_log_that_cannot_be_tightened_stops_file_writes_and_names_the_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         log_path = tmp_path / "usage.jsonl"
         log_path.write_text("")
@@ -460,18 +481,24 @@ class TestLogFileMode:
             raise PermissionError("not the owner")
 
         monkeypatch.setattr(Path, "chmod", refuse)
+        caplog.set_level(logging.WARNING, logger="ha_mcp.utils.usage_logger")
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
-            assert logger._enabled is False
+            assert logger._disk_enabled is False
         finally:
             logger.shutdown()
+        [warning] = _disk_disabled_warnings(caplog)
+        # The directory exists and is writable; only the file's mode is at fault,
+        # so the operator must be pointed at the file, not told to fix a mkdir.
+        assert str(log_path) in warning
+        assert "could not create" not in warning
 
 
 class TestLogPathControlledByOthers:
     """Another local user must not be able to redirect or read the usage log."""
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
-    def test_log_directory_owned_by_another_user_disables_logging(
+    def test_log_directory_owned_by_another_user_stops_file_writes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         log_dir = tmp_path / "logs"
@@ -480,7 +507,24 @@ class TestLogPathControlledByOthers:
         monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
         logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
         try:
-            assert logger._enabled is False
+            assert logger._disk_enabled is False
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
+    def test_refused_log_file_keeps_recent_calls_for_bug_reports(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        real_euid = os.geteuid()
+        monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
+        logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
+        monkeypatch.setattr(usage_logger_module, "_usage_logger", logger)
+        try:
+            assert logger._disk_enabled is False
+            _log_one(logger, tool_name="ha_kept_in_memory")
+            assert [e["tool_name"] for e in get_recent_logs(5)] == ["ha_kept_in_memory"]
         finally:
             logger.shutdown()
 
@@ -493,8 +537,24 @@ class TestLogPathControlledByOthers:
         log_dir.chmod(0o777)
         logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
         try:
-            assert logger._enabled is True
+            assert logger._disk_enabled is True
             assert log_dir.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+    def test_symlinked_log_directory_is_refused_and_left_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "shared"
+        target.mkdir()
+        target.chmod(0o777)
+        log_dir = tmp_path / "logs"
+        log_dir.symlink_to(target, target_is_directory=True)
+        logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
+        try:
+            assert logger._disk_enabled is False
+            assert stat.S_IMODE(target.stat().st_mode) == 0o777
         finally:
             logger.shutdown()
 
@@ -507,7 +567,7 @@ class TestLogPathControlledByOthers:
         log_path.symlink_to(target)
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
-            assert logger._enabled is False
+            assert logger._disk_enabled is False
             assert stat.S_IMODE(target.stat().st_mode) == 0o644
         finally:
             logger.shutdown()
@@ -527,16 +587,35 @@ class TestLogPathControlledByOthers:
                 log_path.symlink_to(target)
             else:
                 os.link(target, log_path)
-            logger.log_tool_usage(
-                tool_name="ha_get_state",
-                parameters={"entity_id": "sun.sun"},
-                execution_time_ms=1.0,
-                success=True,
-            )
-            deadline = time.monotonic() + 3.0
-            while logger._enabled and time.monotonic() < deadline:
-                time.sleep(0.05)
-            assert logger._enabled is False
+            _log_one(logger)
+            _wait_for(lambda: not logger._disk_enabled)
+            assert logger._disk_enabled is False
             assert target.read_text() == ""
         finally:
             logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX FIFOs and modes")
+    @pytest.mark.parametrize("swap", ["fifo_without_reader", "unwritable_file"])
+    def test_log_that_cannot_be_opened_after_startup_warns_once(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, swap: str
+    ) -> None:
+        if swap == "unwritable_file" and os.geteuid() == 0:
+            pytest.skip("root bypasses file modes")
+        log_path = tmp_path / "usage.jsonl"
+        caplog.set_level(logging.WARNING, logger="ha_mcp.utils.usage_logger")
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            if swap == "fifo_without_reader":
+                os.mkfifo(log_path, 0o600)
+            else:
+                fd = os.open(log_path, os.O_CREAT | os.O_WRONLY, 0o600)
+                os.close(fd)
+                log_path.chmod(0o000)
+            _log_one(logger)
+            _log_one(logger)
+            _wait_for(lambda: logger._log_queue.empty() and not logger._disk_enabled)
+            assert logger._disk_enabled is False
+        finally:
+            logger.shutdown()
+        [warning] = _disk_disabled_warnings(caplog)
+        assert str(log_path) in warning
