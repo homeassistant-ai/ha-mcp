@@ -503,12 +503,17 @@ class TestOAuthCredsHint:
     form (review gap: zero coverage on any of them)."""
 
     def test_non_legacy_mode_points_at_the_mode_selector(self) -> None:
+        # Stored credentials from an earlier legacy period must not show
+        # while another mode is configured; only the select-mode hint does.
         flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
+                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
+            },
         )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Set Authentication mode" in hint
-        assert "Client ID" in hint
+        common = {**cf._COMMON_FALLBACKS, "oauth_select_legacy_mode": "<pick>"}
+        assert flow._oauth_creds_hint(common) == "<pick>"
 
     def test_legacy_mode_before_minting_says_appear_after_start(self) -> None:
         flow = _make_options_flow(
