@@ -472,7 +472,7 @@ def test_every_python_base_consumer_pulls_the_mirror_the_workflow_fills() -> Non
     named = {
         label: set(
             re.findall(
-                r"ghcr\.io/homeassistant-ai/ha-mcp-python[\w-]*",
+                r"ghcr\.io/homeassistant-ai/ha-mcp-python[\w-]*(?:/[\w.-]+)*",
                 (_REPO_ROOT / rel).read_text(encoding="utf-8"),
             )
         )

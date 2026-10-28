@@ -8,6 +8,7 @@ import urllib.error
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -120,6 +121,14 @@ def test_the_mirror_probe_asks_ghcr_anonymously_for_the_pinned_manifest() -> Non
         assert _REAL_MIRROR_STATUS(_DIGEST) == 200
     token_request, manifest_request = (c.args[0] for c in urlopen.call_args_list)
     assert token_request.get_header("Authorization") is None
+    token_url = urlsplit(token_request.full_url)
+    assert token_url.netloc == "ghcr.io"
+    repository = (
+        urlsplit(manifest_request.full_url)
+        .path.removeprefix("/v2/")
+        .partition("/manifests/")[0]
+    )
+    assert parse_qs(token_url.query)["scope"] == [f"repository:{repository}:pull"]
     assert manifest_request.full_url == (
         f"https://ghcr.io/v2/{python_base.MIRROR_REPOSITORY}/manifests/{_DIGEST}"
     )

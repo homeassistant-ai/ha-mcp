@@ -51,11 +51,22 @@ jobs:
         # can hold nothing but copies of official images.
         pins=$(git grep -h -o -E 'public\.ecr\.aws/docker/library/python:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}' -- '*Dockerfile' | sort -u)
         [ -n "$pins" ] || { echo "::error::no python base pins found"; exit 1; }
+        # The checks above run logged in; consumers pull anonymously, and a new
+        # GHCR package starts private until an org admin makes it public.
+        warn_unless_public() {
+          token=$(curl -fsS "https://ghcr.io/token?service=ghcr.io&scope=repository:${mirror#ghcr.io/}:pull" | jq -r .token) || token=""
+          if ! curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/${mirror#ghcr.io/}/manifests/$1"; then
+            echo "::warning::$mirror does not serve $1 to anonymous pulls (package not public?); CI falls back to ECR Public and Docker Hub"
+          fi
+        }
         for pin in $pins; do
           tag=${pin#*:}; tag=${tag%@*}
           digest=${pin#*@}
           if skopeo inspect --raw "docker://$mirror@$digest" >/dev/null 2>&1; then
             echo "$digest already mirrored"
+            warn_unless_public "$digest"
             continue
           fi
           # Tagged per digest so no copy is left untagged by a later one.
@@ -77,4 +88,5 @@ jobs:
           [ -n "$copied" ] || { echo "::error::could not copy $digest from any registry"; exit 1; }
           skopeo inspect --raw "docker://$mirror@$digest" >/dev/null
           echo "Mirrored $digest from $copied as $dest"
+          warn_unless_public "$digest"
         done
