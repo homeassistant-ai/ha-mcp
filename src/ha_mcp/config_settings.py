@@ -250,11 +250,11 @@ class Settings(BaseSettings):
         Setting(surface="advanced", section="operations", restart_required=True),
     ] = Field(True, alias="ENABLE_WEBSOCKET")
 
-    # Base URL of the screenshot engine (e.g. ``http://puppet:10000`` or a
-    # docker-compose sidecar). A connection string, NOT a beta toggle, so
-    # it is not a feature flag. Left blank, the
-    # provisioner auto-discovers the Puppet add-on via the Supervisor in
-    # HA OS / Supervised mode; Container / Core users set it explicitly.
+    # Base URL of the screenshot engine (e.g. ``http://puppet:10000``,
+    # ``http://wpe-screenshot-engine:8080`` or a docker-compose sidecar). A
+    # connection string, NOT a beta toggle, so it is not a feature flag. Left
+    # blank, the provisioner auto-discovers supported apps via the Supervisor
+    # in HA OS / Supervised mode; Container / Core users set it explicitly.
     # Resolved live per capture (resolve_engine), so unlike the time
     # budgets it takes effect without a restart (#1538).
     dashboard_screenshot_engine_url: Annotated[
@@ -670,9 +670,9 @@ class Settings(BaseSettings):
     # Dashboard screenshot mode — the ``ha_get_dashboard_screenshot`` tool
     # plus the ``include_screenshot`` / ``return_screenshot`` params on the
     # dashboard get/set tools. Renders responsive Lovelace images via a
-    # separate, opt-in headless-Chromium screenshot add-on (balloob's Puppet
-    # add-on, or a docker-compose sidecar). Off by default; nothing heavy is
-    # pulled unless the user enables it AND installs the engine.
+    # separate, opt-in screenshot engine app (Puppet, WPE Screenshot Engine,
+    # or a docker-compose sidecar). Off by default; nothing heavy is pulled
+    # unless the user enables it AND installs the engine.
     enable_dashboard_screenshot: Annotated[
         bool, Setting(surface="feature", beta=True, app=_DEV_FLAVOR)
     ] = Field(False, alias="HAMCP_ENABLE_DASHBOARD_SCREENSHOT")

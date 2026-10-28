@@ -811,7 +811,7 @@
   {
     "name": "ha_get_dashboard_screenshot",
     "title": "Get Dashboard Screenshot",
-    "description": "Get rendered images of a Home Assistant Lovelace dashboard view.\n\nWhen not to use: while reading or writing dashboard configuration, use\nha_config_get_dashboard(include_screenshot=True) or\nha_config_set_dashboard(return_screenshot=True) for a single workflow.\n\nUse it for repeatable visual checks, including ordered mobile, tablet,\nand desktop captures. Puppet reports image bytes but does not confirm\nthat the frontend accepted a requested theme or language; structured\nmetadata therefore records the values sent to the engine. A requested\ntheme or dark_mode persists on the engine account's profile; the change\nis reported in warnings but not undone (see ha_manage_theme\naction='set_engine_theme').\n\nTo change the Puppet engine app (add-on) itself (keep_browser_open,\nrestart), use ha_manage_app.",
+    "description": "Get rendered images of a Home Assistant Lovelace dashboard view.\n\nWhen not to use: while reading or writing dashboard configuration, use\nha_config_get_dashboard(include_screenshot=True) or\nha_config_set_dashboard(return_screenshot=True) for a single workflow.\n\nUse it for repeatable visual checks, including ordered mobile, tablet,\nand desktop captures. The engine returns image bytes but does not\nconfirm that the frontend accepted a requested theme or language;\nstructured metadata therefore records the values sent to the engine.\nWPE Screenshot Engine applies frontend preferences temporarily. Puppet\nmay persist requested theme or dark-mode changes on the engine account;\nha-mcp reports detected changes in warnings but does not undo them (see\nha_manage_theme action='set_engine_theme').\n\nTo change the screenshot engine app's own options or restart it, use\nha_manage_app.",
     "inputSchema": {
       "properties": {
         "dashboard_path": {
@@ -877,7 +877,7 @@
         },
         "full_page": {
           "type": "bool",
-          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Uses Puppet's native auto-height capture (currently capped at 4000 px); raise wait_ms for lazy cards.",
+          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Height limits are engine-specific: Puppet caps at 4000 px; WPE's configured limit can be up to 12000 px, with a width-dependent effective cap. Raise wait_ms for lazy cards.",
           "default": false
         },
         "theme": {

@@ -429,7 +429,7 @@ Toggles all write tools off, and removes ability for tools to make any write or 
 
 Mixed read/write tools whose read functionality exists nowhere else stay available with their write operations blocked:
 
-- `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
+- `ha_config_get_dashboard` — config/list/search reads; optional screenshot rendering is a beta feature that uses a separate screenshot engine (see [beta documentation](../docs/beta.md))
 - `ha_manage_backup` — only listing and viewing per-edit backups
 - `ha_manage_app` — only HTTP GET proxy reads of app (add-on) APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
@@ -629,10 +629,10 @@ The app requests `hassio_role: manager` (declared in `config.yaml`).
 `manager` is required for the Supervisor REST endpoints used to fetch
 add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
 `/core/logs`) — `default` returns 403 (see #1116). The role also supports
-explicit app management through `ha_manage_app`. When dashboard
-screenshots are enabled, `ha_get_dashboard_screenshot` may update only the
-schema-verified Puppet app's `keep_browser_open` option and restart that
-same app; it accepts no caller-supplied slug for those operations.
+explicit app management through `ha_manage_app`. When dashboard screenshots
+are enabled, the screenshot integration uses read-only Supervisor app listing
+and app-info endpoints to discover a supported renderer; it does not change
+renderer options.
 
 ---
 

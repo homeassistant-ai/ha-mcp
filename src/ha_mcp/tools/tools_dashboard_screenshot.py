@@ -185,9 +185,10 @@ class DashboardScreenshotTools:
             bool,
             Field(
                 description=f"{FULL_PAGE_PARAM_DESC[:1].upper()}"
-                f"{FULL_PAGE_PARAM_DESC[1:]}. Uses Puppet's native auto-height "
-                "capture (currently capped at 4000 px); raise wait_ms for "
-                "lazy cards."
+                f"{FULL_PAGE_PARAM_DESC[1:]}. Height limits are engine-specific: "
+                "Puppet caps at 4000 px; WPE's configured limit can be up to "
+                "12000 px, with a width-dependent effective cap. Raise wait_ms "
+                "for lazy cards."
             ),
         ] = False,
         theme: Annotated[
@@ -224,15 +225,16 @@ class DashboardScreenshotTools:
         ha_config_set_dashboard(return_screenshot=True) for a single workflow.
 
         Use it for repeatable visual checks, including ordered mobile, tablet,
-        and desktop captures. Puppet reports image bytes but does not confirm
-        that the frontend accepted a requested theme or language; structured
-        metadata therefore records the values sent to the engine. A requested
-        theme or dark_mode persists on the engine account's profile; the change
-        is reported in warnings but not undone (see ha_manage_theme
-        action='set_engine_theme').
+        and desktop captures. The engine returns image bytes but does not
+        confirm that the frontend accepted a requested theme or language;
+        structured metadata therefore records the values sent to the engine.
+        WPE Screenshot Engine applies frontend preferences temporarily. Puppet
+        may persist requested theme or dark-mode changes on the engine account;
+        ha-mcp reports detected changes in warnings but does not undo them (see
+        ha_manage_theme action='set_engine_theme').
 
-        To change the Puppet engine app (add-on) itself (keep_browser_open,
-        restart), use ha_manage_app.
+        To change the screenshot engine app's own options or restart it, use
+        ha_manage_app.
         """
         target = await resolve_dashboard_render_target(
             self._client,

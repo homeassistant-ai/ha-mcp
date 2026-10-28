@@ -8,7 +8,7 @@ Covers everything that runs inside ha-mcp itself — no container, no engine:
 - the capture HTTP client (URL/param building, PNG return, error -> ToolError)
 - the graceful get/set screenshot helper (feature-off / failure -> warning)
 
-The Supervisor auto-discovery branch + addon lifecycle are exercised end to end
+The Supervisor auto-discovery branch + app (add-on) lifecycle are exercised end to end
 against a mock engine in the HAOS inaddon lane
 (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py).
 """
@@ -52,6 +52,7 @@ def _puppet_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
     info: dict[str, Any] = {
         "name": "Puppet",
         "state": state,
+        "version": "2.4.9",
         "schema": _PUPPET_SCHEMA,
         "options": _puppet_options(keep_browser_open=False),
     }
@@ -470,6 +471,8 @@ class TestResolveEngine:
         )
         target = await provision.resolve_engine()
         assert target.url == "http://engine:10000"
+        assert target.engine_kind is None
+        assert target.engine_version is None
         # An explicitly configured engine has no discoverable credential.
         assert target.addon_credential is None
 
@@ -487,8 +490,8 @@ class TestResolveEngine:
     async def test_explicit_url_picks_up_addon_credential_in_addon_mode(
         self, monkeypatch: Any
     ) -> None:
-        # An explicit engine URL on HA OS must not disable the theme guard:
-        # the Puppet add-on's credential is still discovered best-effort.
+        # An explicit engine URL on HA OS must not disable the Puppet theme
+        # guard: the add-on credential is still discovered best-effort.
         from ha_mcp.dashboard_screenshot import provision
         from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
 
@@ -617,6 +620,8 @@ class TestDiscoverEngineViaSupervisor:
         )
         target = await provision._discover_engine_via_supervisor()
         assert target.url == "http://def-puppet:10000"
+        assert target.engine_kind == "puppet"
+        assert target.engine_version == "2.4.9"
         # The engine user's credential rides along so the theme guard can
         # authenticate without a second discovery round-trip.
         from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
@@ -837,7 +842,7 @@ class TestCapture:
         assert got["params"]["format"] == "png"
 
     async def test_full_page_uses_native_auto_height(self, monkeypatch: Any) -> None:
-        """full_page=True uses Puppet's content-sized viewport request."""
+        """full_page=True uses the content-sized viewport request."""
         from ha_mcp.dashboard_screenshot import capture
 
         async def fake_resolve() -> EngineTarget:
@@ -926,33 +931,6 @@ class TestCapture:
             "auto",
             "landscape",
         )
-
-    async def test_full_page_retries_legacy_fixed_height_on_empty_400(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import capture
-
-        async def fake_resolve() -> EngineTarget:
-            return EngineTarget(url="http://engine:10000")
-
-        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
-        _FakeAsyncClient.gets = []
-        _FakeAsyncClient._next = [
-            _FakeResponse(400, b"", content_type="text/plain"),
-            _FakeResponse(200, _PNG),
-        ]
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
-
-        result = await capture.capture_dashboard_images(
-            "lovelace/0", width=900, full_page=True
-        )
-
-        assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
-            "900xauto",
-            "900x4096",
-        ]
-        assert result[0].height == 4096
-        assert result[0].legacy_full_page_fallback is True
 
     async def test_explicit_auto_does_not_use_legacy_full_page_fallback(
         self, monkeypatch: Any

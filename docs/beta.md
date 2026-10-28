@@ -13,7 +13,7 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 | `ha_delete_file` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_manage_custom_tool` | `enable_code_mode` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev app). |
 | _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on 15 heavy ha-mcp tools (`ha_config_get_automation`, `ha_config_set_automation`, `ha_config_get_script`, `ha_config_set_script`, `ha_config_get_scene`, `ha_config_set_scene`, `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_call_service`, `ha_config_set_yaml`, `ha_search`, `ha_manage_backup`, `ha_report_issue`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource) — except `ha_report_issue`, which defers to the `instructions` field of its own response. Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
-| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render one or more responsive Lovelace images so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — balloob's **Puppet** app (headless Chromium, Apache-2.0), which you install yourself — nothing heavy is installed unless you enable this AND install the engine. |
+| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render one or more responsive Lovelace images so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — Puppet or WPE Screenshot Engine — which you install yourself; nothing heavy is installed unless you enable this AND install an engine. |
 
 ## How to enable
 
@@ -159,35 +159,42 @@ Pair this toggle with one of the following to mitigate:
 
 ### Dashboard screenshot (`ha_get_dashboard_screenshot` / `include_screenshot` / `return_screenshot`)
 
-Rendering does not run inside ha-mcp; it runs in a separate engine — balloob's
-**Puppet** app (headless Chromium, https://github.com/balloob/home-assistant-addons).
-ha-mcp does not vendor it; you install it yourself. Operators should know:
+Rendering does not run inside ha-mcp; it runs in a separate screenshot-engine
+app. ha-mcp supports balloob's **Puppet** app (headless Chromium) and the
+**WPE Screenshot Engine** app. ha-mcp does not vendor either; you install an
+engine yourself. On HA OS / Supervised, leaving the engine URL blank enables
+Supervisor discovery after the app is installed and started. Discovery checks
+the app's slug, name, and option schema before connecting. If more than one
+supported engine is running, set `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL` to
+choose one explicitly. Operators should know:
 
 **Setup by deployment.**
-- *HA OS / Supervised:* add balloob's repository
-  (`https://github.com/balloob/home-assistant-addons`) under Settings > Apps >
-  Install app > ⋮ > Repositories (Settings > Add-ons > Add-on store before
-  Home Assistant 2026.2), install the **Puppet** App (add-on), set its
-  `access_token` option to a Home Assistant long-lived access token, and start
-  it. ha-mcp discovers the running app through the Supervisor (it matches
-  the `*_puppet` slug). (The assistant can do this for you end-to-end via
-  `ha_manage_app(action="add_repository", repository=...)` then
-  `action="install"` / `action="start"`, but you must supply the token.)
-- *Docker / Container:* run Puppet's image as a sidecar (build it from
-  balloob's `puppet/` directory, with `access_token` set) and point ha-mcp at
-  it with `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`.
+- *HA OS / Supervised:* install and start either **Puppet** from
+  `https://github.com/balloob/home-assistant-addons` or **WPE Screenshot
+  Engine** from `https://github.com/Nischay-Pro/ha-wpe-screenshot-engine`.
+  Add the selected repository under Settings > Apps > Install app > ⋮ >
+  Repositories (Settings > Add-ons > Add-on store before Home Assistant
+  2026.2). Configure the engine's Home Assistant token as described below.
+  The assistant can add the repository and install/start the selected app via
+  `ha_manage_app`; you still need to provide its token in the app options.
+  Puppet is discovered at its internal port 10000; WPE Screenshot Engine is
+  discovered at its internal port 8080. The WPE app's default host port is
+  19433 for clients outside the shared app network.
+- *Docker / Container:* run either screenshot engine as a sidecar and set
+  `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL` to the URL reachable from ha-mcp.
+  Puppet listens on port 10000; WPE Screenshot Engine listens on port 8080
+  inside its container.
 - *stdio / standalone:* not supported (no place to host the engine); the tool
   returns a clear error.
 
-**A long-lived access token is required.** Puppet authenticates by injecting a
-Home Assistant long-lived access token (the `access_token` option) into the
-browser. There is no token-less mode: the app's Supervisor token is not a
-valid HA frontend credential (HA Core rejects it), and a token cannot be minted
+**A Home Assistant long-lived access token is required.** Puppet uses its
+`access_token` option; WPE Screenshot Engine uses `home_assistant_token`.
+There is no token-less mode: the app's Supervisor token is not a valid HA
+frontend credential (HA Core rejects it), and a token cannot be minted
 programmatically. Create the token under Profile > Security — ideally for a
 dedicated, low-privilege user, since the engine holds whatever access that
-token grants. If the token is missing or invalid, Puppet lands on the login
-page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
-engine's access token" error rather than a silent failure.
+token grants. If the token is missing or invalid, the engine cannot render the
+authenticated dashboard and ha-mcp reports a screenshot failure.
 
 Puppet dispatches Home Assistant's `settheme` event on cold renders, which
 Home Assistant persists on the frontend profile of the user whose token the
@@ -210,21 +217,28 @@ honestly `readOnlyHint: True` (#1991). `ha_manage_theme(action=
 account's *per-user* profile, a different layer from the backend default that
 `action="set"` changes.
 
-**Give the engine its own Home Assistant user and long-lived token** and the
-problem stops mattering: the write lands on an account nobody looks at, so no
-real session is disturbed. The warning is still emitted — ha-mcp has no signal
-telling it an account is dedicated — but it becomes safe to ignore. Language selection is local to Puppet's browser session.
+WPE Screenshot Engine applies requested theme, dark-mode, and language
+preferences temporarily in its browser. It suppresses Home Assistant's
+frontend user-data writes for theme and language, then restores browser
+storage, so these request options do not change the saved profile. The theme
+warning and restore workflow above address Puppet's behavior.
+
+**For Puppet, give the engine its own Home Assistant user and long-lived
+token** and the profile change lands on an account nobody looks at, so no real
+session is disturbed. The warning is still emitted — ha-mcp has no signal
+telling it an account is dedicated — but it becomes safe to ignore. Language
+selection is local to Puppet's browser session.
 
 To change the Puppet engine app's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_app`; the screenshot tools only render and
 never modify the engine app's configuration.
 
-**Puppet's HTTP listener has no inbound auth, and it publishes host port
-10000.** Anyone who can reach `http://<ha-host>:10000` can pull
-fully-authenticated dashboard renders. Keep it on a trusted network only — do
-NOT expose port 10000 to an untrusted LAN or the internet. (This is balloob's
-upstream packaging; the app's own info page calls it a prototype with "no
-security.")
+**Both engines' HTTP listeners have no inbound authentication.** Anyone who
+can reach an engine can request fully-authenticated dashboard renders. Puppet
+uses port 10000; WPE Screenshot Engine listens on internal port 8080 and
+publishes host port 19433 by default. Keep the engine on a trusted network and
+do NOT expose its listener to an untrusted LAN or the internet. Puppet's
+upstream app describes itself as a prototype with "no security."
 
 **Charts are best-effort.** Canvas cards (ApexCharts, mini-graph-card,
 history-graph) paint after the dashboard reports "loaded". The default
@@ -245,9 +259,9 @@ controls; the dashboard get/set workflows expose only `include_screenshot` /
 `return_screenshot` plus `view_path` and render at defaults. `viewport_presets`
 (standalone only) renders an ordered batch using `mobile` (390x844), `tablet`
 (768x1024), and `desktop` (1280x800); every image is returned as a native MCP
-image block. PNG, JPEG,
-WebP, and BMP are supported by Puppet and carry their matching MIME type, but
-client/model support for less-common image formats varies.
+image block. PNG, JPEG, WebP, and BMP are supported by both engines and carry
+their matching MIME type, but client/model support for less-common image
+formats varies.
 
 Raw image responses are streamed under server safety limits of 20 MiB per
 image and 40 MiB per batch before MCP base64 encoding. Oversize responses use
@@ -260,23 +274,26 @@ requested viewport fails.
 
 The structured `screenshots` metadata binds each image to its `content_index`,
 render path, viewport, engine request, local capture options, byte length, MIME
-type, and SHA-256 digest. Puppet does not report whether Home Assistant accepted
+type, and SHA-256 digest. Neither engine reports whether Home Assistant accepted
 or fell back from a requested theme or language, so the frontend context is
 explicitly marked as not confirmed.
 
 **Capturing below the fold.** By default the render is clipped to the viewport.
-Pass `height="auto"` or the backwards-compatible `full_page=true` to ask Puppet
-to size the capture to the rendered content. Stock Puppet caps auto-height at
-4000 px. It does not expose scroll position, total page height, or segment
-capture, so dashboards beyond that limit remain clipped; true ordered scroll
-segments require an upstream engine capability. For the backwards-compatible
-`full_page=true` alias only, an HTTP 400 from Puppet versions older than 2.5.0
-triggers the legacy 4096 px fixed-height retry and reports
-`legacy_full_page_fallback=true`; explicit `height="auto"` remains strict.
+Pass `height="auto"` or the backwards-compatible `full_page=true` to request
+content-sized capture. Puppet caps auto-height at 4000 px. WPE Screenshot
+Engine uses its configured full-page height limit (default 12000 px,
+configurable from 1000 to 12000 px), with a width-dependent effective cap. It
+tiles tall documents; vertically scrolling inner containers return an error.
+For the backwards-compatible
+`full_page=true` alias only, an HTTP 400 from a Supervisor-identified Puppet
+app below version 2.5.0 triggers the legacy 4096 px fixed-height retry and
+reports `legacy_full_page_fallback=true`. WPE and engines without verified
+Puppet version information return the original error; explicit
+`height="auto"` remains strict.
 
-**Current engine limits.** Puppet does not expose a device-pixel-ratio control,
-confirmed applied-context metadata, or segmented scrolling. ha-mcp also cannot
-observe an MCP client silently dropping an image after successful server-side
+**Current engine limits.** Neither engine exposes a device-pixel-ratio control
+or returns applied-context metadata to ha-mcp. ha-mcp also cannot observe an
+MCP client silently dropping an image after successful server-side
 serialization. There is no screenshot file/media fallback: inline native MCP
 images remain the only transport, avoiding unauthenticated persisted artifacts.
 
@@ -291,14 +308,14 @@ than a warning a caller might miss. Screenshot operations stay **available** in 
 Only Mode: both entry points are `readOnlyHint: True`, so the transform does
 not hide them and the middleware does not block them (#1991 removed the
 exemption that used to block them, pinned by
-`test_dashboard_config_screenshot_now_passes`). Rendering still makes Puppet
-persist theme/dark preferences on the engine account, and ha-mcp still reports
-that in warnings — so in Read Only Mode you get the warning but cannot act on
-it, since `ha_manage_theme` is exempted only for its read actions
+`test_dashboard_config_screenshot_now_passes`). Puppet renders can still
+persist theme/dark preferences on the engine account, and ha-mcp reports that
+in warnings — so in Read Only Mode you get the warning but cannot act on it,
+since `ha_manage_theme` is exempted only for its read actions
 (`get_engine_theme` inspects the value; `set_engine_theme` stays blocked).
 
 **Raw rendered paths remain constrained.** `ha_get_dashboard_screenshot`
 validates legacy `dashboard_path` values (rejects URLs, query strings,
 fragments, `..`, and backslashes) and checks the first route segment against
 Home Assistant's registered Lovelace dashboards. A raw path therefore cannot
-use Puppet's independent credential to render another frontend panel.
+use the engine's independent credential to render another frontend panel.
