@@ -91,12 +91,10 @@ def _approval_request(tool_name: str, wait_seconds: int) -> ElicitRequest:
     # render an empty schema as a blank, non-functional form.
     return ElicitRequest(
         params=ElicitRequestFormParams(
+            # Clients may render this on one truncated line: keep it short.
             message=(
-                f"ha-mcp is holding the {tool_name} call until you approve it in "
-                "the ha-mcp settings, on the Tool Security Policies tab. Accepting "
-                "here does not approve it; the call continues once you have both "
-                "approved it there and accepted here. Decline here to cancel the "
-                f"call. The approval window is {wait_seconds} seconds."
+                f"Approve {tool_name} in ha-mcp > Tool Security Policies and "
+                f"Accept here (either order, within {wait_seconds} s)."
             ),
             requested_schema={
                 "type": "object",

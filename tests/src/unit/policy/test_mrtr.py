@@ -395,4 +395,4 @@ async def test_ask_states_the_configured_approval_window(
     gate.policy.wait_seconds = wait_seconds
     first = await gate.middleware.on_call_tool(context(), gate.execute)
     message = first.input_required.input_requests["ha_mcp_approval"].params.message
-    assert f"window is {wait_seconds} seconds" in message
+    assert f"within {wait_seconds} s" in message
