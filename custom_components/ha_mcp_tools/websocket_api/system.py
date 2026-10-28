@@ -361,7 +361,8 @@ async def _server_entry_update_prep(
             "server_entry_update needs pip_spec. The release channel can no "
             "longer be chosen here: each HA-MCP component release installs the "
             "server it was released with, and development builds come from "
-            "the HACS Pre-release switch for this repository."
+            "this repository's Pre-release switch in HACS, or its Pre-release "
+            "entity in the Marketplace (Home Assistant 2026.11+)."
         )
 
     options = getattr(entry, "options", None)

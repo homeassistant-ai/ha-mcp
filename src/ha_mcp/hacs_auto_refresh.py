@@ -1,16 +1,19 @@
 """Ask HACS to surface the paired component update after a server update.
 
 HACS refreshes a *custom* repository's release data from GitHub only about
-every 48 hours, and the ha_mcp_tools component ships in lockstep with each
-server release — so a freshly updated server can sit for two days next to a
-component update HACS has not noticed yet. This module closes that gap for
-add-on, Docker, pip and stdio installs. The embedded server is skipped: the
-component manages its updates.
+every 48 hours, and the Marketplace that replaces it in Home Assistant 2026.11
+only when a GitHub account is connected. The ha_mcp_tools component ships in
+lockstep with each server release, so a component update can go unnoticed for
+days, or for good. This module closes that gap for every install, the embedded
+server included. It goes away once ha-mcp is in the default catalog, which the
+Marketplace refreshes every 6 hours.
 
 On startup, when the server version changed since the last recorded nudge (the
-just-updated case) or a newer release is pending, it sends HACS's "Update
-information" refresh (``hacs/repository/refresh``) over the existing admin
-WebSocket for every INSTALLED candidate repository entry.
+just-updated case) or a newer release is pending, it sends the store's "Update
+information" refresh (``marketplace/repository/refresh``, or
+``hacs/repository/refresh`` before 2026.11) over the existing admin WebSocket
+for every INSTALLED candidate repository entry. Nothing is installed: the user
+still updates from the update entity.
 
 Fully advisory: every failure degrades to a debug log and nothing here can
 fault startup. A marker file in the data dir records the state the last
@@ -30,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from ._vendor import websockets
-from ._version import get_version, is_embedded
+from ._version import get_version
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -123,18 +126,23 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
     or None when the outcome could not be determined.
     """
     from .client.websocket_client import get_websocket_client
+    from .tools.hacs_backend import STORE_APIS
     from .tools.hacs_registration import send_hacs_repository_refresh
 
     ws_client = await get_websocket_client()
-    try:
-        response = await ws_client.send_command("hacs/repositories/list")
-    except HomeAssistantCommandError as err:
-        # HACS not installed at all — HA rejects its commands as unknown. Same
-        # detection as ``_assert_hacs_available`` in tools/tools_hacs.py. Any
-        # other command failure is a real error: let the retry loop see it.
-        if err.code == "unknown_command" or "unknown command" in str(err).lower():
-            return {"hacs": "absent", "refreshed": []}
-        raise
+    for api in STORE_APIS:
+        try:
+            response = await ws_client.send_command(api.command("list"))
+        except HomeAssistantCommandError as err:
+            # A store that is not installed answers as an unknown command; any
+            # other failure (the Marketplace still loading included) is real:
+            # let the retry loop see it.
+            if err.code == "unknown_command" or "unknown command" in str(err).lower():
+                continue
+            raise
+        break
+    else:
+        return {"hacs": "absent", "refreshed": []}
 
     wanted = {name.lower() for name in CANDIDATE_REPO_FULL_NAMES}
     refreshed: list[str] = []
@@ -148,7 +156,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
             continue
         attempted += 1
         try:
-            await send_hacs_repository_refresh(ws_client, str(repo["id"]))
+            await send_hacs_repository_refresh(ws_client, str(repo["id"]), api)
         except Exception as err:  # noqa: BLE001
             # Both entries read installed only when someone downloaded the
             # mirror without removing the legacy record — HACS guards against
@@ -202,9 +210,6 @@ async def _refresh_with_retries() -> dict[str, Any] | None:
 async def maybe_refresh_hacs_after_update() -> None:
     """Nudge HACS once per startup when the update picture changed."""
     try:
-        if is_embedded():
-            # The component manages the embedded server's updates.
-            return
         if is_update_check_disabled():
             return
 

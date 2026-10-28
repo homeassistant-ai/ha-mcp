@@ -3171,7 +3171,8 @@ def _build_get_caller_token_handler(
                 "error_code": "manifest_unreadable",
                 "error": (
                     "ha_mcp_tools manifest version could not be read. "
-                    "Reinstall the integration via HACS."
+                    "Reinstall the integration via HACS (the Marketplace on Home "
+                    "Assistant 2026.11+)."
                 ),
             }
         return {

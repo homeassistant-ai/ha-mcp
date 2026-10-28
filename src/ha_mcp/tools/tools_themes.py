@@ -273,7 +273,7 @@ class ThemesTools:
 
         When NOT to use: themes are YAML files - Home Assistant has no API to
         create or edit them. Installing community themes goes through HACS
-        (ha_manage_hacs); editing custom theme files goes through
+        (the Marketplace on 2026.11+, both via ha_manage_hacs); editing custom theme files goes through
         ha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name
         and attempts an automatic theme reload).
 

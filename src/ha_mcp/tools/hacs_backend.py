@@ -103,6 +103,8 @@ class StoreApi:
 
 
 HACS_API = StoreApi("hacs")
+# The order to probe them in: Home Assistant 2026.11 replaced HACS.
+STORE_APIS = (StoreApi("marketplace"), HACS_API)
 
 
 async def _probe(ws_client: Any, command: str) -> tuple[dict[str, Any] | None, str]:

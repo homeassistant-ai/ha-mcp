@@ -61,7 +61,8 @@ async def _component_command(
     if not component_supports(caps, CAPABILITY):
         raise _Unavailable(
             "This HA-MCP component cannot edit the callback list. Update the "
-            "HA-MCP integration in HACS."
+            "HA-MCP integration in HACS (the Marketplace on Home Assistant "
+            "2026.11+)."
         )
     ws = await get_websocket_client(
         url=client.base_url,
