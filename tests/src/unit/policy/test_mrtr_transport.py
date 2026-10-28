@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.client.elicitation import ElicitResult
 from ha_mcp._vendor.fastmcp.server.middleware import MiddlewareContext
 from ha_mcp._vendor.mcp import MCPError
+from ha_mcp._vendor.mcp_types import ElicitResult as MCPElicitResult
 from ha_mcp._vendor.mcp_types import InputRequiredResult
 from ha_mcp.policy.approval_queue import ApprovalQueue, PendingApproval
 from ha_mcp.policy.middleware import PolicyMiddleware
@@ -14,6 +16,10 @@ from ha_mcp.policy.model import Policy, Rule
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
 type ApprovalServer = tuple[FastMCP, ApprovalQueue, list[str], PolicyMiddleware]
+
+
+async def accept(*_args: object) -> ElicitResult:
+    return ElicitResult(action="accept", content={"decided": True})
 
 
 @pytest.fixture
@@ -48,10 +54,12 @@ async def test_wire_continuation_is_bound_and_single_use(
         mcp.add_transform(CategorizedSearchTransform())
         name, args = "ha_call_write_tool", {"name": name, "arguments": args}
 
-    async with Client(mcp) as client:
+    async with Client(mcp, elicitation_handler=accept) as client:
         first = await client.session.call_tool(name, args, allow_input_required=True)
         assert isinstance(first, InputRequiredResult)
         assert first.request_state
+        # Through the proxy too, the form names the gated tool, not the proxy.
+        assert "ha_test_write" in first.input_requests["ha_mcp_approval"].params.message
         entry = queue.list_pending()[0]
         assert entry.token not in first.request_state
         assert executed == []
@@ -77,12 +85,25 @@ async def test_wire_continuation_is_bound_and_single_use(
             )
         assert queue.list_pending() == [entry]
         queue.approve(entry.token)
+        accepted = {
+            "ha_mcp_approval": MCPElicitResult(
+                action="accept", content={"decided": True}
+            )
+        }
         result = await client.session.call_tool(
-            name, args, request_state=first.request_state, allow_input_required=True
+            name,
+            args,
+            request_state=first.request_state,
+            input_responses=accepted,
+            allow_input_required=True,
         )
         assert not result.is_error
         replay = await client.session.call_tool(
-            name, args, request_state=first.request_state, allow_input_required=True
+            name,
+            args,
+            request_state=first.request_state,
+            input_responses=accepted,
+            allow_input_required=True,
         )
         assert replay.is_error
         assert executed == ["original"]
@@ -103,7 +124,7 @@ async def test_sdk_automatically_resumes_pending_approval(
             queue.approve(pending.token)
 
     monkeypatch.setattr(middleware, "_wait_for_decision", decide_on_resume)
-    async with Client(mcp) as client:
+    async with Client(mcp, elicitation_handler=accept) as client:
         result = await client.call_tool("ha_test_write", {"value": "approved"})
     assert not result.is_error
     assert len(waits) == 2
@@ -127,3 +148,20 @@ async def test_legacy_wire_call_uses_normal_error_and_manual_retry(
         result = await client.call_tool("ha_test_write", {"value": "approved"})
         assert not result.is_error
         assert executed == ["approved"]
+
+
+@pytest.mark.anyio
+async def test_modern_client_without_elicitation_gets_normal_error(
+    server: ApprovalServer,
+) -> None:
+    """Without a declared elicitation capability the client cannot be asked,
+    so a 2026-07-28 call gets the approval error rather than input_required."""
+    mcp, queue, executed, _ = server
+    async with Client(mcp) as client:
+        first = await client.session.call_tool(
+            "ha_test_write", {"value": "approved"}, allow_input_required=True
+        )
+        assert not isinstance(first, InputRequiredResult)
+        assert first.is_error
+        assert "USER_APPROVAL_REQUIRED" in first.content[0].text
+        assert executed == []

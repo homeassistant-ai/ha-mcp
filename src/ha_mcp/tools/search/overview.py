@@ -90,6 +90,7 @@ _OVERVIEW_INDEPENDENT_FIELDS = frozenset(
         "read_only_mode",
         "read_only_mode_hint",
         "ha_mcp_update",
+        "mcp_client",
     }
 )
 
@@ -435,8 +436,9 @@ class OverviewMixin(SearchToolsBase):
         (``load_hidden_set`` reaches any extra data it needs — e.g. the
         Assist-exposure dimension — through the ``client`` it is already passed).
         The server-side-only fields (``tool_discovery``, ``settings_url``,
-        ``read_only_mode``, ``ha_mcp_update``) and the ``fields=`` projection are
-        applied by ``ha_get_overview`` after this, identically on both paths.
+        ``read_only_mode``, ``ha_mcp_update``, ``mcp_client``) and the
+        ``fields=`` projection are applied by ``ha_get_overview`` after this,
+        identically on both paths.
         """
         caps = await get_component_caps(self._client)
         if component_supports(caps, "overview") and component_supports(

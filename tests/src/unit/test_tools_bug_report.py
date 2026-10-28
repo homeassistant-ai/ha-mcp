@@ -13,7 +13,6 @@ from ha_mcp.client.rest_client import ErrorLogPage
 from ha_mcp.tools.bug_report_templates import _sanitize_log_text
 from ha_mcp.tools.tools_bug_report import (
     _detect_mcp_transport,
-    _extract_client_info,
     _fetch_addon_logs,
     _fetch_core_error_log,
     _format_logs_for_report,
@@ -1564,98 +1563,6 @@ class TestDetectMcpTransport:
         assert _detect_mcp_transport() == "http"
 
 
-class TestExtractClientInfo:
-    """Tests for _extract_client_info — pulls clientInfo off the MCP context."""
-
-    def test_returns_empty_when_ctx_is_none(self):
-        # Tool can be invoked outside an MCP request (unit tests, scripts).
-        # The bug-report path must not blow up — empty dict is the contract.
-        assert _extract_client_info(None) == {}
-
-    def test_returns_empty_when_session_has_no_client_params(self):
-        # Some transports / direct callers won't have completed an initialize
-        # handshake yet. _extract_client_info should treat that as "no info".
-        ctx = SimpleNamespace(session=SimpleNamespace(client_params=None))
-        assert _extract_client_info(ctx) == {}
-
-    def test_reads_name_version_title_off_initialize_params(self):
-        # Mirrors the shape of mcp.types.InitializeRequestParams.clientInfo
-        # (an Implementation: name + version, optional title) without pulling
-        # the real types into the test.
-        client_info_obj = SimpleNamespace(
-            name="Claude Desktop",
-            version="0.7.42",
-            title="Claude Desktop (claude.ai integration)",
-        )
-        ctx = SimpleNamespace(
-            session=SimpleNamespace(
-                client_params=SimpleNamespace(clientInfo=client_info_obj)
-            )
-        )
-        info = _extract_client_info(ctx)
-        assert info == {
-            "name": "Claude Desktop",
-            "version": "0.7.42",
-            "title": "Claude Desktop (claude.ai integration)",
-        }
-
-    def test_missing_optional_title_falls_back_to_empty_string(self):
-        client_info_obj = SimpleNamespace(name="Cursor", version="0.42", title=None)
-        ctx = SimpleNamespace(
-            session=SimpleNamespace(
-                client_params=SimpleNamespace(clientInfo=client_info_obj)
-            )
-        )
-        info = _extract_client_info(ctx)
-        assert info["name"] == "Cursor"
-        assert info["version"] == "0.42"
-        assert info["title"] == ""
-
-    def test_missing_version_falls_back_to_unknown(self):
-        # Pin the docstring promise: name/version default to "unknown" when
-        # the client didn't send them. If the future SDK refactor stops
-        # sending `version`, the f"{name} {version}" downstream rendering
-        # must not produce "Cursor None".
-        client_info_obj = SimpleNamespace(name="Cursor", version=None, title=None)
-        ctx = SimpleNamespace(
-            session=SimpleNamespace(
-                client_params=SimpleNamespace(clientInfo=client_info_obj)
-            )
-        )
-        info = _extract_client_info(ctx)
-        assert info == {"name": "Cursor", "version": "unknown", "title": ""}
-
-    def test_snake_case_client_info_attribute_is_picked_up(self):
-        # ha-mcp pins mcp 1.24.x where the attribute is `clientInfo`. Future
-        # SDK versions may switch to `client_info` (snake_case). The helper
-        # falls back to the snake_case attribute name so we keep working
-        # across the rename.
-        client_info_obj = SimpleNamespace(
-            name="Future Client", version="9.9.9", title=None
-        )
-        ctx = SimpleNamespace(
-            session=SimpleNamespace(
-                client_params=SimpleNamespace(client_info=client_info_obj)
-            )
-        )
-        info = _extract_client_info(ctx)
-        assert info == {"name": "Future Client", "version": "9.9.9", "title": ""}
-
-    def test_swallows_exceptions_and_returns_empty(self):
-        # If the context shape is unexpected (future MCP / FastMCP API churn),
-        # we'd rather degrade silently than fail the bug report.
-        class Boom:
-            # Use a property (not __getattr__) so the raise is a normal
-            # attribute access, not a special-method protocol violation.
-            # _extract_client_info reads ``ctx.session`` first, so raising
-            # here drives it into the broad ``except Exception`` swallow path.
-            @property
-            def session(self):
-                raise RuntimeError("unexpected ctx shape")
-
-        assert _extract_client_info(Boom()) == {}
-
-
 class TestBugReportNewIdentityFields:
     """End-to-end checks that the new self-reported placeholders + auto fields
     land in both templates and the response payload."""
@@ -1843,6 +1750,48 @@ class TestBugReportNewIdentityFields:
         agent = await ha_report_issue_func(ctx=ctx, report_type="agent_behavior")
         for template in (result["issue_body"], agent["issue_body"]):
             assert "**MCP Client:** Claude Desktop 0.7.42" in template
+
+    @pytest.mark.asyncio
+    async def test_protocol_version_and_capabilities_reach_the_report(
+        self, ha_report_issue_func
+    ):
+        from ha_mcp._vendor.mcp_types import (
+            ClientCapabilities,
+            ElicitationCapability,
+            RootsCapability,
+        )
+
+        session = SimpleNamespace(
+            client_params=None,
+            client_capabilities=ClientCapabilities(
+                elicitation=ElicitationCapability(), roots=RootsCapability()
+            ),
+        )
+        ctx = SimpleNamespace(
+            session=session,
+            request_context=SimpleNamespace(
+                protocol_version="2026-07-28", session=session
+            ),
+        )
+        result = await ha_report_issue_func(ctx=ctx)
+        diag = result["diagnostic_info"]
+        assert diag["mcp_protocol_version"] == "2026-07-28"
+        assert diag["mcp_client_capabilities"] == ["elicitation.form", "roots"]
+        agent = await ha_report_issue_func(ctx=ctx, report_type="agent_behavior")
+        for template in (result["issue_body"], agent["issue_body"]):
+            assert (
+                "**MCP Protocol:** 2026-07-28 (client capabilities: "
+                "elicitation.form, roots)"
+            ) in template
+
+    @pytest.mark.asyncio
+    async def test_protocol_line_without_a_request(self, ha_report_issue_func):
+        result = await ha_report_issue_func()
+        assert result["diagnostic_info"]["mcp_protocol_version"] is None
+        assert (
+            "**MCP Protocol:** unknown (client capabilities: not sent with this request)"
+            in result["issue_body"]
+        )
 
     @pytest.mark.asyncio
     async def test_instructions_describe_all_self_report_fields(
@@ -2165,59 +2114,6 @@ class TestWebsocketsProbeBranches:
 
         assert state["shared_metadata_version"] is None
         assert "shared_metadata_error" not in state
-
-
-class TestExtractClientInfoUserAgentFallback:
-    """Older-protocol clients over stateless HTTP send client info only in
-    initialize, so the request's User-Agent identifies them instead."""
-
-    @pytest.fixture
-    def headers(self, monkeypatch):
-        from ha_mcp.tools import tools_bug_report
-
-        current: dict[str, str] = {}
-        monkeypatch.setattr(
-            tools_bug_report, "get_http_headers", lambda include=None: current
-        )
-        return current
-
-    def _ctx_without_client_params(self):
-        return SimpleNamespace(session=SimpleNamespace(client_params=None))
-
-    def test_parses_product_and_version(self, headers):
-        headers["user-agent"] = "claude-code/2.1.4 (external, cli)"
-        assert _extract_client_info(self._ctx_without_client_params()) == {
-            "name": "claude-code",
-            "version": "2.1.4",
-            "title": "from HTTP User-Agent",
-        }
-
-    def test_product_without_version(self, headers):
-        headers["user-agent"] = "SomeClient"
-        assert _extract_client_info(self._ctx_without_client_params()) == {
-            "name": "SomeClient",
-            "version": "unknown",
-            "title": "from HTTP User-Agent",
-        }
-
-    def test_no_user_agent_returns_empty(self, headers):
-        assert _extract_client_info(self._ctx_without_client_params()) == {}
-
-    def test_client_params_win_over_user_agent(self, headers):
-        headers["user-agent"] = "python-httpx/0.28.1"
-        client_info = SimpleNamespace(name="Cursor", version="1.0", title=None)
-        ctx = SimpleNamespace(
-            session=SimpleNamespace(
-                client_params=SimpleNamespace(client_info=client_info)
-            )
-        )
-        assert _extract_client_info(ctx)["name"] == "Cursor"
-
-
-def test_extract_client_info_outside_an_http_request_returns_empty():
-    """stdio has no HTTP request, so there is no User-Agent to fall back to."""
-    ctx = SimpleNamespace(session=SimpleNamespace(client_params=None))
-    assert _extract_client_info(ctx) == {}
 
 
 class TestBugReportClientHostRow:

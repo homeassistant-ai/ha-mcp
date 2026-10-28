@@ -41,6 +41,7 @@ from .utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME,
     best_practices_skill,
     list_skill_files,
+    log_skill_registration_summary,
     parse_skill_frontmatter,
 )
 
@@ -216,9 +217,12 @@ class HomeAssistantSmartMCPServer:
         # Keep the pre-rename tool names callable for clients that still hold
         # an older catalog. First in the chain, so everything after it sees the
         # current name it is keyed on.
+        from .mcp_client_context import McpClientDebugLogMiddleware
         from .tools.renamed_tool_middleware import RenamedToolAliasMiddleware
 
         self.mcp.add_middleware(RenamedToolAliasMiddleware())
+        # After the alias, so the DEBUG line logs the current tool name.
+        self.mcp.add_middleware(McpClientDebugLogMiddleware())
 
         # Convert Pydantic type-validation errors to structured ToolErrors so
         # models get actionable guidance instead of raw Pydantic messages.
@@ -882,31 +886,7 @@ class HomeAssistantSmartMCPServer:
             )
             status["tool"] = "failed"
 
-        self._log_skill_registration_summary(status)
-
-    @staticmethod
-    def _log_skill_registration_summary(status: dict[str, str | int]) -> None:
-        """Emit one-line summary of skill registration outcome.
-
-        ``info`` when both provider and tool registered AND at least one
-        skill bundle parsed; ``warning`` otherwise. The guidance>0 gate
-        catches the "tool registered but exposes nothing" case (skills
-        directory missing, empty, or every SKILL.md fails to parse) —
-        the tool stays present so the failure is reachable via a tool
-        call, but operators should grep for this warning when a user
-        reports missing skill features.
-        """
-        provider = status.get("provider")
-        tool = status.get("tool")
-        raw_guidance = status.get("guidance_count", 0)
-        guidance = raw_guidance if isinstance(raw_guidance, int) else 0
-
-        message = "Skill system summary: provider=%s, tool=%s, guidance_count=%d"
-        args = (provider, tool, guidance)
-        if provider == "ok" and tool == "ok" and guidance > 0:
-            logger.info(message, *args)
-        else:
-            logger.warning(message, *args)
+        log_skill_registration_summary(status)
 
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
         """Register the ``ha_get_skill_guide`` tool unconditionally.
