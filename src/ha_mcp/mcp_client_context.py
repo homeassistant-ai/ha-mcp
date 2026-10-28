@@ -48,10 +48,15 @@ def declares_form_elicitation(caps: ClientCapabilities | None) -> bool:
     return elicitation.form is not None or elicitation.url is None
 
 
-def capability_names(caps: ClientCapabilities | None) -> list[str]:
-    """Flatten declared capabilities into stable, readable names."""
+def capability_names(caps: ClientCapabilities | None) -> list[str] | None:
+    """Flatten declared capabilities into stable, readable names.
+
+    ``None`` means the request carried none to read, which is not the same as
+    declaring none: a handshake-era client over stateless HTTP sends them only
+    in ``initialize``, never on a later call.
+    """
     if caps is None:
-        return []
+        return None
     names: list[str] = []
     if caps.elicitation is not None:
         if declares_form_elicitation(caps):

@@ -76,8 +76,11 @@ def _format_client_info_for_template(info: dict[str, str]) -> str:
 def _format_protocol_for_template(diagnostic_info: dict[str, Any]) -> str:
     """Render the request's protocol version and declared client capabilities."""
     version = diagnostic_info.get("mcp_protocol_version") or "unknown"
-    capabilities = diagnostic_info.get("mcp_client_capabilities") or []
-    declared = ", ".join(capabilities) if capabilities else "none declared"
+    capabilities = diagnostic_info.get("mcp_client_capabilities")
+    if capabilities is None:
+        declared = "not sent with this request"
+    else:
+        declared = ", ".join(capabilities) if capabilities else "none declared"
     return f"{version} (client capabilities: {declared})"
 
 

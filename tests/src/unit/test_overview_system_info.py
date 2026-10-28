@@ -856,7 +856,7 @@ class TestHaGetOverviewHaMcpUpdate:
         assert result["mcp_client"] == {
             "protocol_version": "unknown",
             "client_info": {},
-            "capabilities": [],
+            "capabilities": None,
         }
 
 
