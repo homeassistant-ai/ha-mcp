@@ -3,8 +3,6 @@
 import logging
 from typing import Any
 
-from ..client.rest_client import HomeAssistantError
-
 logger = logging.getLogger(__name__)
 
 # Integrations whose update entities are store repositories; Home Assistant
@@ -15,13 +13,9 @@ _STORE_PLATFORMS = frozenset({"hacs", "marketplace"})
 
 async def update_platforms(client: Any) -> dict[str, str]:
     """Map each registered update entity to the integration that owns it."""
-    try:
-        reply = await client.send_websocket_message(
-            {"type": "config/entity_registry/list_for_display"}
-        )
-    except HomeAssistantError as err:
-        logger.debug("Entity registry unavailable for update categories: %s", err)
-        return {}
+    reply = await client.send_websocket_message(
+        {"type": "config/entity_registry/list_for_display"}
+    )
     if not reply.get("success"):
         logger.debug("Entity registry unavailable for update categories: %s", reply)
         return {}
@@ -36,11 +30,10 @@ def categorize_update(
     entity_id: str, attributes: dict[str, Any], platform: str = ""
 ) -> str:
     """Categorize an update entity by its integration, entity_id and attributes."""
-    entity_lower = entity_id.lower()
-    # The entity-ID match covers HACS entities when the registry did not answer.
-    if platform in _STORE_PLATFORMS or (not platform and "hacs" in entity_lower):
+    if platform in _STORE_PLATFORMS:
         return "hacs"
 
+    entity_lower = entity_id.lower()
     # Use 'or ""' to handle both missing keys AND explicit None values
     title_lower = (attributes.get("title") or "").lower()
 

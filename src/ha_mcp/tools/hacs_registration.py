@@ -136,9 +136,8 @@ async def _find_repo_in_list_by_full_name(
     for repo in list_response.get("result", []):
         if (repo.get("full_name") or "").lower() == full_name_lower:
             # ``ws_client`` is ``Any`` so mypy can't narrow the result
-            # entry. The HACS wire shape (``custom_components/hacs/
-            # websocket/repositories.py``) always emits a dict per repo,
-            # so a runtime guard would be defensive only.
+            # entry. Both stores' list commands emit a dict per repo, so a
+            # runtime guard would be defensive only.
             return dict(repo)
     return None
 
@@ -290,7 +289,7 @@ async def wait_for_repo_registration(
     backstop_poll_interval: float = HACS_REPO_BACKSTOP_POLL_INTERVAL,
     api: StoreApi = HACS_API,
 ) -> dict[str, Any] | None:
-    """Wait for a HACS repo to register, using HACS' dispatch signal.
+    """Wait for a store repo to register, using HACS' dispatch signal.
 
     Replaces the previous fixed 10x1s blind poll of
     ``hacs/repositories/list``. HACS dispatches
@@ -307,11 +306,11 @@ async def wait_for_repo_registration(
         timeout: Wall-clock budget before giving up.
         backstop_poll_interval: Between dispatch nudges, re-check the
             list at this cadence to recover from a missed/lossy dispatch.
+        api: The store. The Marketplace registers a repository before its
+            add command answers, so there one list lookup is the whole
+            answer and ``timeout``/``backstop_poll_interval`` go unused.
 
-    Returns the HACS repo dict if found, or ``None`` on timeout.
-
-    The Marketplace registers a repository before its add command answers,
-    so there one list lookup is the whole answer.
+    Returns the repo dict if found, or ``None`` on timeout.
     """
     full_name_lower = full_name.lower()
     if api.is_marketplace:

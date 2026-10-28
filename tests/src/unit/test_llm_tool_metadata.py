@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -24,6 +23,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
 )
 
 from ._llm_api_helpers import (  # noqa: E402
+    CoreToolResult,
     fake_session,
     make_api,
     make_hass,
@@ -39,14 +39,6 @@ class _CoreToolAnnotations:
     destructive: bool = True
     idempotent: bool = False
     open_world: bool = True
-
-
-@dataclass
-class _CoreToolResult:
-    """Shape of Core 2026.10's ``llm.ToolResult``."""
-
-    data: Any
-    error: bool = False
 
 
 def _annotated_entry(sdk: str, **hints: bool) -> SimpleNamespace:
@@ -74,7 +66,7 @@ class TestCoreToolMetadata:
         monkeypatch.setattr(
             llm_api.llm, "ToolAnnotations", _CoreToolAnnotations, raising=False
         )
-        monkeypatch.setattr(llm_api.llm, "ToolResult", _CoreToolResult, raising=False)
+        monkeypatch.setattr(llm_api.llm, "ToolResult", CoreToolResult, raising=False)
 
     @pytest.mark.parametrize("sdk", ["v1", "v2"])
     async def test_mirrored_tool_carries_the_servers_metadata(
@@ -132,7 +124,7 @@ class TestCoreToolMetadata:
             llm_api.llm.LLMContext(),
         )
 
-        assert isinstance(result, _CoreToolResult)
+        assert isinstance(result, CoreToolResult)
         assert result.error is is_error
         assert result.data["isError"] is is_error
 

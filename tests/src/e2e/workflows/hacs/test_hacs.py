@@ -671,8 +671,6 @@ class TestHacsWriteOperations:
 
         if expected == "hacs" or marketplace["result"]["warning_accepted"]:
             return
-        if not search.get("results"):
-            pytest.skip("The store returned no repository to try installing")
         refused = await safe_hacs_call(
             mcp_client,
             "ha_manage_hacs",
@@ -685,7 +683,7 @@ class TestHacsWriteOperations:
         )
         assert accepted.get("success"), accepted
 
-    async def test_download_then_remove_roundtrip(self, mcp_client):
+    async def test_download_then_remove_roundtrip(self, mcp_client, ha_client):
         """
         Test: Download a disposable repository, then remove it.
 
@@ -715,12 +713,19 @@ class TestHacsWriteOperations:
         if target is None:
             pytest.skip("No downloadable theme repository available")
         repo_id = str(target["id"])
+        # The Marketplace warning is per user: accept it for the test user
+        # (no-op on HACS) rather than relying on the gate test running first.
+        await ha_client.send_websocket_message({"type": "marketplace/warning/accept"})
 
         download = await safe_hacs_call(
             mcp_client,
             "ha_manage_hacs",
             {"action": "download", "repository_id": repo_id},
         )
+        if download.get("store_error") == "warning_not_accepted":
+            # The in-add-on server connects as Supervisor's user, whose
+            # warning only that user can accept.
+            pytest.skip("The server's user has not accepted the Marketplace warning")
         if not download.get("success"):
             # Download needs GitHub content access; treat failure as an
             # environment limitation, mirroring the suite's skip policy.

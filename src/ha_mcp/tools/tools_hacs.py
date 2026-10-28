@@ -156,10 +156,12 @@ class HacsTools:
         """Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
 
         On Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool
-        uses whichever the instance has. Use ``action="search"`` to search/browse/list store repositories, or
-        ``action="info"`` for one repository's full details (README, versions, GitHub
-        stats). This tool is read-only; to install or add repositories use
-        ``ha_manage_hacs``, and for non-HACS entities/config use the domain-specific tools.
+        uses whichever the instance has. Use ``action="search"`` to
+        search/browse/list store repositories, or ``action="info"`` for one
+        repository's full details as the store reports them (the README is in
+        ``additional_info``). This tool is read-only; to install or add
+        repositories use ``ha_manage_hacs``, and for non-HACS entities/config use
+        the domain-specific tools.
 
         **DASHBOARD TIP:** ``action="search", installed_only=True, category="lovelace"``
         discovers installed custom cards to wire into ``ha_config_set_dashboard()``.
@@ -252,15 +254,26 @@ class HacsTools:
                 description=f"Repository category (action='add_repository'). {CATEGORY_HELP}"
             ),
         ] = None,
+        confirm_replace_built_in: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Marketplace only (action='download'): install a repository "
+                    "that replaces the built-in integration of the same domain. "
+                    "Set it only after the user agrees."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
         On Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool
-        uses whichever the instance has. This tool performs writes; to search the store or read repository details use
-        ``ha_get_hacs_info``. Use ``action="update_information"`` to run the HACS UI's
-        "Update information" action ("Refresh information" in the Marketplace) — a forced re-fetch of one repository's release data
-        from GitHub, so a pending update becomes visible to HACS and its update entity
-        immediately.
+        uses whichever the instance has. This tool performs writes; to search the
+        store or read repository details use ``ha_get_hacs_info``. Use
+        ``action="update_information"`` to run the HACS UI's "Update information"
+        action ("Refresh information" in the Marketplace) — a forced re-fetch of
+        one repository's release data from GitHub, so a pending update becomes
+        visible to the store and its update entity immediately.
 
         **Examples:**
         - Install latest: ha_manage_hacs(action="download", repository_id="441028036")
@@ -278,7 +291,9 @@ class HacsTools:
         connected GitHub account), so ``update_information`` is the way to surface a
         just-published release. The Marketplace refuses installs until the connected user has
         accepted its first-run warning, and adding a repository needs a connected GitHub
-        account; both are steps the user takes in the Marketplace panel.
+        account; both are steps the user takes in the Marketplace panel. A repository
+        that replaces a built-in integration installs only with
+        ``confirm_replace_built_in=True``, after the user agrees.
         """
         try:
             # Reject parameters that don't belong to the chosen action rather
@@ -293,17 +308,25 @@ class HacsTools:
                     "version": version,
                     "repository": repository,
                     "category": category,
+                    "confirm_replace_built_in": confirm_replace_built_in,
                 },
-                add_repository={"repository_id": repository_id, "version": version},
+                add_repository={
+                    "repository_id": repository_id,
+                    "version": version,
+                    "confirm_replace_built_in": confirm_replace_built_in,
+                },
                 update_information={
                     "version": version,
                     "repository": repository,
                     "category": category,
+                    "confirm_replace_built_in": confirm_replace_built_in,
                 },
             )
 
             if action == "download":
-                return await self._hacs_download(repository_id, version)
+                return await self._hacs_download(
+                    repository_id, version, bool(confirm_replace_built_in)
+                )
 
             if action == "remove":
                 return await self._hacs_remove(repository_id)
@@ -472,7 +495,7 @@ class HacsTools:
         return {"success": True, **wrapped}
 
     async def _hacs_download(
-        self, repository_id: str | None, version: str | None
+        self, repository_id: str | None, version: str | None, replace_built_in: bool
     ) -> dict[str, Any]:
         # Empty/whitespace repository_id would either be passed straight
         # into ``_resolve_hacs_repo_id`` (which has no empty-check and
@@ -500,6 +523,9 @@ class HacsTools:
         download_kwargs: dict[str, Any] = {"repository": actual_id}
         if version:
             download_kwargs["version"] = version
+        if replace_built_in and api.is_marketplace:
+            # HACS has no such gate, and its schema rejects the field
+            download_kwargs["confirm_replace_built_in"] = True
 
         # Download/install the repository. Same 60 s budget as remove: HACS
         # refreshes from GitHub before acting, and a slow GitHub past the

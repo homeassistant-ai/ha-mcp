@@ -61,6 +61,10 @@ _GATE_SUGGESTIONS = {
         "GitHub's anonymous rate limit ran out; wait and retry, or connect a "
         "GitHub account in Marketplace to raise the limit.",
     ],
+    "replaces_built_in": [
+        "This repository replaces a built-in integration of the same domain. "
+        "Ask the user to confirm, then retry with confirm_replace_built_in=True.",
+    ],
 }
 
 
@@ -88,7 +92,8 @@ class StoreApi:
 
     def native_category(self, category: str) -> str:
         """The store's name for ``category``, checked against its live list."""
-        native = _CATEGORY_ALIASES.get(category, category)
+        # The stores lower-case it themselves
+        native = _CATEGORY_ALIASES.get(category.lower(), category.lower())
         offered = self.info.get("categories")
         if offered and native not in offered:
             raise_tool_error(

@@ -777,8 +777,8 @@ class EntityTools:
         device_rename_result: dict[str, Any] | None,
     ) -> tuple[dict[str, bool] | None, dict[str, Any], bool]:
         """Apply expose_to changes; returns (exposure_result, entity_entry, unchanged)."""
-        if not parsed_expose_to:
-            return None, entity_entry, True
+        if parsed_expose_to is None:
+            return None, entity_entry, False
 
         # Group by should_expose value for efficient API calls
         expose_true = [a for a, v in parsed_expose_to.items() if v]
@@ -837,9 +837,8 @@ class EntityTools:
         unchanged = changed is not None and entity_id not in changed
 
         # Exposure mutates the registry entry's options, so refetch to return the
-        # post-exposure state. This is unconditional: the method returns early on
-        # an empty expose_to (line 695) and any exposure failure already raised
-        # above, so reaching here always means at least one exposure was applied.
+        # post-exposure state. An empty expose_to applies nothing but still
+        # refetches: no earlier phase may have read the entry.
         get_msg: dict[str, Any] = {
             "type": "config/entity_registry/get",
             "entity_id": entity_id,

@@ -85,13 +85,11 @@ def _strip_ansi(text: str) -> str:
 def _normalize_timestamp(timestamp: str) -> str:
     """Put a matched timestamp on one date/time separator.
 
-    Every timestamp comparison downstream is lexicographic — the covered
-    window, an issue's ``first_seen``/``last_seen`` bounds, and the recency
-    tiebreaker. ``_HA_LOG_LINE_RE`` accepts both the space and the ``T`` form
-    (case-insensitively), and ``" "`` sorts below every digit while ``"T"``
-    sorts above them, so a stream mixing the two forms would corrupt all three
-    at once. HA core emits the space form, so normalize onto that: real logs
-    come out byte-identical and only the ISO-8601 variant is rewritten.
+    ``_HA_LOG_LINE_RE`` accepts both the space and the ``T`` form
+    (case-insensitively); one form keeps a recurring issue's reported
+    timestamps uniform. HA core emits the space form, so normalize onto that:
+    real logs come out byte-identical and only the ISO-8601 variant is
+    rewritten. Comparisons go through ``_instant_order``.
 
     The date is fixed-width in the pattern (``\\d{4}-\\d{2}-\\d{2}``), so the
     separator is always at index 10 — replacing by position also covers the
@@ -109,7 +107,8 @@ def _instant_order(stamps: list[str]) -> Callable[[str], datetime]:
     outlives a restart.
     """
     offset = next(
-        (o for s in stamps if (o := datetime.fromisoformat(s).utcoffset())), None
+        (o for s in stamps if (o := datetime.fromisoformat(s).utcoffset()) is not None),
+        None,
     )
 
     def key(stamp: str) -> datetime:

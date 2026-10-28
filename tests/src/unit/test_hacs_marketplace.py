@@ -156,6 +156,45 @@ class TestMarketplaceCommands:
         assert "template" in text
         ws.send_command.assert_not_awaited()
 
+    async def test_category_case_is_the_stores_to_fold(self, tools):
+        # Core lower-cases it on add; a capitalised one must not be refused.
+        ws = _ws(_ok([]))
+        with _on_marketplace(ws):
+            await tools.ha_get_hacs_info(action="search", category="Integration")
+        assert ws.send_command.await_args.kwargs["categories"] == ["integration"]
+
+    async def test_built_in_replacement_names_the_confirmation(self, tools):
+        ws = _ws(
+            HomeAssistantCommandError(
+                "Command failed: o/youtube replaces the built-in youtube "
+                "integration, confirm that before installing it",
+                "replaces_built_in",
+            )
+        )
+        with _on_marketplace(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="download", repository_id="123")
+        text = str(excinfo.value)
+        assert "confirm_replace_built_in=True" in text
+        assert "Verify the target entity" not in text
+
+    @pytest.mark.parametrize("store", [MARKETPLACE, StoreApi("hacs")])
+    async def test_confirmed_replacement_reaches_only_the_marketplace(
+        self, tools, store
+    ):
+        ws = _ws(_ok(None))
+        with (
+            _on_marketplace(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.detect_store_api",
+                new=AsyncMock(return_value=store),
+            ),
+        ):
+            await tools.ha_manage_hacs(
+                action="download", repository_id="123", confirm_replace_built_in=True
+            )
+        kwargs = ws.send_command.await_args.kwargs
+        assert ("confirm_replace_built_in" in kwargs) is store.is_marketplace
+
     async def test_lovelace_alias_reaches_the_store_as_plugin(self, tools):
         ws = _ws(_ok([]))
         with _on_marketplace(ws):

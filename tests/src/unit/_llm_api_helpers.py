@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -16,6 +17,14 @@ from custom_components.ha_mcp_tools import llm_api
 from custom_components.ha_mcp_tools.const import DOMAIN, EXPOSURE_FULL
 
 FULL_ID = f"{DOMAIN}-entry-1745"
+
+
+@dataclass
+class CoreToolResult:
+    """Shape of Core's ``llm.ToolResult`` (2026.10+)."""
+
+    data: Any
+    error: bool = False
 
 
 def make_hass() -> MagicMock:
