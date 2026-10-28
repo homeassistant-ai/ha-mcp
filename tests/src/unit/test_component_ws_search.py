@@ -1873,7 +1873,7 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_LOGBOOK_EVENTS,
             wsapi.WS_OAUTH_CALLBACKS,
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
-            *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
+            *wsapi.helper_collections.COMMANDS + wsapi.entity_restore.COMMANDS,
             wsapi.core_contract.COMMAND,
             "ha_mcp_tools/statistics_units",
             wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py

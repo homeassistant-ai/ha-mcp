@@ -6,16 +6,23 @@ own helpers are reached lazily so its tests can patch them in place.
 
 from __future__ import annotations
 
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from ._vendor.websockets.exceptions import WebSocketException
+from .utils.registry_update_lock import registry_update_locks
 
 
 def _manager() -> Any:
     from . import backup_manager
 
     return backup_manager
+
+
+def entity_id_locks(*entity_ids: str) -> AbstractAsyncContextManager[None]:
+    """Hold the registry lock of each entity ID, in a stable order."""
+    lock = _manager().registry_update_lock
+    return registry_update_locks("entity", *entity_ids, lock=lock)
 
 
 async def registry_row(
@@ -140,12 +147,7 @@ async def _restore_entity_id(
     row = await bm._created_entity(client, entry_id, unique_id)
     source, target = row["entity_id"], saved["entity_id"]
     locked_ids = {source, target}
-    async with AsyncExitStack() as locks:
-        # A rename changes the lock key; hold both IDs in a stable order.
-        for entity_id in sorted(locked_ids):
-            await locks.enter_async_context(
-                bm.registry_update_lock("entity", entity_id)
-            )
+    async with entity_id_locks(*locked_ids):
         row = await bm._created_entity(client, entry_id, unique_id)
         source = row["entity_id"]
         if source not in locked_ids:

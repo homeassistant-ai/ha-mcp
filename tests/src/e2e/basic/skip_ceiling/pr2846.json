@@ -1,0 +1,12 @@
+{
+  "reason": "#2846 adds one external_only auto-backup test (tests/src/e2e/workflows/auto_backup/test_entity_capture_restore.py::test_a_removed_entity_says_what_core_keeps): restoring a removed entity's backup says what Home Assistant still keeps of it. It needs the in-process server's auto-backup env, so it skips at collection on every lane whose server runs out of process.",
+  "deltas": {
+    "haos_stdio": 1,
+    "haos_inaddon": 1,
+    "haos_inaddon_no_tools": 1,
+    "embedded": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded": 1,
+    "haos_embedded_no_tools": 1
+  }
+}
