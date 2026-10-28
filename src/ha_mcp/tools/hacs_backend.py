@@ -163,8 +163,10 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
             "Neither the Marketplace (Home Assistant 2026.11+) nor HACS is available.",
             suggestions=[
                 "On Home Assistant 2026.11 or newer, the Marketplace is built in",
-                "On older versions, install HACS from https://hacs.xyz/ and "
-                "restart Home Assistant",
+                (
+                    "On older versions, install HACS from https://hacs.xyz/ "
+                    "and restart Home Assistant"
+                ),
             ],
         )
     )
