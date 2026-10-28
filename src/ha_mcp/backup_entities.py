@@ -81,15 +81,20 @@ async def fetch_entity(client: Any, entity_id: str) -> dict[str, Any] | None:
 
 def _entry_id(entity_id: str, config: Any) -> str:
     """The snapshot's registry entry ``id``. A backup from before entity
-    backups held registry settings has none; it is refused before anything,
+    backups held registry settings has none, and one without a string
+    entity_id names no entity to restore; both are refused before anything,
     a safety backup included, is written."""
     entry_id = config.get("id") if isinstance(config, dict) else None
-    if isinstance(entry_id, str):
-        return entry_id
-    raise _manager().InvalidBackupSnapshotError(
-        f"The backup of {entity_id} holds its state from an earlier ha-mcp "
-        "version, not its registry settings, so it cannot be restored"
-    )
+    if not isinstance(entry_id, str):
+        raise _manager().InvalidBackupSnapshotError(
+            f"The backup of {entity_id} holds its state from an earlier ha-mcp "
+            "version, not its registry settings, so it cannot be restored"
+        )
+    if not isinstance(config.get("entity_id"), str):
+        raise _manager().InvalidBackupSnapshotError(
+            f"The backup of {entity_id} names no entity_id, so it cannot be restored"
+        )
+    return entry_id
 
 
 async def _component_send(client: Any, capability: str, message: dict[str, Any]) -> Any:
@@ -178,18 +183,18 @@ _HELD: ContextVar[frozenset[str] | None] = ContextVar("held_entity_locks", defau
 async def restore_locks(client: Any, config: Any) -> AsyncIterator[None]:
     """Hold the entity locks from before a restore's safety backup through its
     write, as a flow helper's restore holds its config-entry guard. When the
-    lookup finds no entry or fails with a transient error, the restore runs as
-    before: it takes its locks after the safety backup."""
+    lookup finds no entry or fails with a transient error, nothing is locked,
+    and the restore refuses before it writes."""
     entry_id = config.get("id") if isinstance(config, dict) else None
+    saved = config.get("entity_id") if isinstance(config, dict) else None
     try:
         found = await _lookup(client, entry_id) if isinstance(entry_id, str) else {}
     except _manager()._CAPTURE_TRANSIENT_ERRORS:
         found = {}  # the restore looks the entry up again and reports a failure
     entry = found.get("entry")
-    if entry is None:
-        yield
-        return
-    ids = frozenset((entry["entity_id"], config["entity_id"]))
+    ids: frozenset[str] = frozenset()
+    if entry is not None and isinstance(saved, str):
+        ids = frozenset((entry["entity_id"], saved))
     async with entity_id_locks(*ids):
         token = _HELD.set(ids)
         try:
@@ -201,11 +206,18 @@ async def restore_locks(client: Any, config: Any) -> AsyncIterator[None]:
 def _entity_locks(
     entity_id: str, source: str, target: str
 ) -> AbstractAsyncContextManager[None]:
-    """The restore's entity locks, or none when ``restore_locks`` holds them;
-    an entity renamed to a third ID since then is not under them."""
+    """The restore's entity locks, or none when ``restore_locks`` holds them.
+    An entry it could not lock, or one renamed to a third ID since, is not
+    under them, and its safety backup was taken without them."""
     held = _HELD.get()
     if held is None:
         return entity_id_locks(source, target)
+    if not held:
+        raise _manager().BackupRestoreError(
+            f"{entity_id} could not be locked before its safety backup was taken; retry",
+            reason="entity_identity_mismatch",
+            verification_status="mismatched",
+        )
     if source not in held:
         raise _changed_while_waiting(entity_id)
     return nullcontext()
@@ -373,11 +385,7 @@ def _refusal(entity_id: str, error: dict[str, Any]) -> Exception:
         return _entry_deleted(entity_id, {"deleted": error.get("deleted")})
     refusal: Exception
     if code == "entity_identity_mismatch":
-        refusal = _manager().BackupRestoreError(
-            f"{entity_id} changed while waiting to restore it; retry",
-            reason="entity_identity_mismatch",
-            verification_status="mismatched",
-        )
+        refusal = _changed_while_waiting(entity_id)
     elif code == "invalid":
         refusal = _manager().BackupRestoreError(
             f"Home Assistant refused the restore of {entity_id}: {message}. "

@@ -861,6 +861,79 @@ class TestRenamedEntity:
 
         assert _writes(registry) == []
 
+    @pytest.mark.parametrize("first", ["fails", "finds_nothing"])
+    async def test_an_entry_not_locked_before_the_safety_backup_is_not_written(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        first: str,
+    ) -> None:
+        """The lookup before the safety backup failed or found no entry, and
+        a later one finds it: the restore refuses instead of writing it
+        without its locks."""
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        registry.edit("light.desk", area_id="kitchen")
+        lookup = backup_entities._lookup
+        calls = 0
+
+        async def first_lookup_misses(client: Any, entry_id: str) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                return await lookup(client, entry_id)
+            if first == "fails":
+                raise ConnectionError("registry unavailable")
+            return {"entry": None}
+
+        monkeypatch.setattr(backup_entities, "_lookup", first_lookup_misses)
+
+        with pytest.raises(backup_manager.BackupRestoreError) as err:
+            await mgr.restore_snapshot(path.name)
+
+        assert err.value.outcome["reason"] == "entity_identity_mismatch"
+        assert err.value.outcome["verification_status"] == "mismatched"
+        assert "could not be locked before its safety backup" in str(err.value)
+        assert _writes(registry) == []
+        assert registry.entries["light.desk"]["area_id"] == "kitchen"
+
+    @pytest.mark.parametrize("missing", ["deleted", "none"])
+    async def test_a_backup_without_an_entity_id_is_refused(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        missing: str,
+    ) -> None:
+        """Refused before its locks and its safety backup; before, a missing
+        key raised a KeyError in the lock lookup and a None one let the
+        restore go ahead."""
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        read = mgr.read_snapshot
+
+        def without_entity_id(name: str) -> dict[str, Any]:
+            data = read(name)
+            if missing == "deleted":
+                del data["config"]["entity_id"]
+            else:
+                data["config"]["entity_id"] = None
+            return data
+
+        monkeypatch.setattr(mgr, "read_snapshot", without_entity_id)
+        files = await asyncio.to_thread(_files, tmp_path)
+
+        with pytest.raises(
+            backup_manager.InvalidBackupSnapshotError, match="names no entity_id"
+        ):
+            await mgr.restore_snapshot(path.name)
+
+        assert await asyncio.to_thread(_files, tmp_path) == files
+        assert _writes(registry) == []
+
     async def test_diff_compares_with_the_renamed_entity(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
