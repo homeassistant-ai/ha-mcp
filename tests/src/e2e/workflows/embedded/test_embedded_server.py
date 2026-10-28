@@ -58,6 +58,7 @@ from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX
 
 from ...utilities.streamable_http import parse_mcp_response
 from ...utilities.wait_helpers import wait_for_condition
+from ..hacs.test_auto_refresh_startup import NUDGE_MARKER_TIMEOUT
 
 # ``not_on_embedded``: this test boots its OWN dedicated in-process MCP server container to
 # prove the install method end to end. The embedded backend (E2E_BACKEND=embedded)
@@ -547,15 +548,15 @@ class TestEmbeddedServerEndToEnd:
                 assert stamps["ha_search"]["pinned"] is True
                 assert stamps["ha_get_state"]["pinned"] is False
 
-    async def test_embedded_server_skips_the_startup_nudge(self, embedded_ha):
-        """The in-process server must NOT run the HACS startup nudge.
+    async def test_embedded_server_runs_the_startup_nudge(self, embedded_ha):
+        """The in-process server must run the store startup nudge too.
 
         ``hacs_refresh_lifespan`` is attached to the server itself, so the
-        in-process server runs it too (``embedded_server`` enters
-        ``mcp._lifespan_manager()`` around uvicorn). The nudge inside it must
-        return at the ``is_embedded()`` gate: the embedded server arrives with
-        the component release HACS delivers, so there is nothing to refresh.
-        The negative lanes' positive counterparts live in
+        in-process server runs it (``embedded_server`` enters
+        ``mcp._lifespan_manager()`` around uvicorn). Its component update is
+        the one the Marketplace (Home Assistant 2026.11+) never checks for
+        without a connected GitHub account, so the pass must complete and
+        write its marker here as on every other launcher, whose lanes live in
         tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py.
 
         Readiness is the ``embedded_ha`` fixture itself — it only yields once
@@ -572,35 +573,18 @@ class TestEmbeddedServerEndToEnd:
         _base_url, _session_id, config_path, _container = embedded_ha
         data_dir = config_path / _SERVER_CONFIG_SUBDIR
 
-        # The component creates this dir during bring-up; the test seeds
-        # nothing into it. Its absence would mean the glob below is pointed at
-        # the wrong path, which would make "no marker" prove nothing.
-        assert data_dir.is_dir(), (
-            f"{data_dir} does not exist, so the in-process server's data dir "
-            "is not where this test looks — check SERVER_CONFIG_SUBDIR in "
-            "custom_components/ha_mcp_tools/const.py. /config contents: "
-            f"{sorted(p.name for p in config_path.iterdir())}"
-        )
-
         def marker_files() -> list[Path]:
             return list(data_dir.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-        # 10 s: the container ships a loaded HACS, so a regressed
-        # is_embedded gate completes its pass (and writes the marker) on the
-        # immediate first attempt — this window is over the completion time,
-        # not the retry schedule, which only starts when that attempt fails.
+        # The container ships a loaded store with neither candidate repository
+        # installed, so the pass completes on its first attempt.
         appeared = await wait_for_condition(
             marker_files,
-            timeout=10,
-            condition_name=(
-                "(not expected) HACS refresh marker in the in-process server's data dir"
-            ),
+            timeout=NUDGE_MARKER_TIMEOUT,
+            condition_name="store refresh marker in the in-process server's data dir",
         )
-        assert not appeared, (
-            "The in-process server wrote a HACS refresh marker "
-            f"({[p.name for p in marker_files()]}), but the embedded install "
-            "skips the nudge by design — it arrives with the component release "
-            "HACS delivers. The "
-            "is_embedded() gate in maybe_refresh_hacs_after_update is what "
-            "must hold here."
+        assert appeared, (
+            "The in-process server wrote no store refresh marker to "
+            f"{data_dir} within {NUDGE_MARKER_TIMEOUT:.0f}s, so its startup "
+            "nudge never completed a pass."
         )

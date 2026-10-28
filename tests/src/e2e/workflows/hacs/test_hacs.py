@@ -6,7 +6,8 @@ custom integrations, Lovelace cards, themes, and more from the HACS store.
 
 Note: These tests require HACS to be installed in the test environment.
 The test environment includes HACS in custom_components/ with a pre-configured
-config entry.
+config entry. Home Assistant 2026.11+ migrates that entry to the built-in
+Marketplace, which the same tools then drive.
 
 HACS requires a valid GitHub token to fully function. Without a valid token,
 HACS may be in a partially disabled state but the WebSocket API still responds.
@@ -26,6 +27,9 @@ from ...utilities.assertions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The stores' own name for what HA-MCP also accepts as "lovelace".
+_NATIVE_CATEGORY = {"lovelace": "plugin"}
 
 
 def extract_hacs_data(raw_result) -> dict:
@@ -227,11 +231,10 @@ class TestHacsSearchInstalled:
                 f"Category filter should be {category}"
             )
 
-            # All returned results should match the category
+            # Results carry the store's own category name
+            native = _NATIVE_CATEGORY.get(category, category)
             for repo in data["results"]:
-                assert repo["category"] == category, (
-                    f"Repo category should be {category}"
-                )
+                assert repo["category"] == native, f"Repo category should be {native}"
 
             logger.info(f"Category {category}: {data['total_matches']} installed")
 
@@ -308,10 +311,10 @@ class TestHacsSearch:
             "Category filter should be lovelace"
         )
 
-        # All results should be in the lovelace category
+        # Results carry the store's own name for the lovelace category
         for result_item in data["results"]:
-            assert result_item["category"] == "lovelace", (
-                "Result category should be lovelace"
+            assert result_item["category"] == "plugin", (
+                "Result category should be plugin"
             )
 
         logger.info(f"Search 'card' in lovelace: {data['total_matches']} matches")
@@ -645,6 +648,40 @@ class TestHacsWriteOperations:
         )
 
         logger.info("Remove store-only repository test passed")
+
+    async def test_tools_use_the_store_this_home_assistant_has(
+        self, mcp_client, ha_client
+    ):
+        """Test: the Marketplace on 2026.11+, HACS before; Marketplace gates hold.
+
+        On the Marketplace an install waits until the connected user has
+        accepted its first-run warning, which the agent cannot do: the refusal
+        must name that step. Accepting it the way the Marketplace panel does
+        then lets the download/remove roundtrip below run on this lane too.
+        """
+        marketplace = await ha_client.send_websocket_message(
+            {"type": "marketplace/info"}
+        )
+        search = await safe_hacs_call(
+            mcp_client, "ha_get_hacs_info", {"action": "search", "max_results": 1}
+        )
+        assert search.get("success"), f"Store search failed: {search.get('error')}"
+        expected = "marketplace" if marketplace.get("success") else "hacs"
+        assert search["store"]["api"] == expected
+
+        if expected == "hacs" or marketplace["result"]["warning_accepted"]:
+            return
+        refused = await safe_hacs_call(
+            mcp_client,
+            "ha_manage_hacs",
+            {"action": "download", "repository_id": str(search["results"][0]["id"])},
+        )
+        assert refused.get("success") is not True, "Install ran without the warning"
+        assert "first-run warning" in str(refused), refused
+        accepted = await ha_client.send_websocket_message(
+            {"type": "marketplace/warning/accept"}
+        )
+        assert accepted.get("success"), accepted
 
     async def test_download_then_remove_roundtrip(self, mcp_client):
         """
