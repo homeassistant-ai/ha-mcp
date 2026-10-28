@@ -505,6 +505,7 @@ async def test_bulk_component_batch_progress_does_not_claim_confirmation() -> No
         total=2,
         message_contains="dispatched via component; each op's result shows its outcome",
     )
+    assert "confirmed" not in call.kwargs["message"], call.kwargs
 
 
 # ---------------------------------------------------------------------------
