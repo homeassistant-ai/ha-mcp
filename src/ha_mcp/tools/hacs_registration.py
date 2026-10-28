@@ -20,21 +20,6 @@ from .hacs_backend import HACS_API, StoreApi
 
 logger = logging.getLogger(__name__)
 
-# HACS uses different category names internally vs what users expect
-# User-friendly name -> HACS internal name
-CATEGORY_MAP = {
-    "lovelace": "plugin",  # HACS calls Lovelace cards "plugin"
-    "integration": "integration",
-    "theme": "theme",
-    "appdaemon": "appdaemon",
-    "python_script": "python_script",
-    "template": "template",
-}
-
-# Reverse mapping for display
-CATEGORY_DISPLAY = {v: k for k, v in CATEGORY_MAP.items()}
-CATEGORY_DISPLAY["plugin"] = "lovelace"  # Display as lovelace for users
-
 
 def _score_repo_against_query(
     query_lower: str, name: str, full_name: str, description: str, authors: str
@@ -82,29 +67,10 @@ def _filter_and_score_repos(
         else:
             score = 0
 
-        # Map HACS internal category back to user-friendly name
-        repo_category = repo.get("category", "")
-        display_category = CATEGORY_DISPLAY.get(repo_category, repo_category)
-        entry: dict[str, Any] = {
-            "name": repo.get("name"),
-            "full_name": repo.get("full_name"),
-            "description": repo.get("description"),
-            "category": display_category,
-            "id": repo.get("id"),
-            "stars": repo.get("stars", 0),
-            "downloads": repo.get("downloads", 0),
-            "authors": authors_list,
-            "installed": repo.get("installed", False),
-            "installed_version": repo.get("installed_version")
-            if repo.get("installed")
-            else None,
-            "available_version": repo.get("available_version"),
-        }
+        # The store's own row, so fields it adds reach the caller.
+        entry = dict(repo)
         if query_lower:
             entry["score"] = score
-        if repo.get("installed"):
-            entry["pending_update"] = repo.get("pending_upgrade", False)
-            entry["domain"] = repo.get("domain")
         matches.append(entry)
 
     # Sort by score (descending) when searching, by name when listing

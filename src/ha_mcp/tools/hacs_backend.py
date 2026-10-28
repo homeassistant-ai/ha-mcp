@@ -21,6 +21,7 @@ _COMMANDS = {
         "refresh": "hacs/repository/refresh",
         "add": "hacs/repositories/add",
         "subscribe": "hacs/subscribe",
+        "releases": "hacs/repository/releases",
     },
     "marketplace": {
         "list": "marketplace/repositories/list",
@@ -30,15 +31,19 @@ _COMMANDS = {
         "refresh": "marketplace/repository/refresh",
         "add": "marketplace/repositories/add",
         "subscribe": "marketplace/subscribe",
+        "releases": "marketplace/repository/releases",
     },
 }
 _REPOSITORY_SIGNAL = {
     "hacs": "hacs_dispatch_repository",
     "marketplace": "marketplace_repository",
 }
-
-# Categories HACS managed that the Marketplace retired (they get a repair).
-RETIRED_MARKETPLACE_CATEGORIES = frozenset({"appdaemon", "python_script"})
+# HA-MCP's older name for what both stores call "plugin".
+_CATEGORY_ALIASES = {"lovelace": "plugin"}
+CATEGORY_HELP = (
+    "One of the categories the store reports (search's store.categories); "
+    "'lovelace' means 'plugin' (dashboard cards)."
+)
 
 # The Marketplace refuses these until the calling user acts in the UI; the
 # message Core sends is already user-facing, the suggestions add the step.
@@ -80,6 +85,21 @@ class StoreApi:
 
     def command(self, operation: str) -> str:
         return _COMMANDS[self.prefix][operation]
+
+    def native_category(self, category: str) -> str:
+        """The store's name for ``category``, checked against its live list."""
+        native = _CATEGORY_ALIASES.get(category, category)
+        offered = self.info.get("categories")
+        if offered and native not in offered:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{self.name} has no '{category}' category.",
+                    suggestions=[f"Use one of: {', '.join(sorted(offered))}"],
+                    context={"category": category, "categories": sorted(offered)},
+                )
+            )
+        return native
 
 
 HACS_API = StoreApi("hacs")
@@ -152,3 +172,39 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
 def gate_suggestions(err: HomeAssistantCommandError) -> list[str] | None:
     """The UI step for a Marketplace refusal the agent cannot clear itself."""
     return _GATE_SUGGESTIONS.get(err.code or "")
+
+
+async def fetch_releases(
+    ws_client: Any, api: StoreApi, repository_id: str, info: dict[str, Any]
+) -> dict[str, Any]:
+    """The repository's GitHub releases and the notes of versions not installed.
+
+    Release notes come from HACS's own command, or on the Marketplace from the
+    repository's update entity, the way the update dialog shows them.
+    """
+    out: dict[str, Any] = {}
+    warnings: list[str] = []
+    try:
+        reply = await ws_client.send_command(
+            api.command("releases"), repository_id=repository_id
+        )
+        out["github_releases"] = reply.get("result") or []
+    except HomeAssistantCommandError as err:
+        warnings.append(f"Releases unavailable: {err}")
+
+    try:
+        if not api.is_marketplace:
+            reply = await ws_client.send_command(
+                "hacs/repository/release_notes", repository=repository_id
+            )
+            out["release_notes"] = reply.get("result") or []
+        elif info.get("pending_upgrade") and info.get("update_entity_id"):
+            reply = await ws_client.send_command(
+                "update/release_notes", entity_id=info["update_entity_id"]
+            )
+            out["release_notes"] = reply.get("result")
+    except HomeAssistantCommandError as err:
+        warnings.append(f"Release notes unavailable: {err}")
+    if warnings:
+        out["warnings"] = warnings
+    return out
