@@ -119,7 +119,7 @@ async def test_verified_legacy_puppet_retries_with_maximum_height(
     assert result[0].legacy_full_page_fallback is True
 
 
-async def test_unknown_explicit_engine_skips_redundant_capabilities_probe(
+async def test_unknown_explicit_engine_is_not_retried_as_legacy_puppet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests, error = await _capture_error(
