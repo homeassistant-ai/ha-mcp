@@ -83,7 +83,12 @@ from .backup_diff import (
     _compute_json_patch,
     _summarize_patch_counts,
 )
-from .backup_entities import current_entity_id, fetch_entity, restore_entity
+from .backup_entities import (
+    current_entity_id,
+    fetch_entity,
+    restore_entity,
+    restore_locks,
+)
 from .backup_entity_ids import (
     _restore_entity_ids,
     update_with_registry_icon,
@@ -1490,6 +1495,11 @@ class BackupManager:
                     ) from err
                 data["entity_id"] = entity_id
                 async with self.config_entry_write_guard(entity_id, exclusive=True):
+                    return await self._restore_snapshot_data(
+                        name, data, take_safety_backup=take_safety_backup
+                    )
+            if data["domain"] == "entity":
+                async with restore_locks(self._client, data["config"]):
                     return await self._restore_snapshot_data(
                         name, data, take_safety_backup=take_safety_backup
                     )

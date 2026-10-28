@@ -24,6 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
+from contextvars import ContextVar
 from typing import Any
 
 from ._vendor.fastmcp.exceptions import ToolError
@@ -167,6 +170,57 @@ def _entry_deleted(entity_id: str, found: dict[str, Any]) -> Exception:
     return error
 
 
+# The entity IDs whose locks ``restore_locks`` holds for the running restore.
+_HELD: ContextVar[frozenset[str] | None] = ContextVar("held_entity_locks", default=None)
+
+
+@asynccontextmanager
+async def restore_locks(client: Any, config: Any) -> AsyncIterator[None]:
+    """Hold the entity locks from before a restore's safety backup through its
+    write, as a flow helper's restore holds its config-entry guard. When the
+    lookup finds no entry or fails with a transient error, the restore runs as
+    before: it takes its locks after the safety backup."""
+    entry_id = config.get("id") if isinstance(config, dict) else None
+    try:
+        found = await _lookup(client, entry_id) if isinstance(entry_id, str) else {}
+    except _manager()._CAPTURE_TRANSIENT_ERRORS:
+        found = {}  # the restore looks the entry up again and reports a failure
+    entry = found.get("entry")
+    if entry is None:
+        yield
+        return
+    ids = frozenset((entry["entity_id"], config["entity_id"]))
+    async with entity_id_locks(*ids):
+        token = _HELD.set(ids)
+        try:
+            yield
+        finally:
+            _HELD.reset(token)
+
+
+def _entity_locks(
+    entity_id: str, source: str, target: str
+) -> AbstractAsyncContextManager[None]:
+    """The restore's entity locks, or none when ``restore_locks`` holds them;
+    an entity renamed to a third ID since then is not under them."""
+    held = _HELD.get()
+    if held is None:
+        return entity_id_locks(source, target)
+    if source not in held:
+        raise _changed_while_waiting(entity_id)
+    return nullcontext()
+
+
+def _changed_while_waiting(entity_id: str) -> Exception:
+    """The refusal for an entry that moved while the restore waited for it."""
+    error: Exception = _manager().BackupRestoreError(
+        f"{entity_id} changed while waiting to restore it; retry",
+        reason="entity_identity_mismatch",
+        verification_status="mismatched",
+    )
+    return error
+
+
 async def restore_entity(client: Any, entity_id: str, config: Any) -> Any:
     """Write the snapshot's registry fields back, under the entity ID it saved."""
     bm = _manager()
@@ -176,14 +230,10 @@ async def restore_entity(client: Any, entity_id: str, config: Any) -> Any:
     if current is None:
         raise _entry_deleted(entity_id, found)
     source, target = current["entity_id"], config["entity_id"]
-    async with entity_id_locks(source, target):
+    async with _entity_locks(entity_id, source, target):
         current = await fetch_entity(client, source)
         if current is None or current["id"] != entry_id:
-            raise bm.BackupRestoreError(
-                f"{entity_id} changed while waiting to restore it; retry",
-                reason="entity_identity_mismatch",
-                verification_status="mismatched",
-            )
+            raise _changed_while_waiting(entity_id)
         if source != target:
             await bm._check_entity_collision(client, target)
         await _check_references(client, config)

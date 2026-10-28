@@ -686,6 +686,181 @@ class TestRenamedEntity:
         assert _writes(registry) == []
         assert registry.entries["light.lamp"]["area_id"] == "kitchen"
 
+    async def test_an_edit_queued_during_the_safety_backup_waits_for_the_write(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The restore holds the entity lock from before its safety backup
+        through its write, so an edit cannot land between the two."""
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        registry.edit("light.desk", area_id="kitchen")
+        order: list[str] = []
+        queued = asyncio.Event()
+        edits: list[asyncio.Task[None]] = []
+
+        async def edit() -> None:
+            lock = backup_manager.registry_update_lock("entity", "light.desk")
+            queued.set()
+            async with lock:
+                order.append("edit")
+
+        capture = mgr.maybe_snapshot
+
+        async def capture_with_an_edit_queued(*args: Any, **kwargs: Any) -> Any:
+            edits.append(asyncio.ensure_future(edit()))
+            await queued.wait()
+            return await capture(*args, **kwargs)
+
+        sent = registry.ws
+
+        async def record(client: Any, msg: dict[str, Any]) -> Any:
+            if msg["type"] in (
+                "config/entity_registry/update",
+                "ha_mcp_tools/entity_restore",
+            ):
+                order.append("write")
+            return await sent(client, msg)
+
+        monkeypatch.setattr(mgr, "maybe_snapshot", capture_with_an_edit_queued)
+        monkeypatch.setattr(backup_manager, "_ws_send", record)
+
+        await mgr.restore_snapshot(path.name)
+        await asyncio.gather(*edits)
+
+        assert order[-1] == "edit" and "write" in order, order
+
+    async def test_a_rename_past_the_held_locks_stops_the_restore(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Renamed to a third ID after the safety backup, by a writer the
+        locks do not cover: the restore holds no lock on that ID and stops."""
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        registry.edit("light.desk", area_id="kitchen")
+        captured = False
+        capture = mgr.maybe_snapshot
+
+        async def capture_then_flag(*args: Any, **kwargs: Any) -> Any:
+            nonlocal captured
+            result = await capture(*args, **kwargs)
+            captured = True
+            return result
+
+        lookup = backup_entities._lookup
+
+        async def rename_once_captured(client: Any, entry_id: str) -> Any:
+            if captured and "light.desk" in registry.entries:
+                registry.edit("light.desk", new_entity_id="light.third")
+            return await lookup(client, entry_id)
+
+        monkeypatch.setattr(mgr, "maybe_snapshot", capture_then_flag)
+        monkeypatch.setattr(backup_entities, "_lookup", rename_once_captured)
+
+        with pytest.raises(backup_manager.BackupRestoreError) as err:
+            await mgr.restore_snapshot(path.name)
+
+        assert err.value.outcome["reason"] == "entity_identity_mismatch"
+        assert _writes(registry) == []
+
+    async def test_a_rename_back_holds_both_ids_from_the_safety_backup(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        registry.edit("light.desk", new_entity_id="light.lamp", area_id="kitchen")
+        seen: list[tuple[str, list[str]]] = []
+
+        def held() -> list[str]:
+            return [
+                entity_id
+                for entity_id in ("light.desk", "light.lamp")
+                if backup_manager.registry_update_lock("entity", entity_id).locked()
+            ]
+
+        capture = mgr.maybe_snapshot
+
+        async def check(*args: Any, **kwargs: Any) -> Any:
+            seen.append(("backup", held()))
+            return await capture(*args, **kwargs)
+
+        sent = registry.ws
+
+        async def record(client: Any, msg: dict[str, Any]) -> Any:
+            if msg["type"] in (
+                "config/entity_registry/update",
+                "ha_mcp_tools/entity_restore",
+            ):
+                seen.append(("write", held()))
+            return await sent(client, msg)
+
+        monkeypatch.setattr(mgr, "maybe_snapshot", check)
+        monkeypatch.setattr(backup_manager, "_ws_send", record)
+
+        await mgr.restore_snapshot(path.name)
+
+        assert seen[0][0] == "backup", seen
+        assert all(ids == ["light.desk", "light.lamp"] for _, ids in seen), seen
+
+    async def test_a_failed_lock_lookup_keeps_the_restore_outcome(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+
+        async def failing(client: Any, entry_id: str) -> Any:
+            raise ConnectionError("registry unavailable")
+
+        monkeypatch.setattr(backup_entities, "_lookup", failing)
+
+        with pytest.raises(ConnectionError) as err:
+            await mgr.restore_snapshot(path.name)
+
+        assert vars(err.value)["restore_outcome"]["restored_from"] == path.name
+        assert _writes(registry) == []
+
+    async def test_a_cancel_during_the_lock_lookup_writes_nothing(
+        self,
+        registry: FakeRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mgr = _manager(tmp_path, registry)
+        path = await mgr.maybe_snapshot("entity", "light.desk", tool_name="t")
+        assert path is not None
+        registry.edit("light.desk", area_id="kitchen")
+        lookup = backup_entities._lookup
+        calls = 0
+
+        async def cancelled_once(client: Any, entry_id: str) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise asyncio.CancelledError
+            return await lookup(client, entry_id)
+
+        monkeypatch.setattr(backup_entities, "_lookup", cancelled_once)
+
+        with pytest.raises(asyncio.CancelledError):
+            await mgr.restore_snapshot(path.name)
+
+        assert _writes(registry) == []
+
     async def test_diff_compares_with_the_renamed_entity(
         self, registry: FakeRegistry, tmp_path: Path
     ) -> None:
