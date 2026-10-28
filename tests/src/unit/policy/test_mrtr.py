@@ -165,6 +165,7 @@ async def test_dynamic_selector_resumes_only_its_original_row(
                 first.input_required.request_state,
                 name="ha_bulk_control",
                 arguments=args,
+                answer="accept",
             ),
             gate.execute,
         )
@@ -214,7 +215,8 @@ async def test_concurrent_resumes_cannot_reuse_remembered_approval(
     results = await asyncio.gather(
         *(
             gate.middleware.on_call_tool(
-                context(first.input_required.request_state), gate.execute
+                context(first.input_required.request_state, answer="accept"),
+                gate.execute,
             )
             for _ in range(2)
         ),
@@ -269,9 +271,12 @@ async def test_continuation_resumes_only_after_ui_approval(
 
     queue.approve(entry.token)
     state = second.input_required.request_state
-    assert await middleware.on_call_tool(context(state), execute) == "saved"
+    assert (
+        await middleware.on_call_tool(context(state, answer="accept"), execute)
+        == "saved"
+    )
     with pytest.raises(ToolError):
-        await middleware.on_call_tool(context(state), execute)
+        await middleware.on_call_tool(context(state, answer="accept"), execute)
     assert dispatched == [{"domain": "light"}]
 
 
@@ -396,3 +401,32 @@ async def test_ask_states_the_configured_approval_window(
     first = await gate.middleware.on_call_tool(context(), gate.execute)
     message = first.input_required.input_requests["ha_mcp_approval"].params.message
     assert f"within {wait_seconds} s" in message
+
+
+@pytest.mark.anyio
+async def test_dismissed_form_cannot_run_an_already_approved_call(
+    gate: SimpleNamespace,
+) -> None:
+    """Continuing needs both the approval and an accepted form."""
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="cancel"),
+            gate.execute,
+        )
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_unanswered_retry_is_asked_again_even_once_approved(
+    gate: SimpleNamespace,
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    again = await gate.middleware.on_call_tool(
+        context(first.input_required.request_state), gate.execute
+    )
+    assert isinstance(again, InputRequiredToolResult)
+    assert "ha_mcp_approval" in again.input_required.input_requests
+    assert gate.executed == []

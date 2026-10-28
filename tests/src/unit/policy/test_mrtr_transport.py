@@ -8,6 +8,7 @@ from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.client.elicitation import ElicitResult
 from ha_mcp._vendor.fastmcp.server.middleware import MiddlewareContext
 from ha_mcp._vendor.mcp import MCPError
+from ha_mcp._vendor.mcp_types import ElicitResult as MCPElicitResult
 from ha_mcp._vendor.mcp_types import InputRequiredResult
 from ha_mcp.policy.approval_queue import ApprovalQueue, PendingApproval
 from ha_mcp.policy.middleware import PolicyMiddleware
@@ -82,12 +83,25 @@ async def test_wire_continuation_is_bound_and_single_use(
             )
         assert queue.list_pending() == [entry]
         queue.approve(entry.token)
+        accepted = {
+            "ha_mcp_approval": MCPElicitResult(
+                action="accept", content={"decided": True}
+            )
+        }
         result = await client.session.call_tool(
-            name, args, request_state=first.request_state, allow_input_required=True
+            name,
+            args,
+            request_state=first.request_state,
+            input_responses=accepted,
+            allow_input_required=True,
         )
         assert not result.is_error
         replay = await client.session.call_tool(
-            name, args, request_state=first.request_state, allow_input_required=True
+            name,
+            args,
+            request_state=first.request_state,
+            input_responses=accepted,
+            allow_input_required=True,
         )
         assert replay.is_error
         assert executed == ["original"]

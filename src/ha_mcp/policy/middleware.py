@@ -15,6 +15,7 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     Middleware,
     MiddlewareContext,
 )
+from ha_mcp._vendor.fastmcp.tools.base import InputRequiredToolResult
 
 from ..errors import ErrorCode, create_error_response
 from ..renamed_tools import current_tool_name
@@ -270,7 +271,21 @@ class PolicyMiddleware(Middleware):
                 pending, policy, wait, dynamic_targets=dynamic_targets
             )
         answer = approval_answer(context) if resumed is not None else None
-        await self._wait_or_apply_answer(context, pending, continuation, wait, answer)
+        if resumed is not None and answer != "accept":
+            return await self._end_unconfirmed_resume(
+                pending,
+                rule,
+                resumed[0],
+                answer,
+                dynamic_targets=dynamic_targets,
+                policy=policy,
+                name=name,
+            )
+        await self._wait_for_decision(
+            context,
+            pending,
+            continuation.wait_seconds(answer) if continuation else wait,
+        )
 
         if pending.decision == "approved":
             if self._claim_approval(
@@ -308,31 +323,36 @@ class PolicyMiddleware(Middleware):
         self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
-    async def _wait_or_apply_answer(
+    async def _end_unconfirmed_resume(
         self,
-        context: MiddlewareContext,
         pending: PendingApproval,
-        continuation: ApprovalContinuation | None,
-        wait: int,
+        rule: Rule | None,
+        continuation: ApprovalContinuation,
         answer: ApprovalAnswer | None,
-    ) -> None:
-        """Wait for the UI decision, unless the user answered the ask.
+        *,
+        dynamic_targets: bool,
+        policy: Policy,
+        name: str,
+    ) -> InputRequiredToolResult | None:
+        """Handle a resumed call whose form was not accepted. Never dispatches.
 
-        The answer is client-supplied, so it may stop or deny the call but
-        never approve it: a decline denies even an already-approved row, and
-        a cancel skips the wait and falls through to the approval error.
+        Only an accepted form continues a resumed call, even once the row is
+        approved. The answer is client-supplied, so it may stop or deny the
+        call but never approve it: decline denies the row, cancel ends with
+        the approval error, and a retry with no answer is asked again.
         """
-        if answer == "decline":
+        if answer == "decline" or pending.decision == "denied":
             self._queue.deny(pending.token)
             self._queue.remove(pending.token)
             self._raise_denied_error()
-        if answer == "cancel":
-            return
-        await self._wait_for_decision(
-            context,
-            pending,
-            continuation.wait_seconds(answer) if continuation else wait,
+        if answer is None and (ask := continuation.next_result(self._queue)):
+            return ask
+        pending = self._finalize_timed_out_pending(
+            pending, dynamic_targets=dynamic_targets, policy=policy, name=name
         )
+        await self._announce_reissued(pending, rule, dynamic_targets=dynamic_targets)
+        self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _announce_reissued(
         self,
