@@ -15,6 +15,7 @@ import pytest
 
 from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools.hacs_backend import HACS_API
 from ha_mcp.tools.tools_hacs import (
     HACS_ADD_REGISTRATION_TIMEOUT,
     HACS_RESOLVE_REGISTRATION_TIMEOUT,
@@ -47,8 +48,8 @@ def _patched_hacs(ws):
     """Patch HACS availability, the WS client factory, and tz metadata."""
     with (
         patch(
-            "ha_mcp.tools.tools_hacs._assert_hacs_available",
-            new=AsyncMock(return_value=None),
+            "ha_mcp.tools.tools_hacs.detect_store_api",
+            new=AsyncMock(return_value=HACS_API),
         ),
         patch(
             "ha_mcp.client.websocket_client.get_websocket_client",
@@ -232,8 +233,8 @@ class TestManageHacsAddRepository:
     async def test_add_repository_translates_category_and_returns_registered_id(
         self, tools
     ):
-        # The user-facing "lovelace" category must reach HACS as its internal
-        # name "plugin" (CATEGORY_MAP), and the returned id comes from the repo
+        # HA-MCP's "lovelace" alias must reach HACS as its own name "plugin",
+        # and the returned id comes from the repo
         # that actually registers — the add ack itself carries no id.
         ws = _ws({})
         registered = {"id": "999", "full_name": "owner/my-card", "name": "My Card"}
@@ -285,7 +286,7 @@ class TestManageHacsAddRepository:
         assert "did not register" in str(excinfo.value)
 
     async def test_add_repository_rejects_slashless_format_before_ws(self, tools):
-        # The "owner/repo" format guard lives after _assert_hacs_available but
+        # The "owner/repo" format guard lives after the store detection but
         # before the WS add; the e2e test for it skips when HACS is
         # unavailable, so pin it deterministically here.
         ws = _ws({})
