@@ -899,7 +899,7 @@ class TestRenamedEntity:
         assert _writes(registry) == []
         assert registry.entries["light.desk"]["area_id"] == "kitchen"
 
-    @pytest.mark.parametrize("missing", ["deleted", "none"])
+    @pytest.mark.parametrize("missing", ["deleted", "none", "empty"])
     async def test_a_backup_without_an_entity_id_is_refused(
         self,
         registry: FakeRegistry,
@@ -920,7 +920,7 @@ class TestRenamedEntity:
             if missing == "deleted":
                 del data["config"]["entity_id"]
             else:
-                data["config"]["entity_id"] = None
+                data["config"]["entity_id"] = None if missing == "none" else ""
             return data
 
         monkeypatch.setattr(mgr, "read_snapshot", without_entity_id)

@@ -81,16 +81,16 @@ async def fetch_entity(client: Any, entity_id: str) -> dict[str, Any] | None:
 
 def _entry_id(entity_id: str, config: Any) -> str:
     """The snapshot's registry entry ``id``. A backup from before entity
-    backups held registry settings has none, and one without a string
-    entity_id names no entity to restore; both are refused before anything,
-    a safety backup included, is written."""
+    backups held registry settings has none, and one without a non-empty
+    string entity_id names no entity to restore; both are refused before
+    anything, a safety backup included, is written."""
     entry_id = config.get("id") if isinstance(config, dict) else None
     if not isinstance(entry_id, str):
         raise _manager().InvalidBackupSnapshotError(
             f"The backup of {entity_id} holds its state from an earlier ha-mcp "
             "version, not its registry settings, so it cannot be restored"
         )
-    if not isinstance(config.get("entity_id"), str):
+    if not isinstance(config.get("entity_id"), str) or not config["entity_id"]:
         raise _manager().InvalidBackupSnapshotError(
             f"The backup of {entity_id} names no entity_id, so it cannot be restored"
         )
