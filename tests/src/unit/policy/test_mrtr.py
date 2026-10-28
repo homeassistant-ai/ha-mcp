@@ -540,3 +540,26 @@ async def test_accepted_call_denied_in_the_tab_is_denied(gate: SimpleNamespace) 
         )
     assert gate.queue.list_pending() == []
     assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_replaying_a_used_approval_after_the_window_does_not_invite_a_rerun(
+    gate: SimpleNamespace,
+) -> None:
+    """The row is gone either way, so the message must not say nothing ran."""
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    state = first.input_required.request_state
+    assert (
+        await gate.middleware.on_call_tool(
+            context(state, answer="accept"), gate.execute
+        )
+        == "saved"
+    )
+    gate.clock[0] += 70
+    with pytest.raises(ToolError) as exc:
+        await gate.middleware.on_call_tool(
+            context(state, answer="accept"), gate.execute
+        )
+    assert "check its outcome" in str(exc.value)
+    assert gate.executed == ["ha_call_service"]

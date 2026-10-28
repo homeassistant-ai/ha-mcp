@@ -146,12 +146,12 @@ def _window_ended() -> NoReturn:
     raise_tool_error(
         create_error_response(
             ErrorCode.USER_APPROVAL_REQUIRED,
-            "The approval window for this call has ended and its request has "
-            "expired. No tool was executed. Call the tool again to request a "
-            "new approval.",
+            "The approval window for this call has ended. This retry executed "
+            "nothing, but an earlier attempt of this call may already have run: "
+            "check its outcome before calling the tool again.",
             suggestions=[
-                "Re-call this tool, then approve the new request in the Tool "
-                + "Security Policies tab while the call is waiting.",
+                "Check the target's current state before re-calling.",
+                "A fresh call needs a new approval in the Tool Security Policies tab.",
             ],
         )
     )
