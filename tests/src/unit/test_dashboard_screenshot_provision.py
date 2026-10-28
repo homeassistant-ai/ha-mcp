@@ -145,8 +145,10 @@ class TestWpeSupervisorDiscovery:
             },
         )
 
-        with pytest.raises(ToolError, match=r"(?i)not started"):
+        with pytest.raises(ToolError, match=r"(?i)not started") as exc_info:
             await provision._discover_engine_via_supervisor()
+
+        assert str(exc_info.value).lower().count("start it") == 1
 
     async def test_explicit_url_keeps_puppet_theme_guard_with_wpe_installed(
         self, monkeypatch: pytest.MonkeyPatch

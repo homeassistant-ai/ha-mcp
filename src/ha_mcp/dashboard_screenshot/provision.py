@@ -120,7 +120,7 @@ _NOT_STARTED_HELP = (
     "The supported screenshot engine app is installed but not started. Open "
     "Settings > Apps > the selected engine (Settings > Add-ons before Home "
     f"Assistant 2026.2), {TOKEN_HINT}, "
-    "and start it. Enable 'Start on boot' to keep it available."
+    "Enable 'Start on boot' to keep it available."
 )
 
 _STDIO_HELP = (

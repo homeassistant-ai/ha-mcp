@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
@@ -120,7 +119,7 @@ async def test_verified_legacy_puppet_retries_with_maximum_height(
     assert result[0].legacy_full_page_fallback is True
 
 
-async def test_unknown_explicit_engine_is_not_retried_as_legacy_puppet(
+async def test_unknown_explicit_engine_skips_redundant_capabilities_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests, error = await _capture_error(
@@ -129,33 +128,10 @@ async def test_unknown_explicit_engine_is_not_retried_as_legacy_puppet(
         [_error(400), _error(404, b"not found")],
     )
 
+    assert len(requests) == 1
+    assert requests[0]["url"] == "http://engine:10000/lovelace/0"
     assert requests[0]["params"]["viewport"] == "900xauto"
-    assert requests[1]["url"] == "http://engine:10000/capabilities"
-    assert requests[1]["timeout"] == 2.0
-    assert len(requests) == 2
     assert error["engine_kind"] == "unknown"
-
-
-async def test_explicit_wpe_capabilities_prevent_legacy_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    requests, error = await _capture_error(
-        monkeypatch,
-        EngineTarget(url="http://wpe:19433"),
-        [
-            _error(400, b"height unavailable"),
-            _Response(
-                200,
-                b'{"name":"WPE Screenshot Engine","api_version":1}',
-                "application/json",
-            ),
-        ],
-    )
-
-    assert requests[0]["params"]["viewport"] == "900xauto"
-    assert requests[1]["url"] == "http://wpe:19433/capabilities"
-    assert len(requests) == 2
-    assert error["engine_kind"] == "wpe"
 
 
 async def test_current_puppet_does_not_use_legacy_full_page_retry(
@@ -173,26 +149,3 @@ async def test_current_puppet_does_not_use_legacy_full_page_retry(
     assert requests[0]["params"]["viewport"] == "900xauto"
     assert error["engine_kind"] == "puppet"
     assert error["engine_version"] == "2.5.0"
-
-
-async def test_capabilities_probe_has_a_total_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from ha_mcp.dashboard_screenshot import engine_compat
-
-    class SlowResponse(_Response):
-        async def aiter_bytes(self) -> AsyncIterator[bytes]:
-            yield b'{"name":"WPE Screenshot Engine",'
-            await asyncio.sleep(0.05)
-            yield b'"api_version":1}'
-
-    monkeypatch.setattr(engine_compat, "IDENTIFICATION_TIMEOUT_SECONDS", 0.01)
-    _Client.requests = []
-    _Client.responses = [SlowResponse(200, b"", "application/json")]
-
-    async with _Client() as client:
-        result = await engine_compat.detect_engine_kind_from_capabilities(
-            client, "http://wpe:19433"
-        )
-
-    assert result is None

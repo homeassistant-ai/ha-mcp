@@ -24,7 +24,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
-from .engine_compat import detect_engine_kind_from_capabilities, is_legacy_puppet
+from .engine_compat import is_legacy_puppet
 from .provision import TOKEN_HINT, EngineKind, resolve_engine
 from .theme_guard import ThemeGuard
 
@@ -638,20 +638,13 @@ async def _request_viewport_image(
                         response, MAX_ENGINE_ERROR_BODY_BYTES
                     )
                     error_text = error_body.decode(errors="replace")
-                    identified_engine_kind = engine_kind
                     if (
                         response.status_code == 400
                         and options.full_page
                         and viewport.height == "auto"
                         and not fallback_used
                     ):
-                        if identified_engine_kind is None:
-                            identified_engine_kind = (
-                                await detect_engine_kind_from_capabilities(
-                                    http_client, engine_url
-                                )
-                            )
-                        if is_legacy_puppet(identified_engine_kind, engine_version):
+                        if is_legacy_puppet(engine_kind, engine_version):
                             fallback_used = True
                             capture_height = MAX_VIEWPORT_DIMENSION
                             params["viewport"] = (
@@ -667,7 +660,7 @@ async def _request_viewport_image(
                             context={
                                 **request_context,
                                 "status_code": response.status_code,
-                                "engine_kind": identified_engine_kind or "unknown",
+                                "engine_kind": engine_kind or "unknown",
                                 "engine_version": engine_version,
                                 "legacy_full_page_fallback_attempted": fallback_used,
                             },
