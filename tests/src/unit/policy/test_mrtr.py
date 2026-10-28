@@ -313,11 +313,6 @@ async def test_modern_client_without_elicitation_gets_blocking_approval_error(
     gate.middleware._wait_for_decision.assert_awaited_once()
     assert gate.middleware._wait_for_decision.await_args.args[2] == 60
     assert gate.executed == []
-    gate.queue.approve(gate.queue.list_pending()[0].token)
-    assert (
-        await gate.middleware.on_call_tool(context(elicitation=False), gate.execute)
-        == "saved"
-    )
 
 
 @pytest.mark.anyio

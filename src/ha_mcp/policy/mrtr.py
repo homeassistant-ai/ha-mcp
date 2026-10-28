@@ -99,7 +99,7 @@ def _approval_request(tool_name: str, wait_seconds: int) -> ElicitRequest:
             # Clients may render this on one truncated line: keep it short.
             message=(
                 f"Approve {tool_name} in ha-mcp > Tool Security Policies and "
-                f"Accept here (either order, within {wait_seconds} s)."
+                f"Accept here (either order, within {wait_seconds} s of the call)."
             ),
             # A bool field rather than an empty schema: FastMCP notes some
             # clients render an empty schema as a blank, non-functional form.

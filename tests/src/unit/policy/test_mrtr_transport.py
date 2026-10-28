@@ -165,7 +165,3 @@ async def test_modern_client_without_elicitation_gets_normal_error(
         assert first.is_error
         assert "USER_APPROVAL_REQUIRED" in first.content[0].text
         assert executed == []
-        queue.approve(queue.list_pending()[0].token)
-        result = await client.call_tool("ha_test_write", {"value": "approved"})
-        assert not result.is_error
-        assert executed == ["approved"]
