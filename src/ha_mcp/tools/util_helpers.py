@@ -197,6 +197,12 @@ def is_credential_ws_command(
         if not isinstance(endpoint, str):
             return False
         path = normalized_path(endpoint)
+        # Supervisor mounts the same handlers again under /v2 when its
+        # supervisor_v2_api feature flag is on (its own security middleware
+        # matches both with ``^(?:/v2)?``), and the flag itself can be switched
+        # on through supervisor/api.
+        if path == "/v2" or path.startswith("/v2/"):
+            path = path[3:] or "/"
         return any(
             path == root or path.startswith(root + "/")
             for root in _CREDENTIAL_SUPERVISOR_ENDPOINTS
@@ -217,10 +223,14 @@ class WsRefusal(NamedTuple):
 
 
 _POLICY_REFUSAL_SUGGESTIONS: list[str] = [
-    "This is a fixed policy refusal, not an input error: no other spelling, "
-    "parameter or ha-mcp tool sends it.",
-    "Ask the user to make the change in the Home Assistant UI (Profile > "
-    "Security for tokens, Settings > People for users and passwords).",
+    (
+        "This is a fixed policy refusal, not an input error: no other spelling, "
+        "parameter or ha-mcp tool sends it."
+    ),
+    (
+        "Ask the user to make the change in the Home Assistant UI (Profile > "
+        "Security for tokens, Settings > People for users and passwords)."
+    ),
 ]
 
 

@@ -40,6 +40,12 @@ def _supervisor(endpoint: str, method: str = "post") -> dict[str, Any]:
         ("supervisor/api", _supervisor("/os/ssh/authorized_keys")),
         ("supervisor/api", _supervisor("/auth")),
         ("supervisor/api", _supervisor("/addons/../%61uth/list", "get")),
+        # Supervisor's /v2 mount, reachable once supervisor_v2_api is switched on
+        # (reproduced live in the second #2850 review).
+        ("supervisor/api", _supervisor("/v2/auth/reset")),
+        ("supervisor/api", _supervisor("/v2/auth/list", "get")),
+        ("supervisor/api", _supervisor("/v2/os/ssh/authorized_keys")),
+        ("supervisor/api", _supervisor("//V2/%61uth/reset")),
     ],
 )
 def test_token_minting_and_user_admin_commands_are_refused(
@@ -56,6 +62,8 @@ def test_token_minting_and_user_admin_commands_are_refused(
         ("authority/list", None),
         ("supervisor/api", _supervisor("/core/info", "get")),
         ("supervisor/api", _supervisor("/authentication", "get")),
+        ("supervisor/api", _supervisor("/v2/core/info", "get")),
+        ("supervisor/api", _supervisor("/v2auth/list", "get")),
     ],
 )
 def test_whoami_and_unrelated_commands_stay_usable(
@@ -72,6 +80,8 @@ def test_whoami_and_unrelated_commands_stay_usable(
         ("config/auth_provider/homeassistant/admin_change_password", None),
         ("supervisor/api", _supervisor("/auth/reset")),
         ("supervisor/api", _supervisor("/os/ssh/authorized_keys")),
+        ("supervisor/api", _supervisor("/v2/auth/reset")),
+        ("supervisor/api", _supervisor("/v2/os/ssh/authorized_keys")),
     ],
 )
 async def test_call_service_cannot_mint_tokens_or_manage_users(
@@ -124,6 +134,10 @@ async def test_call_service_still_sends_whoami_and_other_supervisor_calls(
         ),
         (
             {"type": "supervisor/api", **_supervisor("/os/ssh/authorized_keys")},
+            "refused by policy",
+        ),
+        (
+            {"type": "supervisor/api", **_supervisor("/v2/os/ssh/authorized_keys")},
             "refused by policy",
         ),
         # The blocked-write check matches case-insensitively, like ws_command.
