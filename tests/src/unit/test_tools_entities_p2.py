@@ -9,6 +9,7 @@ Covers:
 
 import asyncio
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -619,8 +620,8 @@ class TestSingleSetHoldsEntityLock:
         ids=["same-id", "renamed", "renamed-old-id"],
     )
     async def test_restore_waits_for_every_write_of_the_set(
-        self, new_entity_id, locked_id
-    ):
+        self, new_entity_id: str | None, locked_id: str
+    ) -> None:
         """An entity restore takes the lock of the entity's ID, on a rename of
         either ID. Queued while the registry update is in flight, it gets the
         lock only after the options, device-rename and expose writes."""
@@ -629,7 +630,7 @@ class TestSingleSetHoldsEntityLock:
         in_update = asyncio.Event()
         restore_queued = asyncio.Event()
 
-        async def send(message):
+        async def send(message: dict[str, Any]) -> dict[str, Any]:
             await asyncio.sleep(0)
             order.append(message["type"])
             if message["type"] == "config/entity_registry/update" and "name" in message:
@@ -637,13 +638,14 @@ class TestSingleSetHoldsEntityLock:
                 await restore_queued.wait()
             return {"success": True, "result": {"entity_entry": entry, **entry}}
 
-        async def restore():
+        async def restore() -> list[str]:
+            """What was sent before the restore got the lock."""
             await in_update.wait()
             lock = registry_update_lock("entity", locked_id)
             restore_queued.set()
             await lock.acquire()
-            order.append("restore")
             lock.release()
+            return list(order)
 
         client = _make_client()
         client.send_websocket_message = AsyncMock(side_effect=send)
@@ -658,9 +660,8 @@ class TestSingleSetHoldsEntityLock:
             new_device_name="Dev X",
             expose_to={"conversation": True},
         )
-        await waiter
+        before = await waiter
 
-        before = order[: order.index("restore")]
         assert before.count("config/entity_registry/update") == 2, order
         assert "config/device_registry/update" in before, order
         assert "homeassistant/expose_entity" in before, order
