@@ -556,20 +556,43 @@ class TodoTools:
         target = find_item(items, item)
         # The uid keeps the update and the read-back on the item resolved here;
         # after a move, a name shared with another item can resolve to that one.
-        ref = (target or {}).get("uid") or item
+        uid = (target or {}).get("uid")
+        ref = uid or item
+        update = bool(updates) or move_after is None
+        # Core resolves an item value to the first row whose uid or summary
+        # equals it; a move can put a row named after the uid first.
+        if (
+            update
+            and uid
+            and any(i is not target and i.get("summary") == uid for i in items)
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Another item on {entity_id} is named {ref!r}, so Home "
+                    "Assistant would change that one; nothing was changed",
+                    context={"entity_id": entity_id, "item": item},
+                    suggestions=["Rename the item named after the uid first"],
+                )
+            )
         applied = ""
         if move_after is not None:
             # Moved first, so a list without reordering refuses before the
             # update is written.
             await self._move_item(entity_id, item, target, items, move_after)
             applied = "; the move was applied"
-        if updates or move_after is None:
+        if update:
             # Core decides whether the update names anything to change.
             await self._todo_service(
                 "update_item", entity_id, {"item": ref, **updates}, applied
             )
         after, warnings = await self._read_back(entity_id)
-        todo_item = find_item(after, ref) if after else None
+        # By uid alone: after a move, another item can be named after it.
+        todo_item = (
+            next((i for i in after or [] if i.get("uid") == uid), None)
+            if uid
+            else find_item(after or [], item)
+        )
         if after is not None and todo_item is None:
             warnings.append(
                 f"'{item}' was not on the list read back after the write; "

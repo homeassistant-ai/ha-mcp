@@ -1661,6 +1661,15 @@ class BackupManager:
 
     # ----- diff ----------------------------------------------------------
 
+    async def _comparison_target(self, domain: str, data: dict[str, Any]) -> str | None:
+        """The id the item a snapshot holds has now."""
+        target: str = data["entity_id"]
+        if domain == "entity":
+            return await current_entity_id(self._client, target, data["config"])
+        if domain == "todo_item":
+            return todo_current_key(target, data["config"])
+        return target
+
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity."""
         data = await asyncio.to_thread(self.read_snapshot, name)
@@ -1674,15 +1683,7 @@ class BackupManager:
         handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
-        target = data["entity_id"]
-        if domain == "entity":
-            target = await current_entity_id(self._client, target, data["config"])
-        elif domain == "todo_item":
-            target = todo_current_key(target, data["config"])
-            if isinstance(data["config"], dict):
-                # Older snapshots carry the list's completion time, which
-                # the fetch now leaves out.
-                data["config"].pop("completed", None)
+        target = await self._comparison_target(domain, data)
         current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)
@@ -1701,6 +1702,10 @@ class BackupManager:
             # A snapshot from before registry icons were recorded: its restore
             # leaves the registry alone, so the icon is no difference.
             current.pop("registry_icon", None)
+        if domain == "todo_item" and isinstance(data["config"], dict):
+            # Older snapshots carry the list's completion time, which the
+            # fetch now leaves out.
+            data["config"].pop("completed", None)
         if _is_flow_helper_domain(domain) and current is not None:
             # Both MCP and Settings preview this comparison. Registry metadata
             # is recreation-only; an existing-entry restore applies options.

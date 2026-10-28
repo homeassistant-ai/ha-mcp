@@ -176,8 +176,9 @@ def note_no_safety_backup(
 ) -> None:
     """Say why a restore goes ahead without a safety backup."""
     if target is None:  # safety_target: the stored item no longer exists
-        # An entity snapshot's "id" is its registry entry id, not a name to show.
-        key = "entity_id" if domain == "entity" else "id"
+        # An entity snapshot's "id" is its registry entry id, not a name to show;
+        # a todo snapshot has none.
+        key = {"entity": "entity_id", "todo_item": "summary"}.get(domain, "id")
         stored = config.get(key) if isinstance(config, dict) else None
         outcome["warnings"] = [
             f"No safety backup was taken: {domain.removeprefix('helper_')} "

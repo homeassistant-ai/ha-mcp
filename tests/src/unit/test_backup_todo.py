@@ -411,3 +411,27 @@ class TestSnapshotFieldsAndGuards:
         with pytest.raises(HomeAssistantError, match="could not be told apart"):
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
         assert [c["service"] for c in fake.calls] == ["add_item"]
+
+    async def test_item_named_like_the_new_uid_blocks_the_completion(
+        self, fake: _FakeList
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items.pop(1)
+        # The re-added item gets uid "101"; an earlier item is named "101".
+        fake.items.insert(0, {"uid": "z", "summary": "101", "status": "needs_action"})
+        with pytest.raises(HomeAssistantError, match="could not be told apart"):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert [c["service"] for c in fake.calls] == ["add_item"]
+        assert fake.items[0]["status"] == "needs_action"
+
+    def test_warning_for_a_removed_item_names_its_summary(self) -> None:
+        from ha_mcp.backup_helper_target import note_no_safety_backup
+
+        outcome: dict[str, Any] = {}
+        note_no_safety_backup(
+            outcome, "todo_item", None, {"uid": "2", "summary": "Pay"}
+        )
+        assert outcome["warnings"] == [
+            "No safety backup was taken: todo_item Pay no longer exists, "
+            "so this restore overwrites none of its state."
+        ]

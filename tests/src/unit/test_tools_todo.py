@@ -641,3 +641,38 @@ class TestTargetsAndReplies:
             await tools.ha_set_todo_item(LIST, item="Nope", status="completed")
         assert client.services()[0][1]["item"] == "Nope"
         assert "Unable to find" in _error(excinfo)["error"]["message"]
+
+    async def test_item_named_like_the_uid_blocks_the_update(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Core would resolve the uid "2" to the earlier item named "2".
+        client.items.insert(0, {"uid": "x", "summary": "2", "status": "needs_action"})
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(LIST, item="Pay", status="needs_action")
+        error = _error(excinfo)["error"]
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "nothing was changed" in error["message"]
+        assert client.services() == []
+
+    async def test_move_below_an_item_named_like_the_uid_is_refused(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # "Pay" (uid "2") sits above an item named "2"; moved below it, Core
+        # would resolve "2" to that item.
+        client.items.append({"uid": "x", "summary": "2", "status": "needs_action"})
+        with pytest.raises(ToolError):
+            await tools.ha_set_todo_item(
+                LIST, item="Pay", move_after="x", status="needs_action"
+            )
+        assert client.services() == []
+        assert not [c for c in client.calls if c["type"] == "todo/item/move"]
+
+    async def test_move_alone_ignores_an_item_named_like_the_uid(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # todo/item/move takes the uid itself; only update_item resolves names.
+        client.items.append({"uid": "x", "summary": "2", "status": "needs_action"})
+        got = await tools.ha_set_todo_item(LIST, item="Pay", move_after="x")
+        assert [i["uid"] for i in client.items][-2:] == ["x", "2"]
+        # The read-back reports the moved item, not the one named after its uid.
+        assert got["todo_item"]["uid"] == "2"

@@ -170,15 +170,13 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
         return result
     known = {i.get("uid") for i in items}
     try:
-        added = [
-            i
-            for i in await list_items(client, todo_entity) or []
-            if i.get("uid") not in known
-        ]
+        after = await list_items(client, todo_entity) or []
+        added = [i for i in after if i.get("uid") not in known]
         if (
             len(added) != 1
             or not added[0].get("uid")
             or added[0].get("summary") != summary
+            or find_item(after, added[0]["uid"]) is not added[0]
         ):
             raise HomeAssistantError("the re-added item could not be told apart")
         return await _call(
