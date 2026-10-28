@@ -97,12 +97,13 @@ class _FakeClient:
             items = [i for i in self.items if not statuses or i["status"] in statuses]
             return {"success": True, "result": {"response": {LIST: {"items": items}}}}
         if service == "add_item":
+            # Core's add_item schema strips the summary.
             self.items.append(
-                {"uid": "9", "summary": data["item"], "status": "needs_action"}
+                {"uid": "9", "summary": data["item"].strip(), "status": "needs_action"}
             )
             if self.add_twice:
                 self.items.append(
-                    {"uid": "10", "summary": "x", "status": "needs_action"}
+                    {"uid": "10", "summary": data["item"], "status": "needs_action"}
                 )
         elif service == "update_item":
             row = next(
@@ -676,3 +677,59 @@ class TestTargetsAndReplies:
         assert [i["uid"] for i in client.items][-2:] == ["x", "2"]
         # The read-back reports the moved item, not the one named after its uid.
         assert got["todo_item"]["uid"] == "2"
+
+    async def test_update_of_an_item_above_its_uid_namesake_goes_through(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Without a move, Core resolves "2" to "Pay", which comes first.
+        client.items.append({"uid": "x", "summary": "2", "status": "needs_action"})
+        await tools.ha_set_todo_item(LIST, item="Pay", status="needs_action")
+        assert client.services() == [
+            ("update_item", {"item": "2", "status": "needs_action"})
+        ]
+
+    async def test_update_not_sent_after_a_move_says_the_move_happened(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        client.raise_on = ("update_item", HomeAssistantCommandNotSent("not sent"))
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(LIST, item="Pay", rename="Paid", move_after="")
+        payload = _error(excinfo)
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert "the move was applied" in payload["error"]["message"]
+        # Never sent, so not an unknown outcome.
+        assert "write_outcome_unknown" not in payload
+
+    async def test_another_clients_new_item_is_not_returned_as_ours(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        original = client._service
+
+        def add_other(service: str, data: dict[str, Any]) -> dict[str, Any]:
+            if service != "add_item":
+                return original(service, data)
+            # Core skipped the add; another client added an item meanwhile.
+            client.items.append(
+                {"uid": "o", "summary": "Other", "status": "needs_action"}
+            )
+            return {"success": True, "result": {"context": {}}}
+
+        client._service = add_other  # type: ignore[method-assign]
+        got = await tools.ha_set_todo_item(LIST, summary="Eggs")
+        assert got["todo_item"] is None
+        assert "not confirmed" in got["message"]
+
+    async def test_padded_summary_is_confirmed_as_core_stores_it(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        got = await tools.ha_set_todo_item(LIST, summary="  Eggs ")
+        assert got["todo_item"]["uid"] == "9"
+
+    async def test_move_to_the_top_with_an_update_is_not_refused(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # At the top, Core resolves the uid to the item itself.
+        client.items.insert(0, {"uid": "x", "summary": "2", "status": "needs_action"})
+        await tools.ha_set_todo_item(LIST, item="Pay", rename="Paid", move_after="")
+        assert client.services() == [("update_item", {"item": "2", "rename": "Paid"})]
+        assert client.items[0]["uid"] == "2"

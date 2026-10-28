@@ -148,11 +148,20 @@ class TodoTools:
         context: dict[str, Any],
         applied: str = "",
     ) -> None:
-        """Send one write; a write that got no answer is reported as unknown."""
+        """Send one write; a write that got no answer is reported as unknown,
+        and one never sent after an applied write says what was applied."""
         try:
             result = await self._client.send_websocket_message(message)
-        except HomeAssistantCommandNotSent:
-            raise
+        except HomeAssistantCommandNotSent as e:
+            if not applied:
+                raise
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    f"{label} was not sent: {e}{applied}",
+                    context=context,
+                )
+            )
         except HomeAssistantConnectionError as e:
             raise_tool_error(
                 create_error_response(
@@ -525,7 +534,14 @@ class TodoTools:
         known = {i.get("uid") for i in await self._list_items(entity_id)}
         await self._todo_service("add_item", entity_id, {"item": summary, **fields})
         after, warnings = await self._read_back(entity_id)
-        added = [i for i in after or [] if i.get("uid") not in known]
+        # Core strips the summary it stores; an item another client adds with
+        # another summary is not taken for ours.
+        stored = summary.strip()
+        added = [
+            i
+            for i in after or []
+            if i.get("uid") not in known and i.get("summary") == stored
+        ]
         todo_item = added[0] if len(added) == 1 else None
         if after is not None and todo_item is None:
             warnings.append(
@@ -560,12 +576,16 @@ class TodoTools:
         ref = uid or item
         update = bool(updates) or move_after is None
         # Core resolves an item value to the first row whose uid or summary
-        # equals it; a move can put a row named after the uid first.
-        if (
-            update
-            and uid
-            and any(i is not target and i.get("summary") == uid for i in items)
-        ):
+        # equals it. Without a move, that is decided by the list as read; a move
+        # to the top puts the item first; a move below another item can put a
+        # row named after the uid before it.
+        if move_after is None:
+            resolves_elsewhere = find_item(items, ref) is not target
+        else:
+            resolves_elsewhere = bool(move_after) and any(
+                i is not target and i.get("summary") == uid for i in items
+            )
+        if update and uid and resolves_elsewhere:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
