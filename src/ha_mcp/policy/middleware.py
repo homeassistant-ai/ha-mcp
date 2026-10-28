@@ -30,7 +30,12 @@ from .evaluator import (
 )
 from .events import emit_approval_requested
 from .model import Policy, Rule
-from .mrtr import ApprovalContinuation, supports_mrtr
+from .mrtr import (
+    ApprovalAnswer,
+    ApprovalContinuation,
+    approval_answer,
+    supports_mrtr,
+)
 
 if TYPE_CHECKING:
     from ..client.rest_client import HomeAssistantClient
@@ -264,9 +269,8 @@ class PolicyMiddleware(Middleware):
             continuation = ApprovalContinuation.start(
                 pending, policy, wait, dynamic_targets=dynamic_targets
             )
-        await self._wait_for_decision(
-            context, pending, continuation.wait_seconds() if continuation else wait
-        )
+        answer = approval_answer(context) if resumed is not None else None
+        await self._wait_or_apply_answer(context, pending, continuation, wait, answer)
 
         if pending.decision == "approved":
             if self._claim_approval(
@@ -292,7 +296,7 @@ class PolicyMiddleware(Middleware):
             self._queue.remove(pending.token)
             self._raise_denied_error()
 
-        if continuation is not None:
+        if continuation is not None and answer is None:
             result = continuation.next_result(self._queue)
             if result is not None:
                 return result
@@ -303,6 +307,32 @@ class PolicyMiddleware(Middleware):
         await self._announce_reissued(pending, rule, dynamic_targets=dynamic_targets)
         self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+
+    async def _wait_or_apply_answer(
+        self,
+        context: MiddlewareContext,
+        pending: PendingApproval,
+        continuation: ApprovalContinuation | None,
+        wait: int,
+        answer: ApprovalAnswer | None,
+    ) -> None:
+        """Wait for the UI decision, unless the user answered the ask.
+
+        The answer is client-supplied, so it may stop or deny the call but
+        never approve it: a decline denies even an already-approved row, and
+        a cancel skips the wait and falls through to the approval error.
+        """
+        if answer == "decline":
+            self._queue.deny(pending.token)
+            self._queue.remove(pending.token)
+            self._raise_denied_error()
+        if answer == "cancel":
+            return
+        await self._wait_for_decision(
+            context,
+            pending,
+            continuation.wait_seconds(answer) if continuation else wait,
+        )
 
     async def _announce_reissued(
         self,

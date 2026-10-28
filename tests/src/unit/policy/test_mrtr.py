@@ -10,6 +10,12 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools.base import InputRequiredToolResult
+from ha_mcp._vendor.mcp_types import (
+    ClientCapabilities,
+    ElicitationCapability,
+    ElicitRequest,
+    ElicitResult,
+)
 from ha_mcp.policy.approval_queue import ApprovalQueue
 from ha_mcp.policy.middleware import PolicyMiddleware
 from ha_mcp.policy.model import Policy, Rule
@@ -21,16 +27,26 @@ def context(
     version: str = "2026-07-28",
     name: str = "ha_call_service",
     arguments: dict[str, Any] | None = None,
+    elicitation: bool = True,
+    answer: str | None = None,
 ) -> SimpleNamespace:
     args = arguments if arguments is not None else {"domain": "light"}
+    caps = ClientCapabilities(
+        elicitation=ElicitationCapability() if elicitation else None
+    )
+    responses = (
+        {"ha_mcp_approval": ElicitResult(action=answer)} if answer is not None else None
+    )
     return SimpleNamespace(
         message=SimpleNamespace(name=name, arguments=args),
         fastmcp_context=SimpleNamespace(
             request_context=SimpleNamespace(
                 protocol_version=version,
                 _srctx=SimpleNamespace(params={"name": name, "arguments": args}),
+                session=SimpleNamespace(client_capabilities=caps),
             ),
             request_state=state,
+            input_responses=responses,
             report_progress=AsyncMock(),
         ),
     )
@@ -239,7 +255,9 @@ async def test_continuation_resumes_only_after_ui_approval(
 
     first = await middleware.on_call_tool(context(), execute)
     assert isinstance(first, InputRequiredToolResult)
-    assert not first.input_required.input_requests
+    ask = first.input_required.input_requests["ha_mcp_approval"]
+    assert isinstance(ask, ElicitRequest)
+    assert "Tool Security Policies" in ask.params.message
     assert dispatched == []
     entry = queue.list_pending()[0]
     second = await middleware.on_call_tool(
@@ -276,3 +294,93 @@ async def test_legacy_client_keeps_approval_error_and_recall(
     assert (
         await middleware.on_call_tool(context(version="2025-11-25"), execute) == "saved"
     )
+
+
+@pytest.mark.anyio
+async def test_modern_client_without_elicitation_gets_blocking_approval_error(
+    gate: SimpleNamespace,
+) -> None:
+    """A state-only continuation gives such a client nothing to show its user,
+    so it waits the whole window and gets the approval-required error."""
+    with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
+        await gate.middleware.on_call_tool(context(elicitation=False), gate.execute)
+    gate.middleware._wait_for_decision.assert_awaited_once()
+    assert gate.middleware._wait_for_decision.await_args.args[2] == 60
+    assert gate.executed == []
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    assert (
+        await gate.middleware.on_call_tool(context(elicitation=False), gate.execute)
+        == "saved"
+    )
+
+
+@pytest.mark.anyio
+async def test_confirmed_retry_waits_out_the_window_without_asking_again(
+    gate: SimpleNamespace,
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.clock[0] += 10
+    with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="accept"),
+            gate.execute,
+        )
+    assert gate.middleware._wait_for_decision.await_args.args[2] == 50
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_confirmed_retry_runs_once_approved(gate: SimpleNamespace) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    assert (
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="accept"),
+            gate.execute,
+        )
+        == "saved"
+    )
+    assert gate.executed == ["ha_call_service"]
+
+
+@pytest.mark.anyio
+async def test_declined_ask_denies_the_call(gate: SimpleNamespace) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    with pytest.raises(ToolError, match="USER_DENIED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="decline"),
+            gate.execute,
+        )
+    assert gate.queue.list_pending() == []
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_declined_ask_cannot_run_an_already_approved_call(
+    gate: SimpleNamespace,
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    with pytest.raises(ToolError, match="USER_DENIED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="decline"),
+            gate.execute,
+        )
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_cancelled_ask_returns_approval_error_and_keeps_the_row(
+    gate: SimpleNamespace,
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.middleware._wait_for_decision.reset_mock()
+    with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="cancel"),
+            gate.execute,
+        )
+    gate.middleware._wait_for_decision.assert_not_awaited()
+    assert len(gate.queue.list_pending()) == 1
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    assert await gate.middleware.on_call_tool(context(), gate.execute) == "saved"

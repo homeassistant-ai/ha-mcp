@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.client.elicitation import ElicitResult
 from ha_mcp._vendor.fastmcp.server.middleware import MiddlewareContext
 from ha_mcp._vendor.mcp import MCPError
 from ha_mcp._vendor.mcp_types import InputRequiredResult
@@ -14,6 +15,10 @@ from ha_mcp.policy.model import Policy, Rule
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
 type ApprovalServer = tuple[FastMCP, ApprovalQueue, list[str], PolicyMiddleware]
+
+
+async def accept(*_args: object) -> ElicitResult:
+    return ElicitResult(action="accept", content={"decided": True})
 
 
 @pytest.fixture
@@ -48,7 +53,7 @@ async def test_wire_continuation_is_bound_and_single_use(
         mcp.add_transform(CategorizedSearchTransform())
         name, args = "ha_call_write_tool", {"name": name, "arguments": args}
 
-    async with Client(mcp) as client:
+    async with Client(mcp, elicitation_handler=accept) as client:
         first = await client.session.call_tool(name, args, allow_input_required=True)
         assert isinstance(first, InputRequiredResult)
         assert first.request_state
@@ -103,7 +108,7 @@ async def test_sdk_automatically_resumes_pending_approval(
             queue.approve(pending.token)
 
     monkeypatch.setattr(middleware, "_wait_for_decision", decide_on_resume)
-    async with Client(mcp) as client:
+    async with Client(mcp, elicitation_handler=accept) as client:
         result = await client.call_tool("ha_test_write", {"value": "approved"})
     assert not result.is_error
     assert len(waits) == 2
@@ -122,6 +127,27 @@ async def test_legacy_wire_call_uses_normal_error_and_manual_retry(
         )
         assert result.is_error
         assert "USER_APPROVAL_REQUIRED" in result.content[0].text
+        assert executed == []
+        queue.approve(queue.list_pending()[0].token)
+        result = await client.call_tool("ha_test_write", {"value": "approved"})
+        assert not result.is_error
+        assert executed == ["approved"]
+
+
+@pytest.mark.anyio
+async def test_modern_client_without_elicitation_gets_normal_error(
+    server: ApprovalServer,
+) -> None:
+    """Without a declared elicitation capability the client cannot be asked,
+    so a 2026-07-28 call gets the approval error rather than input_required."""
+    mcp, queue, executed, _ = server
+    async with Client(mcp) as client:
+        first = await client.session.call_tool(
+            "ha_test_write", {"value": "approved"}, allow_input_required=True
+        )
+        assert not isinstance(first, InputRequiredResult)
+        assert first.is_error
+        assert "USER_APPROVAL_REQUIRED" in first.content[0].text
         assert executed == []
         queue.approve(queue.list_pending()[0].token)
         result = await client.call_tool("ha_test_write", {"value": "approved"})
