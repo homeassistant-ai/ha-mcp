@@ -9,7 +9,7 @@ def python_base_args() -> list[str]:
     """``--build-arg PYTHON_BASE=...`` when CI resolved the base image, else nothing.
 
     pr.yml's "Pull python base image" step exports ``PYTHON_BASE`` as the
-    ECR Public or Docker Hub reference it managed to pull; without it the
+    GHCR mirror, ECR Public or Docker Hub reference it managed to pull; without it the
     Dockerfile's own default applies.
     """
     base = os.environ.get("PYTHON_BASE")
