@@ -896,21 +896,16 @@ class DeviceControlTools:
                 operations, valid_operations, skipped_operations, parallel
             )
             if component_response is not None:
-                # M-progress-msg: count the ops HA confirmed (each op's ``confirmed``).
-                # A top-level ``partial`` comes only from _build_ambiguous_bulk_response
-                # (timeout/drop or malformed frame): that batch is not retried.
-                ops = component_response["results"]
-                confirmed = sum(1 for r in ops if r.get("confirmed"))
-                component_message = (
-                    f"dispatched via component ({confirmed} of {len(ops)} confirmed)"
-                )
-                if component_response.get("partial"):
-                    component_message += " — not retried"
+                # Like the legacy path, progress reports the dispatch only; whether HA
+                # confirmed an op is in that op's result, never claimed here.
                 await safe_progress(
                     ctx,
                     progress=len(valid_operations),
                     total=len(valid_operations),
-                    message=component_message,
+                    message=(
+                        f"dispatched {len(valid_operations)} op(s) via component; "
+                        "each result says whether HA confirmed it"
+                    ),
                 )
                 return component_response
 
@@ -1413,8 +1408,8 @@ class DeviceControlTools:
                 },
                 "verification_method": "component_state_change",
                 "message": (
-                    f"{entity_id} {action} dispatched but the batch confirmation did "
-                    "not arrive within the timeout; not retried"
+                    f"{entity_id} {action} dispatched but no usable batch "
+                    "confirmation arrived; not retried"
                 ),
             }
             for (_idx, op, entity_id, action), row in zip(
@@ -1426,9 +1421,9 @@ class DeviceControlTools:
         )
         response["partial"] = True
         response.setdefault("warnings", []).append(
-            "The bulk operation was dispatched but Home Assistant did not confirm "
-            "within the timeout. Operations were NOT retried (at-most-once). Use "
-            "ha_get_state to verify the affected entities."
+            "The bulk operation was dispatched but no usable confirmation arrived "
+            "(timeout, dropped connection or malformed reply). Operations were NOT "
+            "retried (at-most-once). Use ha_get_state to verify the affected entities."
         )
         return response
 

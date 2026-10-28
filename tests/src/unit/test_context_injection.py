@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.smart_search import SmartSearchTools
@@ -470,53 +469,18 @@ async def test_bulk_device_control_parallel_emits_dispatch_only() -> None:
     )
 
 
-_CONFIRMED_OP = {"command_sent": True, "confirmed": True}
-_UNCONFIRMED_OP = {"command_sent": True, "confirmed": False}
-# A per-op failure carries no ``confirmed`` key at all.
-_NOT_FOUND_OP = create_error_response(ErrorCode.ENTITY_NOT_FOUND, "Entity not found")
-
-
-def _component_batch(*results: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    """A component bulk response carrying the given per-op ``results``."""
-    response: dict[str, Any] = {"results": list(results)}
-    if partial:
-        response["partial"] = True
-    return response
-
-
-@pytest.mark.parametrize(
-    ("component_response", "wording", "retry_note"),
-    [
-        (
-            _component_batch(_CONFIRMED_OP, _UNCONFIRMED_OP),
-            "1 of 2 confirmed",
-            False,
-        ),
-        (
-            _component_batch(_UNCONFIRMED_OP, _NOT_FOUND_OP),
-            "0 of 2 confirmed",
-            False,
-        ),
-        (
-            _component_batch(_UNCONFIRMED_OP, _UNCONFIRMED_OP, partial=True),
-            "0 of 2 confirmed",
-            True,
-        ),
-    ],
-    ids=["some-unconfirmed", "served-none-confirmed", "batch-unconfirmed"],
-)
 @pytest.mark.asyncio
-async def test_bulk_component_batch_progress_counts_the_ops_ha_confirmed(
-    component_response: dict[str, Any], wording: str, retry_note: bool
-) -> None:
-    """A batch with ops HA did not confirm is not reported as confirmed.
-
-    The completion event counts the ops HA confirmed and says "not retried" only
-    for an ambiguous (top-level ``partial``) batch.
-    """
+async def test_bulk_component_batch_progress_does_not_claim_confirmation() -> None:
+    """A batch with an op HA did not confirm is not announced as confirmed."""
     client = _mock_ha_client()
     tools = DeviceControlTools(client=client)
     ctx = _make_ctx()
+    component_response = {
+        "results": [
+            {"command_sent": True, "confirmed": True},
+            {"command_sent": True, "confirmed": False},
+        ]
+    }
     tools._bulk_via_component = AsyncMock(return_value=component_response)  # type: ignore[method-assign]
     tools.control_device_smart = AsyncMock()  # type: ignore[method-assign]
 
@@ -535,8 +499,10 @@ async def test_bulk_component_batch_progress_counts_the_ops_ha_confirmed(
     _assert_no_protocol_logging(ctx)
     # One completion event; the legacy "dispatching operations" framing is skipped.
     (call,) = ctx.report_progress.await_args_list
-    _assert_progress_call(call, progress=2, total=2, message_contains=wording)
-    assert ("not retried" in call.kwargs["message"]) is retry_note
+    _assert_progress_call(
+        call, progress=2, total=2, message_contains="dispatched 2 op(s) via component"
+    )
+    assert "confirmed inline" not in call.kwargs["message"]
 
 
 # ---------------------------------------------------------------------------
