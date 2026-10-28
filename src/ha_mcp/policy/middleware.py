@@ -270,8 +270,7 @@ class PolicyMiddleware(Middleware):
             continuation = ApprovalContinuation.start(
                 pending, policy, wait, dynamic_targets=dynamic_targets
             )
-        answer = approval_answer(context) if resumed is not None else None
-        if resumed is not None and answer != "accept":
+        if resumed is not None and (answer := approval_answer(context)) != "accept":
             return await self._end_unconfirmed_resume(
                 pending,
                 rule,
@@ -284,7 +283,9 @@ class PolicyMiddleware(Middleware):
         await self._wait_for_decision(
             context,
             pending,
-            continuation.wait_seconds(answer) if continuation else wait,
+            continuation.wait_seconds(confirmed=resumed is not None)
+            if continuation
+            else wait,
         )
 
         if pending.decision == "approved":
@@ -311,16 +312,15 @@ class PolicyMiddleware(Middleware):
             self._queue.remove(pending.token)
             self._raise_denied_error()
 
-        if continuation is not None and answer is None:
+        # Only the first leg asks; an accepted form already waited out the window.
+        if continuation is not None and resumed is None:
             result = continuation.next_result(self._queue)
             if result is not None:
                 return result
 
-        pending = self._finalize_timed_out_pending(
-            pending, dynamic_targets=dynamic_targets, policy=policy, name=name
+        await self._raise_unresolved(
+            pending, rule, dynamic_targets=dynamic_targets, policy=policy, name=name
         )
-        await self._announce_reissued(pending, rule, dynamic_targets=dynamic_targets)
-        self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _end_unconfirmed_resume(
@@ -338,21 +338,61 @@ class PolicyMiddleware(Middleware):
 
         Only an accepted form continues a resumed call, even once the row is
         approved. The answer is client-supplied, so it may stop or deny the
-        call but never approve it: decline denies the row, cancel ends with
-        the approval error, and a retry with no answer is asked again.
+        call but never approve it: decline denies or removes the row (for
+        every call waiting on a shared static row, as a Deny click would),
+        cancel ends with the approval error, and a retry with no answer is
+        asked again.
         """
+        if answer is not None:
+            # Logged because a client answer can end a row a human approved.
+            logger.info(
+                "policy middleware: token %s for tool=%s ended by the client's "
+                "form answer=%s (decision was %s)",
+                pending.token,
+                name,
+                answer,
+                pending.decision,
+            )
         if answer == "decline" or pending.decision == "denied":
             self._queue.deny(pending.token)
             self._queue.remove(pending.token)
             self._raise_denied_error()
-        if answer is None and (ask := continuation.next_result(self._queue)):
-            return ask
+        if answer is None:
+            ask = continuation.next_result(self._queue)
+            if ask is not None:
+                return ask
+        await self._raise_unresolved(
+            pending,
+            rule,
+            dynamic_targets=dynamic_targets,
+            policy=policy,
+            name=name,
+            dismissed=answer == "cancel",
+        )
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+
+    async def _raise_unresolved(
+        self,
+        pending: PendingApproval,
+        rule: Rule | None,
+        *,
+        dynamic_targets: bool,
+        policy: Policy,
+        name: str,
+        dismissed: bool = False,
+    ) -> NoReturn:
+        """End a call that has no decision: finalize the row, re-announce, raise."""
         pending = self._finalize_timed_out_pending(
-            pending, dynamic_targets=dynamic_targets, policy=policy, name=name
+            pending,
+            dynamic_targets=dynamic_targets,
+            policy=policy,
+            name=name,
+            dismissed=dismissed,
         )
         await self._announce_reissued(pending, rule, dynamic_targets=dynamic_targets)
-        self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+        self._raise_pending_error(
+            pending, rule, dynamic_targets=dynamic_targets, dismissed=dismissed
+        )
 
     async def _announce_reissued(
         self,
@@ -576,8 +616,12 @@ class PolicyMiddleware(Middleware):
         dynamic_targets: bool,
         policy: Policy,
         name: str,
+        dismissed: bool = False,
     ) -> PendingApproval:
-        """Resolve a pending entry that timed out without a decision.
+        """Resolve a pending entry that ended without a decision.
+
+        ``dismissed`` means the user dismissed the approval form rather than
+        the wait running out; it only changes what is logged.
 
         Two mutually exclusive outcomes, split by ``dynamic_targets`` for
         the same reason the entry was never shared or looked up in the
@@ -611,9 +655,12 @@ class PolicyMiddleware(Middleware):
             # an operator tell those apart.
             logger.info(
                 "policy middleware: dynamic pending token %s removed after "
-                "its single-use wait window closed for tool=%s; a late "
-                "Approve click on it will log as an unknown token",
+                "%s for tool=%s; a late Approve click on it will log as an "
+                "unknown token",
                 pending.token,
+                "the approval form was dismissed"
+                if dismissed
+                else "its single-use wait window closed",
                 name,
             )
             return pending
@@ -677,6 +724,7 @@ class PolicyMiddleware(Middleware):
         rule: Rule | None = None,
         *,
         dynamic_targets: bool = False,
+        dismissed: bool = False,
     ) -> NoReturn:
         """Raise the structured USER_APPROVAL_REQUIRED error for one pending entry.
 
@@ -688,9 +736,9 @@ class PolicyMiddleware(Middleware):
         picked up by a later re-call -- so its wording must not promise the
         normal "re-call after the user approves" recovery path the
         non-dynamic case uses, and must not describe a still-open approval
-        window: this is the ONLY call site, reached after
-        ``_wait_for_decision`` returns with no decision, so the wait window
-        has already closed by the time this message is built.
+        window. It ends either after ``_wait_for_decision`` returned with no
+        decision (the window closed) or, with ``dismissed``, when the user
+        dismissed the approval form, and the message says which.
         """
         context: dict[str, Any] = {"token": pending.token}
         # Surface the matched rule so users (and the LLM) can tell at a
@@ -707,10 +755,15 @@ class PolicyMiddleware(Middleware):
             # countdown left to report -- a number here would read as
             # "there's still time", exactly the false impression this
             # message must not give.
+            ended = (
+                "the approval form for this call was dismissed"
+                if dismissed
+                else "this call's wait window has now closed"
+            )
             message = (
                 "User approval required, and this specific request has "
-                "already expired: it was single-use, bound to this one "
-                "call only, and this call's wait window has now closed. "
+                "already ended: it was single-use, bound to this one "
+                f"call only, and {ended}. "
                 "The token above has already been removed and no longer "
                 "exists -- there is nothing left to approve for this call. "
                 "Re-call this tool to create a brand-new, independent "

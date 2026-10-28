@@ -16,10 +16,11 @@ the elicitation answer can stop or deny a call, never approve it.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import time
-from typing import Any, Literal, NoReturn, cast
+from typing import Literal, NoReturn, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -33,12 +34,18 @@ from ha_mcp._vendor.mcp_types import (
 from ha_mcp._vendor.mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
 from ..errors import ErrorCode, create_error_response
-from ..mcp_client_context import client_capabilities, declares_form_elicitation
+from ..mcp_client_context import (
+    client_capabilities,
+    declares_form_elicitation,
+    protocol_version,
+)
 from ..renamed_tools import current_tool_name
 from ..tool_dispatch import CALL_PROXY_META_TOOLS
 from ..tools.helpers import raise_tool_error
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .model import Policy
+
+logger = logging.getLogger(__name__)
 
 # Leave room below the SDK's default ten-round limit for a normal final error.
 MAX_CONTINUATIONS = 8
@@ -50,14 +57,13 @@ ApprovalAnswer = Literal["accept", "decline", "cancel"]
 
 
 def supports_mrtr(context: MiddlewareContext) -> bool:
-    """Use MRTR only where the client can show the ask and the retry resumes
-    this single tool dispatch."""
+    """Use MRTR only where the client can show the ask and a retry resumes this dispatch."""
     ctx = context.fastmcp_context
-    request = getattr(ctx, "request_context", None)
-    if getattr(request, "protocol_version", None) not in MODERN_PROTOCOL_VERSIONS:
+    if protocol_version(ctx) not in MODERN_PROTOCOL_VERSIONS:
         return False
     if not declares_form_elicitation(client_capabilities(ctx)):
         return False
+    request = getattr(ctx, "request_context", None)
     params = getattr(getattr(request, "_srctx", None), "params", None)
     if not isinstance(params, Mapping):
         return False
@@ -71,24 +77,30 @@ def supports_mrtr(context: MiddlewareContext) -> bool:
 
 
 def approval_answer(context: MiddlewareContext) -> ApprovalAnswer | None:
-    """The user's answer to the approval elicitation, if this retry carries one."""
+    """The user's answer to the approval elicitation, if this retry carries one.
+
+    Accept with the "continue" box unticked reads as cancel: the user said
+    not to continue.
+    """
     responses = getattr(context.fastmcp_context, "input_responses", None)
     if not responses:
         return None
-    answer: Any = responses.get(APPROVAL_INPUT_KEY)
-    action = (
-        answer.get("action")
-        if isinstance(answer, Mapping)
-        else getattr(answer, "action", None)
-    )
-    if action in ("accept", "decline", "cancel"):
-        return cast("ApprovalAnswer", action)
-    return None
+    answer = responses.get(APPROVAL_INPUT_KEY)
+    action = getattr(answer, "action", None)
+    if action not in get_args(ApprovalAnswer):
+        logger.warning(
+            "approval elicitation: unreadable answer (keys %s, value %r); asking again",
+            sorted(responses),
+            answer,
+        )
+        return None
+    content = getattr(answer, "content", None) or {}
+    if action == "accept" and content.get("decided") is False:
+        return "cancel"
+    return cast("ApprovalAnswer", action)
 
 
 def _approval_request(tool_name: str, wait_seconds: int) -> ElicitRequest:
-    # A bool field rather than an empty schema: FastMCP notes some clients
-    # render an empty schema as a blank, non-functional form.
     return ElicitRequest(
         params=ElicitRequestFormParams(
             # Clients may render this on one truncated line: keep it short.
@@ -96,6 +108,8 @@ def _approval_request(tool_name: str, wait_seconds: int) -> ElicitRequest:
                 f"Approve {tool_name} in ha-mcp > Tool Security Policies and "
                 f"Accept here (either order, within {wait_seconds} s)."
             ),
+            # A bool field rather than an empty schema: FastMCP notes some
+            # clients render an empty schema as a blank, non-functional form.
             requested_schema={
                 "type": "object",
                 "properties": {
@@ -135,8 +149,23 @@ def _cannot_resume() -> NoReturn:
     )
 
 
+def _window_ended() -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.USER_APPROVAL_REQUIRED,
+            "The approval window for this call has ended and its request has "
+            "expired. No tool was executed. Call the tool again to request a "
+            "new approval.",
+            suggestions=[
+                "Re-call this tool, then approve the new request in the Tool "
+                + "Security Policies tab while the call is waiting.",
+            ],
+        )
+    )
+
+
 class ApprovalContinuation(BaseModel):
-    """Small, sealed reference retaining one logical call's deadline."""
+    """Small, sealed reference retaining one logical call's deadline and window."""
 
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
@@ -170,6 +199,11 @@ class ApprovalContinuation(BaseModel):
         except ValidationError:
             _cannot_resume()
         pending = queue.get(continuation.token)
+        # A late answer is ordinary user latency, not a stale or reused
+        # state: past the deadline the gate waits no longer and ends with
+        # the normal approval outcome, so the deadline is not checked here.
+        if pending is None and continuation.deadline <= time():
+            _window_ended()
         if (
             pending is None
             or continuation.tool_name != name
@@ -177,7 +211,6 @@ class ApprovalContinuation(BaseModel):
             or pending.tool_name != name
             or pending.args_hash != args_hash
             or continuation.policy_hash != _policy_hash(policy)
-            or continuation.deadline <= time()
         ):
             _cannot_resume()
         return continuation, pending
@@ -205,10 +238,10 @@ class ApprovalContinuation(BaseModel):
             window_seconds=wait_seconds,
         )
 
-    def wait_seconds(self, answer: ApprovalAnswer | None) -> float:
+    def wait_seconds(self, *, confirmed: bool) -> float:
         """Wait briefly before asking; once the user confirmed, use the whole window."""
         remaining = self.deadline - time()
-        if answer == "accept":
+        if confirmed:
             return max(0, remaining)
         return max(0, min(ROUND_WAIT_SECONDS, remaining))
 

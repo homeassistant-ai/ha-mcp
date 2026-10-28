@@ -79,8 +79,10 @@ def _format_protocol_for_template(diagnostic_info: dict[str, Any]) -> str:
     capabilities = diagnostic_info.get("mcp_client_capabilities")
     if capabilities is None:
         declared = "not sent with this request"
+    elif not capabilities:
+        declared = "none declared"
     else:
-        declared = ", ".join(capabilities) if capabilities else "none declared"
+        declared = ", ".join(capabilities)
     return f"{version} (client capabilities: {declared})"
 
 
@@ -571,7 +573,7 @@ def _generate_runtime_bug_template(
 - **In-process Server entry:** {_format_server_entry_value(diagnostic_info)}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
-- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the request)_
 - **MCP Protocol:** {_format_protocol_for_template(diagnostic_info)}
 - **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
 - **AI Model:** {text.ai_model or ""}
@@ -636,7 +638,7 @@ def _agent_environment_sections(
 - **In-process Server entry:** {_format_server_entry_value(diagnostic_info)}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
-- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the request)_
 - **MCP Protocol:** {_format_protocol_for_template(diagnostic_info)}
 - **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
 - **AI Model:** {text.ai_model or ""}

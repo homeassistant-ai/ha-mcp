@@ -29,14 +29,16 @@ def context(
     arguments: dict[str, Any] | None = None,
     elicitation: bool = True,
     answer: str | None = None,
+    decided: bool | None = None,
+    responses: dict[str, Any] | None = None,
 ) -> SimpleNamespace:
     args = arguments if arguments is not None else {"domain": "light"}
     caps = ClientCapabilities(
         elicitation=ElicitationCapability() if elicitation else None
     )
-    responses = (
-        {"ha_mcp_approval": ElicitResult(action=answer)} if answer is not None else None
-    )
+    if answer is not None:
+        content = None if decided is None else {"decided": decided}
+        responses = {"ha_mcp_approval": ElicitResult(action=answer, content=content)}
     return SimpleNamespace(
         message=SimpleNamespace(name=name, arguments=args),
         fastmcp_context=SimpleNamespace(
@@ -307,6 +309,7 @@ async def test_modern_client_without_elicitation_gets_blocking_approval_error(
 ) -> None:
     """A state-only continuation gives such a client nothing to show its user,
     so it waits the whole window and gets the approval-required error."""
+    gate.policy.wait_seconds = 60
     with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
         await gate.middleware.on_call_tool(context(elicitation=False), gate.execute)
     gate.middleware._wait_for_decision.assert_awaited_once()
@@ -429,4 +432,127 @@ async def test_unanswered_retry_is_asked_again_even_once_approved(
     )
     assert isinstance(again, InputRequiredToolResult)
     assert "ha_mcp_approval" in again.input_required.input_requests
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_accept_with_the_continue_box_unticked_does_not_run(
+    gate: SimpleNamespace,
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="accept", decided=False),
+            gate.execute,
+        )
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_unreadable_answer_is_logged_and_asked_again(
+    gate: SimpleNamespace, caplog: pytest.LogCaptureFixture
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    with caplog.at_level("WARNING", logger="ha_mcp.policy.mrtr"):
+        again = await gate.middleware.on_call_tool(
+            context(
+                first.input_required.request_state,
+                responses={"other_key": ElicitResult(action="accept")},
+            ),
+            gate.execute,
+        )
+    assert isinstance(again, InputRequiredToolResult)
+    assert "unreadable answer" in caplog.text
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_late_accept_on_an_approved_call_runs_instead_of_a_false_reuse_error(
+    gate: SimpleNamespace,
+) -> None:
+    """Answering after the window is user latency, not a reused state."""
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.approve(gate.queue.list_pending()[0].token)
+    gate.clock[0] += 70
+    assert (
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="accept"),
+            gate.execute,
+        )
+        == "saved"
+    )
+
+
+@pytest.mark.anyio
+async def test_late_accept_without_approval_gets_the_normal_recall_error(
+    gate: SimpleNamespace,
+) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.clock[0] += 70
+    with pytest.raises(ToolError) as exc:
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="accept"),
+            gate.execute,
+        )
+    assert "USER_APPROVAL_REQUIRED" in str(exc.value)
+    assert "may already have used the approval" not in str(exc.value)
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_late_accept_on_an_expired_selector_row_says_the_window_ended(
+    gate: SimpleNamespace,
+) -> None:
+    args = {"selector": {"domain": "light"}, "action": "turn_off"}
+    first = await gate.middleware.on_call_tool(
+        context(name="ha_bulk_control", arguments=args), gate.execute
+    )
+    gate.clock[0] += 70
+    with pytest.raises(ToolError, match="approval window for this call has ended"):
+        await gate.middleware.on_call_tool(
+            context(
+                first.input_required.request_state,
+                name="ha_bulk_control",
+                arguments=args,
+                answer="accept",
+            ),
+            gate.execute,
+        )
+    assert gate.executed == []
+
+
+@pytest.mark.anyio
+async def test_dismissed_form_on_a_selector_call_says_it_was_dismissed(
+    gate: SimpleNamespace,
+) -> None:
+    args = {"selector": {"domain": "light"}, "action": "turn_off"}
+    first = await gate.middleware.on_call_tool(
+        context(name="ha_bulk_control", arguments=args), gate.execute
+    )
+    with pytest.raises(ToolError) as exc:
+        await gate.middleware.on_call_tool(
+            context(
+                first.input_required.request_state,
+                name="ha_bulk_control",
+                arguments=args,
+                answer="cancel",
+            ),
+            gate.execute,
+        )
+    assert "approval form for this call was dismissed" in str(exc.value)
+    assert "window has now closed" not in str(exc.value)
+
+
+@pytest.mark.anyio
+async def test_accepted_call_denied_in_the_tab_is_denied(gate: SimpleNamespace) -> None:
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    gate.queue.deny(gate.queue.list_pending()[0].token)
+    with pytest.raises(ToolError, match="USER_DENIED"):
+        await gate.middleware.on_call_tool(
+            context(first.input_required.request_state, answer="accept"),
+            gate.execute,
+        )
+    assert gate.queue.list_pending() == []
     assert gate.executed == []

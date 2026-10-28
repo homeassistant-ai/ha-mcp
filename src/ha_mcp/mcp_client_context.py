@@ -92,22 +92,17 @@ def extract_client_info(ctx: Any) -> dict[str, str]:
     sent" from a real title without false-positive aside rendering.
 
     Returns an empty dict when there is no context, or no client info and no
-    ``User-Agent`` (e.g. stdio), so the bug-report path stays robust. The
-    log level is intentionally INFO, not DEBUG: this catch is the only signal
-    we'd get if FastMCP/MCP SDK shape drifts in a future release, and silent
-    drift would hide a regression for months.
+    ``User-Agent`` (e.g. stdio), so its callers (bug report, overview, debug
+    log) never fail on it. The log level is intentionally INFO, not DEBUG:
+    this catch is the only signal we'd get if FastMCP/MCP SDK shape drifts in
+    a future release, and silent drift would hide a regression for months.
     """
     if ctx is None:
         return {}
     try:
-        session = getattr(ctx, "session", None)
-        params = (
-            getattr(session, "client_params", None) if session is not None else None
-        )
-        client = (
-            getattr(params, "client_info", None) or getattr(params, "clientInfo", None)
-            if params is not None
-            else None
+        params = getattr(getattr(ctx, "session", None), "client_params", None)
+        client = getattr(params, "client_info", None) or getattr(
+            params, "clientInfo", None
         )
         if client is None:
             return _client_info_from_user_agent()

@@ -58,6 +58,8 @@ async def test_wire_continuation_is_bound_and_single_use(
         first = await client.session.call_tool(name, args, allow_input_required=True)
         assert isinstance(first, InputRequiredResult)
         assert first.request_state
+        # Through the proxy too, the form names the gated tool, not the proxy.
+        assert "ha_test_write" in first.input_requests["ha_mcp_approval"].params.message
         entry = queue.list_pending()[0]
         assert entry.token not in first.request_state
         assert executed == []

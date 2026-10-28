@@ -564,10 +564,10 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         Omitted for the ``unknown`` version, when ``HA_MCP_DISABLE_UPDATE_CHECK``
         is set, or when the update check itself failed.
 
-
         ``mcp_client`` reports the MCP protocol version, client info and
         client capabilities this call arrived with, for diagnosing
-        client-specific behaviour.
+        client-specific behaviour. ``capabilities: null`` means the request
+        carried none to read, not that the client declared none.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields".

@@ -221,6 +221,7 @@ class HomeAssistantSmartMCPServer:
         from .tools.renamed_tool_middleware import RenamedToolAliasMiddleware
 
         self.mcp.add_middleware(RenamedToolAliasMiddleware())
+        # After the alias, so the DEBUG line logs the current tool name.
         self.mcp.add_middleware(McpClientDebugLogMiddleware())
 
         # Convert Pydantic type-validation errors to structured ToolErrors so

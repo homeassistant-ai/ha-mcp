@@ -1,5 +1,6 @@
 """Unit tests for ha_get_overview system_info builder."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -857,6 +858,31 @@ class TestHaGetOverviewHaMcpUpdate:
             "protocol_version": "unknown",
             "client_info": {},
             "capabilities": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_mcp_client_reports_the_calling_request(self, overview_tool):
+        from ha_mcp._vendor.mcp_types import ClientCapabilities, ElicitationCapability
+
+        session = SimpleNamespace(
+            client_params=SimpleNamespace(
+                client_info=SimpleNamespace(
+                    name="openai-mcp", version="1.0.0", title=""
+                )
+            ),
+            client_capabilities=ClientCapabilities(elicitation=ElicitationCapability()),
+        )
+        ctx = SimpleNamespace(
+            session=session,
+            request_context=SimpleNamespace(
+                protocol_version="2026-07-28", session=session
+            ),
+        )
+        result = await overview_tool(fields=["system_info"], ctx=ctx)
+        assert result["mcp_client"] == {
+            "protocol_version": "2026-07-28",
+            "client_info": {"name": "openai-mcp", "version": "1.0.0", "title": ""},
+            "capabilities": ["elicitation.form"],
         }
 
 
