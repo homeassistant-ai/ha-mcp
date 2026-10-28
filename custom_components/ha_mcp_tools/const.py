@@ -23,7 +23,7 @@ DOMAIN = "ha_mcp_tools"
 # the server can display/debug the running component build. Capability
 # negotiation — not this version — gates each WS command (see
 # ``websocket_api.constants.CAPABILITIES``).
-COMPONENT_VERSION = "8.7.0"
+COMPONENT_VERSION = "9.0.0"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
