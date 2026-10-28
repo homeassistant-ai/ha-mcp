@@ -85,11 +85,11 @@ configuration:
       (ha_config_set_scene) 不受影響。預設為關閉；只有在上方「Enable YAML config editing」也開啟時才會生效。
   enable_lite_docstrings:
     name: 啟用精簡工具說明字串 (beta)
-    description: 測試版功能。將 15 個較大型的 ha-mcp 工具（ha_config_get_automation、ha_config_set_automation、ha_config_get_script、ha_config_set_script、ha_config_get_scene、ha_config_set_scene、ha_config_list_helpers、ha_config_set_helper、ha_config_get_dashboard、ha_config_set_dashboard、ha_call_service、ha_config_set_yaml、ha_search、ha_manage_backup、ha_report_issue）的說明文件替換為較短的變體，將結構描述與範例詳細資料延後至
-      ha_get_skill_guide 工具（或其 skill:// 資源）。有一個例外：ha_report_issue 則改為延後至其自身回應的指令欄位。微調備份提示設定在精簡模式下依然適用。警告：這會減少閒置
-      Token 的使用量，但可能會降低 LLM 的效能 — 簡短的描述依賴 LLM 實際呼叫技能工具或讀取技能資源來取得詳細資料，這無法獲得保證（某些模型會跳過額外的工具呼叫，導致獲得的指引比以前少）。最適合與支援
-      MCP 資源的用戶端或 enable_tool_search 一同使用。需要重新啟動才能生效。需要開啟上方（以及網頁 UI 中的）主「啟用測試版功能」切換開關
-      — 否則此子旗標在執行階段將被忽略，無論其在此處的值為何。
+    description: Beta 功能。將 15 個大型 ha-mcp 工具（ha_config_get_automation、ha_config_set_automation、ha_config_get_script、ha_config_set_script、ha_config_get_scene、ha_config_set_scene、ha_config_list_helpers、ha_config_set_helper、ha_config_get_dashboard、ha_config_set_dashboard、ha_call_service、ha_config_set_yaml、ha_search、ha_manage_backup、ha_report_issue）上的說明字串（docstrings）替換為較短的變體，將結構描述和範例詳細資訊延遲至
+      ha_get_skill_guide 工具（或其 skill:// 資源）。有一個例外：ha_report_issue 改為延遲至其自身回應的 instructions
+      欄位。警告：這會減少閒置 Token 的使用量，但可能會降低 LLM 的效能 — 經裁剪的描述依賴 LLM 實際呼叫技能工具或讀取技能資源來取得詳細資訊，這並無法保證（有些模型會略過額外的工具呼叫，導致獲得的指引比以前少）。最適合與支援
+      MCP 資源或啟用 enable_tool_search 的客戶端搭配使用。需要重新啟動才能生效。需要開啟上方（以及網頁 UI 中）的主開關「啟用 Beta
+      功能」— 否則此子旗標在執行階段將被忽略，無論此處的值為何。
   enable_filesystem_tools:
     name: 啟用檔案系統工具 (beta)
     description: 設定 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。啟用對 Home Assistant 檔案系統的直接檔案讀取/寫入存取權。警告：這會賦予

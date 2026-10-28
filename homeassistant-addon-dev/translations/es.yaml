@@ -195,19 +195,18 @@ configuration:
       ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
       ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
       ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) con variantes
-      más cortas que delegan los detalles de esquemas y ejemplos a la herramienta
+      más cortas que delegan los detalles del esquema y ejemplos en la herramienta
       ha_get_skill_guide (o su recurso skill://). Una excepción: ha_report_issue delega
-      al campo instructions de su propia respuesta en su lugar. El ajuste de la opción
-      Backup-hint sigue funcionando en modo lite. ADVERTENCIA: esto reduce el uso
-      de tokens en reposo, pero puede disminuir el rendimiento del LLM; las descripciones
-      recortadas dependen de que el LLM realmente llame a la herramienta de habilidades
-      o lea el recurso de habilidades para obtener detalles, lo cual no está garantizado
-      (algunos modelos omitirán la llamada adicional a la herramienta y terminarán
-      con menos orientación que antes). Se combina mejor con un cliente que admita
-      recursos MCP o con enable_tool_search. Requiere reiniciar para surtir efecto.
-      REQUIRES el interruptor maestro "Enable beta features" de arriba (y en la interfaz
-      web) activado; de lo contrario, esta subopción se ignorará en tiempo de ejecución
-      independientemente de su valor aquí.'
+      en el campo instructions de su propia respuesta en su lugar. ADVERTENCIA: esto
+      reduce el uso de tokens inactivos, pero puede degradar el rendimiento del LLM;
+      las descripciones recortadas dependen de que el LLM realmente llame a la herramienta
+      de habilidades o lea el recurso de habilidades para obtener detalles, lo cual
+      no está garantizado (algunos modelos omitirán la llamada a herramienta adicional
+      y terminarán con menos orientación que antes). Se combina mejor con un cliente
+      que admita recursos MCP o con enable_tool_search. Requiere reiniciar para surtir
+      efecto. REQUIERE que el interruptor principal "Enable beta features" de arriba
+      (y en la interfaz web) esté activado; de lo contrario, este subindicador se
+      ignorará en tiempo de ejecución independientemente de su valor aquí.'
   enable_filesystem_tools:
     name: Activar las herramientas de sistema de archivos (beta)
     description: 'Establece HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Habilita el acceso

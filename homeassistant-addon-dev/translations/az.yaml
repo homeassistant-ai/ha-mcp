@@ -183,23 +183,22 @@ configuration:
       yuxarıdakı "Enable YAML config editing" seçimi də aktiv olduqda qüvvəyə minir.
   enable_lite_docstrings:
     name: Alətlərin qısa sənədləşmə mətnlərini aktivləşdir (beta)
-    description: 'Beta funksiya. 15 geniş həcmli ha-mcp alətinin (ha_config_get_automation,
+    description: 'Beta xüsusiyyəti. 15 ağır ha-mcp alətindəki (ha_config_get_automation,
       ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
       ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
       ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
-      ha_report_issue) sənədləşmə mətnlərini sxem və nümunə təfərrüatları üçün ha_get_skill_guide
-      alətinə (və ya onun skill:// resursuna) yönləndirən daha qısa variantlarla əvəz
-      edir. Bir istisna var: ha_report_issue bunun əvəzinə öz cavabının instructions
-      sahəsinə yönləndirir. Ehtiyat nüsxə ipucu parametrinin tənzimlənməsi qısa mətn
-      rejimində də qüvvədə qalır. XƏBƏRDARLIQ: bu, başlanğıc token istifadəsini azaldır,
-      lakin LLM performansını pisləşdirə bilər — qısaldılmış təsvirlər LLM-in təfərrüatlar
-      üçün həqiqətən bacarıq alətini çağırmasına və ya bacarıq resursunu oxumasına
-      əsaslanır, buna isə zəmanət yoxdur (bəzi modellər əlavə alət çağırışını ötürəcək
-      və nəticədə əvvəlkindən daha az təlimata malik olacaq). MCP resurslarını dəstəkləyən
-      müştəri ilə və ya enable_tool_search ilə birlikdə istifadəsi daha uyğundur.
-      Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki)
-      əsas "Enable beta features" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda
-      bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.'
+      ha_report_issue) sənəd sətirlərini sxem və nümunə təfərrüatını ha_get_skill_guide
+      alətinə (və ya onun skill:// resursuna) ötürən daha qısa variantlarla əvəz edir.
+      Bir istisna: ha_report_issue əvəzində öz cavabının təlimatlar sahəsinə müraciət
+      edir. XƏBƏRDARLIQ: bu, boşta qalan token istifadəsini azaldır, lakin LLM performansını
+      aşağı sala bilər — qısaldılmış təsvirlər LLM-in təfərrüat üçün həqiqətən bacarıq
+      alətini çağıracağına və ya bacarıq resursunu oxuyacağına əsaslanır ki, bu da
+      zəmanətli deyil (bəzi modellər əlavə alət zəngini ötürəcək və əvvəlkindən daha
+      az təlimatla qalacaqlar). MCP resurslarını dəstəkləyən müştəri və ya enable_tool_search
+      ilə birlikdə istifadə edilməsi tövsiyə olunur. Qüvvəyə minməsi üçün yenidən
+      başladılması tələb olunur. İşləməsi üçün yuxarıdakı (və veb interfeysdəki) əsas
+      "Enable beta features" keçidinin açıq olması TƏLƏB OLUNUR — əks halda, bu alt
+      bayraq buradakı dəyərindən asılı olmayaraq işləmə vaxtı nəzərə alınmır.'
   enable_filesystem_tools:
     name: Fayl sistemi alətlərini aktivləşdir (beta)
     description: 'HAMCP_ENABLE_FILESYSTEM_TOOLS=true təyin edir. Home Assistant fayl

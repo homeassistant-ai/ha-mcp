@@ -170,23 +170,22 @@ configuration:
       redaktadon de YAML-agordo" supre estas ankaŭ ŝaltita.
   enable_lite_docstrings:
     name: Ebligi malpezajn ilajn dokumentŝnurojn (beta)
-    description: 'Beta-funkcio. Anstataŭigas la dokumentajn signovicojn ĉe 15 pezaj
-      ha-mcp-iloj (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+    description: 'Beta-funkcio. Anstataŭigas la dokumentajn ĉenojn (docstrings) ĉe
+      15 pezaj ha-mcp-iloj (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
       ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
       ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
       ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) per pli mallongaj
-      variantoj, kiuj prokrastas la detalojn de skemo kaj ekzemplo al la ilo ha_get_skill_guide
-      (aŭ ĝia risurco skill://). Unu escepto: ha_report_issue prokrastas anstataŭe
-      al la instrukcia kampo de sia propra respondo. Agordi la konservan konsilon
-      (Backup-hint) ankoraŭ validas en malpeza reĝimo. ATENTO: ĉi tio malpliigas la
-      uzadon de neaktivaj signetoj (tokens), sed povas malbonigi la LLM-efikecon —
-      la fortonĉitaj priskriboj dependas de tio, ke la LLM fakte vokas la lertan ilon
-      aŭ legas la lertan risurcon por detaloj, kio ne estas garantiita (kelkaj modeloj
-      preterlasos la ekstran ilvokon kaj finos kun malpli da gvidado ol antaŭe). Plej
-      bone uzata kune kun kliento kiu subtenas MCP-risurcojn aŭ kun enable_tool_search.
-      Postulas restartigon por ekvalidi. POSTULAS, ke la ĉefa ŝaltilo "Enable beta
-      features" supre (kaj en la reta interfaco) estu enŝaltita — alie ĉi tiu sub-flago
-      estas ignorata dum rulado sendepende de sia valoro ĉi tie.'
+      variantoj, kiuj transdonas skemon kaj ekzemplajn detalojn al la ilo ha_get_skill_guide
+      (aŭ ĝia risurco skill://). Unu escepto: ha_report_issue transdonas tion al la
+      kampo instructions de sia propra respondo anstataŭe. ⚠ ATENTO: ĉi tio malpliigas
+      la uzadon de neaktivaj signetoj (tokens), sed povas malbonigi la LLM-efikecon
+      — la tonditaj priskriboj dependas de tio, ke la LLM fakte vokas la kapablan
+      ilon aŭ legas la kapablan risurcon por detaloj, kio ne estas garantiita (kelkaj
+      modeloj preterlasos la ekstran ilovokon kaj finos kun malpli da gvidado ol antaŭe).
+      Plej bone parigite kun kliento kiu subtenas MCP-risurcojn aŭ kun enable_tool_search.
+      Postulas restartigon por efiki. POSTULAS ke la ĉefa ŝaltilo "Enable beta features"
+      supre (kaj en la reta interfaco) estu ŝaltita — alie ĉi tiu sub-flago estas
+      ignorata dum rultempo negrave de sia valoro ĉi tie.'
   enable_filesystem_tools:
     name: Ebligi dosiersistemajn ilojn (beta)
     description: 'Agordas HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Ebligas rektan dosier-leg/skriban

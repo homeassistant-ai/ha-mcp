@@ -172,22 +172,21 @@ configuration:
       když je také zapnuto „Povolit úpravy konfigurace YAML“ výše.
   enable_lite_docstrings:
     name: Povolit zjednodušené docstringy nástrojů (beta)
-    description: 'Beta funkce. Nahrazuje dokumentační řetězce u 15 náročných nástrojů
-      ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+    description: 'Funkce v beta verzi. Nahrazuje dokumentační řetězce u 15 náročných
+      nástrojů ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
       ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
       ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
       ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) kratšími variantami,
-      které odsouvají podrobnosti schémat a příkladů na nástroj ha_get_skill_guide
-      (nebo jeho zdroj skill://). Jedna výjimka: ha_report_issue se odkazuje na pole
-      instructions ve své vlastní odpovědi. Ladění nastavení Backup-hint funguje v
-      úsporném režimu (lite mode) i nadále. VAROVÁNÍ: toto snižuje spotřebu tokenů
-      v klidovém stavu, ale může snížit výkon LLM — zkrácené popisy spoléhají na to,
-      že LLM skutečně zavolá nástroj dovedností nebo si přečte zdroj dovedností pro
-      podrobnosti, což není zaručeno (některé modely přeskočí dodatečné volání nástroje
-      a skončí s menší nápovědou než dříve). Nejlépe se používá s klientem, který
-      podporuje zdroje MCP nebo s enable_tool_search. Vyžaduje restart, aby se projevilo.
-      VYŽADUJE, aby hlavní přepínač "Povolit beta funkce" výše (a ve webovém rozhraní)
-      byl zapnutý — jinak bude tento podpříznak za běhu ignorován bez ohledu na jeho
+      které přenášejí podrobnosti o schématu a příkladech na nástroj ha_get_skill_guide
+      (nebo jeho zdroj skill://). Jedna výjimka: ha_report_issue odkazuje na pole
+      pokynů ve vlastní odpovědi. VAROVÁNÍ: toto snižuje spotřebu tokenů v klidovém
+      stavu, ale může snížit výkon LLM — ořezané popisy spoléhají na to, že LLM skutečně
+      zavolá nástroj dovednosti nebo si přečte zdroj dovednosti pro podrobnosti, což
+      není zaručeno (některé modely přeskočí dodatečné volání nástroje a skončí s
+      menší podporou než dříve). Nejlépe se používá s klientem, který podporuje zdroje
+      MCP nebo s enable_tool_search. Vyžaduje restart, aby se projevilo. VYŽADUJE,
+      aby byl hlavní přepínač "Enable beta features" nahoře (a ve webovém rozhraní)
+      zapnutý — jinak bude tento dílčí příznak za běhu ignorován bez ohledu na jeho
       hodnotu zde.'
   enable_filesystem_tools:
     name: Povolit nástroje souborového systému (beta)

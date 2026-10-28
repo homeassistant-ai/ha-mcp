@@ -182,24 +182,23 @@ configuration:
       ist.
   enable_lite_docstrings:
     name: Lite-Tool-Docstrings aktivieren (Beta)
-    description: 'Beta-Funktion. Ersetzt die Docstrings von 15 speicherintensiven
-      ha-mcp-Tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
-      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
-      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
-      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) durch kürzere
-      Varianten, die Schema- und Beispieldetails auf das ha_get_skill_guide-Tool (oder
-      dessen skill://-Ressource) auslagern. Eine Ausnahme: ha_report_issue verweist
-      stattdessen auf das instructions-Feld seiner eigenen Antwort. Die Anpassung
-      der Backup-Hinweis-Einstellung gilt weiterhin im Lite-Modus. WARNUNG: Dies reduziert
-      die Token-Nutzung im Ruhezustand, kann jedoch die LLM-Leistung beeinträchtigen
-      — die gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich
-      das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was nicht
-      garantiert ist (einige Modelle überspringen den zusätzlichen Tool-Aufruf und
-      erhalten dadurch weniger Hilfestellung als zuvor). Am besten in Kombination
-      mit einem Client, der MCP-Ressourcen unterstützt oder mit enable_tool_search.
-      Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass der übergeordnete
-      Schalter „Enable beta features“ oben (und in der Web-UI) aktiviert ist — andernfalls
-      wird dieses Unter-Flag zur Laufzeit unabhängig von seinem Wert hier ignoriert.'
+    description: 'Beta-Funktion. Ersetzt die Docstrings von 15 umfangreichen ha-mcp-Tools
+      (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script,
+      ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper,
+      ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml,
+      ha_search, ha_manage_backup, ha_report_issue) durch kürzere Varianten, die Schema-
+      und Beispieldetails auf das ha_get_skill_guide-Tool (oder dessen skill://-Ressource)
+      auslagern. Eine Ausnahme: ha_report_issue verweist stattdessen auf das instructions-Feld
+      der eigenen Antwort. WARNUNG: Dies reduziert die Token-Nutzung im Leerlauf,
+      kann jedoch die LLM-Leistung beeinträchtigen – die gekürzten Beschreibungen
+      hängen davon ab, dass das LLM tatsächlich das Skill-Tool aufruft oder die Skill-Ressource
+      für Details liest, was nicht garantiert ist (einige Modelle überspringen den
+      zusätzlichen Tool-Aufruf und erhalten dadurch weniger Anleitung als zuvor).
+      Lässt sich am besten mit einem Client kombinieren, der MCP-Ressourcen unterstützt
+      oder enable_tool_search nutzt. Erfordert einen Neustart, um wirksam zu werden.
+      ERFORDERT, dass der Hauptschalter „Enable beta features“ oben (und in der Web-UI)
+      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit unabhängig
+      von seinem Wert hier ignoriert.'
   enable_filesystem_tools:
     name: Dateisystem-Tools aktivieren (Beta)
     description: 'Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten Dateilese-/-schreibzugriff
