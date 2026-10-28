@@ -96,8 +96,7 @@ def _approval_request(tool_name: str, wait_seconds: int) -> ElicitRequest:
                 "the ha-mcp settings, on the Tool Security Policies tab. Accepting "
                 "here does not approve it; the call continues once you have both "
                 "approved it there and accepted here. Decline here to cancel the "
-                f"call. The approval window is {wait_seconds} seconds from when the "
-                "call was made."
+                f"call. The approval window is {wait_seconds} seconds."
             ),
             requested_schema={
                 "type": "object",
@@ -149,7 +148,7 @@ class ApprovalContinuation(BaseModel):
     args_hash: str
     policy_hash: str
     deadline: float
-    wait_seconds: int
+    window_seconds: int
     rounds: int = Field(default=0, ge=0, le=MAX_CONTINUATIONS)
 
     @classmethod
@@ -205,7 +204,7 @@ class ApprovalContinuation(BaseModel):
             args_hash=pending.args_hash,
             policy_hash=_policy_hash(policy),
             deadline=deadline,
-            wait_seconds=wait_seconds,
+            window_seconds=wait_seconds,
         )
 
     def wait_seconds(self, answer: ApprovalAnswer | None) -> float:
@@ -228,7 +227,7 @@ class ApprovalContinuation(BaseModel):
             InputRequiredResult(
                 input_requests={
                     APPROVAL_INPUT_KEY: _approval_request(
-                        self.tool_name, self.wait_seconds
+                        self.tool_name, self.window_seconds
                     )
                 },
                 request_state=state.model_dump_json(),
