@@ -317,6 +317,12 @@ class TestDashboardLifecycle:
                 d.get("url_path") == "test-no-config"
                 for d in list_data.get("dashboards", [])
             )
+            # Core has no config for it yet; the dashboard still exists.
+            empty_data = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": "test-no-config"}
+            )
+            assert empty_data["stored_config"] is False
+            assert empty_data["config"] is None
 
             update_data = await mcp.call_tool_success(
                 "ha_config_set_dashboard",
@@ -401,16 +407,14 @@ class TestDashboardErrorHandling:
     """Test error handling and edge cases."""
 
     async def test_get_nonexistent_dashboard(self, mcp_client):
-        """Test getting config for non-existent dashboard."""
+        """An unknown dashboard is reported as not found, not as a failed call."""
         logger.info("Starting get nonexistent dashboard test")
 
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_config_get_dashboard",
             {"url_path": "nonexistent-dashboard-12345"},
         )
-        # May succeed but return empty/error config, or fail - either is acceptable
-        assert "success" in data or "error" in data
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
         logger.info("Get nonexistent dashboard test completed successfully")
 

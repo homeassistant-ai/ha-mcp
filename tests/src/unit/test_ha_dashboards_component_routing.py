@@ -20,6 +20,7 @@ than propagating.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -349,9 +350,10 @@ async def test_get_not_found_falls_back_to_legacy() -> None:
     client = RoutingClient()  # legacy lovelace/config → config_not_found
     get_dashboard = _build_get_dashboard(client)
 
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
+    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError) as exc:
         await get_dashboard(url_path="ghost")
     assert client.config_calls == ["ghost"]
+    assert json.loads(str(exc.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 class _ForceCapturingClient(RoutingClient):

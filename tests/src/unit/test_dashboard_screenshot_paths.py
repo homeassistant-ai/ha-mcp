@@ -308,8 +308,6 @@ async def test_structured_resolution_maps_transport_failure_to_tool_error() -> N
             "message": "A localized message that does not contain the path marker",
         },
         "Command failed: Unknown config specified: wall-panel",
-        {"code": None, "message": "No config found."},
-        "Command failed: No config found.",
     ],
 )
 async def test_dashboard_fetch_maps_only_exact_missing_signals_to_not_found(

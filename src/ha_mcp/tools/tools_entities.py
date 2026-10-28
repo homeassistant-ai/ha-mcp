@@ -39,7 +39,7 @@ from .entity_param_parsing import (
     _parse_options_param,
     _parse_string_list_field,
 )
-from .entity_removal import remove_registry_entry
+from .entity_removal import remove_registry_entries, remove_registry_entry
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
@@ -2032,13 +2032,8 @@ class EntityTools:
         return response
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
-        """Remove many entities sequentially, classifying each outcome.
-
-        Registry writes are NOT parallelized (per the removal WS command's
-        write semantics). Each id lands in exactly one bucket: ``removed``,
-        ``skipped`` (not-found is idempotent success, not an error), or
-        ``errors`` (any other failure, carrying code + message).
-        """
+        """Validate the id list, then remove the ids one at a time; registry
+        writes are not parallelized (see ``remove_registry_entries``)."""
         if not isinstance(entity_ids, list):
             raise_tool_error(
                 create_error_response(
@@ -2077,37 +2072,9 @@ class EntityTools:
             )
 
         logger.info(f"Bulk removing {len(entity_ids)} entities")
-        removed: list[str] = []
-        skipped: list[str] = []
-        errors: list[dict[str, str]] = []
-        for eid in entity_ids:
-            result = await self._client.send_websocket_message(
-                {"type": "config/entity_registry/remove", "entity_id": eid}
-            )
-            if result.get("success"):
-                removed.append(eid)
-                continue
-            error_msg = _extract_ws_error(result)
-            # Same not-found detection as the single path — HA surfaces the
-            # error as a plain string; already-absent is idempotent success.
-            if "not found" in error_msg.lower():
-                skipped.append(eid)
-            else:
-                errors.append(
-                    {
-                        "entity_id": eid,
-                        "code": ErrorCode.SERVICE_CALL_FAILED.value,
-                        "message": error_msg,
-                    }
-                )
-
-        return {
-            "success": len(errors) == 0,
-            "total": len(entity_ids),
-            "removed": removed,
-            "skipped": skipped,
-            "errors": errors,
-        }
+        return await remove_registry_entries(
+            self._client, entity_ids, _extract_ws_error
+        )
 
     @tool(
         name="ha_remove_entity",
@@ -2149,7 +2116,8 @@ class EntityTools:
         its filters change. Removals run sequentially and return:
           {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
         where skipped = ids already absent (not-found is idempotent, not an
-        error). Only single-id removal is auto-backed-up.
+        error). A lost connection stops the run; not_attempted lists the ids
+        left, safe to retry. Only single-id removal is auto-backed-up.
 
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
@@ -2175,7 +2143,7 @@ class EntityTools:
 
             if not result.get("success"):
                 error_msg = _extract_ws_error(result)
-                if "not found" in error_msg.lower():
+                if result.get("error_code") == "not_found":
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.ENTITY_NOT_FOUND,

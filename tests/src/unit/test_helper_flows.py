@@ -17,7 +17,6 @@ from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import auto_backup, flow_helper_lookup, helper_flows
 from ha_mcp.tools.backup import _edits_create
 from ha_mcp.tools.config_entry_backup import resolve_config_entry_backup_domain
-from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
 from ha_mcp.tools.flow_helper_lookup import _raise_platform_mismatch
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_integrations import IntegrationTools
@@ -389,10 +388,6 @@ def test_flow_helper_snapshot_domains_need_no_list_of_flow_types(
     domain: str, is_flow: bool
 ) -> None:
     assert bm._is_flow_helper_domain(domain) is is_flow
-
-
-def test_every_storage_type_is_snapshotted_as_storage_not_as_a_flow() -> None:
-    assert bm._HELPER_LIST_TYPES == SIMPLE_HELPER_TYPES
 
 
 def test_a_mistyped_flow_domain_does_not_stay_in_the_supported_domains(

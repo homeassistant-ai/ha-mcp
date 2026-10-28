@@ -15,7 +15,6 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import (
-    check_core_gaps,
     with_create_defaults,
 )
 from .icon_route import collection_icon
@@ -35,7 +34,6 @@ def _build_create_message(
     if icon:
         message["icon"] = icon
     message.update(with_create_defaults(helper_type, fields))
-    check_core_gaps(helper_type, message)
     message["type"] = f"{helper_type}/create"  # never a field's
     return message
 

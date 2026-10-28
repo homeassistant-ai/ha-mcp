@@ -11,6 +11,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
+from ..dashboard_read_errors import CONFIG_NOT_FOUND_CODE, NO_STORED_CONFIG_MESSAGES
 from ..helper_flows import helper_flow_types
 from ..helpers import exception_to_structured_error, safe_progress
 from ..tools_config_dashboards import (
@@ -66,14 +67,6 @@ async def _scrub_results_for_enforce(
             results[category] = scrub_records(items, enforce_regex)
 
 
-# The ``lovelace/config`` messages meaning "this dashboard has no stored
-# config" — bare (nested error shape) and as ``send_websocket_message``'s
-# flat envelope prefixes it. Mirrors ``dashboard_screenshot/paths.py``.
-_NO_STORED_CONFIG_MESSAGES = frozenset(
-    {"No config found.", "Command failed: No config found."}
-)
-
-
 def _is_no_stored_config(resp: dict[str, Any]) -> bool:
     """True when a failed ``lovelace/config`` envelope means the dashboard
     has no stored config — an auto-generated dashboard that was never taken
@@ -95,9 +88,9 @@ def _is_no_stored_config(resp: dict[str, Any]) -> bool:
     same HA error.
     """
     code = resp.get("error_code") or get_error_code(resp)
-    if code != "config_not_found":
+    if code != CONFIG_NOT_FOUND_CODE:
         return False
-    return get_error_message(resp) in _NO_STORED_CONFIG_MESSAGES
+    return get_error_message(resp) in NO_STORED_CONFIG_MESSAGES
 
 
 async def _phase_finished(

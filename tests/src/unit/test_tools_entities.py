@@ -1845,23 +1845,19 @@ class TestHaRemoveEntity:
 
     @pytest.mark.asyncio
     async def test_remove_entity_not_found(self, remove_entity_tool, mock_client):
-        """Removing a non-existent entity should raise ToolError containing 'not found'.
-
-        Note: send_websocket_message returns errors as plain strings, never as dicts.
-        Detection: "not found" in error_msg.lower() -- NOT error.get("code").
-        """
+        """Core's not_found code is reported as ENTITY_NOT_FOUND, whatever its text."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
                 "success": False,
-                "error": "Command failed: Entity not found",
+                "error": "Command failed: Entity missing",
+                "error_code": "not_found",
             }
         )
 
         with pytest.raises(ToolError) as exc_info:
             await remove_entity_tool(entity_id="sensor.definitely_not_real_12345")
 
-        error_msg = str(exc_info.value).lower()
-        assert "not found" in error_msg
+        assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_remove_entity_exception(self, remove_entity_tool, mock_client):

@@ -1,6 +1,7 @@
-"""Unit tests for the dashboard-resolver helpers in tools_config_dashboards.
+"""Unit tests for the dashboard-resolver helpers in tools_config_dashboards and
+dashboard_read_errors.
 
-The helpers under test (`_should_lazy_resolve`, `_resolve_dashboard`,
+The helpers under test (`is_unknown_dashboard`, `_resolve_dashboard`,
 `_lazy_resolve_and_retry`) hold the substring-trigger contract and the
 two-call-site resolver glue that the rest of the dual-accept identifier
 design rests on. End-to-end tests would only catch a regression here on
@@ -16,12 +17,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools.dashboard_read_errors import (
+    UNKNOWN_CONFIG_PREFIX,
+    is_unknown_dashboard,
+)
 from ha_mcp.tools.tools_config_dashboards import (
-    _LAZY_RESOLVE_TRIGGER,
     DashboardConfigTools,
     _lazy_resolve_and_retry,
     _resolve_dashboard,
-    _should_lazy_resolve,
 )
 
 # -----------------------------------------------------------------------------
@@ -43,7 +46,7 @@ def _trigger_response(missing_id: str = "anything") -> dict:
     return {
         "success": False,
         "error": {
-            "message": f"{_LAZY_RESOLVE_TRIGGER}: {missing_id}",
+            "message": f"{UNKNOWN_CONFIG_PREFIX}: {missing_id}",
             "code": "config_not_found",
         },
     }
@@ -54,37 +57,37 @@ def _success_response(payload: dict | None = None) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# _should_lazy_resolve — substring contract
+# is_unknown_dashboard — substring contract
 # -----------------------------------------------------------------------------
 
 
-class TestShouldLazyResolve:
+class TestIsUnknownDashboard:
     """The substring trigger is the only signal available at the tool
     layer. Pin the contract so an HA-side wording change is caught here
     rather than degrading to "lazy fallback never fires" silently."""
 
     def test_exact_trigger_message(self):
-        assert _should_lazy_resolve(_LAZY_RESOLVE_TRIGGER) is True
+        assert is_unknown_dashboard(UNKNOWN_CONFIG_PREFIX) is True
 
     def test_trigger_with_identifier_suffix(self):
         # The HA emit form is f"Unknown config specified: {url_path}".
-        assert _should_lazy_resolve("Unknown config specified: my_dashboard") is True
+        assert is_unknown_dashboard("Unknown config specified: my_dashboard") is True
 
     def test_trigger_embedded_in_longer_message(self):
         assert (
-            _should_lazy_resolve("Command failed: Unknown config specified: foo")
+            is_unknown_dashboard("Command failed: Unknown config specified: foo")
             is True
         )
 
     def test_unrelated_message_does_not_match(self):
-        assert _should_lazy_resolve("Some other error") is False
-        assert _should_lazy_resolve("") is False
+        assert is_unknown_dashboard("Some other error") is False
+        assert is_unknown_dashboard("") is False
 
     def test_legitimate_empty_dashboard_message_does_not_match(self):
         # HA emits "No config found." for genuinely empty (un-initialised)
         # dashboards — must NOT trigger a lazy retry, otherwise the
         # caller's empty-state path is hidden.
-        assert _should_lazy_resolve("No config found.") is False
+        assert is_unknown_dashboard("No config found.") is False
 
 
 # -----------------------------------------------------------------------------
