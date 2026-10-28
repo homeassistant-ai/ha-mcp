@@ -29,6 +29,7 @@ class _FakeClient:
         self.calls: list[dict[str, Any]] = []
         self.refuse: dict[str, tuple[str, str]] = {}
         self.state = "1"
+        self.attributes: dict[str, Any] = {}
         self.writes = 0
         # Reads fail once a write has gone through (read-back after a write).
         self.read_back_fails = False
@@ -40,7 +41,11 @@ class _FakeClient:
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         if entity_id != LIST:
             raise HomeAssistantAPIError("Not found", status_code=404)
-        return {"entity_id": entity_id, "state": self.state}
+        return {
+            "entity_id": entity_id,
+            "state": self.state,
+            "attributes": self.attributes,
+        }
 
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(message)
@@ -180,7 +185,10 @@ class TestGetTodo:
         self, tools: TodoTools, client: _FakeClient
     ) -> None:
         # todo.get_items matches no unavailable entity; todo/item/list answers.
+        # A loaded entity keeps its attributes; only Core's placeholder has
+        # `restored`.
         client.state = "unavailable"
+        client.attributes = {"friendly_name": "Tasks", "supported_features": 15}
         got = await tools.ha_get_todo(LIST, status="completed")
         assert got["count"] == 3
         assert "unavailable" in got["warnings"][0]
@@ -188,6 +196,20 @@ class TestGetTodo:
         assert client.services() == []
         unfiltered = await tools.ha_get_todo(LIST)
         assert "unfiltered" not in unfiltered["warnings"][0]
+
+    async def test_placeholder_list_is_refused_before_core_is_asked(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Core's placeholder state for a registered list with no loaded entity;
+        # todo/item/list would answer "Entity not found".
+        client.state = "unavailable"
+        client.attributes = {"restored": True}
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_todo(LIST)
+        error = _error(excinfo)["error"]
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "placeholder" in error["message"]
+        assert client.calls == []
 
 
 class TestSetTodoItem:
@@ -724,6 +746,7 @@ class TestTargetsAndReplies:
     ) -> None:
         got = await tools.ha_set_todo_item(LIST, summary="  Eggs ")
         assert got["todo_item"]["uid"] == "9"
+        assert got["message"] == f"Added 'Eggs' to {LIST}"
 
     async def test_move_to_the_top_with_an_update_is_not_refused(
         self, tools: TodoTools, client: _FakeClient

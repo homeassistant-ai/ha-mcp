@@ -104,7 +104,10 @@ with their text; the REST service endpoint answers them with a bare 400.
 `ha_get_todo` filters with `todo.get_items`. Core's services skip an
 unavailable list, answering a write with success and `todo.get_items` with no
 match, so the tools refuse a write to one and read its items with
-`todo/item/list`, which still answers. A todo item backup restores an edited item with
+`todo/item/list`, which still answers for a loaded list entity. A list that
+Core holds only as its `restored` placeholder state (no loaded entity, for
+example while its integration is not set up) is refused, as `todo/item/list`
+answers it with "Entity not found". A todo item backup restores an edited item with
 `todo.update_item` under its uid, which the safety backup and the diff also
 follow. The snapshot holds no position and Core's services cannot set a uid,
 so a removed item comes back through `todo.add_item` with a new uid, at the

@@ -113,8 +113,8 @@ class TodoTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def _list_unavailable(self, entity_id: str) -> bool:
-        """Whether the list is unavailable; an unknown list is not found."""
+    async def _list_state(self, entity_id: str) -> dict[str, Any]:
+        """The list's state; an unknown list is not found."""
         state = await get_entity_state_or_none(self._client, entity_id)
         if state is None:
             raise_tool_error(
@@ -125,12 +125,12 @@ class TodoTools:
                     suggestions=["Use ha_get_todo() to find valid todo lists"],
                 )
             )
-        return bool(state.get("state") == "unavailable")
+        return state
 
     async def _require_available(self, entity_id: str) -> None:
         """Core's services skip an unavailable list: a service call changes
         nothing yet answers success. Refuse a write up front."""
-        if await self._list_unavailable(entity_id):
+        if (await self._list_state(entity_id)).get("state") == "unavailable":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -201,6 +201,48 @@ class TodoTools:
                 )
             )
         return items
+
+    async def _read_unavailable(
+        self,
+        entity_id: str,
+        state: dict[str, Any],
+        status: str | list[str] | None,
+    ) -> dict[str, Any]:
+        if (state.get("attributes") or {}).get("restored"):
+            # Core's placeholder for a registered list with no loaded
+            # entity; todo/item/list answers it with "Entity not found".
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Todo list {entity_id} is unavailable and Home "
+                    "Assistant holds only a placeholder for it (for "
+                    "example while its integration is not set up), so "
+                    "it has no items to read",
+                    context={"entity_id": entity_id},
+                    suggestions=["Check the integration that provides the list"],
+                )
+            )
+        # todo.get_items matches no unavailable entity; the list
+        # command still answers with the items Core last held.
+        held = await self._list_items(entity_id)
+        return {
+            "success": True,
+            "entity_id": entity_id,
+            "status_filter": status,
+            "count": len(held),
+            "items": held,
+            "message": f"Found {len(held)} item(s) in {entity_id}",
+            "warnings": [
+                f"{entity_id} is unavailable: these are the items Home "
+                "Assistant last held"
+                + (
+                    ", unfiltered, since Home Assistant applies the "
+                    "status filter only to an available list"
+                    if status
+                    else ""
+                )
+            ],
+        }
 
     async def _read_back(
         self, entity_id: str
@@ -284,28 +326,9 @@ class TodoTools:
                 }
 
             _require_todo_entity(entity_id)
-            if await self._list_unavailable(entity_id):
-                # todo.get_items matches no unavailable entity; the list
-                # command still answers with the items Core last held.
-                held = await self._list_items(entity_id)
-                return {
-                    "success": True,
-                    "entity_id": entity_id,
-                    "status_filter": status,
-                    "count": len(held),
-                    "items": held,
-                    "message": f"Found {len(held)} item(s) in {entity_id}",
-                    "warnings": [
-                        f"{entity_id} is unavailable: these are the items Home "
-                        "Assistant last held"
-                        + (
-                            ", unfiltered, since Home Assistant applies the "
-                            "status filter only to an available list"
-                            if status
-                            else ""
-                        )
-                    ],
-                }
+            state = await self._list_state(entity_id)
+            if state.get("state") == "unavailable":
+                return await self._read_unavailable(entity_id, state, status)
             message = service_message(
                 "get_items", entity_id, {"status": status} if status else {}
             )
@@ -553,7 +576,7 @@ class TodoTools:
             "entity_id": entity_id,
             "item": summary,
             "todo_item": todo_item,
-            "message": f"Added '{summary}' to {entity_id}"
+            "message": f"Added '{stored}' to {entity_id}"
             if todo_item is not None
             else f"Sent '{summary}' to {entity_id}; the new item is not confirmed",
         }
