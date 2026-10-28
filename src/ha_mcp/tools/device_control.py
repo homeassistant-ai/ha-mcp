@@ -65,8 +65,8 @@ _BULK_ROW_SHAPE_SUGGESTION = (
 # The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
 # capability. When the component advertises ``bulk_call_service`` the consumer
 # resolves every op's domain/service server-side (D6), sends one register-before-fire
-# batch frame, and maps the inline-confirmed per-op transitions back into the legacy
-# bulk response shape — no operation-id polling needed. Named once so the routing
+# batch frame, and maps each op's inline result (confirmed or not) back into the
+# legacy bulk response shape — no operation-id polling needed. Named once so the routing
 # helper and its tests agree on the wire string.
 WS_BULK_CALL_SERVICE = "ha_mcp_tools/bulk_call_service"
 
@@ -887,25 +887,25 @@ class DeviceControlTools:
                 )
 
             # Route through the component's bulk_call_service capability when
-            # advertised (D5a): one register-before-fire batch frame confirms every
-            # op inline, so ops return already-verified (no operation-id polling). A
-            # None return means nothing dispatched (capability miss / unresolvable op
-            # / transport failure), so the legacy path below is a safe first fire
-            # (D9 at-most-once).
+            # advertised (D5a): one register-before-fire batch frame; HA confirms ops
+            # inline (no operation-id polling) and each op's ``confirmed`` says whether
+            # it did. A None return means nothing dispatched (capability miss /
+            # unresolvable op / pre-send failure), so the legacy path below is a safe
+            # first fire (D9 at-most-once).
             component_response = await self._bulk_via_component(
                 operations, valid_operations, skipped_operations, parallel
             )
             if component_response is not None:
-                # M-progress-msg: the ambiguous batch response carries a top-level
-                # ``partial`` (dispatched but the batch confirmation never arrived — not
-                # retried); only a fully-served batch is "confirmed inline". The legacy
-                # ``_build_bulk_response`` never sets a top-level ``partial``, so this
-                # flag reliably marks the ambiguous path.
+                # M-progress-msg: count the ops HA confirmed (each op's ``confirmed``).
+                # A top-level ``partial`` comes only from _build_ambiguous_bulk_response
+                # (timeout/drop or malformed frame): that batch is not retried.
+                ops = component_response["results"]
+                confirmed = sum(1 for r in ops if r.get("confirmed"))
                 component_message = (
-                    "dispatched via component (unconfirmed — not retried)"
-                    if component_response.get("partial")
-                    else "dispatched via component (confirmed inline)"
+                    f"dispatched via component ({confirmed} of {len(ops)} confirmed)"
                 )
+                if component_response.get("partial"):
+                    component_message += " — not retried"
                 await safe_progress(
                     ctx,
                     progress=len(valid_operations),
