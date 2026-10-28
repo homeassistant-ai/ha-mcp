@@ -76,7 +76,10 @@ async def test_switching_access_off_closes_the_server_until_switched_on(
     assert not await _has_state(ha_client, entity_id)
 
     async def _switch_added() -> bool:
-        return await _has_state(ha_client, entity_id)
+        # Core 2026.11 writes an "unavailable" placeholder as soon as the
+        # entity is enabled; the switch itself arrives with the reload.
+        states = {s["entity_id"]: s["state"] for s in await ha_client.get_states()}
+        return states.get(entity_id) in ("on", "off")
 
     await _set_switch_enabled(ha_client, entity_id, True)
     try:
