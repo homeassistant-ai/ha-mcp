@@ -3,7 +3,7 @@
 ``llm_api`` exposes the in-process server's toolset as Home Assistant LLM
 API(s) so conversation agents (and through them the Assist chat UI and voice)
 can drive ha-mcp. These tests cover the registration lifecycle (exposure
-modes, failure containment), the per-turn tool-list fetch with the server's
+modes, failure containment), the per-instance tool-list fetch with the server's
 exposure stamp, the tool-search meta-tools (search + call-time enforcement),
 and the loopback transport error mapping — all hermetically: Home Assistant
 is stubbed via ``_embedded_stubs`` and the MCP client session is faked at the

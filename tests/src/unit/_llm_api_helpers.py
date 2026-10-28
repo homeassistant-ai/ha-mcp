@@ -60,8 +60,11 @@ def fake_session(
     delay: float = 0.0,
 ) -> SimpleNamespace:
     """Patch ``llm_api._mcp_session`` with a fake and return the session."""
+    # The default lists ha_search exposed, the tool the call tests forward;
+    # every forwarded call re-reads exposure from this list.
+    listed = [tool_entry()] if tools is None else tools
     session = SimpleNamespace(
-        list_tools=AsyncMock(return_value=SimpleNamespace(tools=tools or [])),
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=listed)),
         call_tool=AsyncMock(return_value=call_result),
     )
     init_result = SimpleNamespace(instructions=instructions)
