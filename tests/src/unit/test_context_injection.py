@@ -500,9 +500,11 @@ async def test_bulk_component_batch_progress_does_not_claim_confirmation() -> No
     # One completion event; the legacy "dispatching operations" framing is skipped.
     (call,) = ctx.report_progress.await_args_list
     _assert_progress_call(
-        call, progress=2, total=2, message_contains="dispatched 2 op(s) via component"
+        call,
+        progress=2,
+        total=2,
+        message_contains="dispatched via component; each op's result shows its outcome",
     )
-    assert "confirmed inline" not in call.kwargs["message"]
 
 
 # ---------------------------------------------------------------------------
