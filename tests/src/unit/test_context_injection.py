@@ -469,6 +469,45 @@ async def test_bulk_device_control_parallel_emits_dispatch_only() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("component_response", "wording"),
+    [
+        ({"successful_commands": 2}, ("confirmed inline",)),
+        ({"successful_commands": 2, "partial": True}, ("unconfirmed", "not retried")),
+    ],
+    ids=["confirmed", "unconfirmed"],
+)
+@pytest.mark.asyncio
+async def test_bulk_component_batch_progress_says_whether_ha_confirmed_the_batch(
+    component_response: dict[str, Any], wording: tuple[str, ...]
+) -> None:
+    """A component batch whose confirmation never arrived is not reported as confirmed."""
+    client = _mock_ha_client()
+    tools = DeviceControlTools(client=client)
+    ctx = _make_ctx()
+    tools._bulk_via_component = AsyncMock(return_value=component_response)  # type: ignore[method-assign]
+    tools.control_device_smart = AsyncMock()  # type: ignore[method-assign]
+
+    result = await tools.bulk_device_control(
+        operations=[
+            {"entity_id": "light.a", "action": "on"},
+            {"entity_id": "light.b", "action": "off"},
+            # Skipped as invalid, so the event must count only the two dispatched ops.
+            {"action": "on"},
+        ],
+        ctx=ctx,
+    )
+
+    assert result is component_response
+    tools.control_device_smart.assert_not_awaited()
+    _assert_no_protocol_logging(ctx)
+    # One completion event; the legacy "dispatching operations" framing is skipped.
+    (call,) = ctx.report_progress.await_args_list
+    _assert_progress_call(call, progress=2, total=2, message_contains="via component")
+    for part in wording:
+        assert part in call.kwargs["message"]
+
+
 # ---------------------------------------------------------------------------
 # Branch-coverage tests for non-default search types / sources / paths
 # ---------------------------------------------------------------------------
