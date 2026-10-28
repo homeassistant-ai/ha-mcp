@@ -258,7 +258,7 @@ class HacsTools:
         On Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool
         uses whichever the instance has. This tool performs writes; to search the store or read repository details use
         ``ha_get_hacs_info``. Use ``action="update_information"`` to run the HACS UI's
-        "Update information" action — a forced re-fetch of one repository's release data
+        "Update information" action ("Refresh information" in the Marketplace) — a forced re-fetch of one repository's release data
         from GitHub, so a pending update becomes visible to HACS and its update entity
         immediately.
 
