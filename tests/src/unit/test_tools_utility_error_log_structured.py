@@ -357,6 +357,18 @@ class TestParseErrorLogStructured:
         assert summary["window_start"] == "2026-05-27 10:00:01.000"
         assert summary["window_end"] == "2026-05-27 10:00:09.000"
 
+    def test_utc_offset_timestamps_from_core_2026_11_parse(self):
+        # Core 2026.11 appends the local UTC offset to every log timestamp.
+        log = textwrap.dedent("""\
+            2026-10-28 14:45:10.501-04:00 ERROR (MainThread) [a.b.c] boom
+            2026-10-28 18:45:11.002+00:00 WARNING (Recorder) [d.e.f] careful
+        """)
+        result = _parse_error_log_structured(log)
+        assert result["summary"]["unparseable_lines"] == 0
+        assert result["summary"]["parsed_entries"] == 2
+        boom = next(i for i in result["top_issues"] if i["message"] == "boom")
+        assert boom["first_seen"] == "2026-10-28 14:45:10.501-04:00"
+
     def test_nested_paren_thread_name_parses(self):
         # threading.Thread(target=fn) is named "Thread-N (fn)" since 3.10, and
         # libraries that spawn raw threads for device I/O log under that name.

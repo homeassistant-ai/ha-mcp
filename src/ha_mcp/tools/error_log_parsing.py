@@ -33,9 +33,9 @@ from .log_common import (
 # The thread field is matched lazily instead of as `\([^)]*\)`: since Python 3.10
 # an unnamed thread is called "Thread-1 (target_fn)", so the field itself can
 # contain parentheses, and a class that cannot cross them drops every line those
-# threads log.
+# threads log. Core 2026.11+ appends the local UTC offset ("…10:15:23.456-04:00").
 _HA_LOG_LINE_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)"
     r"\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)"
     r"\s+\(.*?\)"
     r"\s+\[([^\]]+)\]"
