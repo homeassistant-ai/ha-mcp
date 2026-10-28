@@ -291,9 +291,7 @@ class HacsTools:
         connected GitHub account), so ``update_information`` is the way to surface a
         just-published release. The Marketplace refuses installs until the connected user has
         accepted its first-run warning, and adding a repository needs a connected GitHub
-        account; both are steps the user takes in the Marketplace panel. A repository
-        that replaces a built-in integration installs only with
-        ``confirm_replace_built_in=True``, after the user agrees.
+        account; both are steps the user takes in the Marketplace panel.
         """
         try:
             # Reject parameters that don't belong to the chosen action rather

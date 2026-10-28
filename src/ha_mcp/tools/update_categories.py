@@ -37,31 +37,25 @@ def categorize_update(
     # Use 'or ""' to handle both missing keys AND explicit None values
     title_lower = (attributes.get("title") or "").lower()
 
-    # Core update
     if "home_assistant_core" in entity_lower or (
         "core" in entity_lower and "home_assistant" in title_lower
     ):
         return "core"
 
-    # Operating System
     if "operating_system" in entity_lower or "haos" in entity_lower:
         return "os"
 
-    # Supervisor
     if "supervisor" in entity_lower:
         return "supervisor"
 
     # Add-ons (typically named update.xxx_update where xxx is addon name)
-    # Add-ons usually have "Add-on" in title or specific patterns
     if "add-on" in title_lower or "addon" in title_lower:
         return "addons"
 
-    # Device firmware updates (ESPHome, Z-Wave, Zigbee, etc.)
     device_patterns = ["esphome", "zwave", "zigbee", "zha", "matter", "firmware"]
     if any(
         pattern in entity_lower or pattern in title_lower for pattern in device_patterns
     ):
         return "devices"
 
-    # Default to other
     return "other"
