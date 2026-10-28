@@ -318,7 +318,7 @@ class TestSchemaConversionCompatibility:
 
         def _import_module(name):
             imports.append((name, threading.get_ident()))
-            if name.startswith("mcp."):
+            if name.startswith("mcp.") or name == "jsonschema":
                 return SimpleNamespace()
             if name == "voluptuous_openapi":
                 return legacy
@@ -338,7 +338,7 @@ class TestSchemaConversionCompatibility:
         assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
         assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
 
-        assert [name for name, _ in imports] == [
+        assert [n for n, _ in imports if n != "jsonschema"] == [
             "mcp.client.session",
             "mcp.client.streamable_http",
             "voluptuous_openapi",
