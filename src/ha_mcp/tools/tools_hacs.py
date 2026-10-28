@@ -26,7 +26,7 @@ from .hacs_backend import (
     StoreApi,
     detect_store_api,
     fetch_releases,
-    gate_suggestions,
+    raise_store_error,
 )
 from .hacs_registration import (
     HACS_ADD_REGISTRATION_TIMEOUT,
@@ -434,14 +434,12 @@ class HacsTools:
                 api.command("info"), repository_id=actual_id
             )
         except HomeAssistantCommandError as cmd_err:
-            exception_to_structured_error(
+            raise_store_error(
                 cmd_err,
-                context={
+                {
                     "command": api.command("info"),
                     "repository_id": repository_id,
                 },
-                suggestions=gate_suggestions(cmd_err),
-                raise_error=True,
             )
 
         if not response.get("success"):
@@ -531,16 +529,14 @@ class HacsTools:
                 raise_error=True,
             )
         except HomeAssistantCommandError as cmd_err:
-            exception_to_structured_error(
+            raise_store_error(
                 cmd_err,
-                context={
+                {
                     "command": api.command("install"),
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
                 },
-                suggestions=gate_suggestions(cmd_err),
-                raise_error=True,
             )
 
         if not response.get("success"):
@@ -663,15 +659,13 @@ class HacsTools:
             # returns success=False), so this — not the dict branch below,
             # which serves stubbed/alternative clients — is where a real
             # HACS remove failure lands; keep the command context attached.
-            exception_to_structured_error(
+            raise_store_error(
                 cmd_err,
-                context={
+                {
                     "command": api.command("remove"),
                     "repository_id": repository_id,
                     "timeout_seconds": 60.0,
                 },
-                suggestions=gate_suggestions(cmd_err),
-                raise_error=True,
             )
 
         if not response.get("success"):
@@ -744,15 +738,13 @@ class HacsTools:
             # lands. ``timeout_seconds`` rides along because a HACS-side
             # message containing "timeout" routes to the by-message timeout
             # branch, which would otherwise claim 30 s against this budget.
-            exception_to_structured_error(
+            raise_store_error(
                 cmd_err,
-                context={
+                {
                     "command": api.command("refresh"),
                     "repository_id": repository_id,
                     "timeout_seconds": HACS_REFRESH_TIMEOUT,
                 },
-                suggestions=gate_suggestions(cmd_err),
-                raise_error=True,
             )
 
         if not response.get("success"):
@@ -809,15 +801,13 @@ class HacsTools:
                 category=hacs_category,
             )
         except HomeAssistantCommandError as cmd_err:
-            exception_to_structured_error(
+            raise_store_error(
                 cmd_err,
-                context={
+                {
                     "command": api.command("add"),
                     "repository": repository,
                     "category": category,
                 },
-                suggestions=gate_suggestions(cmd_err),
-                raise_error=True,
             )
 
         if not response.get("success"):

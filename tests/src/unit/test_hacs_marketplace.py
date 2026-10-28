@@ -132,6 +132,21 @@ class TestMarketplaceCommands:
         assert "first-run warning" in text
         assert "cannot accept" in text
 
+    async def test_github_gate_is_not_mistaken_for_a_connection_failure(self, tools):
+        ws = _ws(
+            HomeAssistantCommandError(
+                "Command failed: Connect a GitHub account to the Marketplace first",
+                "github_not_connected",
+            )
+        )
+        with _on_marketplace(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="add_repository", repository="o/r", category="integration"
+            )
+        text = str(excinfo.value)
+        assert "CONNECTION_FAILED" not in text
+        assert "Connect GitHub" in text
+
     async def test_category_is_checked_against_the_store_list(self, tools):
         ws = _ws()
         with _on_marketplace(ws), pytest.raises(ToolError) as excinfo:

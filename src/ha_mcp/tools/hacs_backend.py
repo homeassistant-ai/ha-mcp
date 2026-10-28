@@ -6,11 +6,11 @@ talk to whichever API the instance serves, Marketplace first.
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
 from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
-from .helpers import raise_tool_error
+from .helpers import exception_to_structured_error, raise_tool_error
 
 _COMMANDS = {
     "hacs": {
@@ -49,13 +49,13 @@ CATEGORY_HELP = (
 # message Core sends is already user-facing, the suggestions add the step.
 _GATE_SUGGESTIONS = {
     "warning_not_accepted": [
-        "Open Marketplace in the Home Assistant sidebar as the user this server "
-        "connects as, and accept the first-run warning. The agent cannot accept "
-        "it on the user's behalf.",
+        "Open Settings > Marketplace as the user this server connects as, and "
+        "accept the first-run warning. The agent cannot accept it on the user's "
+        "behalf.",
     ],
     "github_not_connected": [
-        "Open Marketplace in the Home Assistant sidebar and connect a GitHub "
-        "account (a device sign-in), then retry.",
+        "Open Settings > Marketplace and select Connect GitHub (a device "
+        "sign-in), then retry. The agent cannot connect it on the user's behalf.",
     ],
     "github_rate_limited": [
         "GitHub's anonymous rate limit ran out; wait and retry, or connect a "
@@ -171,9 +171,24 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
     return HACS_API  # unreachable: raise_tool_error always raises
 
 
-def gate_suggestions(err: HomeAssistantCommandError) -> list[str] | None:
-    """The UI step for a Marketplace refusal the agent cannot clear itself."""
-    return _GATE_SUGGESTIONS.get(err.code or "")
+def raise_store_error(
+    err: HomeAssistantCommandError, context: dict[str, Any]
+) -> NoReturn:
+    """Raise a store command failure; a Marketplace gate names the UI step.
+
+    The gates are told apart by Core's error code: their messages ("Connect a
+    GitHub account ...") would otherwise read as a connection failure.
+    """
+    if suggestions := _GATE_SUGGESTIONS.get(err.code or ""):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(err),
+                suggestions=suggestions,
+                context={**context, "store_error": err.code},
+            )
+        )
+    exception_to_structured_error(err, context=context, raise_error=True)
 
 
 async def fetch_releases(
