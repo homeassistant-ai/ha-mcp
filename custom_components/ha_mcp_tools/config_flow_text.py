@@ -67,8 +67,11 @@ _COMMON_FALLBACKS: dict[str, str] = {
     "connect_remote_url": "Remote connect URL: {url}",
     "connect_local_lan": 'Local/LAN (when Network access is "Local network"): {url}',
     "oauth_select_legacy_mode": (
-        "Set Authentication mode to legacy OAuth above and save to "
-        "generate a Client ID and Client Secret."
+        "For clients that don't support modern OAuth, change the mode to "
+        "legacy OAuth to generate an ID and secret. If you have trouble "
+        'connecting when set to "Sign in with Home Assistant", then we '
+        'recommend switching to "Secret webhook URL" to test your '
+        "connection first before trying legacy OAuth."
     ),
     "oauth_creds_pending": (
         "The Client ID and Client Secret appear here once the server has started."
