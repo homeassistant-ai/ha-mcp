@@ -423,6 +423,9 @@ def _import_mcp_sdk() -> None:
     """
     importlib.import_module("mcp.client.session")
     importlib.import_module("mcp.client.streamable_http")
+    # The SDK imports jsonschema on the first call that validates a tool's
+    # output, and that import reads its metaschema files: here, not on the loop.
+    importlib.import_module("jsonschema")
     _schema_converter()
 
 
