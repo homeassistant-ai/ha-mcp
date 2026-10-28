@@ -98,6 +98,18 @@ same test the frontend's restart dialog applies). When the recorder or the
 backup manager does not answer, it says so in `warnings` instead of claiming
 the check passed.
 
+The todo tools call Core's todo services through WebSocket `call_service`, and
+`todo/item/move` for a reorder, so Core's schema rejections reach the caller
+with their text; the REST service endpoint answers them with a bare 400.
+`ha_get_todo` filters with `todo.get_items`. Core's services skip an
+unavailable list, answering a write with success and `todo.get_items` with no
+match, so the tools refuse a write to one and read its items with
+`todo/item/list`, which still answers. A todo item backup restores an edited item with
+`todo.update_item` under its uid, which the safety backup and the diff also
+follow. The snapshot holds no position and Core's services cannot set a uid,
+so a removed item comes back through `todo.add_item` with a new uid, at the
+place the list gives new items.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative

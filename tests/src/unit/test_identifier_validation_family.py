@@ -1037,26 +1037,19 @@ class TestTodoIdentifierValidation:
             await tools.ha_remove_todo_item(entity_id="todo.shopping_list", item=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "item"' in str(excinfo.value), str(excinfo.value)
-        tools._client.call_service.assert_not_called()
+        tools._client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_set_item_rejects_empty_item_on_implicit_update(self, tools, bad):
         # ``item`` is the implicit create/update discriminator: ``None``
-        # routes to create, non-None to update. Without the new guard,
+        # routes to create, non-None to update. Without the guard,
         # ``item=""`` would route to update (``"" is None`` is False) and
-        # call ``todo.update_item`` with an empty item — destructive
-        # silent-routing class identical to the helper implicit-discriminator
-        # gate this PR closes. ``status="completed"`` is supplied so the
-        # update-mode "at least one update field" gate doesn't fire first.
+        # reach ``todo.update_item`` with an empty item name.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_set_todo_item(
-                entity_id="todo.shopping_list",
-                item=bad,
-                status="completed",
-            )
+            await tools.ha_set_todo_item(entity_id="todo.shopping_list", item=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "item"' in str(excinfo.value), str(excinfo.value)
-        tools._client.call_service.assert_not_called()
+        tools._client.send_websocket_message.assert_not_called()
 
 
 # --- tools_entities.py (Round-4 sibling sweep) ---------------------------

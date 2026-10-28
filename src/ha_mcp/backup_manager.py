@@ -103,6 +103,8 @@ from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
 from .backup_tags import restore_tag, tag_snapshot
+from .backup_todo import current_key as todo_current_key
+from .backup_todo import fetch_todo_item, restore_todo_item
 from .backup_zones import fetch_zone, restore_zone
 from .client.rest_client import (
     HomeAssistantCommandError,
@@ -1675,6 +1677,8 @@ class BackupManager:
         target = data["entity_id"]
         if domain == "entity":
             target = await current_entity_id(self._client, target, data["config"])
+        elif domain == "todo_item":
+            target = todo_current_key(target, data["config"])
         current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)
@@ -2024,8 +2028,8 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
             )
     # ``send_command`` returns ``{"success": True, "result": <inner>}``
     # — unwrap so fetch / restore handlers downstream see the inner
-    # shape directly (list for ``<type>/list`` calls, dict for
-    # ``execute_script`` calls, etc.). Without the unwrap the
+    # shape directly (a list for the registry ``<type>/list`` calls, a dict
+    # for others such as ``todo/item/list``). Without the unwrap the
     # ``_require_list`` checks in every fetch handler would see the
     # envelope as a non-list and raise a spurious degraded-fetch error.
     if isinstance(envelope, dict) and "result" in envelope:
@@ -2119,15 +2123,12 @@ def _require_list(value: Any, endpoint: str) -> list[Any]:
 def _require_dict(value: Any, endpoint: str) -> dict[str, Any]:
     """Return ``value`` if it's a dict, else raise.
 
-    Dict-shaped counterpart to :func:`_require_list` for the
-    ``execute_script``-backed fetchers (calendar / todo). Their service
-    response is a dict envelope; a non-dict body is a degraded/malformed
-    200 (auth-scope change, API drift), not a genuine miss. Raising
-    funnels it through the diff tool's ``exception_to_structured_error``
-    and the capture pipeline's ``_CAPTURE_TRANSIENT_ERRORS`` warning,
-    instead of collapsing to ``None`` — which callers read as
-    ``entity_missing``. The genuine-miss signal stays the nested ``uid``
-    lookup returning ``None``.
+    Dict-shaped counterpart to :func:`_require_list` for replies and rows
+    that are dicts. A non-dict body is a degraded/malformed reply
+    (auth-scope change, API drift), not a genuine miss. Raising funnels it
+    through the diff tool's ``exception_to_structured_error`` and the
+    capture pipeline's ``_CAPTURE_TRANSIENT_ERRORS`` warning, instead of
+    collapsing to ``None`` — which callers read as ``entity_missing``.
     """
     if not isinstance(value, dict):
         raise HomeAssistantError(
@@ -2621,59 +2622,6 @@ async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> An
         raise ValueError(f"Unknown area/floor kind: {kind!r}")
     async with registry_update_lock(kind, real_id):
         return await _ws_send(client, payload)
-
-
-# Todo items — entity_id is "<todo.entity>::<item_uid>"
-
-
-async def _fetch_todo_item(client: Any, entity_id: str) -> Any:
-    # The second segment is whatever the tool's ``item`` param carried.
-    # ha_set_todo_item / ha_remove_todo_item accept EITHER the item uid OR
-    # its exact summary/name, so this can be either form.
-    cal, _, item_ref = entity_id.partition("::")
-    if not cal or not item_ref:
-        return None
-    payload = {
-        "type": "execute_script",
-        "sequence": [
-            {
-                "service": "todo.get_items",
-                "target": {"entity_id": cal},
-                "response_variable": "items",
-            },
-            {"stop": "", "response_variable": "items"},
-        ],
-    }
-    try:
-        result = await _ws_send(client, payload)
-    except HomeAssistantError as err:
-        # Same narrow-to-404 rule as the calendar fetcher: only treat
-        # "todo entity not present" as a clean skip; let auth/transport
-        # errors propagate to the WARNING log via the manager's outer
-        # _CAPTURE_TRANSIENT_ERRORS catch.
-        if getattr(err, "status_code", None) == 404:
-            return None
-        raise
-    result = _require_dict(result, "execute_script")
-    items = result.get("response", {}).get("items", {}).get(cal, {}).get("items", [])
-    for item in items:
-        # Match either form. Matching only on uid silently skipped the
-        # snapshot whenever the caller passed the human-readable summary
-        # (the documented/common case, e.g. ha_remove_todo_item(list, "Buy
-        # milk")) — uid != summary, so the loop found nothing -> None.
-        if item.get("uid") == item_ref or item.get("summary") == item_ref:
-            return {"todo_entity_id": cal, **item}
-    return None
-
-
-async def _restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
-    cal = config.get("todo_entity_id") or entity_id.split("::", 1)[0]
-    data = {k: v for k, v in config.items() if k != "todo_entity_id"}
-    return await _rest_post(
-        client,
-        "services/todo/add_item",
-        {"entity_id": cal, **data},
-    )
 
 
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates
@@ -3907,7 +3855,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
     )
-    mgr.register(DomainHandler("todo_item", _fetch_todo_item, _restore_todo_item))
+    mgr.register(DomainHandler("todo_item", fetch_todo_item, restore_todo_item))
     mgr.register(DomainHandler("entity", fetch_entity, restore_entity))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
     mgr.register(DomainHandler("integration", fetch_integration, restore_integration))

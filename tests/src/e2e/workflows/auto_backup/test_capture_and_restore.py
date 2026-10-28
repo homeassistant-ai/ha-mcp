@@ -1397,15 +1397,14 @@ class TestDashboardResourceCaptureRestore:
         )
 
 
-# ---------------------------------------------------------------- calendar/todo lanes
+# ---------------------------------------------------------------- calendar lane
 #
-# calendar_event and todo_item have no entity in the base image, so these
-# create their own backing entity via the integration config flow
-# (local_calendar / local_todo both ship with HA Core) — neither is a
-# ``helper_type``, so we drive the flow through ``ha_client`` like
-# test_integration_setup.py does. Capture fires on DELETE (and on an
-# update, which carries a uid) for calendar, and on EDIT for todo. Each
-# test tears its config entry down in a finally block.
+# calendar_event has no entity in the base image, so this lane creates its
+# own backing entity via the local_calendar config flow (it ships with HA
+# Core and is not a ``helper_type``), driven through ``ha_client`` like
+# test_integration_setup.py does. Capture fires on DELETE (and on an update,
+# which carries a uid). The test tears its config entry down in a finally
+# block. The todo_item lane is test_todo_capture_restore.py.
 
 
 @pytest.mark.haos_only
@@ -1552,97 +1551,6 @@ class TestCalendarCaptureRestore:
                 description=f"restored event {summary!r} visible",
                 timeout=45,
             )
-        finally:
-            if entry_id is not None:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_remove_helpers_integrations",
-                    {"target": entry_id, "confirm": True},
-                )
-
-
-@pytest.mark.haos_only
-@pytest.mark.external_only
-@pytest.mark.cleanup
-class TestTodoCaptureRestore:
-    """Auto-backup for todo items. The pre-write snapshot fires when an
-    existing item is edited (update by summary) or removed. Regression
-    guard for the fetch matching only on uid — the tool passes the item
-    summary, so capture was silently skipped before the fix."""
-
-    async def test_todo_capture_on_edit(
-        self, mcp_client, ha_client, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _enable_auto_backup(monkeypatch)
-        unique = uuid.uuid4().hex[:8]
-        list_name = f"BK Todo {unique}"
-        entity_id = f"todo.bk_todo_{unique}"
-
-        entry_id: str | None = None
-        try:
-            flow_init = await ha_client.start_config_flow("local_todo")
-            if not isinstance(flow_init, dict) or flow_init.get("type") != "form":
-                pytest.skip(f"local_todo config flow unavailable: {flow_init}")
-            # local_todo's single field mirrors local_calendar's naming
-            # convention (``<integration>_name``). If the schema differs on
-            # this HA version the flow won't create an entry and we skip.
-            flow_done = await ha_client.submit_config_flow_step(
-                flow_init["flow_id"], {"todo_list_name": list_name}
-            )
-            if flow_done.get("type") != "create_entry":
-                pytest.skip(f"local_todo entry not created: {flow_done}")
-            entry_id = flow_done["result"]["entry_id"]
-
-            await wait_for_tool_result(
-                mcp_client,
-                tool_name="ha_get_entity",
-                arguments={"entity_id": entity_id},
-                predicate=lambda d: d.get("success") is True,
-                description=f"{entity_id} registers in entity registry",
-                timeout=20,
-            )
-
-            summary = f"bk-item-{unique}"
-            added = await safe_call_tool(
-                mcp_client,
-                "ha_set_todo_item",
-                {"entity_id": entity_id, "summary": summary},
-            )
-            if added.get("success") is False:
-                pytest.skip(f"todo add_item unsupported: {added}")
-
-            # Let HA index the new item before the edit fires; the pre-edit
-            # fetch (todo.get_items) may otherwise miss the fresh item and
-            # silently skip the snapshot.
-            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
-
-            # Edit the item BY SUMMARY — the exact form that was silently
-            # skipped before the fetch matched on summary as well as uid.
-            mcp = MCPAssertions(mcp_client)
-            await mcp.call_tool_success(
-                "ha_set_todo_item",
-                {"entity_id": entity_id, "item": summary, "status": "completed"},
-            )
-
-            try:
-                backup_name = await _wait_for_backup(
-                    mcp_client,
-                    domain="todo_item",
-                    entity_id=f"{entity_id}::{summary}",
-                    timeout=20,
-                )
-            except TimeoutError:
-                pytest.skip(
-                    "todo_item snapshot not observed within timeout on this HA "
-                    "rig (capture/indexing timing); the unit test "
-                    "test_fetch_todo_item_matches_by_summary is the hard guard "
-                    "for the summary-match fix"
-                )
-            view = await mcp.call_tool_success(
-                "ha_manage_backup",
-                {"scope": "edits", "action": "view", "backup_name": backup_name},
-            )
-            assert view.get("success") is True
         finally:
             if entry_id is not None:
                 await safe_call_tool(

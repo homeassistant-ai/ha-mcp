@@ -18,6 +18,7 @@ from typing import Any, NoReturn
 from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entities import current_entity_id
 from .backup_entity_ids import _manager
+from .backup_todo import safety_target as todo_safety_target
 
 
 async def _stored_items(client: Any, helper_type: str) -> list[Any]:
@@ -83,8 +84,11 @@ async def safety_target(
     another item. For a storage item the registry entry whose unique_id is the
     stored id follows it. An item can outlive its registry entry, so only its
     absence from the stored items means it is gone: the restore recreates it or
-    fails, and overwrites nothing that needs a backup.
+    fails, and overwrites nothing that needs a backup. A todo item is followed
+    by its uid (``backup_todo.safety_target``).
     """
+    if domain == "todo_item":
+        return await todo_safety_target(client, entity_id, config)
     bm = _manager()
     if domain == "entity":
         return await current_entity_id(client, entity_id, config)
