@@ -384,3 +384,21 @@ async def test_cancelled_ask_returns_approval_error_and_keeps_the_row(
     assert len(gate.queue.list_pending()) == 1
     gate.queue.approve(gate.queue.list_pending()[0].token)
     assert await gate.middleware.on_call_tool(context(), gate.execute) == "saved"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("wait_seconds", [30, 120])
+async def test_ask_tells_the_user_how_long_is_left_of_their_window(
+    gate: SimpleNamespace, wait_seconds: int
+) -> None:
+    """The form cannot count down, so it states what is left of the user's own
+    window when it is sent, after the first leg has used part of it."""
+    gate.policy.wait_seconds = wait_seconds
+
+    async def first_leg(*_args: object) -> None:
+        gate.clock[0] += 10
+
+    gate.middleware._wait_for_decision.side_effect = first_leg
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    message = first.input_required.input_requests["ha_mcp_approval"].params.message
+    assert f"about {wait_seconds - 10} seconds" in message

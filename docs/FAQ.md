@@ -987,9 +987,11 @@ How the wait looks depends on the client:
 
 - **Clients using MCP 2026-07-28 that support elicitation:** after about ten
   seconds the client shows you a short form saying the call is waiting in
-  the Tool Security Policies tab. Approve or deny it there, then confirm the
-  form, and the original call carries on for the rest of the window. Decline
-  the form to cancel the call; dismiss it to stop waiting.
+  the Tool Security Policies tab and how much of the window is left.
+  Accepting the form does not approve the call: it continues once you have
+  both approved it in that tab and accepted the form, in either order,
+  within the window. Decline the form to cancel the call; dismiss it to stop
+  waiting.
 - **All other clients:** the call waits the whole window. If you decide in
   time it completes; otherwise the client gets an approval-required error
   telling it to wait for your approval and call again.

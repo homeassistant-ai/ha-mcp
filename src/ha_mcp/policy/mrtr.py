@@ -86,23 +86,25 @@ def approval_answer(context: MiddlewareContext) -> ApprovalAnswer | None:
     return None
 
 
-def _approval_request(tool_name: str) -> ElicitRequest:
+def _approval_request(tool_name: str, seconds_left: int) -> ElicitRequest:
     # A bool field rather than an empty schema: FastMCP notes some clients
-    # render an empty schema as a blank, non-functional form.
+    # render an empty schema as a blank, non-functional form. The form is
+    # static, so the time left is stated as of sending it.
     return ElicitRequest(
         params=ElicitRequestFormParams(
             message=(
-                f"ha-mcp is holding the {tool_name} call for approval. Open the "
-                "ha-mcp settings, go to the Tool Security Policies tab and approve "
-                "or deny the pending request, then confirm here. Decline here to "
-                "cancel the call."
+                f"ha-mcp is holding the {tool_name} call until you approve it in "
+                "the ha-mcp settings, on the Tool Security Policies tab. Accepting "
+                "here does not approve it; the call continues once you have both "
+                "approved it there and accepted here. Decline here to cancel the "
+                f"call. You have about {seconds_left} seconds."
             ),
             requested_schema={
                 "type": "object",
                 "properties": {
                     "decided": {
                         "type": "boolean",
-                        "title": "I approved or denied it in the ha-mcp settings",
+                        "title": "Continue once approved in the ha-mcp settings",
                         "default": True,
                     }
                 },
@@ -222,7 +224,11 @@ class ApprovalContinuation(BaseModel):
         state = self.model_copy(update={"rounds": self.rounds + 1})
         return InputRequiredToolResult(
             InputRequiredResult(
-                input_requests={APPROVAL_INPUT_KEY: _approval_request(self.tool_name)},
+                input_requests={
+                    APPROVAL_INPUT_KEY: _approval_request(
+                        self.tool_name, round(self.deadline - time())
+                    )
+                },
                 request_state=state.model_dump_json(),
             )
         )
