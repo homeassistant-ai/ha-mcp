@@ -605,19 +605,19 @@ class HaMcpTool(llm.Tool):
             hass, self._server_url, self.name, tool_input.tool_args
         )
         if dumped is None:
-            return _unknown_tool(self.name)
+            return _unknown_tool(self.name, searchable=False)
         return tool_result(dumped, error=dumped.get("isError") is True)
 
 
-def _unknown_tool(name: str) -> Any:
-    """The answer for a tool that does not exist or is not exposed."""
-    return tool_result(
-        {
-            "error": f"Unknown tool '{name}'.",
-            "suggestion": f"Use {_SEARCH_TOOL_NAME} to discover available tools.",
-        },
-        error=True,
-    )
+def _unknown_tool(name: str, *, searchable: bool = True) -> Any:
+    """The answer for a tool that does not exist or is not exposed.
+
+    Only the tool-search mode has a search tool to point the agent at.
+    """
+    answer = {"error": f"Unknown tool '{name}'."}
+    if searchable:
+        answer["suggestion"] = f"Use {_SEARCH_TOOL_NAME} to discover available tools."
+    return tool_result(answer, error=True)
 
 
 async def _forward_tool_call(

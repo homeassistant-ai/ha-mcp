@@ -104,6 +104,20 @@ class TestCategorizeUpdate:
         result = _categorize_update("update.ha_mcp_custom_component", {}, platform)
         assert result == "hacs"
 
+    def test_hacs_entity_id_counts_when_the_registry_did_not_answer(self):
+        assert _categorize_update("update.hacs_some_card", {}) == "hacs"
+
+    @pytest.mark.asyncio
+    async def test_registry_failure_leaves_categories_to_the_entity(self):
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+        from ha_mcp.tools.update_categories import update_platforms
+
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("closed")
+        )
+        assert await update_platforms(client) == {}
+
     def test_addon_update_by_title(self):
         """Add-on updates are identified by title."""
         result = _categorize_update(

@@ -671,6 +671,8 @@ class TestHacsWriteOperations:
 
         if expected == "hacs" or marketplace["result"]["warning_accepted"]:
             return
+        if not search.get("results"):
+            pytest.skip("The store returned no repository to try installing")
         refused = await safe_hacs_call(
             mcp_client,
             "ha_manage_hacs",

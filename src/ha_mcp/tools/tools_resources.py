@@ -531,7 +531,7 @@ class ResourceTools:
 
         EXAMPLES:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
-        - Store card on a YAML-mode resource list (in storage mode HACS and the Marketplace register it on install, so adding it again duplicates it): ha_config_set_dashboard_resource(url="/local/community/lovelace-mushroom/mushroom.js", resource_type="module")
+        - Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
         - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
 
         After adding a resource, a browser cache clear or hard refresh

@@ -16,7 +16,9 @@ the client or tool plumbing.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timezone
 from typing import Any, Literal, NamedTuple
 
 from ..client.error_log_journald import cursor_token
@@ -98,6 +100,29 @@ def _normalize_timestamp(timestamp: str) -> str:
     return timestamp[:10] + " " + timestamp[11:]
 
 
+def _instant_order(stamps: list[str]) -> Callable[[str], datetime]:
+    """Order timestamps by instant, not text.
+
+    Core 2026.11+ stamps carry the UTC offset, so the repeated hour when
+    daylight saving ends sorts wrong as text. Offset-less stamps (older Core,
+    or the lines before an upgrade) take the window's first offset: the zone
+    outlives a restart.
+    """
+    offset = next(
+        (o for s in stamps if (o := datetime.fromisoformat(s).utcoffset())), None
+    )
+
+    def key(stamp: str) -> datetime:
+        parsed = datetime.fromisoformat(stamp)
+        if parsed.tzinfo is None:
+            if offset is None:
+                return parsed
+            parsed = parsed.replace(tzinfo=timezone(offset))
+        return parsed.astimezone(UTC).replace(tzinfo=None)
+
+    return key
+
+
 def _get_component_prefix(logger_name: str) -> str:
     """Extract the component prefix (first N dotted segments) of a logger name.
 
@@ -141,6 +166,7 @@ class _ExtractedLines(NamedTuple):
     blank: int
     window_start: str | None
     window_end: str | None
+    order: Callable[[str], datetime]
 
 
 def _extract_log_entries(
@@ -159,8 +185,7 @@ def _extract_log_entries(
     matched = 0
     unparseable = 0
     blank = 0
-    window_start: str | None = None
-    window_end: str | None = None
+    stamps: list[str] = []
     needle = search.lower() if search else None
 
     for line in lines:
@@ -180,12 +205,9 @@ def _extract_log_entries(
         matched += 1
         timestamp, log_level, logger_name, message = match.groups()
         timestamp = _normalize_timestamp(timestamp)
-        # Widen the covered window on every parseable line, filtered or not:
+        # The covered window spans every parseable line, filtered or not:
         # it describes the log slice that was read, not the summary's contents.
-        if window_start is None or timestamp < window_start:
-            window_start = timestamp
-        if window_end is None or timestamp > window_end:
-            window_end = timestamp
+        stamps.append(timestamp)
         log_level = log_level.upper()
         if level and log_level != level:
             continue
@@ -207,13 +229,15 @@ def _extract_log_entries(
             }
         )
 
+    order = _instant_order(stamps)
     return _ExtractedLines(
         entries=entries,
         matched=matched,
         unparseable=unparseable,
         blank=blank,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=min(stamps, key=order, default=None),
+        window_end=max(stamps, key=order, default=None),
+        order=order,
     )
 
 
@@ -440,8 +464,12 @@ def _parse_error_log_structured(
         # Bounds, not last-write-wins: a log whose lines are not perfectly
         # ordered would otherwise drag last_seen backwards, which also
         # misplaces the issue in the recency tiebreaker below.
-        record["first_seen"] = min(record["first_seen"], entry["timestamp"])
-        record["last_seen"] = max(record["last_seen"], entry["timestamp"])
+        record["first_seen"] = min(
+            record["first_seen"], entry["timestamp"], key=extracted.order
+        )
+        record["last_seen"] = max(
+            record["last_seen"], entry["timestamp"], key=extracted.order
+        )
 
     # Count first, then severity, then recency. Python's sort is stable, so
     # count alone would return the *oldest* of a tied run — and on a log whose
@@ -452,7 +480,7 @@ def _parse_error_log_structured(
         key=lambda i: (
             i["count"],
             _LEVEL_SEVERITY.get(i["level"], 0),
-            i["last_seen"],
+            extracted.order(i["last_seen"]),
         ),
         reverse=True,
     )

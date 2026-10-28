@@ -7,6 +7,9 @@ every forwarded call rather than taken from that list.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import pytest
 
 from ._embedded_stubs import install
@@ -20,10 +23,19 @@ from ._llm_api_helpers import fake_session, make_hass, tool_entry  # noqa: E402
 _URL = "http://127.0.0.1:9584/private_x"
 
 
+@dataclass
+class _ToolResult:
+    """Shape of Core's ``llm.ToolResult`` (2026.10+)."""
+
+    data: Any
+    error: bool = False
+
+
 @pytest.mark.parametrize("via_call_tool", [False, True])
 async def test_tool_hidden_after_the_list_was_built_is_refused(
     monkeypatch: pytest.MonkeyPatch, via_call_tool: bool
 ) -> None:
+    monkeypatch.setattr(llm_api.llm, "ToolResult", _ToolResult, raising=False)
     session = fake_session(monkeypatch, tools=[tool_entry("ha_search", exposed=False)])
     if via_call_tool:
         tool = llm_api.HaMcpCallTool(_URL, {"ha_search"})
@@ -37,4 +49,7 @@ async def test_tool_hidden_after_the_list_was_built_is_refused(
     out = await tool.async_call(make_hass(), tool_input, llm_api.llm.LLMContext())
 
     session.call_tool.assert_not_awaited()
-    assert "Unknown tool 'ha_search'" in str(out)
+    assert out.error is True
+    assert out.data["error"] == "Unknown tool 'ha_search'."
+    # Only the tool-search mode has a search tool to point at.
+    assert ("suggestion" in out.data) is via_call_tool

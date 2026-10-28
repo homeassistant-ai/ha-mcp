@@ -5,6 +5,7 @@ actually changed (core#188809); before that the reply carried no result, and
 the tool can only assume the request changed something.
 """
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,7 +16,7 @@ from ha_mcp.tools.tools_entities import register_entity_tools
 _ENTRY = {"entity_id": "light.test", "original_name": "Test", "aliases": []}
 
 
-def _set_entity_tool(client: MagicMock):
+def _set_entity_tool(client: MagicMock) -> Any:
     tools = {}
     mcp = MagicMock()
     mcp.add_tool = lambda method: tools.setdefault(method.__fastmcp__.name, method)
@@ -42,6 +43,41 @@ async def test_single_entity_update_says_when_nothing_changed(
         entity_id="light.test", expose_to={"conversation": True}
     )
     assert ("already set" in " ".join(result["updates"])) is already_set
+
+
+async def test_a_change_in_an_earlier_assistant_group_counts() -> None:
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(
+        side_effect=[
+            {"success": True, "result": {"changed_entity_ids": ["light.test"]}},
+            {"success": True, "result": {"changed_entity_ids": []}},
+            {"success": True, "result": _ENTRY},
+        ]
+    )
+    result = await _set_entity_tool(client)(
+        entity_id="light.test", expose_to={"conversation": True, "cloud.alexa": False}
+    )
+    assert "already set" not in " ".join(result["updates"])
+
+
+async def test_bulk_update_marks_only_the_unchanged_entities() -> None:
+    client = MagicMock()
+    entries = {
+        eid: {"entity_id": eid, "original_name": eid, "aliases": []}
+        for eid in ("light.a", "light.b")
+    }
+    client.send_websocket_message = AsyncMock(
+        side_effect=[
+            {"success": True, "result": {"changed_entity_ids": ["light.a"]}},
+            {"success": True, "result": entries},
+        ]
+    )
+    result = await _set_entity_tool(client)(
+        entity_id=["light.a", "light.b"], expose_to={"conversation": True}
+    )
+    updates = {r["entity_id"]: " ".join(r["updates"]) for r in result["succeeded"]}
+    assert "already set" not in updates["light.a"]
+    assert "already set" in updates["light.b"]
 
 
 async def test_bulk_exposure_collects_what_core_changed() -> None:

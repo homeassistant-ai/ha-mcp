@@ -778,7 +778,7 @@ class EntityTools:
     ) -> tuple[dict[str, bool] | None, dict[str, Any], bool]:
         """Apply expose_to changes; returns (exposure_result, entity_entry, unchanged)."""
         if not parsed_expose_to:
-            return None, entity_entry, False
+            return None, entity_entry, True
 
         # Group by should_expose value for efficient API calls
         expose_true = [a for a, v in parsed_expose_to.items() if v]
