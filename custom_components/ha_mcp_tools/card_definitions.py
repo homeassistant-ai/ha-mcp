@@ -96,6 +96,13 @@ req.r = function () {};
 req.n = function (m) { return function () { return m; }; };
 req.o = function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); };
 req.g = globalThis;
+// An async module (frontend 20261028+ tile editor forms) only awaits a
+// dependency that is a promise; handing back the loaded ones runs it in sync.
+req.a = function (module, body) {
+  var failure;
+  body(function (deps) { return deps; }, function (e) { failure = e; });
+  if (failure) throw failure;
+};
 function build(src, bindings) {
   var names = Object.keys(bindings);
   var values = names.map(function (n) {
@@ -233,6 +240,34 @@ def _local_definition(body: str, name: str) -> str | None:
     if not m:
         return None
     return body[m.end() : _expr_end(body, m.end())]
+
+
+_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`')
+_PARAMS_RE = re.compile(r"\(?([\w$,]*)\)?=>")
+
+
+def _closure_locals(expr: str) -> list[str]:
+    """Free names in a function expression, minus its parameters and keys."""
+    code = _STRING_RE.sub('""', expr)
+    head = _PARAMS_RE.match(code)
+    skip = set(head.group(1).split(",")) if head else set()
+    names = []
+    for m in re.finditer(r"(?<![\w$.])[A-Za-z_$][\w$]*", code):
+        # An object key sits between "{" or "," and ":".
+        before, after = code[m.start() - 1 : m.start()], code[m.end() : m.end() + 1]
+        key = before in ("{", ",") and after == ":"
+        if not key and m.group() not in skip:
+            skip.add(m.group())
+            names.append(m.group())
+    return names
+
+
+def _closure_prelude(body: str, expr: str, aliases: dict[str, str]) -> list[str]:
+    return [
+        f"var {name}={definition};"
+        for name in _closure_locals(expr)
+        if name not in aliases and (definition := _local_definition(body, name))
+    ]
 
 
 def _stored_fields(
@@ -436,7 +471,9 @@ class CardDefinitions:
             for name, module in aliases.items()
             if re.search(r"(?<![\w$.])" + re.escape(name) + r"\.", expr)
         }
-        prelude: list[str] = []
+        # An exported function reads module locals only when called, after
+        # this source is gone, so bind them now.
+        prelude = _closure_prelude(body, expr, aliases) if op == "export" else []
         for _ in range(40):
             src = "".join(prelude) + "return (" + expr + ")"
             out = self._js(op, {"src": src, "bindings": bindings, "key": key})
