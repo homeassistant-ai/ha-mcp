@@ -1,0 +1,92 @@
+name: Mirror Python Base Image
+
+# CI pulls python:3.13-slim at the Dockerfiles' pinned digests from
+# ghcr.io/homeassistant-ai/ha-mcp-python-base first: ECR Public's and Docker
+# Hub's anonymous limits are shared by every GitHub runner and answer 429 under
+# load. This copies each pinned digest there unchanged (same manifest digest),
+# so a pull by digest from the mirror is the image the pin names. The
+# Dockerfiles keep their ECR Public pins, which Renovate updates; a push of a
+# new pin (Renovate's branch included) runs this before CI needs it, and every
+# consumer still falls back to ECR Public, then Docker Hub, while it is absent.
+on:
+  push:
+    paths:
+      - '**/Dockerfile'
+      - '.github/workflows/mirror-python-base.yml'
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mirror-python-base
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Copy pinned python base digests to GHCR
+    # Forks cannot write the project's package.
+    if: github.repository == 'homeassistant-ai/ha-mcp'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Log in to GHCR
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: printf '%s' "$GH_TOKEN" | skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+    - name: Copy missing digests
+      run: |
+        mirror=ghcr.io/homeassistant-ai/ha-mcp-python-base
+        # Only the official python repository's pins qualify, so the mirror
+        # can hold nothing but copies of official images.
+        pins=$(git grep -h -o -E 'public\.ecr\.aws/docker/library/python:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}' -- '*Dockerfile' | sort -u)
+        [ -n "$pins" ] || { echo "::error::no python base pins found"; exit 1; }
+        # The checks above run logged in; consumers pull anonymously, and a new
+        # GHCR package starts private until an org admin makes it public.
+        warn_unless_public() {
+          token=$(curl -fsS --connect-timeout 10 --max-time 30 "https://ghcr.io/token?service=ghcr.io&scope=repository:${mirror#ghcr.io/}:pull" | jq -r .token) || token=""
+          if ! curl -fsS --connect-timeout 10 --max-time 30 -o /dev/null -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/${mirror#ghcr.io/}/manifests/$1"; then
+            echo "::warning::$mirror does not serve $1 to anonymous pulls (package not public?); CI falls back to ECR Public and Docker Hub"
+          fi
+        }
+        for pin in $pins; do
+          tag=${pin#*:}; tag=${tag%@*}
+          digest=${pin#*@}
+          if skopeo inspect --raw "docker://$mirror@$digest" >/dev/null 2>&1; then
+            echo "$digest already mirrored"
+            warn_unless_public "$digest"
+            continue
+          fi
+          # Tagged per digest so no copy is left untagged by a later one.
+          dest="docker://$mirror:$tag-${digest:7:12}"
+          copied=""
+          # Each round tries both registries: a rate-limited ECR answer costs
+          # about a minute of skopeo's own retries, so it must not hold up
+          # Docker Hub for several rounds.
+          for round in 1 2 3; do
+            for source in public.ecr.aws/docker/library/python docker.io/library/python; do
+              if skopeo copy --all --preserve-digests --retry-times 2 \
+                  "docker://$source@$digest" "$dest"; then
+                copied=$source
+                break 2
+              fi
+            done
+            sleep $((round * 30))
+          done
+          [ -n "$copied" ] || { echo "::error::could not copy $digest from any registry"; exit 1; }
+          skopeo inspect --raw "docker://$mirror@$digest" >/dev/null
+          echo "Mirrored $digest from $copied as $dest"
+          warn_unless_public "$digest"
+        done

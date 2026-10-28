@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.haos_image_build import python_base
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 
@@ -409,11 +411,11 @@ def test_a_renovate_abort_fails_the_workflow() -> None:
 _PYTHON_BASE_FALLBACK = ".github/actions/docker-build-python-base-fallback"
 
 
-def test_buildx_image_builds_fall_back_to_docker_hub_for_the_python_base() -> None:
-    """Every buildx image build goes through the fallback action, which repeats
-    the build from Docker Hub's copy of the pinned base when ECR Public fails;
-    the buildx docker-container builder pulls on its own, so a host pull would
-    not reach it."""
+def test_buildx_image_builds_fall_back_from_the_mirror_for_the_python_base() -> None:
+    """Every buildx image build goes through the fallback action, which builds
+    from the GHCR mirror of the pinned base and repeats from ECR Public, then
+    Docker Hub, when a build fails; the buildx docker-container builder pulls
+    on its own, so a host pull would not reach it."""
     direct: list[str] = []
     through_action: list[str] = []
     for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
@@ -435,16 +437,47 @@ def test_buildx_image_builds_fall_back_to_docker_hub_for_the_python_base() -> No
         for step in action["runs"]["steps"]
         if step.get("uses", "").startswith("docker/build-push-action@")
     ]
-    assert len(builds) == 2
-    ecr, dockerhub = builds
+    assert len(builds) == 3
+    mirror, ecr, dockerhub = builds
+    assert mirror["id"] == "mirror" and mirror["continue-on-error"] is True
+    assert "if" not in mirror
     assert ecr["id"] == "ecr" and ecr["continue-on-error"] is True
+    assert ecr["if"] == "steps.mirror.outcome == 'failure'"
     assert dockerhub["if"] == "steps.ecr.outcome == 'failure'"
-    assert ecr["uses"] == dockerhub["uses"]
-    passthrough = {k: v for k, v in dockerhub["with"].items() if k != "build-args"}
-    assert passthrough == {k: v for k, v in ecr["with"].items() if k != "build-args"}
-    assert "${{ inputs.build-args }}" in dockerhub["with"]["build-args"]
-    assert (
-        dockerhub["with"]["build-args"]
-        .rstrip()
-        .endswith("PYTHON_BASE=${{ steps.base.outputs.dockerhub }}")
-    )
+    assert mirror["uses"] == ecr["uses"] == dockerhub["uses"]
+
+    def passthrough(step: dict) -> dict:
+        return {k: v for k, v in step["with"].items() if k != "build-args"}
+
+    assert passthrough(mirror) == passthrough(ecr) == passthrough(dockerhub)
+    # The ECR attempt builds from the Dockerfile's own pin.
+    assert ecr["with"]["build-args"] == "${{ inputs.build-args }}"
+    for step, output in ((mirror, "mirror"), (dockerhub, "dockerhub")):
+        assert "${{ inputs.build-args }}" in step["with"]["build-args"]
+        assert (
+            step["with"]["build-args"]
+            .rstrip()
+            .endswith(f"PYTHON_BASE=${{{{ steps.base.outputs.{output} }}}}")
+        )
+
+
+def test_every_python_base_consumer_pulls_the_mirror_the_workflow_fills() -> None:
+    """A consumer naming another repository would never find a digest and
+    silently fall back to the rate-limited registries on every run."""
+    sources = {
+        "mirror workflow": ".github/workflows/mirror-python-base.yml",
+        "pr.yml pull step": ".github/workflows/pr.yml",
+        "buildx fallback action": f"{_PYTHON_BASE_FALLBACK}/action.yml",
+    }
+    named = {
+        label: set(
+            re.findall(
+                r"ghcr\.io/homeassistant-ai/ha-mcp-python[\w-]*(?:/[\w.-]+)*",
+                (_REPO_ROOT / rel).read_text(encoding="utf-8"),
+            )
+        )
+        for label, rel in sources.items()
+    }
+    named["HAOS bake"] = {python_base.MIRROR_PYTHON}
+    assert all(names == named["mirror workflow"] for names in named.values()), named
+    assert len(named["mirror workflow"]) == 1
