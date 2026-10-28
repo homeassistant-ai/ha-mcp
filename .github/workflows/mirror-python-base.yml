@@ -32,7 +32,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -61,15 +61,18 @@ jobs:
           # Tagged per digest so no copy is left untagged by a later one.
           dest="docker://$mirror:$tag-${digest:7:12}"
           copied=""
-          for source in public.ecr.aws/docker/library/python docker.io/library/python; do
-            for attempt in 1 2 3; do
+          # Each round tries both registries: a rate-limited ECR answer costs
+          # about a minute of skopeo's own retries, so it must not hold up
+          # Docker Hub for several rounds.
+          for round in 1 2 3; do
+            for source in public.ecr.aws/docker/library/python docker.io/library/python; do
               if skopeo copy --all --preserve-digests --retry-times 2 \
                   "docker://$source@$digest" "$dest"; then
                 copied=$source
                 break 2
               fi
-              sleep $((attempt * 30))
             done
+            sleep $((round * 30))
           done
           [ -n "$copied" ] || { echo "::error::could not copy $digest from any registry"; exit 1; }
           skopeo inspect --raw "docker://$mirror@$digest" >/dev/null
