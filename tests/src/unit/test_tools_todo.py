@@ -189,13 +189,22 @@ class TestGetTodo:
         # `restored`.
         client.state = "unavailable"
         client.attributes = {"friendly_name": "Tasks", "supported_features": 15}
-        got = await tools.ha_get_todo(LIST, status="completed")
+        got = await tools.ha_get_todo(LIST)
         assert got["count"] == 3
         assert "unavailable" in got["warnings"][0]
-        assert "unfiltered" in got["warnings"][0]
         assert client.services() == []
-        unfiltered = await tools.ha_get_todo(LIST)
-        assert "unfiltered" not in unfiltered["warnings"][0]
+
+    async def test_unavailable_list_refuses_a_status_filter(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Core filters in todo.get_items, which matches no unavailable list.
+        client.state = "unavailable"
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_todo(LIST, status="completed")
+        error = _error(excinfo)["error"]
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "status" in error["message"]
+        assert client.calls == []
 
     async def test_placeholder_list_is_refused_before_core_is_asked(
         self, tools: TodoTools, client: _FakeClient

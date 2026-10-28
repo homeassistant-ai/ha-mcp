@@ -222,25 +222,32 @@ class TodoTools:
                     suggestions=["Check the integration that provides the list"],
                 )
             )
-        # todo.get_items matches no unavailable entity; the list
-        # command still answers with the items Core last held.
+        # todo.get_items, which applies the status filter, matches no
+        # unavailable entity; todo/item/list still answers with the
+        # items Core last held, unfiltered.
+        if status:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Todo list {entity_id} is unavailable, and Home Assistant "
+                    "filters by status only on an available list",
+                    context={"entity_id": entity_id, "status": status},
+                    suggestions=[
+                        "Omit status to read the items Home Assistant last held"
+                    ],
+                )
+            )
         held = await self._list_items(entity_id)
         return {
             "success": True,
             "entity_id": entity_id,
-            "status_filter": status,
+            "status_filter": None,
             "count": len(held),
             "items": held,
             "message": f"Found {len(held)} item(s) in {entity_id}",
             "warnings": [
                 f"{entity_id} is unavailable: these are the items Home "
                 "Assistant last held"
-                + (
-                    ", unfiltered, since Home Assistant applies the "
-                    "status filter only to an available list"
-                    if status
-                    else ""
-                )
             ],
         }
 
