@@ -115,6 +115,16 @@ class TestSplitLogRecords:
         records = _split_log_records(f"{_ERROR_RECORD}\n{_WARNING_RECORD}".splitlines())
         assert [record.level for record in records] == ["ERROR", "WARNING"]
 
+    def test_core_2026_11_utc_offset_stamps_start_records(self) -> None:
+        records = _split_log_records(
+            [
+                "2026-10-28 14:45:10.501-04:00 ERROR (MainThread) [a.b] boom",
+                "  frame",
+                "2026-10-28 18:45:11.002+00:00 WARNING (Recorder) [c.d] careful",
+            ]
+        )
+        assert [record.level for record in records] == ["ERROR", "WARNING"]
+
     def test_leading_continuation_is_a_partial_record(self) -> None:
         records = _split_log_records(["  frame", "ValueError: x"])
         assert len(records) == 1
