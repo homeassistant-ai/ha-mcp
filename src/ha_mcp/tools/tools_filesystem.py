@@ -229,8 +229,7 @@ def _raise_component_too_old(detail: str) -> NoReturn:
             ErrorCode.COMPONENT_NOT_INSTALLED,
             f"The installed ha_mcp_tools custom component is too old: {detail}. "
             f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
-            "Update it via HACS (the Marketplace on Home Assistant 2026.11+) "
-            "and restart Home Assistant.",
+            "Update via HACS or the Marketplace and restart Home Assistant.",
             suggestions=[
                 "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after update completes",
@@ -326,8 +325,7 @@ async def _fetch_caller_token(client: Any) -> str:
                 f"malformed version: {version!r}, so ha-mcp can't verify it "
                 f"meets the required >= {MIN_COMPONENT_VERSION}.",
                 suggestions=[
-                    "Reinstall ha_mcp_tools via HACS (the Marketplace on Home Assistant "
-                    "2026.11+)",
+                    "Reinstall ha_mcp_tools via HACS or the Marketplace",
                     "Restart Home Assistant after reinstalling",
                     "If the version is still malformed, file an issue at "
                     + "https://github.com/homeassistant-ai/ha-mcp/issues",

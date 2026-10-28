@@ -564,7 +564,9 @@ class HacsTools:
                 "version": version or "latest",
                 "message": f"Successfully installed {repo_name}"
                 + (f" version {version}" if version else ""),
-                "note": "For integrations, restart Home Assistant to activate. For Lovelace cards, clear browser cache.",
+                "note": "For integrations, restart Home Assistant to activate. Lovelace "
+                "cards are registered as dashboard resources by the store itself "
+                "(storage mode); clear the browser cache to load them.",
                 "data": result,
             },
         )
