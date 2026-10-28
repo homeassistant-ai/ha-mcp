@@ -15,7 +15,7 @@
   "src/ha_mcp/stdio_settings_sidecar.py": 1504,
   "src/ha_mcp/tools/config_entry_flow_form.py": 1114,
   "src/ha_mcp/tools/config_entry_flow_walker.py": 1149,
-  "src/ha_mcp/tools/device_control.py": 1676,
+  "src/ha_mcp/tools/device_control.py": 1670,
   "src/ha_mcp/tools/smart_search/_deep.py": 1721,
   "src/ha_mcp/tools/smart_search/_entities.py": 1002,
   "src/ha_mcp/tools/tools_addons.py": 4046,
