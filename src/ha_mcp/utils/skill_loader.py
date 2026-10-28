@@ -434,3 +434,27 @@ def _read_file_safely(
         # propagate up and fail the write the agent just committed.
         logger.warning("Skill file %s/%s is not valid UTF-8: %s", skill, rel_path, e)
         return None
+
+
+def log_skill_registration_summary(status: dict[str, str | int]) -> None:
+    """Emit one-line summary of skill registration outcome.
+
+    ``info`` when both provider and tool registered AND at least one
+    skill bundle parsed; ``warning`` otherwise. The guidance>0 gate
+    catches the "tool registered but exposes nothing" case (skills
+    directory missing, empty, or every SKILL.md fails to parse) —
+    the tool stays present so the failure is reachable via a tool
+    call, but operators should grep for this warning when a user
+    reports missing skill features.
+    """
+    provider = status.get("provider")
+    tool = status.get("tool")
+    raw_guidance = status.get("guidance_count", 0)
+    guidance = raw_guidance if isinstance(raw_guidance, int) else 0
+
+    message = "Skill system summary: provider=%s, tool=%s, guidance_count=%d"
+    args = (provider, tool, guidance)
+    if provider == "ok" and tool == "ok" and guidance > 0:
+        logger.info(message, *args)
+    else:
+        logger.warning(message, *args)
