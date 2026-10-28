@@ -1,8 +1,9 @@
 """
-HACS (Home Assistant Community Store) integration tools for Home Assistant MCP server.
+HACS (Home Assistant Community Store) tools for the Home Assistant MCP server.
 
-This module provides tools to interact with HACS via the WebSocket API, enabling AI agents
-to discover custom integrations, Lovelace cards, themes, and more.
+Home Assistant 2026.11 builds HACS in as the Marketplace; these tools use its
+``marketplace/*`` WebSocket API there and the HACS integration's ``hacs/*``
+API on older versions (``hacs_backend``).
 """
 
 import logging
@@ -20,6 +21,12 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import ErrorCode, create_error_response
+from .hacs_backend import (
+    RETIRED_MARKETPLACE_CATEGORIES,
+    StoreApi,
+    detect_store_api,
+    gate_suggestions,
+)
 from .hacs_registration import (
     CATEGORY_MAP,
     HACS_ADD_REGISTRATION_TIMEOUT,
@@ -41,51 +48,6 @@ from .response_helpers import add_timezone_metadata
 from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
-
-
-async def _assert_hacs_available(ws_client: HomeAssistantWebSocketClient) -> None:
-    """Raise ToolError if HACS is not installed or not responding.
-
-    Distinguishes "unknown command" (HACS not installed) from other failures
-    (HACS installed but broken) so the error message is accurate.
-
-    Must be called within a try block that handles API errors via
-    exception_to_structured_error, so connection failures are classified
-    correctly rather than masked as COMPONENT_NOT_INSTALLED.
-    """
-    response = await ws_client.send_command("hacs/info")
-    if response.get("success"):
-        return
-
-    error = response.get("error", {})
-    error_code = error.get("code") if isinstance(error, dict) else None
-    error_message = error.get("message", "") if isinstance(error, dict) else str(error)
-
-    # "unknown_command" means HACS is not installed at all
-    if error_code == "unknown_command" or "unknown command" in error_message.lower():
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                "HACS is not installed.",
-                suggestions=[
-                    "Install HACS from https://hacs.xyz/",
-                    "Restart Home Assistant after HACS installation",
-                ],
-            )
-        )
-
-    # HACS is installed but not responding correctly
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.COMPONENT_NOT_INSTALLED,
-            f"HACS is installed but not responding: {error_message or 'unknown error'}",
-            suggestions=[
-                "Restart Home Assistant",
-                "Check Home Assistant logs for HACS errors",
-                "Verify HACS is up to date",
-            ],
-        )
-    )
 
 
 def _reject_foreign_params(action: str, **per_action: dict[str, Any]) -> None:
@@ -127,8 +89,10 @@ class HacsTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def _get_hacs_client(self) -> HomeAssistantWebSocketClient:
-        """Check HACS on the current request's connection, including OAuth users."""
+    async def _get_hacs_client(
+        self, category: str | None = None
+    ) -> tuple[HomeAssistantWebSocketClient, StoreApi]:
+        """Find the store API on the current request's connection, OAuth users included."""
         from ..client.websocket_client import get_websocket_client
 
         ws_client = await get_websocket_client(
@@ -136,8 +100,22 @@ class HacsTools:
             token=self._client.token,
             verify_ssl=self._client.verify_ssl,
         )
-        await _assert_hacs_available(ws_client)
-        return ws_client
+        api = await detect_store_api(ws_client)
+        if api.is_marketplace and category in RETIRED_MARKETPLACE_CATEGORIES:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "The Marketplace (Home Assistant 2026.11+) no longer manages "
+                    f"the '{category}' category.",
+                    suggestions=[
+                        "Use integration, lovelace, theme or template",
+                        "Repositories installed earlier stay in place; update "
+                        "them outside the Marketplace",
+                    ],
+                    context={"category": category},
+                )
+            )
+        return ws_client, api
 
     @tool(
         name="ha_get_hacs_info",
@@ -155,9 +133,21 @@ class HacsTools:
             str, Field(description="Search keyword (action='search')")
         ] = "",
         category: Annotated[
-            Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
+            Literal[
+                "integration",
+                "lovelace",
+                "theme",
+                "template",
+                "appdaemon",
+                "python_script",
+            ]
             | None,
-            Field(description="Filter by category (action='search')"),
+            Field(
+                description=(
+                    "Filter by category (action='search'); appdaemon and "
+                    "python_script exist only before Home Assistant 2026.11"
+                )
+            ),
         ] = None,
         installed_only: Annotated[
             bool,
@@ -186,7 +176,8 @@ class HacsTools:
     ) -> dict[str, Any]:
         """Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
 
-        Use ``action="search"`` to search/browse/list store repositories, or
+        On Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool
+        uses whichever the instance has. Use ``action="search"`` to search/browse/list store repositories, or
         ``action="info"`` for one repository's full details (README, versions, GitHub
         stats). This tool is read-only; to install or add repositories use
         ``ha_manage_hacs``, and for non-HACS entities/config use the domain-specific tools.
@@ -200,8 +191,8 @@ class HacsTools:
         - Repository details: ha_get_hacs_info(action="info", repository_id="441028036")
 
         **Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub
-        rate limits / needs HACS's configured GitHub token; ``search`` reads HACS's locally
-        cached repository index.
+        rate limits without a connected GitHub account; ``search`` reads the locally cached
+        repository index.
         """
         try:
             if action == "search":
@@ -228,7 +219,7 @@ class HacsTools:
                 e,
                 context={"tool": "ha_get_hacs_info", "action": action},
                 suggestions=[
-                    "Verify HACS is installed: https://hacs.xyz/",
+                    "Verify HACS (the Marketplace on Home Assistant 2026.11+) is available",
                     "For action='search', try a simpler query or a valid category",
                     "For action='info', pass a valid repository_id (numeric ID or 'owner/repo')",
                 ],
@@ -276,14 +267,27 @@ class HacsTools:
             ),
         ] = None,
         category: Annotated[
-            Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
+            Literal[
+                "integration",
+                "lovelace",
+                "theme",
+                "template",
+                "appdaemon",
+                "python_script",
+            ]
             | None,
-            Field(description="Repository category (action='add_repository')"),
+            Field(
+                description=(
+                    "Repository category (action='add_repository'); appdaemon "
+                    "and python_script exist only before Home Assistant 2026.11"
+                )
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
-        This tool performs writes; to search the store or read repository details use
+        On Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool
+        uses whichever the instance has. This tool performs writes; to search the store or read repository details use
         ``ha_get_hacs_info``. Use ``action="update_information"`` to run the HACS UI's
         "Update information" action — a forced re-fetch of one repository's release data
         from GitHub, so a pending update becomes visible to HACS and its update entity
@@ -301,8 +305,11 @@ class HacsTools:
         format plus a matching ``category``. Removing an integration deletes its files but
         the loaded module persists until the next Home Assistant restart — delete its config
         entries first (``ha_remove_helpers_integrations``). HACS refreshes custom
-        repositories on its own only about every 48 hours, so ``update_information`` is the
-        way to surface a just-published release.
+        repositories on its own only about every 48 hours (the Marketplace only with a
+        connected GitHub account), so ``update_information`` is the way to surface a
+        just-published release. The Marketplace refuses installs until the connected user has
+        accepted its first-run warning, and adding a repository needs a connected GitHub
+        account; both are steps the user takes in the Marketplace panel.
         """
         try:
             # Reject parameters that don't belong to the chosen action rather
@@ -346,9 +353,7 @@ class HacsTools:
             valid_category = validate_identifier_not_empty(
                 category,
                 "category",
-                suggestions=[
-                    "Pass category (integration, lovelace, theme, appdaemon, python_script)"
-                ],
+                suggestions=["Pass category (integration, lovelace, theme, template)"],
             )
             return await self._hacs_add_repository(repository, valid_category)
 
@@ -359,7 +364,7 @@ class HacsTools:
                 e,
                 context={"tool": "ha_manage_hacs", "action": action},
                 suggestions=[
-                    "Verify HACS is installed: https://hacs.xyz/",
+                    "Verify HACS (the Marketplace on Home Assistant 2026.11+) is available",
                     "For action='download', 'remove', or 'update_information', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
@@ -387,7 +392,7 @@ class HacsTools:
             ctx, progress=0, total=3, message="checking HACS availability"
         )
 
-        ws_client = await self._get_hacs_client()
+        ws_client, api = await self._get_hacs_client(category)
 
         # Build command parameters - map user-friendly category to HACS internal name
         kwargs_cmd: dict[str, Any] = {}
@@ -399,13 +404,13 @@ class HacsTools:
             ctx, progress=1, total=3, message="fetching HACS repository list"
         )
 
-        response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
+        response = await ws_client.send_command(api.command("list"), **kwargs_cmd)
 
         if not response.get("success"):
             exception_to_structured_error(
-                Exception(f"HACS search request failed: {response}"),
+                Exception(f"{api.name} search request failed: {response}"),
                 context={
-                    "command": "hacs/repositories/list",
+                    "command": api.command("list"),
                     "query": query,
                     "category": category,
                 },
@@ -445,10 +450,10 @@ class HacsTools:
         return {"success": True, **wrapped}
 
     async def _hacs_info(self, repository_id: str) -> dict[str, Any]:
-        ws_client = await self._get_hacs_client()
+        ws_client, api = await self._get_hacs_client()
 
         # If repository_id contains a slash, it's a GitHub path - look up numeric ID
-        actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
+        actual_id, _ = await _resolve_hacs_repo_id(ws_client, api, repository_id)
 
         # Get repository info via WebSocket using numeric ID. The WS client
         # RAISES on a failed result frame, so that — not the dict branch
@@ -456,23 +461,24 @@ class HacsTools:
         # lands; keep the command context attached (mirrors ``_hacs_remove``).
         try:
             response = await ws_client.send_command(
-                "hacs/repository/info", repository_id=actual_id
+                api.command("info"), repository_id=actual_id
             )
         except HomeAssistantCommandError as cmd_err:
             exception_to_structured_error(
                 cmd_err,
                 context={
-                    "command": "hacs/repository/info",
+                    "command": api.command("info"),
                     "repository_id": repository_id,
                 },
+                suggestions=gate_suggestions(cmd_err),
                 raise_error=True,
             )
 
         if not response.get("success"):
             exception_to_structured_error(
-                Exception(f"HACS repository info request failed: {response}"),
+                Exception(f"{api.name} repository info request failed: {response}"),
                 context={
-                    "command": "hacs/repository/info",
+                    "command": api.command("info"),
                     "repository_id": repository_id,
                 },
                 raise_error=True,
@@ -508,7 +514,8 @@ class HacsTools:
                 "topics": result.get("topics", []),
                 "releases": result.get("releases", []),
                 "default_branch": result.get("default_branch"),
-                "readme": result.get("readme"),  # Full README content
+                # Both store APIs send the rendered README as additional_info.
+                "readme": result.get("additional_info"),
                 "readme_note": untrusted_note,
                 "data": result,  # Full response for advanced use
             },
@@ -533,10 +540,12 @@ class HacsTools:
                 "Or pass a GitHub path like 'owner/repo' to install by name",
             ],
         )
-        ws_client = await self._get_hacs_client()
+        ws_client, api = await self._get_hacs_client()
 
         # Resolve GitHub path to numeric ID if needed
-        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+        actual_id, repo_name = await _resolve_hacs_repo_id(
+            ws_client, api, repository_id
+        )
 
         # Build download command parameters
         download_kwargs: dict[str, Any] = {"repository": actual_id}
@@ -548,7 +557,7 @@ class HacsTools:
         # 30 s default reports a false failure for work that completes.
         try:
             response = await ws_client.send_command(
-                "hacs/repository/download", _wait_timeout=60.0, **download_kwargs
+                api.command("install"), _wait_timeout=60.0, **download_kwargs
             )
         except HomeAssistantCommandTimeout as timeout_err:
             # Same false-failure shape remove documents: HACS finishes the
@@ -558,7 +567,7 @@ class HacsTools:
             exception_to_structured_error(
                 timeout_err,
                 context={
-                    "command": "hacs/repository/download",
+                    "command": api.command("install"),
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
@@ -574,19 +583,20 @@ class HacsTools:
             exception_to_structured_error(
                 cmd_err,
                 context={
-                    "command": "hacs/repository/download",
+                    "command": api.command("install"),
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
                 },
+                suggestions=gate_suggestions(cmd_err),
                 raise_error=True,
             )
 
         if not response.get("success"):
             exception_to_structured_error(
-                Exception(f"HACS download request failed: {response}"),
+                Exception(f"{api.name} download request failed: {response}"),
                 context={
-                    "command": "hacs/repository/download",
+                    "command": api.command("install"),
                     "repository_id": repository_id,
                     "version": version,
                 },
@@ -621,9 +631,11 @@ class HacsTools:
                 "Or pass a GitHub path like 'owner/repo' to remove by name",
             ],
         )
-        ws_client = await self._get_hacs_client()
+        ws_client, api = await self._get_hacs_client()
 
-        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+        actual_id, repo_name = await _resolve_hacs_repo_id(
+            ws_client, api, repository_id
+        )
 
         # HACS's remove command "succeeds" on a store-only repository (its
         # uninstall no-ops when no files are downloaded), which would report
@@ -641,7 +653,7 @@ class HacsTools:
         # tests; the unit mocks cannot see the real schema).
         try:
             info = await ws_client.send_command(
-                "hacs/repository/info", repository_id=actual_id
+                api.command("info"), repository_id=actual_id
             )
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as probe_err:
             logger.debug(
@@ -676,13 +688,13 @@ class HacsTools:
         # (#1623) and say the outcome is unknown when it still trips.
         try:
             response = await ws_client.send_command(
-                "hacs/repository/remove", repository=actual_id, _wait_timeout=60.0
+                api.command("remove"), repository=actual_id, _wait_timeout=60.0
             )
         except HomeAssistantCommandTimeout as timeout_err:
             exception_to_structured_error(
                 timeout_err,
                 context={
-                    "command": "hacs/repository/remove",
+                    "command": api.command("remove"),
                     "repository_id": repository_id,
                     "timeout_seconds": 60.0,
                 },
@@ -701,18 +713,19 @@ class HacsTools:
             exception_to_structured_error(
                 cmd_err,
                 context={
-                    "command": "hacs/repository/remove",
+                    "command": api.command("remove"),
                     "repository_id": repository_id,
                     "timeout_seconds": 60.0,
                 },
+                suggestions=gate_suggestions(cmd_err),
                 raise_error=True,
             )
 
         if not response.get("success"):
             exception_to_structured_error(
-                Exception(f"HACS remove request failed: {response}"),
+                Exception(f"{api.name} remove request failed: {response}"),
                 context={
-                    "command": "hacs/repository/remove",
+                    "command": api.command("remove"),
                     "repository_id": repository_id,
                 },
                 raise_error=True,
@@ -746,21 +759,23 @@ class HacsTools:
                 "Or pass a GitHub path like 'owner/repo' to refresh by name",
             ],
         )
-        ws_client = await self._get_hacs_client()
+        ws_client, api = await self._get_hacs_client()
 
-        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+        actual_id, repo_name = await _resolve_hacs_repo_id(
+            ws_client, api, repository_id
+        )
 
         # Without the explicit timeout context, the generic classifier reports
         # its 30 s default — a false claim against this call's 60 s budget.
         # The refresh is idempotent, so unlike remove no unknown-outcome
         # warning is needed: retrying a completed refresh is harmless.
         try:
-            response = await send_hacs_repository_refresh(ws_client, actual_id)
+            response = await send_hacs_repository_refresh(ws_client, actual_id, api)
         except HomeAssistantCommandTimeout as timeout_err:
             exception_to_structured_error(
                 timeout_err,
                 context={
-                    "command": "hacs/repository/refresh",
+                    "command": api.command("refresh"),
                     "repository_id": repository_id,
                     "timeout_seconds": HACS_REFRESH_TIMEOUT,
                 },
@@ -779,18 +794,19 @@ class HacsTools:
             exception_to_structured_error(
                 cmd_err,
                 context={
-                    "command": "hacs/repository/refresh",
+                    "command": api.command("refresh"),
                     "repository_id": repository_id,
                     "timeout_seconds": HACS_REFRESH_TIMEOUT,
                 },
+                suggestions=gate_suggestions(cmd_err),
                 raise_error=True,
             )
 
         if not response.get("success"):
             exception_to_structured_error(
-                Exception(f"HACS refresh request failed: {response}"),
+                Exception(f"{api.name} refresh request failed: {response}"),
                 context={
-                    "command": "hacs/repository/refresh",
+                    "command": api.command("refresh"),
                     "repository_id": repository_id,
                 },
                 raise_error=True,
@@ -803,9 +819,9 @@ class HacsTools:
                 "repository": repo_name,
                 "message": f"Refreshed repository information for {repo_name}",
                 "note": (
-                    "HACS re-fetched this repository's release data from GitHub. "
-                    "If a newer release exists, HACS now shows it (and, for "
-                    "downloaded repositories, so does the update entity)."
+                    f"{api.name} re-fetched this repository's release data from "
+                    f"GitHub. If a newer release exists, {api.name} now shows it "
+                    "(and, for downloaded repositories, so does the update entity)."
                 ),
                 "data": response.get("result", {}),
             },
@@ -815,7 +831,7 @@ class HacsTools:
     async def _hacs_add_repository(
         self, repository: str, category: str
     ) -> dict[str, Any]:
-        ws_client = await self._get_hacs_client()
+        ws_client, api = await self._get_hacs_client(category)
 
         # Validate repository format
         if "/" not in repository:
@@ -833,17 +849,29 @@ class HacsTools:
         # Map user-friendly category to HACS internal name
         hacs_category = CATEGORY_MAP.get(category, category)
 
-        response = await ws_client.send_command(
-            "hacs/repositories/add",
-            repository=repository,
-            category=hacs_category,
-        )
+        try:
+            response = await ws_client.send_command(
+                api.command("add"),
+                repository=repository,
+                category=hacs_category,
+            )
+        except HomeAssistantCommandError as cmd_err:
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": api.command("add"),
+                    "repository": repository,
+                    "category": category,
+                },
+                suggestions=gate_suggestions(cmd_err),
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(
-                Exception(f"HACS add repository request failed: {response}"),
+                Exception(f"{api.name} add repository request failed: {response}"),
                 context={
-                    "command": "hacs/repositories/add",
+                    "command": api.command("add"),
                     "repository": repository,
                     "category": category,
                 },
@@ -856,13 +884,13 @@ class HacsTools:
         # never-registered add (archived repo, bad structure, wrong category)
         # would otherwise report a misleading "Successfully added".
         repo = await wait_for_repo_registration(
-            ws_client, repository, timeout=HACS_ADD_REGISTRATION_TIMEOUT
+            ws_client, repository, timeout=HACS_ADD_REGISTRATION_TIMEOUT, api=api
         )
         if repo is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"HACS accepted the request but '{repository}' did not "
+                    f"{api.name} accepted the request but '{repository}' did not "
                     "register as a custom repository.",
                     suggestions=[
                         "Verify the repository exists and follows HACS structure (e.g. has hacs.json)",
@@ -879,7 +907,7 @@ class HacsTools:
                 "repository": repository,
                 "category": category,
                 "repository_id": str(repo_id) if repo_id is not None else None,
-                "message": f"Successfully added {repository} to HACS",
+                "message": f"Successfully added {repository} to {api.name}",
                 "data": repo,
             },
         )
@@ -891,7 +919,9 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, HacsTools(client))
 
 
-async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str, str]:
+async def _resolve_hacs_repo_id(
+    ws_client: Any, api: StoreApi, repository_id: str
+) -> tuple[str, str]:
     """Resolve a GitHub path (owner/repo) to a HACS numeric repository ID and name.
 
     Returns (numeric_id, display_name). If repository_id is already numeric,
@@ -906,7 +936,7 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
         return repository_id, repository_id
 
     repo = await wait_for_repo_registration(
-        ws_client, repository_id, timeout=HACS_RESOLVE_REGISTRATION_TIMEOUT
+        ws_client, repository_id, timeout=HACS_RESOLVE_REGISTRATION_TIMEOUT, api=api
     )
 
     if repo is not None:
@@ -915,7 +945,7 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
     raise_tool_error(
         create_error_response(
             ErrorCode.RESOURCE_NOT_FOUND,
-            f"Repository '{repository_id}' not found in HACS",
+            f"Repository '{repository_id}' not found in {api.name}",
             suggestions=[
                 "Use ha_get_hacs_info(action='search') to find the repository",
                 "Check the repository name is correct (case-insensitive)",
