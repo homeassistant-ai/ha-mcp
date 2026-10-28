@@ -220,7 +220,7 @@ class TestSetTodoItem:
     ) -> None:
         await tools.ha_set_todo_item(LIST, item="Pay", description="", due_date=" ")
         assert client.services() == [
-            ("update_item", {"item": "Pay", "description": None, "due_date": None})
+            ("update_item", {"item": "2", "description": None, "due_date": None})
         ]
 
     async def test_update_without_changes_is_judged_by_core(
@@ -232,7 +232,7 @@ class TestSetTodoItem:
         )
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay")
-        assert client.services() == [("update_item", {"item": "Pay"})]
+        assert client.services() == [("update_item", {"item": "2"})]
         assert "at least one of" in _error(excinfo)["error"]["message"]
 
     async def test_field_the_list_lacks_reports_core_text(
@@ -480,9 +480,7 @@ class TestReviewGaps:
         got = await tools.ha_set_todo_item(
             LIST, item="Bread", rename="Rye", move_after=""
         )
-        assert client.services() == [
-            ("update_item", {"item": "Bread", "rename": "Rye"})
-        ]
+        assert client.services() == [("update_item", {"item": "3", "rename": "Rye"})]
         assert client.items[0]["summary"] == "Rye"
         assert got["todo_item"]["summary"] == "Rye"
 
@@ -562,3 +560,84 @@ class TestReviewGaps:
             await tools.ha_set_todo_item(LIST, item="Nope", move_after="")
         assert _error(excinfo)["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert not [c for c in client.calls if c["type"] == "todo/item/move"]
+
+
+class TestTargetsAndReplies:
+    async def test_update_after_a_move_targets_the_moved_item(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Two items share a name; Core would resolve the name to the first.
+        client.items = [
+            {"uid": "a", "summary": "Same", "status": "needs_action"},
+            {"uid": "b", "summary": "Same", "status": "needs_action"},
+        ]
+        await tools.ha_set_todo_item(LIST, item="Same", rename="Moved", move_after="b")
+        assert client.services() == [("update_item", {"item": "a", "rename": "Moved"})]
+        assert [(i["uid"], i["summary"]) for i in client.items] == [
+            ("b", "Same"),
+            ("a", "Moved"),
+        ]
+
+    async def test_unconfirmed_add_is_not_called_added(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        client.noop = True
+        got = await tools.ha_set_todo_item(LIST, summary="Eggs")
+        assert got["success"] is True
+        assert got["todo_item"] is None
+        assert "not confirmed" in got["message"]
+
+    @pytest.mark.parametrize("remove_completed", [False, True])
+    async def test_empty_item_list_is_refused(
+        self, tools: TodoTools, client: _FakeClient, remove_completed: bool
+    ) -> None:
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_remove_todo_item(
+                LIST, item=[], remove_completed=remove_completed
+            )
+        assert "empty list" in _error(excinfo)["error"]["message"]
+        assert client.calls == []
+
+    async def test_removed_lists_only_what_was_asked_for(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        original = client._service
+
+        def remove_and_more(service: str, data: dict[str, Any]) -> dict[str, Any]:
+            reply = original(service, data)
+            if service == "remove_item":
+                # Another client removes "Bread" in the meantime.
+                client.items = [i for i in client.items if i["uid"] != "3"]
+            return reply
+
+        client._service = remove_and_more  # type: ignore[method-assign]
+        got = await tools.ha_remove_todo_item(LIST, item="Pay")
+        assert [i["uid"] for i in got["removed"]] == ["2"]
+
+    async def test_removed_completed_leaves_out_another_clients_removal(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        original = client._service
+
+        def remove_and_more(service: str, data: dict[str, Any]) -> dict[str, Any]:
+            reply = original(service, data)
+            if service == "remove_completed_items":
+                # Another client removes the open "Buy milk" in the meantime.
+                client.items = [i for i in client.items if i["uid"] != "1"]
+            return reply
+
+        client._service = remove_and_more  # type: ignore[method-assign]
+        got = await tools.ha_remove_todo_item(LIST, remove_completed=True)
+        assert sorted(i["uid"] for i in got["removed"]) == ["2", "3"]
+
+    async def test_update_of_an_item_missing_from_the_first_read_goes_by_name(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        client.refuse["update_item"] = (
+            "service_validation_error",
+            "Unable to find to-do list item: Nope",
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(LIST, item="Nope", status="completed")
+        assert client.services()[0][1]["item"] == "Nope"
+        assert "Unable to find" in _error(excinfo)["error"]["message"]

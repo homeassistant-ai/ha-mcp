@@ -244,7 +244,7 @@ class TestRestoreGuards:
         snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
         fake.items.pop(1)
         fake.refuse = "update_item"
-        with pytest.raises(HomeAssistantError, match=r"Re-added 'Pay'.*not completed"):
+        with pytest.raises(HomeAssistantError, match=r"Re-added 'Pay'.*no answer"):
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
         assert fake.items[-1]["summary"] == "Pay"
 
@@ -329,3 +329,85 @@ class TestReviewGaps:
 
         assert fake.calls[-1]["service_data"] == {"item": "101", "status": "completed"}
         assert fake.items[1]["status"] == "needs_action"
+
+
+class TestSnapshotFieldsAndGuards:
+    async def test_snapshot_leaves_out_the_completed_time(
+        self, fake: _FakeList
+    ) -> None:
+        fake.items[1]["completed"] = "2026-10-01T10:00:00+00:00"
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        assert snapshot is not None
+        assert "completed" not in snapshot
+
+    async def test_list_comes_from_the_backup_key(self, fake: _FakeList) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items[1]["status"] = "needs_action"
+        await restore_todo_item(
+            object(), f"{LIST}::Pay", {**snapshot, "todo_entity_id": "todo.other"}
+        )
+        assert fake.items[1]["status"] == "completed"
+
+    async def test_item_named_like_the_uid_blocks_the_restore(
+        self, fake: _FakeList
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items.insert(0, {"uid": "9", "summary": "2", "status": "needs_action"})
+        with pytest.raises(HomeAssistantError, match="nothing was restored"):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert fake.calls == []
+
+    async def test_foreign_new_item_is_not_completed(
+        self, fake: _FakeList, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items.pop(1)
+        send = fake.send
+
+        async def swap_added(client: Any, message: dict[str, Any]) -> Any:
+            result = await send(client, message)
+            if message.get("service") == "add_item":
+                # Another writer replaced the re-added item before the read.
+                fake.items[-1]["summary"] = "other"
+            return result
+
+        monkeypatch.setattr(bm, "_ws_send", swap_added)
+        with pytest.raises(HomeAssistantError, match="could not be told apart"):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert fake.items[-1]["status"] == "needs_action"
+
+    async def test_diff_ignores_completed_in_an_older_snapshot(
+        self, tmp_path: Any
+    ) -> None:
+        # Snapshots from before this change stored the list's completion time.
+        mgr = _mk_manager(tmp_path)
+        row = {"uid": "2", "summary": "Pay", "status": "completed"}
+        mgr.register(
+            _mk_handler(
+                "todo_item",
+                fetched={**row, "completed": "2026-10-01T10:00:00+00:00"},
+            )
+        )
+        path = await mgr.maybe_snapshot("todo_item", f"{LIST}::Pay")
+        assert path is not None
+        mgr.register(_mk_handler("todo_item", fetched=row))
+        result = await mgr.diff_snapshot(path.name)
+        assert result["unchanged"] is True
+
+    async def test_re_added_item_without_uid_is_not_completed(
+        self, fake: _FakeList, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items.pop(1)
+        send = fake.send
+
+        async def drop_uid(client: Any, message: dict[str, Any]) -> Any:
+            result = await send(client, message)
+            if message.get("service") == "add_item":
+                fake.items[-1]["uid"] = ""
+            return result
+
+        monkeypatch.setattr(bm, "_ws_send", drop_uid)
+        with pytest.raises(HomeAssistantError, match="could not be told apart"):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert [c["service"] for c in fake.calls] == ["add_item"]

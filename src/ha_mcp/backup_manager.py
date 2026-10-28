@@ -1679,6 +1679,10 @@ class BackupManager:
             target = await current_entity_id(self._client, target, data["config"])
         elif domain == "todo_item":
             target = todo_current_key(target, data["config"])
+            if isinstance(data["config"], dict):
+                # Older snapshots carry the list's completion time, which
+                # the fetch now leaves out.
+                data["config"].pop("completed", None)
         current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)

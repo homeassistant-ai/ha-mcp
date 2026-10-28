@@ -76,6 +76,25 @@ def _raise_core_failure(
     )
 
 
+def _removed(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]] | None,
+    item: str | list[str] | None,
+    remove_completed: bool,
+) -> list[dict[str, Any]] | None:
+    """The asked-for items gone after a removal; another client's removal of
+    an item the call did not ask for is not this call's. None when the list
+    was not read back."""
+    if after is None:
+        return None
+    kept = {i.get("uid") for i in after}
+    gone = [i for i in before if i.get("uid") not in kept]
+    if remove_completed:
+        return [i for i in gone if i.get("status") == "completed"]
+    refs = {item} if isinstance(item, str) else set(item or [])
+    return [i for i in gone if {i.get("uid"), i.get("summary")} & refs]
+
+
 def _require_todo_entity(entity_id: str) -> None:
     if not entity_id.startswith("todo."):
         raise_tool_error(
@@ -327,7 +346,6 @@ class TodoTools:
                 e, context=context or None, suggestions=suggestions
             )
             raise  # unreachable: exception_to_structured_error always raises
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_set_todo_item",
@@ -519,7 +537,9 @@ class TodoTools:
             "entity_id": entity_id,
             "item": summary,
             "todo_item": todo_item,
-            "message": f"Added '{summary}' to {entity_id}",
+            "message": f"Added '{summary}' to {entity_id}"
+            if todo_item is not None
+            else f"Sent '{summary}' to {entity_id}; the new item is not confirmed",
         }
         if warnings:
             response["warnings"] = warnings
@@ -534,6 +554,9 @@ class TodoTools:
     ) -> dict[str, Any]:
         items = await self._list_items(entity_id)
         target = find_item(items, item)
+        # The uid keeps the update and the read-back on the item resolved here;
+        # after a move, a name shared with another item can resolve to that one.
+        ref = (target or {}).get("uid") or item
         applied = ""
         if move_after is not None:
             # Moved first, so a list without reordering refuses before the
@@ -543,12 +566,10 @@ class TodoTools:
         if updates or move_after is None:
             # Core decides whether the update names anything to change.
             await self._todo_service(
-                "update_item", entity_id, {"item": item, **updates}, applied
+                "update_item", entity_id, {"item": ref, **updates}, applied
             )
         after, warnings = await self._read_back(entity_id)
-        todo_item = (
-            find_item(after, (target or {}).get("uid") or item) if after else None
-        )
+        todo_item = find_item(after, ref) if after else None
         if after is not None and todo_item is None:
             warnings.append(
                 f"'{item}' was not on the list read back after the write; "
@@ -645,8 +666,11 @@ class TodoTools:
 
         Give `item` or `remove_completed=True`, not both. Removal is permanent;
         to mark an item done instead, use ha_set_todo_item() with
-        status="completed". Only an item named as a plain string gets an
-        automatic backup; a list and remove_completed do not.
+        status="completed". `removed` lists the items the call asked for that
+        are gone afterwards; with remove_completed=True that includes a
+        completed item another client removed meanwhile. Only an item named as
+        a plain string gets an automatic backup; a list and remove_completed
+        do not.
 
         EXAMPLES:
         - ha_remove_todo_item("todo.shopping_list", "Buy milk")
@@ -654,6 +678,14 @@ class TodoTools:
         - ha_remove_todo_item("todo.shopping_list", remove_completed=True)
         """
         _require_todo_entity(entity_id)
+        if item == []:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "item is an empty list; name at least one item",
+                    context={"entity_id": entity_id},
+                )
+            )
         if (item is None) == (not remove_completed):
             raise_tool_error(
                 create_error_response(
@@ -684,12 +716,7 @@ class TodoTools:
             else:
                 await self._todo_service("remove_item", entity_id, {"item": item})
             after, warnings = await self._read_back(entity_id)
-            kept = {i.get("uid") for i in after or []}
-            removed = (
-                [i for i in before if i.get("uid") not in kept]
-                if after is not None
-                else None
-            )
+            removed = _removed(before, after, item, remove_completed)
             if removed == [] and not remove_completed:
                 # Core refuses to remove an item it does not hold, so an
                 # unchanged list is a stale read.

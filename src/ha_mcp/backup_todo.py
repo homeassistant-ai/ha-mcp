@@ -3,14 +3,14 @@
 The backup key is ``<todo entity>::<item>``, where ``item`` is what the tool
 was given: the item's uid or its summary, which Core's todo services both
 accept. The snapshot is Core's item row (uid, summary, status, and
-description, due and completed where set) plus ``todo_entity_id``. A restore's
-safety backup and the diff follow the item by the snapshot's uid, so a rename
-since the backup does not lose it.
+description and due where set) plus ``todo_entity_id``; it leaves out
+``completed``, the time the list sets when an item is completed, which
+follows the restored status. A restore's safety backup and the diff follow the item
+by the snapshot's uid, so a rename since the backup does not lose it.
 
 An item still on the list under its uid gets its summary, status,
 description and due back through ``todo.update_item``; a description or due
-date the snapshot has none of is cleared. ``completed`` follows the status,
-as Core's services cannot set it. A removed item is added again with
+date the snapshot has none of is cleared. A removed item is added again with
 ``todo.add_item`` and then given its status. The snapshot holds no position
 and Core's services cannot set a uid, so a re-added item gets a new uid and
 goes where the list adds new items.
@@ -52,7 +52,11 @@ async def fetch_todo_item(client: Any, entity_id: str) -> dict[str, Any] | None:
     if not todo_entity or not ref:
         return None
     item = find_item(await list_items(client, todo_entity) or [], ref)
-    return {"todo_entity_id": todo_entity, **item} if item else None
+    if not item:
+        return None
+    return {"todo_entity_id": todo_entity} | {
+        k: v for k, v in item.items() if k != "completed"
+    }
 
 
 def current_key(entity_id: str, config: Any) -> str:
@@ -131,7 +135,8 @@ async def _require_available(client: Any, todo_entity: str) -> None:
 
 
 async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
-    todo_entity = config.get("todo_entity_id") or entity_id.partition("::")[0]
+    # The list comes from the backup key, which the safety backup also uses.
+    todo_entity = entity_id.partition("::")[0]
     uid = config.get("uid")
     summary = config.get("summary")
     status = config.get("status")
@@ -145,6 +150,11 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
         else find_item(items, summary)
     )
     if current is not None:
+        if uid and find_item(items, uid) is not current:
+            raise HomeAssistantError(
+                f"Another item on {todo_entity} is named {uid!r}, so Home "
+                "Assistant would update that one; nothing was restored"
+            )
         return await _call(
             client,
             todo_entity,
@@ -165,7 +175,11 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
             for i in await list_items(client, todo_entity) or []
             if i.get("uid") not in known
         ]
-        if len(added) != 1 or not added[0].get("uid"):
+        if (
+            len(added) != 1
+            or not added[0].get("uid")
+            or added[0].get("summary") != summary
+        ):
             raise HomeAssistantError("the re-added item could not be told apart")
         return await _call(
             client,
@@ -175,6 +189,7 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
         )
     except Exception as err:
         raise HomeAssistantError(
-            f"Re-added {summary!r} to {todo_entity} as not completed, but marking "
-            f"it completed failed: {err}"
+            f"Re-added {summary!r} to {todo_entity}, but marking it completed "
+            f"failed or got no answer ({err}); check its status before restoring "
+            "again, which would add it a second time"
         ) from err
