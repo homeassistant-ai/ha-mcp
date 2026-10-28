@@ -42,7 +42,7 @@
   "tests/src/e2e/tools/test_search_entities.py": 2387,
   "tests/src/e2e/utilities/wait_helpers.py": 1082,
   "tests/src/e2e/workflows/areas/test_lifecycle.py": 1165,
-  "tests/src/e2e/workflows/auto_backup/test_capture_and_restore.py": 2161,
+  "tests/src/e2e/workflows/auto_backup/test_capture_and_restore.py": 1658,
   "tests/src/e2e/workflows/automation/test_helpers.py": 1198,
   "tests/src/e2e/workflows/automation/test_lifecycle.py": 1504,
   "tests/src/e2e/workflows/blueprints/test_blueprints.py": 1497,
