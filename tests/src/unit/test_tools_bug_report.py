@@ -10,10 +10,10 @@ import pytest
 
 from ha_mcp import __version__
 from ha_mcp.client.rest_client import ErrorLogPage
+from ha_mcp.mcp_client_context import extract_client_info as _extract_client_info
 from ha_mcp.tools.bug_report_templates import _sanitize_log_text
 from ha_mcp.tools.tools_bug_report import (
     _detect_mcp_transport,
-    _extract_client_info,
     _fetch_addon_logs,
     _fetch_core_error_log,
     _format_logs_for_report,
@@ -1845,6 +1845,48 @@ class TestBugReportNewIdentityFields:
             assert "**MCP Client:** Claude Desktop 0.7.42" in template
 
     @pytest.mark.asyncio
+    async def test_protocol_version_and_capabilities_reach_the_report(
+        self, ha_report_issue_func
+    ):
+        from ha_mcp._vendor.mcp_types import (
+            ClientCapabilities,
+            ElicitationCapability,
+            RootsCapability,
+        )
+
+        session = SimpleNamespace(
+            client_params=None,
+            client_capabilities=ClientCapabilities(
+                elicitation=ElicitationCapability(), roots=RootsCapability()
+            ),
+        )
+        ctx = SimpleNamespace(
+            session=session,
+            request_context=SimpleNamespace(
+                protocol_version="2026-07-28", session=session
+            ),
+        )
+        result = await ha_report_issue_func(ctx=ctx)
+        diag = result["diagnostic_info"]
+        assert diag["mcp_protocol_version"] == "2026-07-28"
+        assert diag["mcp_client_capabilities"] == ["elicitation.form", "roots"]
+        agent = await ha_report_issue_func(ctx=ctx, report_type="agent_behavior")
+        for template in (result["issue_body"], agent["issue_body"]):
+            assert (
+                "**MCP Protocol:** 2026-07-28 (client capabilities: "
+                "elicitation.form, roots)"
+            ) in template
+
+    @pytest.mark.asyncio
+    async def test_protocol_line_without_a_request(self, ha_report_issue_func):
+        result = await ha_report_issue_func()
+        assert result["diagnostic_info"]["mcp_protocol_version"] is None
+        assert (
+            "**MCP Protocol:** unknown (client capabilities: none declared)"
+            in result["issue_body"]
+        )
+
+    @pytest.mark.asyncio
     async def test_instructions_describe_all_self_report_fields(
         self, ha_report_issue_func
     ):
@@ -2173,11 +2215,11 @@ class TestExtractClientInfoUserAgentFallback:
 
     @pytest.fixture
     def headers(self, monkeypatch):
-        from ha_mcp.tools import tools_bug_report
+        from ha_mcp import mcp_client_context
 
         current: dict[str, str] = {}
         monkeypatch.setattr(
-            tools_bug_report, "get_http_headers", lambda include=None: current
+            mcp_client_context, "get_http_headers", lambda include=None: current
         )
         return current
 

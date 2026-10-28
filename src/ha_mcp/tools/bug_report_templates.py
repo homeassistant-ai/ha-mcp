@@ -73,6 +73,14 @@ def _format_client_info_for_template(info: dict[str, str]) -> str:
     return base
 
 
+def _format_protocol_for_template(diagnostic_info: dict[str, Any]) -> str:
+    """Render the request's protocol version and declared client capabilities."""
+    version = diagnostic_info.get("mcp_protocol_version") or "unknown"
+    capabilities = diagnostic_info.get("mcp_client_capabilities") or []
+    declared = ", ".join(capabilities) if capabilities else "none declared"
+    return f"{version} (client capabilities: {declared})"
+
+
 # Claude Desktop advertises every stdio server as ``local-agent-mode-<server
 # name> 1.0.0`` (#1701, #2472, #2484), so the name alone never says which
 # Desktop release is involved.
@@ -561,6 +569,7 @@ def _generate_runtime_bug_template(
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Protocol:** {_format_protocol_for_template(diagnostic_info)}
 - **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
 - **AI Model:** {text.ai_model or ""}
 - **Operating System:** {platform_info.get("os", "Unknown")} {platform_info.get("os_release", "")} ({platform_info.get("architecture", "Unknown")})
@@ -625,6 +634,7 @@ def _agent_environment_sections(
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Protocol:** {_format_protocol_for_template(diagnostic_info)}
 - **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
 - **AI Model:** {text.ai_model or ""}
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}

@@ -220,6 +220,10 @@ class HomeAssistantSmartMCPServer:
 
         self.mcp.add_middleware(RenamedToolAliasMiddleware())
 
+        from .mcp_client_context import McpClientDebugLogMiddleware
+
+        self.mcp.add_middleware(McpClientDebugLogMiddleware())
+
         # Convert Pydantic type-validation errors to structured ToolErrors so
         # models get actionable guidance instead of raw Pydantic messages.
         from .tools.validation_middleware import ValidationErrorMiddleware

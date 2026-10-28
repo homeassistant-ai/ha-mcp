@@ -30,6 +30,12 @@ from .._version import is_embedded, is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..errors import create_validation_error
+from ..mcp_client_context import (
+    capability_names,
+    client_capabilities,
+    extract_client_info,
+    protocol_version,
+)
 from ..utils.mcp_client_host import detect_client_host
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
@@ -340,73 +346,6 @@ def _tool_policy_summary() -> str:
     count = len(policy.rules)
     rules = "1 rule" if count == 1 else f"{count} rules"
     return f"{rules}, rule_effect={policy.rule_effect}"
-
-
-def _extract_client_info(ctx: Context | None) -> dict[str, str]:
-    """Pull the connecting MCP client's self-identification off the request context.
-
-    The MCP ``initialize`` handshake carries a ``clientInfo`` Implementation
-    object (``name``/``version``/optional ``title``). FastMCP exposes the
-    underlying server session as ``ctx.session``; the MCP SDK's
-    ``ServerSession`` keeps the parsed initialize params on ``client_params``;
-    on the 2026-07-28 protocol the SDK synthesizes them from the request's
-    ``_meta`` when it carries both client info and capabilities. An
-    older-protocol client over stateless HTTP sends client info only in
-    ``initialize``, so the request's ``User-Agent`` is the fallback there,
-    marked as such in ``title``.
-
-    Returns ``{"name": ..., "version": ..., "title": ...}``. ``name`` and
-    ``version`` fall back to ``"unknown"`` when the client didn't send them;
-    ``title`` falls back to the empty string so callers can distinguish "not
-    sent" from a real title without false-positive aside rendering.
-
-    Returns an empty dict when there is no context, or no client info and no
-    ``User-Agent`` (e.g. stdio), so the bug-report path stays robust. The
-    log level is intentionally INFO, not DEBUG: this catch is the only signal
-    we'd get if FastMCP/MCP SDK shape drifts in a future release, and silent
-    drift would hide a regression for months.
-    """
-    if ctx is None:
-        return {}
-    try:
-        session = getattr(ctx, "session", None)
-        params = (
-            getattr(session, "client_params", None) if session is not None else None
-        )
-        client = (
-            getattr(params, "client_info", None) or getattr(params, "clientInfo", None)
-            if params is not None
-            else None
-        )
-        if client is None:
-            return _client_info_from_user_agent()
-        return {
-            "name": getattr(client, "name", None) or "unknown",
-            "version": getattr(client, "version", None) or "unknown",
-            "title": getattr(client, "title", None) or "",
-        }
-    except Exception as e:  # noqa: BLE001
-        logger.info(
-            "Failed to read MCP client info from context: %s (%s)",
-            e,
-            type(e).__name__,
-        )
-        return {}
-
-
-def _client_info_from_user_agent() -> dict[str, str]:
-    """``{"name", "version", "title"}`` from the HTTP ``User-Agent``, or ``{}``."""
-    user_agent = get_http_headers(include={"user-agent"}).get("user-agent", "").strip()
-    if not user_agent:
-        return {}
-    product = user_agent.split()[0]
-    name, _, version = product.partition("/")
-    logger.debug("No MCP client info on the request; using User-Agent %r", product)
-    return {
-        "name": name or "unknown",
-        "version": version or "unknown",
-        "title": "from HTTP User-Agent",
-    }
 
 
 def _http_user_agent() -> str:
@@ -991,7 +930,9 @@ class BugReportTools:
         config_toggles = _get_config_toggles()
         tool_policy = await asyncio.to_thread(_tool_policy_summary)
         mcp_transport = _detect_mcp_transport()
-        client_info = _extract_client_info(ctx)
+        client_info = extract_client_info(ctx)
+        mcp_protocol_version = protocol_version(ctx)
+        mcp_capabilities = capability_names(client_capabilities(ctx))
         client_host = (
             await asyncio.to_thread(detect_client_host)
             if mcp_transport == "stdio"
@@ -1019,6 +960,8 @@ class BugReportTools:
             "websockets_dependency": _websockets_dependency_state(),
             "mcp_transport": mcp_transport,
             "mcp_client_info": client_info,
+            "mcp_protocol_version": mcp_protocol_version,
+            "mcp_client_capabilities": mcp_capabilities,
             "mcp_client_host": client_host,
             "http_user_agent": user_agent,
             "config_toggles": config_toggles,

@@ -848,6 +848,17 @@ class TestHaGetOverviewHaMcpUpdate:
         result = await overview_tool(detail_level="minimal")
         assert "ha_mcp_update" not in result
 
+    @pytest.mark.asyncio
+    async def test_mcp_client_survives_projection(self, overview_tool):
+        """The calling client's protocol and capabilities are always reported,
+        even on a narrow projection, so diagnosing a client needs no extra call."""
+        result = await overview_tool(fields=["system_info"])
+        assert result["mcp_client"] == {
+            "protocol_version": "unknown",
+            "client_info": {},
+            "capabilities": [],
+        }
+
 
 class TestHaGetOverviewAlwaysEmittedKeys:
     """Keys advertised in the ``fields=`` docstring must always be in
