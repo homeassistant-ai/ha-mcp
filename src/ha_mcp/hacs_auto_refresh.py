@@ -1,4 +1,4 @@
-"""Ask HACS to surface the paired component update after a server update.
+"""Ask HACS to surface the paired component update after a server update (opt-in).
 
 HACS refreshes a *custom* repository's release data from GitHub only about
 every 48 hours, and the Marketplace that replaces it in Home Assistant 2026.11
@@ -15,6 +15,10 @@ information" refresh (``marketplace/repository/refresh``, or
 for every INSTALLED candidate repository entry. Nothing is installed: the user
 still updates from the update entity.
 
+It is opt-in (``hacs_refresh_after_update``). An install whose nudge completed
+a pass before it became opt-in has a marker file and no explicit choice; the
+setting is turned on for it once, so its behavior does not change.
+
 Fully advisory: every failure degrades to a debug log and nothing here can
 fault startup. A marker file in the data dir records the state the last
 completed pass ran against, so the common case — a per-conversation stdio
@@ -27,6 +31,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -40,6 +45,7 @@ from .client.rest_client import (
     HomeAssistantConnectionError,
 )
 from .config import OAUTH_MODE_TOKEN, get_global_settings
+from .config_overrides import _read_feature_flag_override_file
 from .update_check import UpdateInfo, get_update_info, is_update_check_disabled
 from .utils.data_paths import get_data_dir
 
@@ -207,6 +213,31 @@ async def _refresh_with_retries() -> dict[str, Any] | None:
     return absent_result
 
 
+SETTING = "hacs_refresh_after_update"
+SETTING_ENV = "HAMCP_HACS_REFRESH_AFTER_UPDATE"
+
+
+async def _opted_in(settings: Any, marker: dict[str, Any] | None) -> bool:
+    """Whether the nudge is on; an install that already ran it keeps it."""
+    if getattr(settings, SETTING):
+        return True
+    explicit = os.environ.get(SETTING_ENV) is not None or SETTING in (
+        await asyncio.to_thread(_read_feature_flag_override_file)
+    )
+    if explicit or marker is None:
+        return False
+    from .settings_ui._handlers_advanced import _write_advanced_overrides_file
+
+    if await _write_advanced_overrides_file({SETTING: True}) is not None:
+        logger.warning("Could not save %s=true; it stays on for this run", SETTING)
+    setattr(settings, SETTING, True)
+    logger.info(
+        "HACS auto-refresh is opt-in now; it stays on for this install, which "
+        "already used it (turn it off under Advanced settings)"
+    )
+    return True
+
+
 async def maybe_refresh_hacs_after_update() -> None:
     """Nudge HACS once per startup when the update picture changed."""
     try:
@@ -220,11 +251,16 @@ async def maybe_refresh_hacs_after_update() -> None:
             return
         ha_url = settings.homeassistant_url
 
+        marker = await asyncio.to_thread(_read_marker, ha_url)
+        if not await _opted_in(settings, marker):
+            # Per-boot DEBUG line: the add-on lane proves scheduling with it.
+            logger.debug("HACS auto-refresh: off (%s is opt-in)", SETTING_ENV)
+            return
+
         current = get_version()
         # Normally a cache hit — the startup banner warms the lru_cache — but
         # offloaded anyway so a cold call can never touch the event loop.
         info = await asyncio.to_thread(get_update_info)
-        marker = await asyncio.to_thread(_read_marker, ha_url)
         if not _nudge_due(current, info, marker):
             # DEBUG, not INFO: the not-due return is the per-conversation
             # stdio hot path and must stay quiet at default levels. The line

@@ -58,7 +58,6 @@ from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX
 
 from ...utilities.streamable_http import parse_mcp_response
 from ...utilities.wait_helpers import wait_for_condition
-from ..hacs.test_auto_refresh_startup import NUDGE_MARKER_TIMEOUT
 
 # ``not_on_embedded``: this test boots its OWN dedicated in-process MCP server container to
 # prove the install method end to end. The embedded backend (E2E_BACKEND=embedded)
@@ -548,15 +547,14 @@ class TestEmbeddedServerEndToEnd:
                 assert stamps["ha_search"]["pinned"] is True
                 assert stamps["ha_get_state"]["pinned"] is False
 
-    async def test_embedded_server_runs_the_startup_nudge(self, embedded_ha):
-        """The in-process server must run the store startup nudge too.
+    async def test_embedded_server_leaves_the_nudge_off_by_default(self, embedded_ha):
+        """The in-process server runs the store startup nudge only when opted in.
 
         ``hacs_refresh_lifespan`` is attached to the server itself, so the
-        in-process server runs it (``embedded_server`` enters
-        ``mcp._lifespan_manager()`` around uvicorn). Its component update is
-        the one the Marketplace (Home Assistant 2026.11+) never checks for
-        without a connected GitHub account, so the pass must complete and
-        write its marker here as on every other launcher, whose lanes live in
+        in-process server schedules it (``embedded_server`` enters
+        ``mcp._lifespan_manager()`` around uvicorn). The nudge is opt-in, and an
+        embedded install never ran it before, so it has no marker and nothing
+        turns it on for it. The opted-in launcher lanes live in
         tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py.
 
         Readiness is the ``embedded_ha`` fixture itself — it only yields once
@@ -573,18 +571,31 @@ class TestEmbeddedServerEndToEnd:
         _base_url, _session_id, config_path, _container = embedded_ha
         data_dir = config_path / _SERVER_CONFIG_SUBDIR
 
+        # The component creates this dir during bring-up; the test seeds
+        # nothing into it. Its absence would mean the glob below is pointed at
+        # the wrong path, which would make "no marker" prove nothing.
+        assert data_dir.is_dir(), (
+            f"{data_dir} does not exist, so the in-process server's data dir "
+            "is not where this test looks — check SERVER_CONFIG_SUBDIR in "
+            "custom_components/ha_mcp_tools/const.py. /config contents: "
+            f"{sorted(p.name for p in config_path.iterdir())}"
+        )
+
         def marker_files() -> list[Path]:
             return list(data_dir.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-        # The container ships a loaded store with neither candidate repository
-        # installed, so the pass completes on its first attempt.
+        # 10 s: the container ships a loaded store, so a nudge running without
+        # the opt-in completes its pass (and writes the marker) on the first
+        # attempt — this window covers the completion, not the retry schedule.
         appeared = await wait_for_condition(
             marker_files,
-            timeout=NUDGE_MARKER_TIMEOUT,
-            condition_name="store refresh marker in the in-process server's data dir",
+            timeout=10,
+            condition_name=(
+                "(not expected) store refresh marker in the in-process server's data dir"
+            ),
         )
-        assert appeared, (
-            "The in-process server wrote no store refresh marker to "
-            f"{data_dir} within {NUDGE_MARKER_TIMEOUT:.0f}s, so its startup "
-            "nudge never completed a pass."
+        assert not appeared, (
+            "The in-process server wrote a store refresh marker "
+            f"({[p.name for p in marker_files()]}) without opting in to the "
+            "nudge (HAMCP_HACS_REFRESH_AFTER_UPDATE)."
         )

@@ -231,6 +231,13 @@ class Settings(BaseSettings):
         bool, Setting(surface="advanced", section="operations")
     ] = Field(False, alias="HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS")
 
+    # Opt-in: ask HACS / the Marketplace to refresh the component's repository
+    # at startup after a server update (hacs_auto_refresh). An install that ran
+    # the refresh before it became opt-in has it turned on once, on its behalf.
+    hacs_refresh_after_update: Annotated[
+        bool, Setting(surface="advanced", section="operations")
+    ] = Field(False, alias="HAMCP_HACS_REFRESH_AFTER_UPDATE")
+
     # Optional process-wide outer tool-call concurrency. Zero preserves the
     # existing unlimited behavior; constrained installs can opt into queuing.
     ha_tool_concurrency: Annotated[

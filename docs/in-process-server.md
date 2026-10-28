@@ -270,6 +270,13 @@ installs can replace the component files with the new release. Either path
 carries the matching server, and restarting Home Assistant after the update
 installs both. The component never downloads or swaps the server on its own.
 
+HACS, and the Marketplace with GitHub connected, check a custom repository
+such as HA-MCP for updates every 48 hours (the Marketplace without GitHub does
+not check it in the background). To have a newly updated server ask for that
+check right away, turn on **Refresh the component in HACS after an update** in
+the settings panel's Advanced settings (Operations); installs that already did
+this before it became optional keep it on.
+
 **Development builds** follow the main branch. Turn on the **Pre-release**
 switch of the HA-MCP Custom Component repository (in HACS, or on its Marketplace
 device, where the entity starts disabled, on Home Assistant 2026.11+) to receive them; each

@@ -28,8 +28,9 @@ startup, so the web lane needs no client connection at all). ``ha-mcp-oauth``
 is a NEGATIVE lane: OAuth mode holds no server-level HA credential, so
 ``maybe_refresh_hacs_after_update`` must return at the ``OAUTH_MODE_TOKEN``
 gate instead of burning its whole retry schedule on auth failures every boot.
-The embedded server is a positive lane too, pinned next to its own bring-up
-in ``tests/src/e2e/workflows/embedded/test_embedded_server.py``. ``ha-mcp-oidc`` has no lane here: it validates HA
+The nudge is opt-in, so the positive lanes set ``HAMCP_HACS_REFRESH_AFTER_UPDATE``;
+the embedded server, which never opts in here, is pinned as off next to its own
+bring-up in ``tests/src/e2e/workflows/embedded/test_embedded_server.py``. ``ha-mcp-oidc`` has no lane here: it validates HA
 credentials at startup and exits without them (``_validate_standard_credentials``
 in ``__main__``), so it has no sentinel state to prove, and its run path is the
 same ``_run_with_shutdown(mcp.run_async(**_http_run_kwargs(...)))`` call the web
@@ -55,7 +56,7 @@ from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
 )
-from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
+from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS, SETTING_ENV
 from ha_mcp.tools.hacs_backend import STORE_APIS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
@@ -224,6 +225,7 @@ async def test_stdio_launcher_runs_the_startup_nudge(
     # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
     # would return the nudge early.
     env = _stdio_env(container_info, tmp_path)
+    env[SETTING_ENV] = "true"  # The nudge is opt-in.
     transport = StdioTransport(command="ha-mcp", args=[], env=env, keep_alive=False)
     client = Client(transport)
 
@@ -305,6 +307,7 @@ async def test_web_launcher_runs_the_startup_nudge(
     await _wait_for_hacs_ws_ready(container_info)
     env = http_launcher_env(container_info["base_url"], tmp_path)
     env["HOMEASSISTANT_TOKEN"] = container_info.get("token", TEST_TOKEN)
+    env[SETTING_ENV] = "true"  # The nudge is opt-in.
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
