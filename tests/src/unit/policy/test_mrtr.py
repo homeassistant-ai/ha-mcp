@@ -29,7 +29,6 @@ def context(
     arguments: dict[str, Any] | None = None,
     elicitation: bool = True,
     answer: str | None = None,
-    decided: bool | None = None,
     responses: dict[str, Any] | None = None,
 ) -> SimpleNamespace:
     args = arguments if arguments is not None else {"domain": "light"}
@@ -37,8 +36,7 @@ def context(
         elicitation=ElicitationCapability() if elicitation else None
     )
     if answer is not None:
-        content = None if decided is None else {"decided": decided}
-        responses = {"ha_mcp_approval": ElicitResult(action=answer, content=content)}
+        responses = {"ha_mcp_approval": ElicitResult(action=answer)}
     return SimpleNamespace(
         message=SimpleNamespace(name=name, arguments=args),
         fastmcp_context=SimpleNamespace(
@@ -432,20 +430,6 @@ async def test_unanswered_retry_is_asked_again_even_once_approved(
     )
     assert isinstance(again, InputRequiredToolResult)
     assert "ha_mcp_approval" in again.input_required.input_requests
-    assert gate.executed == []
-
-
-@pytest.mark.anyio
-async def test_accept_with_the_continue_box_unticked_does_not_run(
-    gate: SimpleNamespace,
-) -> None:
-    first = await gate.middleware.on_call_tool(context(), gate.execute)
-    gate.queue.approve(gate.queue.list_pending()[0].token)
-    with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
-        await gate.middleware.on_call_tool(
-            context(first.input_required.request_state, answer="accept", decided=False),
-            gate.execute,
-        )
     assert gate.executed == []
 
 

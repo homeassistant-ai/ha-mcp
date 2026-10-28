@@ -77,11 +77,7 @@ def supports_mrtr(context: MiddlewareContext) -> bool:
 
 
 def approval_answer(context: MiddlewareContext) -> ApprovalAnswer | None:
-    """The user's answer to the approval elicitation, if this retry carries one.
-
-    Accept with the "continue" box unticked reads as cancel: the user said
-    not to continue.
-    """
+    """The user's answer to the approval elicitation, if this retry carries one."""
     responses = getattr(context.fastmcp_context, "input_responses", None)
     if not responses:
         return None
@@ -94,9 +90,6 @@ def approval_answer(context: MiddlewareContext) -> ApprovalAnswer | None:
             answer,
         )
         return None
-    content = getattr(answer, "content", None) or {}
-    if action == "accept" and content.get("decided") is False:
-        return "cancel"
     return cast("ApprovalAnswer", action)
 
 

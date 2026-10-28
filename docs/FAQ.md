@@ -991,9 +991,8 @@ How the wait looks depends on the client:
   approval window you set. Accepting the form does not approve the call: it
   continues once you have both approved it in that tab and accepted the
   form, in either order, within the window. Decline the form to cancel the
-  call. Dismissing it, or accepting with its box unticked, stops waiting:
-  the client gets the approval-required error and can call again once you
-  approve.
+  call. Dismissing it stops waiting: the client gets the approval-required
+  error and can call again once you approve.
 - **All other clients:** the call waits the whole window. If you decide in
   time it completes; otherwise the client gets an approval-required error
   telling it to wait for your approval and call again.
