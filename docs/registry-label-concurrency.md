@@ -13,7 +13,7 @@ removed automatically.
 | Path | Update semantics | Coordination |
 | --- | --- | --- |
 | `ha_config_set_label(areas=...)` | Read each area's labels and add one label | Hold the area lock through the write and post-write verification. |
-| `ha_set_entity(labels=..., label_operation="add"/"remove")` | Read entity labels and merge/filter them | Hold the entity lock from the read through the registry update, including bulk calls. A single-entity call also holds it through its options, device-rename and expose writes, so an entity restore that locks the entity ID the call was given cannot run between them. |
+| `ha_set_entity(labels=..., label_operation="add"/"remove")` | Read entity labels and merge/filter them | Hold the entity lock from the read through the registry update, including bulk calls. A single-entity call also holds it through its options, device-rename and expose writes, and with `new_entity_id` it holds the locks of both the given and the new entity ID, in sorted order, as the entity backup restore does; an entity restore that locks either ID cannot run between them. A bulk call writes exposure in batched calls outside the entity locks. |
 | `ha_set_entity(label_operation="set")` | Replace labels explicitly | Use the same entity lock; replacement can intentionally remove earlier additions. |
 | `ha_set_area_or_floor(kind="area", labels=...)` | Replace labels explicitly | Use the same area lock through the existing verification. |
 | Helper create/update label setters | Replace entity labels explicitly | Share the entity lock, including config-entry and fallback helper paths. |

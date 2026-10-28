@@ -21,7 +21,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
-from ..utils.registry_update_lock import registry_update_lock
+from ..utils.registry_update_lock import registry_update_locks
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
@@ -949,7 +949,7 @@ class EntityTools:
         new_device_name = clearable_value(
             new_device_name, "new_device_name", hint=_CLEAR_DEVICE_NAME_HINT
         )
-        async with registry_update_lock("entity", entity_id):
+        async with registry_update_locks("entity", entity_id, new_entity_id):
             # Phase 1: For add/remove label operations, fetch current labels first
             final_labels = await self._resolve_final_labels(
                 entity_id, parsed_labels, label_operation

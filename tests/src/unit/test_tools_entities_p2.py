@@ -609,10 +609,21 @@ class TestUniqueIdResolver:
 # --------------------------------------------------------------------------
 class TestSingleSetHoldsEntityLock:
     @pytest.mark.asyncio
-    async def test_restore_waits_for_every_write_of_the_set(self):
-        """An entity restore takes this entity's lock. Queued while the
-        registry update is in flight, it gets the lock only after the options,
-        device-rename and expose writes, not between them."""
+    @pytest.mark.parametrize(
+        ("new_entity_id", "locked_id"),
+        [
+            (None, "sensor.temp"),
+            ("sensor.new", "sensor.new"),
+            ("sensor.new", "sensor.temp"),
+        ],
+        ids=["same-id", "renamed", "renamed-old-id"],
+    )
+    async def test_restore_waits_for_every_write_of_the_set(
+        self, new_entity_id, locked_id
+    ):
+        """An entity restore takes the lock of the entity's ID, on a rename of
+        either ID. Queued while the registry update is in flight, it gets the
+        lock only after the options, device-rename and expose writes."""
         entry = {"entity_id": "sensor.temp", "device_id": "d1", "options": {}}
         order: list[str] = []
         in_update = asyncio.Event()
@@ -628,7 +639,7 @@ class TestSingleSetHoldsEntityLock:
 
         async def restore():
             await in_update.wait()
-            lock = registry_update_lock("entity", "sensor.temp")
+            lock = registry_update_lock("entity", locked_id)
             restore_queued.set()
             await lock.acquire()
             order.append("restore")
@@ -642,6 +653,7 @@ class TestSingleSetHoldsEntityLock:
         await tool(
             entity_id="sensor.temp",
             name="N",
+            new_entity_id=new_entity_id,
             options={"sensor": {"display_precision": 2}},
             new_device_name="Dev X",
             expose_to={"conversation": True},

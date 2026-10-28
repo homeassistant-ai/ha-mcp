@@ -6,11 +6,11 @@ own helpers are reached lazily so its tests can patch them in place.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from ._vendor.websockets.exceptions import WebSocketException
+from .utils.registry_update_lock import registry_update_locks
 
 
 def _manager() -> Any:
@@ -19,16 +19,10 @@ def _manager() -> Any:
     return backup_manager
 
 
-@asynccontextmanager
-async def entity_id_locks(*entity_ids: str) -> AsyncIterator[None]:
-    """Hold the registry lock of each entity ID: a rename changes the lock key,
-    so both IDs are held, in a stable order."""
-    async with AsyncExitStack() as locks:
-        for entity_id in sorted(set(entity_ids)):
-            await locks.enter_async_context(
-                _manager().registry_update_lock("entity", entity_id)
-            )
-        yield
+def entity_id_locks(*entity_ids: str) -> AbstractAsyncContextManager[None]:
+    """Hold the registry lock of each entity ID, in a stable order."""
+    lock = _manager().registry_update_lock
+    return registry_update_locks("entity", *entity_ids, lock=lock)
 
 
 async def registry_row(
