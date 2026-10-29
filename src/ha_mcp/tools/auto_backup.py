@@ -42,7 +42,7 @@ from ..backup_manager import (
     get_backup_manager,
 )
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response
+from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -55,17 +55,43 @@ logger = logging.getLogger(__name__)
 _DECORATOR_TRANSIENT_ERRORS = _CAPTURE_TRANSIENT_ERRORS
 
 
-def _component_not_installed_cause(err: BaseException) -> ToolError | None:
-    """Return the ``COMPONENT_NOT_INSTALLED`` ToolError behind a capture failure.
+class PathNotAllowedError(ToolError):
+    """The File & YAML Tools component refused the file path itself.
+
+    Raised by the ``file`` capture's read, which passes the same path gate as
+    the wrapped write or delete, so that call would be refused too (#2908).
+    """
+
+    def __init__(self, path: str, component_error: str) -> None:
+        super().__init__(
+            json.dumps(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    component_error,
+                    suggestions=[
+                        "Use a path inside an allowed directory, or add one "
+                        "under Custom filesystem paths in the ha-mcp settings UI"
+                    ],
+                    context={"path": path},
+                ),
+                indent=2,
+                default=str,
+            ),
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
+
+
+def _component_refusal_cause(err: BaseException) -> ToolError | None:
+    """Return the component's own refusal behind a capture failure.
 
     A mandatory pre-write snapshot reads the current content through the same
-    File & YAML Tools services the wrapped write needs, so on an install
-    without that config entry the capture fails FIRST and the write would be
-    refused as ``BACKUP_CAPTURE_FAILED`` — burying the actionable "add the
-    entry" guidance one level deep (#2292). Walk the cause chain for the
-    original structured error so the caller can surface it unchanged: retrying
-    the backup cannot succeed, and the remediation is the component's, not the
-    backup pipeline's.
+    File & YAML Tools services the wrapped write needs, so when the component
+    refuses the call the capture fails FIRST and the write would be refused as
+    ``BACKUP_CAPTURE_FAILED``, burying the real error one level deep. Two
+    refusals are surfaced unchanged: ``COMPONENT_NOT_INSTALLED`` (no tools
+    entry, #2292) and ``PathNotAllowedError`` (the path is outside the
+    allowlist, #2908). Retrying the backup cannot succeed for either, and the
+    remediation is the component's, not the backup pipeline's.
     """
     seen: set[int] = set()
     # Worklist over BOTH chain links: an explicit ``raise ... from other``
@@ -79,6 +105,8 @@ def _component_not_installed_cause(err: BaseException) -> ToolError | None:
         if id(cause) in seen:
             continue
         seen.add(id(cause))
+        if isinstance(cause, PathNotAllowedError):
+            return cause
         if isinstance(cause, ToolError):
             try:
                 payload = json.loads(str(cause))
@@ -389,12 +417,12 @@ async def _capture_pre_write_snapshot(
             # wrapped write never runs, so nothing has been changed.
             # The ToolError this raises propagates rather than being
             # swallowed by the best-effort handler below.
-            component_error = _component_not_installed_cause(err)
+            component_error = _component_refusal_cause(err)
             if component_error is not None:
-                # The capture failed because the File & YAML Tools entry is
-                # not set up — the same reason the wrapped write itself would
-                # refuse. Surface that actionable error (add the entry), not a
-                # backup complaint (#2292). The write is still blocked. ``from
+                # The capture failed because the component refused the call —
+                # the same reason the wrapped write itself would refuse.
+                # Surface that actionable error, not a backup complaint (#2292,
+                # #2908). The write is still blocked. ``from
                 # None`` because this IS the underlying error being unwrapped;
                 # chaining it back onto the wrapper it came out of would only
                 # print the chain twice (and B904 wants the intent explicit).
