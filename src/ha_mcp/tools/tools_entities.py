@@ -779,6 +779,8 @@ class EntityTools:
         """Apply expose_to changes; returns (exposure_result, entity_entry, unchanged)."""
         if parsed_expose_to is None:
             return None, entity_entry, False
+        if not parsed_expose_to and entity_entry:
+            return None, entity_entry, True
 
         # Group by should_expose value for efficient API calls
         expose_true = [a for a, v in parsed_expose_to.items() if v]
@@ -837,8 +839,8 @@ class EntityTools:
         unchanged = changed is not None and entity_id not in changed
 
         # Exposure mutates the registry entry's options, so refetch to return the
-        # post-exposure state. An empty expose_to applies nothing but still
-        # refetches: no earlier phase may have read the entry.
+        # post-exposure state. An empty expose_to applies nothing and lands
+        # here only when no earlier phase read the entry.
         get_msg: dict[str, Any] = {
             "type": "config/entity_registry/get",
             "entity_id": entity_id,

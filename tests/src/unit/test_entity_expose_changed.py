@@ -54,6 +54,18 @@ async def test_empty_expose_map_still_returns_the_entry() -> None:
     assert result["entity_entry"]["entity_id"] == "light.test"
 
 
+async def test_empty_expose_map_reuses_an_entry_already_read() -> None:
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": {"entity_entry": _ENTRY}}
+    )
+    result = await _set_entity_tool(client)(
+        entity_id="light.test", name="Test", expose_to={}
+    )
+    assert result["entity_entry"]["entity_id"] == "light.test"
+    client.send_websocket_message.assert_awaited_once()
+
+
 async def test_a_change_in_an_earlier_assistant_group_counts() -> None:
     client = MagicMock()
     client.send_websocket_message = AsyncMock(
