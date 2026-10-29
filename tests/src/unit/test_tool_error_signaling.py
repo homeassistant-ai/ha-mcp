@@ -395,8 +395,9 @@ class TestSchemaAndAuthClassification:
                 "AUTH_INSUFFICIENT_PERMISSIONS",
             ),
             (OSError("Connection refused"), "CONNECTION_FAILED"),
+            (ValueError("boom"), "CONNECTION_FAILED"),
         ],
-        ids=["auth-cause", "admin-cause", "transport-cause"],
+        ids=["auth-cause", "admin-cause", "transport-cause", "other-cause"],
     )
     def test_connection_error_classified_by_auth_cause(self, cause, expected):
         """A connection error raised from an auth rejection classifies as auth.
@@ -430,6 +431,20 @@ class TestSchemaAndAuthClassification:
                 pytest.raises(HomeAssistantConnectionError) as exc_info,
             ):
                 await client.send_websocket_message({"type": "get_states"})
+        result = exception_to_structured_error(exc_info.value, raise_error=False)
+        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
+
+    async def test_registry_read_keeps_the_auth_cause(self):
+        """The reconfigure registry read re-raises a connection error without
+        replacing its cause, so a rejected token still classifies as auth."""
+        from ha_mcp.tools.config_entry_identity import _registry_rows
+
+        rejected = HomeAssistantConnectionError("WebSocket authentication failed")
+        rejected.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        with pytest.raises(HomeAssistantConnectionError) as exc_info:
+            await _registry_rows(
+                AsyncMock(side_effect=rejected), "list_entity_registry", "entry1"
+            )
         result = exception_to_structured_error(exc_info.value, raise_error=False)
         assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
 

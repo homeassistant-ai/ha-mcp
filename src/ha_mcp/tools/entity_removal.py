@@ -94,14 +94,13 @@ async def remove_registry_entries(
                 {"type": "config/entity_registry/remove", "entity_id": eid}
             )
         except HomeAssistantConnectionError as exc:
+            # CONNECTION_FAILED, CONNECTION_TIMEOUT for a timed-out command,
+            # or AUTH_* when the token was rejected on reconnect.
+            structured = exception_to_structured_error(exc, raise_error=False)
             errors.append(
                 {
                     "entity_id": eid,
-                    # CONNECTION_FAILED, CONNECTION_TIMEOUT for a timed-out
-                    # command, or AUTH_* when the token was rejected on reconnect.
-                    "code": exception_to_structured_error(exc, raise_error=False)[
-                        "error"
-                    ]["code"],
+                    "code": structured["error"]["code"],
                     "message": str(exc),
                 }
             )

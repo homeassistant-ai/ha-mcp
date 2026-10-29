@@ -456,10 +456,11 @@ async def _supervisor_api_call_via_core(
     except HomeAssistantCommandNotSent:
         raise
     except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as exc:
-        # A token rejected while obtaining a client sent nothing.
+        # Reads, and a token rejected before anything was sent, keep their error.
         if verb in {"GET", "HEAD"} or isinstance(exc.__cause__, HomeAssistantAuthError):
             raise
-        timed_out = isinstance(exc, HomeAssistantCommandTimeout)
+        # send_websocket_message re-raises a command timeout as the cause.
+        timed_out = HomeAssistantCommandTimeout in {type(exc), type(exc.__cause__)}
         code = ErrorCode.TIMEOUT_OPERATION if timed_out else ErrorCode.CONNECTION_FAILED
         _raise_supervisor_write_outcome_unknown(
             code,
