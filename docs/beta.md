@@ -73,7 +73,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 ### `ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`
 
-These tools provide direct file access to your Home Assistant filesystem and require `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` and the `ha_mcp_tools` custom component installed and active. Install the component through HACS (custom repository `homeassistant-ai/ha-mcp`); an AI agent can drive that install with the generic HACS tools.
+These tools provide direct file access to your Home Assistant filesystem and require `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` and the `ha_mcp_tools` custom component installed and active. Install the component through HACS, the Marketplace on Home Assistant 2026.11+ (custom repository `homeassistant-ai/ha-mcp`); an AI agent can drive that install with the generic HACS tools.
 
 **Access is restricted but sensitive.** The built-in writable directories are `www/`, `themes/`, `custom_templates/`, and `dashboards/`; `ha_read_file` additionally allows reading config YAML files, logs, and `custom_components/`. Power users can grant further read+write access to extra config-relative directories or the HAOS sibling volumes (`/share`, `/media`, `/ssl`, `/backup`) via the web Settings UI — each is opt-in and enforced by the `ha_mcp_tools` component. An AI assistant with these tools enabled has meaningful read and write access to your HA configuration.
 

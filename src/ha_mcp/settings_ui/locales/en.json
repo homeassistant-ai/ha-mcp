@@ -472,6 +472,8 @@
     "advanced.individual_fetch_batch_size.help": "Concurrent per-ID config fetches. Lower toward 1 on serial HA servers.",
     "advanced.enable_history_query_guardrails.label": "History query guardrails",
     "advanced.enable_history_query_guardrails.help": "Reject recorder queries that exceed conservative entity and time-range budgets. Disabled by default.",
+    "advanced.hacs_refresh_after_update.label": "Refresh the component in HACS after an update",
+    "advanced.hacs_refresh_after_update.help": "At startup after a server update, ask HACS (the Marketplace on Home Assistant 2026.11+) to re-check the HA-MCP Custom Component repository, so its matching update shows right away instead of at the next 48-hour check. Off by default; installs that already did this keep it on.",
     "advanced.ha_tool_concurrency.label": "Home Assistant tool concurrency",
     "advanced.ha_tool_concurrency.help": "Optional limit on outer Home Assistant tool calls across all sessions. Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps unlimited behavior. A call waiting for capacity fails after 60 seconds.",
     "advanced.dashboard_screenshot_engine_url.label": "Dashboard screenshot engine URL",

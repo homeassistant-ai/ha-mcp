@@ -1,16 +1,23 @@
-"""Ask HACS to surface the paired component update after a server update.
+"""Ask HACS to surface the paired component update after a server update (opt-in).
 
 HACS refreshes a *custom* repository's release data from GitHub only about
-every 48 hours, and the ha_mcp_tools component ships in lockstep with each
-server release — so a freshly updated server can sit for two days next to a
-component update HACS has not noticed yet. This module closes that gap for
-add-on, Docker, pip and stdio installs. The embedded server is skipped: the
-component manages its updates.
+every 48 hours, and the Marketplace that replaces it in Home Assistant 2026.11
+only when a GitHub account is connected. The ha_mcp_tools component ships in
+lockstep with each server release, so a component update can go unnoticed for
+days, or for good. This module closes that gap for every install, the embedded
+server included. It goes away once ha-mcp is in the default catalog, which the
+Marketplace refreshes every 6 hours.
 
 On startup, when the server version changed since the last recorded nudge (the
-just-updated case) or a newer release is pending, it sends HACS's "Update
-information" refresh (``hacs/repository/refresh``) over the existing admin
-WebSocket for every INSTALLED candidate repository entry.
+just-updated case) or a newer release is pending, it sends the store's "Update
+information" refresh (``marketplace/repository/refresh``, or
+``hacs/repository/refresh`` before 2026.11) over the existing admin WebSocket
+for every INSTALLED candidate repository entry. Nothing is installed: the user
+still updates from the update entity.
+
+It is opt-in (``hacs_refresh_after_update``). An install whose nudge completed
+a pass before it became opt-in has a marker file and no explicit choice; the
+setting is turned on for it once, so its behavior does not change.
 
 Fully advisory: every failure degrades to a debug log and nothing here can
 fault startup. A marker file in the data dir records the state the last
@@ -24,19 +31,21 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from ._vendor import websockets
-from ._version import get_version, is_embedded
+from ._version import get_version
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from .config import OAUTH_MODE_TOKEN, get_global_settings
+from .config_overrides import _read_feature_flag_override_file
 from .update_check import UpdateInfo, get_update_info, is_update_check_disabled
 from .utils.data_paths import get_data_dir
 
@@ -123,18 +132,23 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
     or None when the outcome could not be determined.
     """
     from .client.websocket_client import get_websocket_client
+    from .tools.hacs_backend import STORE_APIS
     from .tools.hacs_registration import send_hacs_repository_refresh
 
     ws_client = await get_websocket_client()
-    try:
-        response = await ws_client.send_command("hacs/repositories/list")
-    except HomeAssistantCommandError as err:
-        # HACS not installed at all — HA rejects its commands as unknown. Same
-        # detection as ``_assert_hacs_available`` in tools/tools_hacs.py. Any
-        # other command failure is a real error: let the retry loop see it.
-        if err.code == "unknown_command" or "unknown command" in str(err).lower():
-            return {"hacs": "absent", "refreshed": []}
-        raise
+    for api in STORE_APIS:
+        try:
+            response = await ws_client.send_command(api.command("list"))
+        except HomeAssistantCommandError as err:
+            # A store that is not installed answers as an unknown command; any
+            # other failure (the Marketplace still loading included) is real:
+            # let the retry loop see it.
+            if err.code == "unknown_command" or "unknown command" in str(err).lower():
+                continue
+            raise
+        break
+    else:
+        return {"hacs": "absent", "refreshed": []}
 
     wanted = {name.lower() for name in CANDIDATE_REPO_FULL_NAMES}
     refreshed: list[str] = []
@@ -148,7 +162,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
             continue
         attempted += 1
         try:
-            await send_hacs_repository_refresh(ws_client, str(repo["id"]))
+            await send_hacs_repository_refresh(ws_client, str(repo["id"]), api)
         except Exception as err:  # noqa: BLE001
             # Both entries read installed only when someone downloaded the
             # mirror without removing the legacy record — HACS guards against
@@ -199,12 +213,34 @@ async def _refresh_with_retries() -> dict[str, Any] | None:
     return absent_result
 
 
+SETTING = "hacs_refresh_after_update"
+SETTING_ENV = "HAMCP_HACS_REFRESH_AFTER_UPDATE"
+
+
+async def _opted_in(settings: Any, marker: dict[str, Any] | None) -> bool:
+    """Whether the nudge is on; an install that already ran it keeps it."""
+    if getattr(settings, SETTING):
+        return True
+    explicit = os.environ.get(SETTING_ENV) is not None or SETTING in (
+        await asyncio.to_thread(_read_feature_flag_override_file)
+    )
+    if explicit or marker is None:
+        return False
+    from .settings_ui._handlers_advanced import _write_advanced_overrides_file
+
+    if await _write_advanced_overrides_file({SETTING: True}) is not None:
+        logger.warning("Could not save %s=true; it stays on for this run", SETTING)
+    setattr(settings, SETTING, True)
+    logger.info(
+        "HACS auto-refresh is opt-in now; it stays on for this install, which "
+        "already used it (turn it off under Advanced settings)"
+    )
+    return True
+
+
 async def maybe_refresh_hacs_after_update() -> None:
     """Nudge HACS once per startup when the update picture changed."""
     try:
-        if is_embedded():
-            # The component manages the embedded server's updates.
-            return
         if is_update_check_disabled():
             return
 
@@ -215,11 +251,16 @@ async def maybe_refresh_hacs_after_update() -> None:
             return
         ha_url = settings.homeassistant_url
 
+        marker = await asyncio.to_thread(_read_marker, ha_url)
+        if not await _opted_in(settings, marker):
+            # Per-boot DEBUG line: the add-on lane proves scheduling with it.
+            logger.debug("HACS auto-refresh: off (%s is opt-in)", SETTING_ENV)
+            return
+
         current = get_version()
         # Normally a cache hit — the startup banner warms the lru_cache — but
         # offloaded anyway so a cold call can never touch the event loop.
         info = await asyncio.to_thread(get_update_info)
-        marker = await asyncio.to_thread(_read_marker, ha_url)
         if not _nudge_due(current, info, marker):
             # DEBUG, not INFO: the not-due return is the per-conversation
             # stdio hot path and must stay quiet at default levels. The line

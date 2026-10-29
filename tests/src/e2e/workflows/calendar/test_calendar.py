@@ -429,7 +429,7 @@ class TestCalendarEventLifecycle:
         list_args = {
             "entity_id": calendar_entity,
             "start": start.isoformat(),
-            # A full extra day: a DST change shifts a local-time occurrence 1h.
+            # A day of slack: across a DST change a local series shifts in UTC.
             "end": (start + timedelta(days=3)).isoformat(),
         }
 

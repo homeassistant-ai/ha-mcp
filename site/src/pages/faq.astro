@@ -659,13 +659,13 @@ nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code
 
         <div class="faq-item">
           <h3 class="text-lg font-medium text-white mb-2">How do I install it?</h3>
-          <p class="text-slate-300 mb-3"><strong class="text-white">Using HACS (recommended):</strong></p>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Using HACS (recommended), or the Marketplace on Home Assistant 2026.11+:</strong></p>
           <p class="text-slate-300 mb-3">
             <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" class="inline-block" target="_blank" rel="noopener noreferrer">
               <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and open a repository inside the Home Assistant Community Store." />
             </a>
           </p>
-          <p class="text-slate-300 mb-3">To add manually: open <strong class="text-white">HACS</strong> &gt; <strong class="text-white">Integrations</strong> &gt; three-dot menu &gt; <strong class="text-white">Custom repositories</strong> &gt; add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code> (category: Integration) &gt; <strong class="text-white">Download</strong>.</p>
+          <p class="text-slate-300 mb-3">To add manually: open <strong class="text-white">HACS</strong> &gt; <strong class="text-white">Integrations</strong> &gt; three-dot menu &gt; <strong class="text-white">Custom repositories</strong> &gt; add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code> (category: Integration) &gt; <strong class="text-white">Download</strong>. On Home Assistant 2026.11 or newer, HACS is the built-in <strong>Marketplace</strong>: accept its first-run warning, <strong>Connect GitHub</strong>, then add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code> as an <strong>Integration</strong> from <strong>Add from link</strong> and <strong>Install</strong>. Connecting GitHub is also what makes the Marketplace check HA-MCP for updates in the background until HA-MCP is in its catalog; otherwise use <strong>Refresh information</strong> on HA-MCP's Marketplace page.</p>
           <p class="text-slate-300 mb-3">After installing, restart Home Assistant. Then open <strong class="text-white">Settings</strong> &gt; <strong class="text-white">Devices &amp; Services</strong> &gt; <strong class="text-white">Add Integration</strong> and search for <strong class="text-white">HA-MCP Custom Component</strong>, then pick the entry type: <strong class="text-white">HA-MCP Server</strong> (the in-process server &mdash; the recommended install) or <strong class="text-white">HA-MCP File &amp; YAML Tools</strong> (the file/YAML services described above).</p>
           <p class="text-slate-300"><strong class="text-white">Manual install:</strong> Copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> from the <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">repository</a> into your HA config's <code class="bg-slate-800 px-1 rounded">custom_components/</code> directory. Restart Home Assistant, then add the integration as described above.</p>
         </div>
@@ -693,7 +693,7 @@ nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code
               </tbody>
             </table>
           </div>
-          <p class="text-slate-400 text-sm mt-3">The component itself is installed through HACS &mdash; add <code class="bg-slate-800 px-1 rounded">homeassistant-ai/ha-mcp</code> as a custom repository (no feature flag required). An AI agent can drive that install with the generic HACS tools; then add the <strong class="text-white">HA-MCP File &amp; YAML Tools</strong> entry from <strong class="text-white">Settings &gt; Devices &amp; Services &gt; Add Integration</strong>.</p>
+          <p class="text-slate-400 text-sm mt-3">The component itself is installed through HACS (the Marketplace on Home Assistant 2026.11+) &mdash; add <code class="bg-slate-800 px-1 rounded">homeassistant-ai/ha-mcp</code> as a custom repository (no feature flag required). An AI agent can drive that install with the generic HACS tools; then add the <strong class="text-white">HA-MCP File &amp; YAML Tools</strong> entry from <strong class="text-white">Settings &gt; Devices &amp; Services &gt; Add Integration</strong>.</p>
         </div>
 
         <div class="faq-item">

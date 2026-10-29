@@ -28,9 +28,9 @@ startup, so the web lane needs no client connection at all). ``ha-mcp-oauth``
 is a NEGATIVE lane: OAuth mode holds no server-level HA credential, so
 ``maybe_refresh_hacs_after_update`` must return at the ``OAUTH_MODE_TOKEN``
 gate instead of burning its whole retry schedule on auth failures every boot.
-The embedded server is the other negative lane, pinned next to its own bring-up
-in ``tests/src/e2e/workflows/embedded/test_embedded_server.py`` (the
-``is_embedded`` gate). ``ha-mcp-oidc`` has no lane here: it validates HA
+The nudge is opt-in, so the positive lanes set ``HAMCP_HACS_REFRESH_AFTER_UPDATE``;
+the embedded server, which never opts in here, is pinned as off next to its own
+bring-up in ``tests/src/e2e/workflows/embedded/test_embedded_server.py``. ``ha-mcp-oidc`` has no lane here: it validates HA
 credentials at startup and exits without them (``_validate_standard_credentials``
 in ``__main__``), so it has no sentinel state to prove, and its run path is the
 same ``_run_with_shutdown(mcp.run_async(**_http_run_kwargs(...)))`` call the web
@@ -56,7 +56,8 @@ from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
 )
-from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
+from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS, SETTING_ENV
+from ha_mcp.tools.hacs_backend import STORE_APIS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
 from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
@@ -125,14 +126,32 @@ _HACS_NOT_LOADED_GRACE = 120.0
 
 
 async def _hacs_entry_state(client: HomeAssistantWebSocketClient) -> str | None:
-    """The seeded HACS config entry's state, or None when there is no entry."""
-    response = await client.send_command("config_entries/get", domain="hacs")
-    entries = response.get("result") or []
-    return entries[0].get("state") if entries else None
+    """The seeded store entry's state, or None when there is no entry.
+
+    Home Assistant 2026.11 hands the seeded ``hacs`` entry to the built-in
+    ``marketplace`` integration.
+    """
+    for domain in ("marketplace", "hacs"):
+        response = await client.send_command("config_entries/get", domain=domain)
+        if entries := response.get("result") or []:
+            return entries[0].get("state")
+    return None
+
+
+async def _list_store(client: HomeAssistantWebSocketClient) -> None:
+    """List the store's repositories through whichever store API answers."""
+    for api in STORE_APIS[:-1]:
+        try:
+            await client.send_command(api.command("list"))
+            return
+        except HomeAssistantCommandError as err:
+            if err.code != "unknown_command":
+                raise
+    await client.send_command(STORE_APIS[-1].command("list"))
 
 
 async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
-    """Block until the container's HACS answers ``hacs/repositories/list``."""
+    """Block until the container's store answers its repository list."""
     client = HomeAssistantWebSocketClient(
         container_info["base_url"], container_info.get("token", TEST_TOKEN)
     )
@@ -148,7 +167,7 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
         not_loaded_since: float | None = None
         while True:
             try:
-                await client.send_command("hacs/repositories/list")
+                await _list_store(client)
                 return
             except HomeAssistantCommandTimeout:
                 # HACS registered the handler but has not answered yet — it
@@ -206,6 +225,7 @@ async def test_stdio_launcher_runs_the_startup_nudge(
     # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
     # would return the nudge early.
     env = _stdio_env(container_info, tmp_path)
+    env[SETTING_ENV] = "true"  # The nudge is opt-in.
     transport = StdioTransport(command="ha-mcp", args=[], env=env, keep_alive=False)
     client = Client(transport)
 
@@ -287,6 +307,7 @@ async def test_web_launcher_runs_the_startup_nudge(
     await _wait_for_hacs_ws_ready(container_info)
     env = http_launcher_env(container_info["base_url"], tmp_path)
     env["HOMEASSISTANT_TOKEN"] = container_info.get("token", TEST_TOKEN)
+    env[SETTING_ENV] = "true"  # The nudge is opt-in.
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))

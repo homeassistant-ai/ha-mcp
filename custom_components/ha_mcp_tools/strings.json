@@ -146,8 +146,8 @@
             }
         },
         "component_outdated": {
-            "title": "Update the HA-MCP Custom Component via HACS",
-            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet) and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
+            "title": "Update the HA-MCP Custom Component",
+            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component from Settings > System > Updates (in HACS, or the Marketplace on Home Assistant 2026.11+, open the HA-MCP Custom Component and use 'Update information' (HACS) or 'Refresh information' (Marketplace) if no update is shown yet) and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
         },
         "legacy_oauth_restart": {
             "title": "Restart Home Assistant to apply the legacy OAuth settings",

@@ -38,11 +38,13 @@ loopback streamable HTTP with Home Assistant's shared ``mcp`` SDK (the manifest
 requires ``mcp>=1.24.0``, so 1.x or 2.x), never ha-mcp's vendored copy. Every SDK import here
 is lazy and the first one runs on the executor.
 
-The tool list is fetched fresh on every ``async_get_api_instance`` call (once
-per conversation turn): exposure toggles and runtime-registered custom tools
-apply on the agent's next message, and two loopback round-trips per turn are
-noise next to the LLM call itself. Tool calls likewise open a short-lived
-stateless session each — the in-process server serves ``stateless_http=True``.
+The tool list is fetched on every ``async_get_api_instance`` call. Before Home
+Assistant 2026.11 that is every conversation turn; from 2026.11 Core keeps the
+instance for the whole conversation, so a newly exposed or registered tool
+shows up in the next conversation. Each tool call opens a short-lived
+stateless session (the in-process server serves ``stateless_http=True``) and
+checks the tool is still exposed before calling it, so hiding a tool takes
+effect on the very next call either way.
 """
 
 from __future__ import annotations
@@ -421,6 +423,9 @@ def _import_mcp_sdk() -> None:
     """
     importlib.import_module("mcp.client.session")
     importlib.import_module("mcp.client.streamable_http")
+    # The SDK imports jsonschema on the first call that validates a tool's
+    # output, and that import reads its metaschema files: here, not on the loop.
+    importlib.import_module("jsonschema")
     _schema_converter()
 
 
@@ -599,18 +604,41 @@ class HaMcpTool(llm.Tool):
         dumped = await _forward_tool_call(
             hass, self._server_url, self.name, tool_input.tool_args
         )
+        if dumped is None:
+            return _unknown_tool(self.name)
         return tool_result(dumped, error=dumped.get("isError") is True)
+
+
+def _unknown_tool(name: str) -> Any:
+    """The answer for a tool that does not exist or is not exposed."""
+    return tool_result(
+        {
+            "error": f"Unknown tool '{name}'.",
+            "suggestion": f"Use {_SEARCH_TOOL_NAME} to discover available tools.",
+        },
+        error=True,
+    )
 
 
 async def _forward_tool_call(
     hass: HomeAssistant, server_url: str, name: str, arguments: dict[str, Any]
-) -> JsonObjectType:
-    """Forward one tool call over loopback and dump the result for the agent."""
+) -> JsonObjectType | None:
+    """Forward one tool call over loopback and dump the result for the agent.
+
+    The tool list the agent holds can be a conversation old (Core 2026.11+
+    keeps the API instance), so exposure is read again here: None means the
+    tool is no longer exposed.
+    """
     try:
         async with (
             asyncio.timeout(_CALL_TOOL_TIMEOUT_SECONDS),
             _mcp_session(server_url) as (session, _init),
         ):
+            exposed, _pinned, _stamped = partition_tools(
+                (await session.list_tools()).tools
+            )
+            if name not in {tool.name for tool in exposed}:
+                return None
             result = await session.call_tool(name, arguments)
     except _transport_errors() as err:
         if not _is_transport_failure(err):
@@ -686,16 +714,10 @@ class HaMcpCallTool(llm.Tool):
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}
         if name not in self._exposed_names:
-            return tool_result(
-                {
-                    "error": f"Unknown tool '{name}'.",
-                    "suggestion": (
-                        f"Use {_SEARCH_TOOL_NAME} to discover available tools."
-                    ),
-                },
-                error=True,
-            )
+            return _unknown_tool(name)
         dumped = await _forward_tool_call(hass, self._server_url, name, arguments)
+        if dumped is None:
+            return _unknown_tool(name)
         return tool_result(dumped, error=dumped.get("isError") is True)
 
 
@@ -716,9 +738,10 @@ class HaMcpLlmApi(llm.API):
     ) -> llm.APIInstance:
         """Fetch the current tool list and return an API instance.
 
-        Fetched fresh each conversation turn (see the module docstring); the
-        server's own initialize ``instructions`` become the API prompt, so the
-        agent gets the same guidance every MCP client gets.
+        Core asks once per turn, or from 2026.11 once per conversation (see
+        the module docstring); the server's own initialize ``instructions``
+        become the API prompt, so the agent gets the same guidance every MCP
+        client gets.
         """
         try:
             async with (

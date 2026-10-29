@@ -20,6 +20,7 @@ import pytest
 
 from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.device_control import DeviceControlTools
+from ha_mcp.tools.hacs_backend import HACS_API
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_hacs import HacsTools
 from ha_mcp.tools.tools_history import HistoryTools
@@ -303,8 +304,8 @@ async def test_ha_get_hacs_info_search_works_without_ctx() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.tools_hacs._assert_hacs_available",
-            new=AsyncMock(return_value=None),
+            "ha_mcp.tools.tools_hacs.detect_store_api",
+            new=AsyncMock(return_value=HACS_API),
         ),
         patch(
             "ha_mcp.client.websocket_client.get_websocket_client",
@@ -332,8 +333,8 @@ async def test_ha_get_hacs_info_search_emits_progress_with_ctx() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.tools_hacs._assert_hacs_available",
-            new=AsyncMock(return_value=None),
+            "ha_mcp.tools.tools_hacs.detect_store_api",
+            new=AsyncMock(return_value=HACS_API),
         ),
         patch(
             "ha_mcp.client.websocket_client.get_websocket_client",
