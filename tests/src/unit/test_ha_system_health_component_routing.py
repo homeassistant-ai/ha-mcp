@@ -15,7 +15,7 @@ reach into the radio integration), and its ``entities``/``states``/
 
 Routing is all-or-nothing per call: a capability miss, a component command
 error/timeout, a malformed slice, OR a transport failure (both a
-``HomeAssistantConnectionError`` off the frame and a plain ``Exception`` from
+``HomeAssistantConnectionError`` off the frame and the same error from
 ``get_websocket_client()`` failing to establish the socket) falls back to every
 consuming section's own legacy fetch — never a partial hybrid where one section
 reads the snapshot and a sibling reads legacy data from a different instant, and
@@ -576,7 +576,7 @@ async def test_snapshot_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` after caps
+    """A failed establish in ``get_websocket_client()`` after caps
     are cached degrades to the per-section legacy fetches, not a whole-tool error."""
     caps_ws = make_ws("ha_mcp_tools/system_snapshot", info_result=_CAPS_SNAPSHOT)
     health_ws = _health_ws(repairs_issues=[_issue("iss-1")])

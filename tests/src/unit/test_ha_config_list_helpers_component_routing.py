@@ -342,7 +342,7 @@ async def test_raised_command_falls_back_with_warning() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → for a STORAGE type, legacy ``{type}/list`` AND a ``warnings[]``
     entry, not a propagated error. The legacy body rides the never-raising bridge,
     so it does not die identically on a pooled-WS drop."""

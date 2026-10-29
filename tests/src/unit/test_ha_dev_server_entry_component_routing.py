@@ -11,7 +11,7 @@ submit or abort. These tests pin: the component path opens exactly one flow
 and never probes/aborts a wrong candidate; a capability miss falls back to
 the legacy per-candidate probe loop unchanged; and the full component error
 taxonomy (unknown_command / command error / a transport failure — both a
-connection error off the frame and a plain establish ``Exception`` — falling back
+connection error off the frame and a failed establish — falling back
 to the legacy probe, which rides the swallowing bridge and so does not die
 identically) behaves like every other component consumer.
 """
@@ -251,7 +251,7 @@ async def test_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) falls back to the legacy per-candidate probe."""
     caps_ws = make_ws("ha_mcp_tools/server_entry", info_result=_CAPS_SERVER_ENTRY)
     client = RoutingClient(entries=[{"entry_id": "server-1"}])

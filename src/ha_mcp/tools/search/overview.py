@@ -468,8 +468,8 @@ class OverviewMixin(SearchToolsBase):
           non-empty ``slice_errors`` — ``_build_overview_slices`` returns
           ``None``): treated like the command-error branch (legacy + warning +
           log), so a partial snapshot never serves a silently-degraded overview.
-        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+        - ``HomeAssistantConnectionError`` (pooled-WS drop or a failed (re)connect
+          in ``get_websocket_client()``) or ``HomeAssistantAuthError`` (token rejected):
           served the same way — the legacy overview reads ``/api/states`` +
           ``/api/services`` over REST and the registries through the swallowing
           ``send_websocket_message`` bridge, so it degrades to a partial overview

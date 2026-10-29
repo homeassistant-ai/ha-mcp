@@ -279,7 +279,7 @@ async def test_command_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → legacy ``expose_entity/list``, enrichment absent, not a propagated
     error. The legacy list rides the swallowing bridge, so it does not die
     identically on a pooled-WS drop."""

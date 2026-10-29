@@ -114,7 +114,7 @@ class VoiceAssistantTools:
                 logger.warning("%s failed; fell back to legacy: %r", WS_EXPOSURE, exc)
             return None
         except Exception as exc:  # noqa: BLE001
-            # HomeAssistantConnectionError / plain establish Exception → legacy (the
+            # HomeAssistantConnectionError or any other error → legacy (the
             # legacy expose_entity/list read rides the bridge).
             logger.warning(
                 "%s connection error; falling back to legacy: %r", WS_EXPOSURE, exc

@@ -554,12 +554,12 @@ async def test_fetch_connection_error_falls_back_to_none() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_ws_establish_failure_falls_back_to_none() -> None:
-    """``get_websocket_client()`` raising a plain ``Exception`` returns None → legacy.
+    """A failed establish in ``get_websocket_client()`` returns None → legacy.
 
-    After caps are cached, ``WebSocketManager`` can raise a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when it cannot (re)establish the pooled socket.
-    ``_fetch_entries_via_component`` catches it broadly and returns ``None`` so the
-    legacy pure-REST get serves the entry, keeping the (still-advertised) caps.
+    After caps are cached, ``WebSocketManager`` raises
+    ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled socket.
+    ``_fetch_entries_via_component`` catches it and returns ``None`` so the legacy
+    pure-REST get serves the entry, keeping the (still-advertised) caps.
     """
     caps_ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES)
     client = RoutingClient()

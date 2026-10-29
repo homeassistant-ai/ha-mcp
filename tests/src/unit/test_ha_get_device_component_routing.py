@@ -554,7 +554,7 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_without_invalidating_caps() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) falls back to the legacy registries for the byte-identical result
     WITHOUT invalidating caps. The legacy device/entity reads ride the swallowing
     bridge, so they do not die identically on a pooled-WS drop."""

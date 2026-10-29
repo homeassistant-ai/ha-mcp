@@ -284,7 +284,7 @@ async def test_command_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish Exception (after caps cached) → legacy dispatch."""
+    """A failed establish (after caps cached) → legacy dispatch."""
     caps_ws = make_ws("ha_mcp_tools/bulk_call_service", info_result=_CAPS_BULK)
     client = BulkRoutingClient()
     tools = DeviceControlTools(client)

@@ -297,8 +297,8 @@ class HelperConfigTools:
           for a storage type, serve the correct result from the legacy WS list,
           append a ``warnings[]`` entry, and ``log.warning``. For a flow type,
           raise the component-required error — no legacy fallback exists.
-        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+        - ``HomeAssistantConnectionError`` (pooled-WS drop or a failed (re)connect
+          in ``get_websocket_client()``) or ``HomeAssistantAuthError`` (token rejected):
           for a storage type, the legacy ``{helper_type}/list`` body is attempted,
           with a ``warnings[]`` entry + ``log.warning``. It rides the
           ``send_websocket_message`` bridge over the SAME pooled connection
@@ -339,8 +339,9 @@ class HelperConfigTools:
             return legacy
         except Exception as exc:
             # Transport/establishment failure — a pooled-WS drop or a failed
-            # (re)connect, both HomeAssistantConnectionError. A storage type
-            # still attempts the legacy
+            # (re)connect (HomeAssistantConnectionError), a rejected token
+            # (HomeAssistantAuthError) or any other error. A storage type still
+            # attempts the legacy
             # `{helper_type}/list` body: it rides the same pooled connection, so it
             # recovers a component-side fault but not a dead socket, where the
             # bridge raises in turn (#1947). A flow type has NO legacy body, so its

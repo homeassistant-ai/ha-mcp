@@ -470,8 +470,8 @@ async def test_embedded_malformed_reply_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_embedded_establishment_failure_falls_back() -> None:
-    """A plain establish Exception from get_websocket_client falls back to the
-    legacy submit.
+    """A failed establish (``HomeAssistantConnectionError``) in
+    get_websocket_client falls back to the legacy submit.
 
     ``patch_ws_establish_failure`` breaks the SHARED ``tools_dev.get_websocket_client``
     for BOTH the component ``server_entry`` read AND the write frame (one binding
@@ -487,7 +487,9 @@ async def test_embedded_establishment_failure_falls_back() -> None:
     client = UpdateClient(config_entries=[{"entry_id": "srv1"}])
 
     with patch_ws_establish_failure(
-        caps_ws, tools_dev, Exception("Failed to connect to HA WebSocket")
+        caps_ws,
+        tools_dev,
+        HomeAssistantConnectionError("Failed to connect to HA WebSocket"),
     ):
         await DevTools(client).ha_dev_manage_server(
             action="update_source", pip_spec="ha-mcp==2.0.0"

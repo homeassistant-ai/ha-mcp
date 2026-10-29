@@ -18,8 +18,8 @@ Two helper paths resolve entities from the registry today:
 These pin that: the component-served resolves never dump the registry NOR run the
 retry-loop sleeps, and every backend degradation (no caps, ``unknown_command`` →
 invalidate + fall back, a non-unknown command error, a malformed reply, AND a
-transport failure — both a ``HomeAssistantConnectionError`` off the frame and a
-plain ``Exception`` from ``get_websocket_client()`` failing to establish the
+transport failure — both a ``HomeAssistantConnectionError`` off the frame and the
+same error from ``get_websocket_client()`` failing to establish the
 socket) still produces the byte-identical legacy result. The registry_lookup
 consumers' legacy reads ride the swallowing ``send_websocket_message`` bridge, so a
 transport failure falls back rather than propagating — and, crucially, letting it
@@ -329,7 +329,7 @@ async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) falls back to the legacy retry loop, not a propagated error."""
     caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
     client = RoutingClient(
@@ -727,7 +727,7 @@ async def test_resolve_entities_connection_error_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_entities_ws_establish_failure_falls_back() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) returns ``None`` (legacy fallback)."""
     caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
     client = RoutingClient()

@@ -297,7 +297,7 @@ async def test_command_error_metadata_only_silent() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_metadata_only_silent() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → metadata-only, not a propagated error. There is no full-body
     legacy fetch, so a transport failure simply serves the already-fetched
     metadata."""

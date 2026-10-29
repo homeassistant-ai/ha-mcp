@@ -27,11 +27,11 @@ returns its payload (an entity_lookup with an EMPTY ``matches`` list is
 authoritative — "no registry entry with that unique_id" — kept distinct from the
 ``None`` miss).
 
-Both helpers apply the uniform transport-fallback taxonomy: a
-``HomeAssistantConnectionError`` off ``send_command`` — and the plain
-``Exception`` ``get_websocket_client()`` raises when ``WebSocketManager`` cannot
-(re)build the pooled socket — are caught and mapped to ``None`` so the legacy
-path runs, NEVER propagated out of the read. Neither consumer's legacy path dies
+Both helpers apply the uniform transport-fallback taxonomy: a transport failure
+— ``HomeAssistantConnectionError`` off ``send_command`` or from a failed (re)build
+of the pooled socket in ``get_websocket_client()``, or ``HomeAssistantAuthError``
+when HA rejects the token — is caught and mapped to ``None`` so the legacy path
+runs, NEVER propagated out of the read. Neither consumer's legacy path dies
 identically on a pooled-WS drop, so propagating would abort work the legacy path
 still completes:
 
@@ -120,8 +120,8 @@ async def fetch_entity_lookup_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_ENTITY_LOOKUP, exc)
         return None
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError: a pooled-WS drop or a failed
-        # (re)connect.
+        # HomeAssistantConnectionError (a pooled-WS drop or a failed
+        # (re)connect) or any other error.
         # The resolvers' legacy paths do NOT die identically (see module docstring),
         # so route to legacy rather than escape.
         logger.warning(
