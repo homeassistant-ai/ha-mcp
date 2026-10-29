@@ -103,12 +103,12 @@ configuration:
       Web UI 中）的主“启用 Beta 功能”开关处于开启状态 — 否则此子标志在运行时将被忽略，无论此处的值为何。
   enable_dashboard_screenshot:
     name: 启用仪表盘截图模式（测试版）
-    description: Beta 功能 — 默认禁用。添加了 ha_get_dashboard_screenshot 工具以及仪表盘获取/设置工具上的 include_screenshot
-      / return_screenshot 选项，使 AI 助手能够检查一个或多个响应式 Lovelace 图像（例如验证刚刚创建的仪表盘）。支持稳定的命名视图、手机/平板/电脑批处理以及
-      PNG/JPEG/WebP/BMP 输出。渲染在单独的可选引擎中运行（balloob 的“Puppet”App（加载项）、无头 Chromium）——您只需安装一次（将
-      balloob 的仓库添加到 App 商店，然后安装“Puppet”）并提供一个长期访问令牌；在 Docker/Container 部署中，您可以将该引擎作为边车（sidecar）运行并设置
-      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非您同时启用此功能并安装引擎，否则不会安装任何笨重的组件。需要重启才能生效。要求上方（以及网页
-      UI 中的）主“启用 beta 功能”开关必须开启 —— 否则此子标志在运行时将被忽略，无论此处的值如何。
+    description: 测试版功能 — 默认禁用。添加了 ha_get_dashboard_screenshot 工具以及仪表盘获取/设置工具上的 include_screenshot
+      / return_screenshot 选项，使 AI 助手能够检查自适应 Lovelace 图像。支持稳定的命名视图、手机/平板/电脑批处理以及 PNG/JPEG/WebP/BMP
+      输出。渲染在独立的应用程序中运行：balloob 的 Puppet 或 WPE Screenshot Engine。安装并配置一个带有其自己的 Home
+      Assistant 长期访问令牌的引擎。HA OS / Supervised 通过 Supervisor 发现已启动的引擎；Docker/Container
+      部署将其作为边车（sidecar）运行并设置 HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非您启用此功能并安装引擎，否则不会安装任何大型组件。需要重启才能生效。要求启用上方（以及网页
+      UI 中）的主“启用测试版功能”开关 — 否则此子标志在运行时将被忽略，无论此处的值为何。
   enable_auto_backup:
     name: 自动备份编辑
     description: 在每次写入或删除工具调用修改实体之前保存其实体快照。关闭此选项后，文件和原始 YAML 工具（ha_write_file、ha_delete_file、ha_config_set_yaml）将拒绝写入。

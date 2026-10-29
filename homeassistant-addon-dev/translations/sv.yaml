@@ -210,19 +210,19 @@ configuration:
       är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_dashboard_screenshot:
     name: Aktivera skärmbildsläge för instrumentpanel (beta)
-    description: Betafunktion – av som standard. Lägger till verktyget ha_get_dashboard_screenshot
-      samt alternativen include_screenshot / return_screenshot på instrumentpanelens
-      hämta-/sättverktyg, så att AI-assistenter kan granska en eller flera responsiva
-      Lovelace-bilder (t.ex. för att verifiera en instrumentpanel de nyss skapade).
-      Stöder stabila namngivna vyer, mobil-/surfplatta-/skrivbordsbatchar samt PNG/JPEG/WebP/BMP-utdata.
-      Renderingen körs i en separat, frivillig motor – balloobs "Puppet"-app (tillägg),
-      headless Chromium – som du installerar en gång (lägg till balloobs förråd i
-      App Store och installera sedan "Puppet") och ger en långlivad åtkomsttoken;
-      på Docker-/Container-distributioner kör du den motorn som en sidovagn (sidecar)
-      och ställer in HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Inget tungt installeras
-      om du inte både aktiverar detta och installerar motorn. Kräver omstart för att
-      träda i kraft. KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
-      är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
+    description: 'Betafunktion — inaktiverad som standard. Lägger till verktyget ha_get_dashboard_screenshot
+      samt alternativen include_screenshot / return_screenshot för verktyg som hämtar/sparar
+      vyer, så att AI-assistenter kan granska responsiva Lovelace-bilder. Stöder fasta
+      namngivna vyer, mobil-/surfplatte-/datorbatchar samt utdata i PNG/JPEG/WebP/BMP.
+      Renderingen körs i en separat app: balloobs Puppet eller WPE Screenshot Engine.
+      Installera och konfigurera en motor med en egen långlivad åtkomsttoken (long-lived
+      access token) för Home Assistant. HA OS / Supervised upptäcker en startad motor
+      via Supervisor; Docker-/Container-distributioner kör den som en sidecar och
+      anger HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Inget tungt installeras om du inte
+      aktiverar detta och installerar en motor. Kräver omstart för att träda i kraft.
+      KRÄVER att huvudreglaget "Aktivera betafunktioner" ovan (och i webbgränssnittet)
+      är på — annars ignoreras denna underordnade flagga vid körning oavsett dess
+      värde här.'
   enable_auto_backup:
     name: Automatisk säkerhetskopiering av redigeringar
     description: Spara en ögonblicksbild av en entitet innan varje skriv- eller ta

@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Uppdatera HA-MCP Custom Component via HACS",
-      "description": "Den installerade ha-mcp-servern kräver HA-MCP Custom Component {required} eller nyare, men du har {installed}. Uppdatera komponenten via HACS (öppna HA-MCP Custom Component-posten och använd 'Uppdatera information' om ingen uppdatering visas ännu) och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän komponenten är uppdaterad."
+      "title": "Uppdatera HA-MCP Custom Component",
+      "description": "Den installerade ha-mcp-servern kräver HA-MCP Custom Component {required} eller nyare, men du har {installed}. Uppdatera komponent från Inställningar > System > Uppdateringar (i HACS, eller Marketplace i Home Assistant 2026.11+, öppna HA-MCP Custom Component och använd 'Uppdatera information' (HACS) eller 'Uppdatera information' (Marketplace) om ingen uppdatering visas än) och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän komponenten har uppdaterats."
     },
     "legacy_oauth_restart": {
       "title": "Starta om Home Assistant för att tillämpa de äldre OAuth-inställningarna",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "Fjärråtkomst via webhook är inaktiverad (endast-lokalt-läge).",
     "oauth_creds_pending": "Klient-ID och klienthemlighet visas här när servern har startat.",
     "oauth_not_serving": "Legacy OAuth tillhandahåller dem inte ännu — starta om Home Assistant när du blir ombedd, så aktiveras de.",
-    "oauth_select_legacy_mode": "Ställ in autentiseringsläge till äldre OAuth ovan och spara för att generera ett klient-ID och en klienthemlighet.",
+    "oauth_select_legacy_mode": "För klienter som inte stöder modern OAuth, ändra läget till legacy OAuth för att generera ett ID och en hemlighet. Om du har problem med att ansluta när det är inställt på \"Sign in with Home Assistant\", rekommenderar vi att du byter till \"Secret webhook URL\" för att testa din anslutning först innan du försöker med legacy OAuth.",
     "panel_hint": "Öppna [HA-MCP-inställningspanelen](/ha-mcp) för verktygshantering och serverinställningar.",
     "tools_module_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad",
     "tools_module_not_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Ej installerad — tryck på \"Lägg till post\" på denna integrationssida och välj \"HA-MCP File & YAML Tools\" för att lägga till den",

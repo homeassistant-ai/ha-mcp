@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Ĝisdatigu la Personan Komponanton de HA-MCP per HACS",
-      "description": "La instalita servilo ha-mcp postulas Personan Komponanton de HA-MCP {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la komponanton per HACS (malfermu la eniron de la Persona Komponanto de HA-MCP kaj uzu 'Ĝisdatigi informojn' se neniu ĝisdatigo ankoraŭ montriĝas) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj funkcioj eble ne funkcios ĝis la komponanto estos ĝisdatigita."
+      "title": "Ĝisdatigu la HA-MCP Propra Komponento",
+      "description": "La instalita ha-mcp servilo postulas HA-MCP Propra Komponento {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la komponenton el Agordoj > Sistemo > Ĝisdatigoj (en HACS, aŭ la Vendejo ĉe Home Assistant 2026.11+, malfermu la HA-MCP Propra Komponento kaj uzu 'Ĝisdatigi informojn' (HACS) aŭ 'Refreŝigi informojn' (Vendejo) se neniu ĝisdatigo estas ankoraŭ montrata) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj ebloj eble ne funkcios ĝis la komponento estos ĝisdatigita."
     },
     "legacy_oauth_restart": {
       "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "Fora aliro per retkroĉo estas malŝaltita (nur-loka reĝimo).",
     "oauth_creds_pending": "La Klienta ID kaj Klienta Sekreto aperos ĉi tie post kiam la servilo startos.",
     "oauth_not_serving": "Legacy OAuth ankoraŭ ne liveras ilin — rekomencu Home Assistant, kiam ĝi petas vin pri tio, por aktivigi ilin.",
-    "oauth_select_legacy_mode": "Agordu Aŭtentigan reĝimon al hereda OAuth supre kaj konservu por generi Klientan ID kaj Klientan Sekreton.",
+    "oauth_select_legacy_mode": "Por klientoj kiuj ne subtenas modernan OAuth, ŝanĝu la reĝimon al hereda OAuth por generi ID-on kaj sekretan ŝlosilon. Se vi havas problemojn pri konektado kiam agordite al \"Sign in with Home Assistant\", tiam ni rekomendas ŝanĝi al \"Secret webhook URL\" por testi vian konekton unue antaŭ ol provi hereda OAuth.",
     "panel_hint": "Malfermu la [agordan panelon de HA-MCP](/ha-mcp) por ilo-administrado kaj servilaj agordoj.",
     "tools_module_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita",
     "tools_module_not_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Ne instalita — premu \"Aldoni eniron\" sur la paĝo de ĉi tiu integriĝo kaj elektu \"HA-MCP File & YAML Tools\" por aldoni ĝin",

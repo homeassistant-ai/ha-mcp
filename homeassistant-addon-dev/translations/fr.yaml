@@ -234,22 +234,20 @@ configuration:
       quelle que soit sa valeur ici.
   enable_dashboard_screenshot:
     name: Activer le mode capture d'écran du tableau de bord (bêta)
-    description: Fonctionnalité bêta — désactivée par défaut. Ajoute l'outil ha_get_dashboard_screenshot
+    description: 'Fonctionnalité bêta — désactivée par défaut. Ajoute l''outil ha_get_dashboard_screenshot
       ainsi que les options include_screenshot / return_screenshot sur les outils
-      de get/set de tableau de bord, afin que les assistants IA puissent inspecter
-      une ou plusieurs images Lovelace responsives (par exemple pour vérifier un tableau
-      de bord qu'ils viennent de créer). Prend en charge les vues nommées stables,
-      les lots mobile/tablette/bureau et la sortie PNG/JPEG/WebP/BMP. Le rendu s'exécute
-      dans un moteur séparé optionnel — l'application (add-on) "Puppet" de balloob,
-      Chromium sans tête — que vous installez une seule fois (ajoutez le dépôt de
-      balloob à la boutique d'applications, puis installez "Puppet") et à laquelle
-      vous donnez un jeton d'accès longue durée ; sur les déploiements Docker/Container,
-      vous exécutez ce moteur en tant que sidecar et définissez HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      Rien de lourd n'est installé à moins que vous n'activiez à la fois cette option
-      et n'installiez le moteur. Nécessite un redémarrage pour prendre effet. NÉCESSITE
-      que l'interrupteur principal "Activer les fonctionnalités bêta" ci-dessus (et
-      dans l'interface Web) soit activé — sinon ce sous-paramètre est ignoré à l'exécution
-      quelle que soit sa valeur ici.
+      get/set de tableau de bord, permettant aux assistants IA d''inspecter des images
+      Lovelace responsives. Prend en charge les vues nommées stables, les lots mobile/tablette/bureau
+      et les formats de sortie PNG/JPEG/WebP/BMP. Le rendu s''exécute dans une application
+      séparée : Puppet de balloob ou WPE Screenshot Engine. Installez et configurez
+      un moteur avec son propre jeton d''accès de longue durée Home Assistant. HA
+      OS / Supervised détecte un moteur démarré via le Supervisor ; les déploiements
+      Docker/Container l''exécutent en tant que sidecar et définissent HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Aucun composant lourd n''est installé à moins d''activer cette option et d''installer
+      un moteur. Nécessite un redémarrage pour prendre effet. NÉCESSITE que l''interrupteur
+      principal « Activer les fonctionnalités bêta » ci-dessus (et dans l''interface
+      web) soit activé — sinon, ce sous-drapeau est ignoré à l''exécution quelle que
+      soit sa valeur ici.'
   enable_auto_backup:
     name: Sauvegardes automatiques des modifications
     description: Enregistre un instantané d'une entité avant que chaque appel d'outil

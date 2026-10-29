@@ -214,21 +214,19 @@ configuration:
       bez ohledu na jeho hodnotu zde.
   enable_dashboard_screenshot:
     name: Povolit režim snímání obrazovky dashboardu (beta)
-    description: Funkce v beta verzi – ve výchozím nastavení zakázána. Přidává nástroj
-      ha_get_dashboard_screenshot a volby include_screenshot / return_screenshot k
-      nástrojům pro získání/nastavení nástěnek, takže AI asistenti mohou kontrolovat
-      jeden nebo více responzivních obrázků Lovelace (např. pro ověření právě vytvořené
-      nástěnky). Podporuje stabilní pojmenované pohledy, dávky pro mobily/tablety/desktopy
-      a výstup v PNG/JPEG/WebP/BMP. Vykreslování běží v samostatném volitelném enginu
-      – „Puppet“ aplikaci (doplňku) od ballooba, což je headless Chromium –, který
-      nainstalujete jednou (přidáte balloobův repozitář do obchodu s aplikacemi a
-      nainstalujete „Puppet“) a poskytnete mu přístupový token s dlouhou platností;
-      v nasazeních Docker/Container tento engine spustíte jako vedlejší kontejner
-      (sidecar) a nastavíte proměnnou HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic náročného
-      se neinstaluje, dokud obojí nepovolíte a nenainstalujete daný engine. K projevům
-      změn je vyžadován restart. VYŽADUJE, aby byl výše uvedený hlavní přepínač „Enable
-      beta features“ zapnutý (a to i ve webovém rozhraní) – v opačném případě bude
-      tento dílčí příznak za běhu ignorován bez ohledu na jeho hodnotu zde.
+    description: 'BETA funkce — ve výchozím nastavení zakázána. Přidává nástroj ha_get_dashboard_screenshot
+      a volby include_screenshot / return_screenshot k nástrojům pro získání/nastavení
+      nástěnek, takže AI asistenti mohou kontrolovat responzivní obrázky rozhraní
+      Lovelace. Podporuje stabilní pojmenované pohledy, dávky pro mobilní zařízení/tablety/stolní
+      počítače a výstup PNG/JPEG/WebP/BMP. Vykreslování běží v samostatné aplikaci:
+      balloob''s Puppet nebo WPE Screenshot Engine. Nainstalujte a nakonfigurujte
+      jeden engine s jeho vlastním dlouhodobým přístupovým tokenem pro Home Assistant.
+      HA OS / Supervised detekuje spuštěný engine přes Supervisor; nasazení v Dockeru
+      / Containeru jej spouštějí jako sidecar a nastavují proměnnou HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Nic náročného se neinstaluje, dokud tuto funkci nepovolíte a nenainstalujete
+      engine. Pro projevení změn je vyžadován restart. VYŽADUJE, aby hlavní přepínač
+      "Povolit beta funkce" výše (a ve webovém rozhraní) byl zapnutý — jinak bude
+      tento dílčí příznak za běhu ignorován bez ohledu na jeho zde zadanou hodnotu.'
   enable_auto_backup:
     name: Automatické zálohování úprav
     description: Uložit snímek entity před každým voláním nástroje pro zápis nebo

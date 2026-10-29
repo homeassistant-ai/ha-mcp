@@ -226,21 +226,20 @@ configuration:
       hier ignoriert.
   enable_dashboard_screenshot:
     name: Dashboard-Screenshot-Modus aktivieren (Beta)
-    description: Beta-Funktion — standardmäßig deaktiviert. Fügt das Tool ha_get_dashboard_screenshot
-      sowie die Optionen include_screenshot / return_screenshot zu den Dashboard-Get/Set-Tools
-      hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder überprüfen
-      können (z. B. um ein gerade erst erstelltes Dashboard zu überprüfen). Unterstützt
-      stabile benannte Ansichten, Mobil-/Tablet-/Desktop-Batches sowie PNG/JPEG/WebP/BMP-Ausgaben.
-      Das Rendern erfolgt in einer separaten, optionalen Engine — balloobs "Puppet"
-      App (Add-on), headless Chromium —, die du einmalig installierst (füge balloobs
-      Repository dem App-Store hinzu, installiere dann "Puppet") und mit einem langlebigen
-      Zugriffstoken versiehst; bei Docker/Container-Bereitstellungen führst du diese
-      Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Es wird
-      nichts Schweres installiert, es sei denn, du aktivierst dies und installierst
-      die Engine. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass
-      der Hauptschalter "Beta-Funktionen aktivieren" oben (und im Web-UI) eingeschaltet
-      ist — andernfalls wird dieses Unterflag zur Laufzeit unabhängig von seinem Wert
-      hier ignoriert.
+    description: 'Beta-Funktion — standardmäßig deaktiviert. Fügt das ha_get_dashboard_screenshot-Tool
+      sowie die Optionen include_screenshot / return_screenshot zu den Dashboard-Get-/Set-Tools
+      hinzu, damit KI-Assistenten responsive Lovelace-Bilder untersuchen können. Unterstützt
+      stabile benannte Ansichten, Mobil-/Tablet-/Desktop-Batches sowie PNG-/JPEG-/WebP-/BMP-Ausgabe.
+      Das Rendern läuft in einer separaten App: balloob''s Puppet oder WPE Screenshot
+      Engine. Installiere und konfiguriere eine Engine mit einem eigenen langlebigen
+      Zugstoken (Long-Lived Access Token) für Home Assistant. HA OS / Supervised erkennt
+      eine gestartete Engine über Supervisor; Docker-/Container-Bereitstellungen führen
+      sie als Sidecar aus und legen HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL fest. Es
+      wird nichts Schweres installiert, es sei denn, du aktivierst dies und installierst
+      eine Engine. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass
+      der Master-Schalter „Beta-Funktionen aktivieren“ oben (und in der Web-UI) eingeschaltet
+      ist — andernfalls wird dieses Unter-Flag zur Laufzeit unabhängig von seinem
+      Wert hier ignoriert.'
   enable_auto_backup:
     name: Automatische Backup-Bearbeitungen
     description: Speichere einen Schnappschuss einer Entität, bevor ein Schreib- oder

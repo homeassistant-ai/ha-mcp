@@ -235,22 +235,21 @@ configuration:
       de ejecución independientemente de su valor aquí.
   enable_dashboard_screenshot:
     name: Activar el modo de captura de pantalla de paneles (beta)
-    description: 'Función beta: deshabilitada por defecto. Añade la herramienta ha_get_dashboard_screenshot
+    description: 'Función beta — desactivada por defecto. Añade la herramienta ha_get_dashboard_screenshot
       además de las opciones include_screenshot / return_screenshot en las herramientas
       de obtención/configuración de paneles, para que los asistentes de IA puedan
-      inspeccionar una o más imágenes adaptables de Lovelace (por ejemplo, para verificar
-      un panel que acaban de crear). Soporta vistas con nombre estables, lotes para
-      móvil/tablet/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se ejecuta
-      en un motor opcional independiente (la App (add-on) "Puppet" de balloob, Chromium
-      sin interfaz gráfica), que instalas una vez (añadiendo el repositorio de balloob
-      a la tienda de aplicaciones e instalando "Puppet") y le proporcionas un token
-      de acceso de larga duración; en implementaciones de Docker/Container, ejecutas
-      ese motor como un sidecar y configuras HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      No se instala nada pesado a menos que habilites esto e instales el motor. Requiere
-      reiniciar para que surta efecto. REQUIERE que el interruptor principal "Enable
-      beta features" de arriba (y en la interfaz web) esté activado; de lo contrario,
-      este subindicador se ignorará en tiempo de ejecución independientemente de su
-      valor aquí.'
+      inspeccionar imágenes responsivas de Lovelace. Es compatible con vistas con
+      nombre estables, lotes para móvil/tablet/escritorio y salida PNG/JPEG/WebP/BMP.
+      El renderizado se ejecuta en una aplicación separada: Puppet de balloob o WPE
+      Screenshot Engine. Instala y configura un motor con su propio token de acceso
+      de larga duración de Home Assistant. HA OS / Supervised detecta un motor iniciado
+      a través de Supervisor; los despliegues en Docker/Container lo ejecutan como
+      un sidecar y configuran HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. No se instala
+      nada pesado a menos que habilites esto e instales un motor. Requiere reiniciar
+      para aplicar los cambios. REQUIERE que el interruptor principal "Enable beta
+      features" de arriba (y en la interfaz web) esté activado; de lo contrario, esta
+      subopción se ignorará en tiempo de ejecución sin importar el valor que tenga
+      aquí.'
   enable_auto_backup:
     name: Copia automática de las ediciones
     description: Guarda una copia de seguridad de una entidad antes de que cada llamada

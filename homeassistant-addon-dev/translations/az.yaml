@@ -226,22 +226,19 @@ configuration:
       nəzərə alınmır.
   enable_dashboard_screenshot:
     name: İdarə panelinin ekran görüntüsü rejimini aktivləşdir (beta)
-    description: Beta funksiya — standart olaraq deaktivdir. AI köməkçilərinin müxtəlif
-      ekran ölçülərinə uyğunlaşan bir və ya daha çox Lovelace şəklini yoxlaya bilməsi
-      üçün (məsələn, indicə yaratdıqları idarə panelini yoxlamaq məqsədilə) ha_get_dashboard_screenshot
-      alətini, həmçinin idarə panelini oxuma/yazma alətlərinə include_screenshot /
-      return_screenshot seçimlərini əlavə edir. Adları sabit olan görünüşləri, mobil/planşet/masaüstü
-      görüntü dəstlərini və PNG/JPEG/WebP/BMP çıxışını dəstəkləyir. Görüntü yaratma
-      ayrıca, istəyə bağlı mühərrikdə — balloob tərəfindən hazırlanmış "Puppet" tətbiqində
-      (əlavəsində), qrafik interfeyssiz Chromium-da — işləyir; onu bir dəfə quraşdırırsınız
-      (balloob repozitoriyasını tətbiq mağazasına əlavə edib "Puppet" tətbiqini quraşdırın)
-      və uzunmüddətli giriş tokeni verirsiniz; Docker/Container qurulumlarında həmin
-      mühərriki köməkçi proses kimi işə salıb HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL
-      təyin edirsiniz. Ağır komponentlər yalnız bu seçimi aktivləşdirib mühərriki
-      də quraşdırdıqda quraşdırılır. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.
-      Yuxarıdakı (və veb interfeysdəki) əsas "Enable beta features" seçiminin aktiv
-      olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq
-      icra zamanı nəzərə alınmır.
+    description: 'Beta xüsusiyyət — standart olaraq söndürülüb. Süni intellekt köməkçilərinin
+      responsiv Lovelace şəkillərini yoxlaya bilməsi üçün ha_get_dashboard_screenshot
+      alətini və panelin almaq/təyin etmək alətlərində include_screenshot / return_screenshot
+      seçimlərini əlavə edir. Sabit adlandırılmış görünüşləri, mobil/planšet/kompüter
+      dəstlərini və PNG/JPEG/WebP/BMP çıxışını dəstəkləyir. Renderinq ayrı tətbiqdə
+      işləyir: balloob''s Puppet və ya WPE Screenshot Engine. Öz Home Assistant uzunmüddətli
+      giriş tokeni ilə bir mühərrik quraşdırın və konfiqurasiya edin. HA OS / Supervised
+      işə salınmış mühərriki Supervisor vasitəsilə aşkar edir; Docker/Container deploylarları
+      onu sidecar kimi işlədir və HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL təyin edir.
+      Bunu aktivləşdirməyənə və mühərrik quraşdırmayana qədər heç bir ağır şey quraşdırılmır.
+      Qüvvəyə minməsi üçün yenidən başladılmalıdır. Yuxarıdakı (və veb interfeysdəki)
+      əsas "Enable beta features" keçidinin aktiv olmasını TƏLƏB EDİR — əks halda
+      bu alt bayraq iş zamanı burdakı dəyərindən asılı olmayaraq nəzərə alınmır.'
   enable_auto_backup:
     name: Redaktələr üçün avtomatik ehtiyat nüsxə yarat
     description: Hər yazma və ya silmə aləti çağırışı onu dəyişməzdən əvvəl obyektin

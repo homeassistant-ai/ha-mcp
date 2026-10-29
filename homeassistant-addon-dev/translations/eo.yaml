@@ -210,20 +210,19 @@ configuration:
       dum rultempo sendepende de sia valoro ĉi tie.
   enable_dashboard_screenshot:
     name: Ebligi panelan ekrankaptan reĝimon (beta)
-    description: Beta-funkcio — malŝaltita defaŭlte. Aldonas la ilon ha_get_dashboard_screenshot
-      plus opciojn include_screenshot / return_screenshot ĉe la panelaj get/set-iloj,
-      por ke AI-asistantoj povu inspekti unu aŭ pli respondemajn Lovelace-bildojn
-      (ekz. por kontroli panelon kiun ili ĝuste kreis). Subtenas stabilajn nomitajn
-      vidojn, poŝtelefonajn/tabulkomputilajn/tabulajn arojn, kaj PNG/JPEG/WebP/BMP-eligon.
-      Teksturigo ruliĝas en aparta, libervola motoro — la "Puppet" App (aldonaĵo)
-      de balloob, senkapa Chromium — kiun vi instalas unufoje (aldonu la deponejon
-      de balloob al la Aldona Butiko, poste instalu "Puppet") kaj donas longdaŭran
-      alirtokonon; ĉe Docker/Container-deplojoj vi ruli tiun motoron kiel flankan
-      ujon kaj agordas HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Neniopeza estas instalita
-      krom se vi kaj ebligas ĉi tion kaj instalas la motoron. Postulas restartigon
+    description: 'Beta-funkcio — malŝaltita defaŭlte. Aldonas la ilon ha_get_dashboard_screenshot
+      kaj la agordojn include_screenshot / return_screenshot ĉe la iloj por akiri/agordi
+      panelojn, do AI-asistantoj povas inspekti respondemajn bildojn de Lovelace.
+      Subtenas stabilajn nomitajn vidojn, poŝtelefonajn/tabulkomputilajn/surtabulajn
+      arojn, kaj eliron en PNG/JPEG/WebP/BMP. La bildigo rulas en aparta apo: Puppet
+      de balloob aŭ WPE Screenshot Engine. Instalu kaj agordu unu motoron kun sia
+      propra longdaŭra alira valuto de Home Assistant. HA OS / Supervised malkovras
+      funkciantan motoron tra Supervisor; Docker/Container deplojoj rulas ĝin kiel
+      kromprogramon (sidecar) kaj agordas HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Neniopeza
+      estas instalita krom se vi ebligas tion kaj instalas motoron. Postulas restartigon
       por ekvalidi. POSTULAS ke la ĉefa ŝaltilo "Enable beta features" supre (kaj
-      en la TTT-interfaco) estu ŝaltita — alie ĉi tiu subflago estas ignorata dum
-      rultempo sendepende de sia valoro ĉi tie.
+      en la reta interfaco) estu ŝaltita — alie ĉi tiu subflago estas ignorata dum
+      la rulado negrave de ĝia valoro ĉi tie.'
   enable_auto_backup:
     name: Aŭtomataj sekurkopioj de redaktoj
     description: Konservi momentfoton de ento antaŭ ol ĉiu skriba aŭ foriga ilvoko

@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Zaktualizuj niestandardowy komponent HA-MCP przez HACS",
-      "description": "Zainstalowany serwer ha-mcp wymaga niestandardowego komponentu HA-MCP {required} lub nowszego, ale masz {installed}. Zaktualizuj komponent przez HACS (otwórz wpis niestandardowego komponentu HA-MCP i użyj „Aktualizuj informacje”, jeśli aktualizacja nie jest jeszcze widoczna) i uruchom ponownie Home Assistant. Serwer działa w międzyczasie, ale niektóre nowsze funkcje mogą nie działać, dopóki komponent nie zostanie zaktualizowany."
+      "title": "Zaktualizuj niestandardowy komponent HA-MCP",
+      "description": "Zainstalowany serwer ha-mcp wymaga niestandardowego komponentu HA-MCP w wersji {required} lub nowszej, podczas gdy masz zainstalowaną wersję {installed}. Zaktualizuj komponent w sekcji Ustawienia > System > Aktualizacje (w HACS lub Sklepie w Home Assistant 2026.11+ otwórz niestandardowy komponent HA-MCP i użyj opcji „Aktualizuj informacje” (HACS) lub „Odśwież informacje” (Sklep), jeśli aktualizacja nie jest jeszcze widoczna) i uruchom ponownie Home Assistanta. Serwer działa w międzyczasie, ale niektóre nowsze funkcje mogą nie działać do momentu aktualizacji komponentu."
     },
     "legacy_oauth_restart": {
       "title": "Uruchom ponownie Home Assistanta, aby zastosować ustawienia Legacy OAuth",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "Zdalny dostęp przez webhook jest wyłączony (tryb tylko lokalny).",
     "oauth_creds_pending": "Client ID i Client Secret pojawią się tutaj po uruchomieniu serwera.",
     "oauth_not_serving": "Legacy OAuth jeszcze ich nie udostępnia — uruchom ponownie Home Assistanta, gdy pojawi się taka prośba, aby je aktywować.",
-    "oauth_select_legacy_mode": "Ustaw tryb uwierzytelniania na legacy OAuth powyżej i zapisz, aby wygenerować Client ID i Client Secret.",
+    "oauth_select_legacy_mode": "W przypadku klientów, które nie obsługują nowoczesnego OAuth, zmień tryb na starszy OAuth, aby wygenerować identyfikator i sekret. Jeśli masz problemy z połączeniem przy ustawieniu „Zaloguj się przez Home Assistant”, zalecamy przełączenie na „Adres URL tajnego webhooka”, aby najpierw przetestować połączenie przed wypróbowaniem starszego OAuth.",
     "panel_hint": "Otwórz [panel ustawień HA-MCP](/ha-mcp) do zarządzania narzędziami i ustawieniami serwera.",
     "tools_module_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany",
     "tools_module_not_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Niezainstalowany — naciśnij „Dodaj wpis” na stronie tej integracji i wybierz „HA-MCP File & YAML Tools”, aby go dodać",

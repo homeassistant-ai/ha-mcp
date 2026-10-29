@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "透過 HACS 更新 HA-MCP 自訂元件",
-      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP 自訂元件 {required} 或更新版本，但您目前安裝的是 {installed}。請透過 HACS 更新元件（開啟 HA-MCP 自訂元件項目，若尚未顯示更新則使用「更新資訊」）並重新整理 Home Assistant。伺服器在此期間會繼續執行，但在更新元件之前，某些較新功能可能無法運作。"
+      "title": "更新 HA-MCP 自訂元件",
+      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP Custom Component {required} 或更新版本，但您目前安裝的是 {installed}。請前往「設定」>「系統」>「更新」（在 HACS 中，或在 Home Assistant 2026.11+ 的市集中）更新此元件；若尚未顯示更新，請開啟 HA-MCP Custom Component 並使用「更新資訊」（HACS）或「重新整理資訊」（市集），然後重新啟動 Home Assistant。伺服器在此期間會繼續運行，但在更新元件之前，部分新功能可能無法使用。"
     },
     "legacy_oauth_restart": {
       "title": "重新啟動 Home Assistant 以套用舊版 OAuth 設定",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "透過 webhook 的遠端存取已停用（僅限本機模式）。",
     "oauth_creds_pending": "伺服器啟動後，用戶端 ID 與用戶端密鑰將會顯示在此處。",
     "oauth_not_serving": "舊版 OAuth 尚未提供這些憑證；請在 Home Assistant 提示時重新啟動以啟用。",
-    "oauth_select_legacy_mode": "將驗證模式設為上方的舊版 OAuth 並儲存，以產生用戶端 ID 與用戶端密鑰。",
+    "oauth_select_legacy_mode": "對於不支援現代 OAuth 的用戶端，請將模式變更為舊版 OAuth 以產生 ID 與密鑰。如果您設定為「Sign in with Home Assistant」時遇到連線問題，建議先切換至「Secret webhook URL」測試連線，然後再嘗試舊版 OAuth。",
     "panel_hint": "開啟 [HA-MCP 設定面板](/ha-mcp)進行工具管理與伺服器設定。",
     "tools_module_installed": "Beta/進階檔案與 YAML 工具模組（選用）：已安裝",
     "tools_module_not_installed": "Beta/進階檔案與 YAML 工具模組（選填）：未安裝 — 請在此整合頁面上按一下「新增項目」並選擇 \"HA-MCP File & YAML Tools\" 來加以新增",

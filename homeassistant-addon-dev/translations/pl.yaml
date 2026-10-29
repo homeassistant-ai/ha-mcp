@@ -227,22 +227,21 @@ configuration:
       jest ignorowana w czasie wykonywania niezależnie od jej wartości.
   enable_dashboard_screenshot:
     name: Włącz tryb zrzutów ekranu pulpitu nawigacyjnego (beta)
-    description: Funkcja w wersji beta — domyślnie wyłączona. Dodaje narzędzie ha_get_dashboard_screenshot
-      oraz opcje include_screenshot / return_screenshot w narzędziach pobierania/ustawiania
-      pulpitów, dzięki czemu asystenci AI mogą sprawdzać jeden lub więcej responsywnych
-      obrazów Lovelace (np. w celu zweryfikowania właśnie utworzonego pulpitu). Obsługuje
-      stabilne nazwane widoki, partie mobilne/tabletowe/desktopowe oraz wyjście w
-      formacie PNG/JPEG/WebP/BMP. Renderowanie odbywa się w osobnym, opcjonalnym silniku
-      — aplikacji (dodatku) "Puppet" autorstwa balloob, bezgłowym Chromium — który
-      instalujesz raz (dodajesz repozytorium balloob do sklepu z aplikacjami, a następnie
-      instalujesz "Puppet") i przekazujesz długoterminowy token dostępu; w przypadku
-      wdrożeń na Dockerze/Containerze uruchamiasz ten silnik jako kontener pomocniczy
-      (sidecar) i ustawiasz zmienną HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Żadne duże
-      komponenty nie są instalowane, dopóki zarówno nie włączysz tej opcji, jak i
-      nie zainstalujesz silnika. Wymaga ponownego uruchomienia, aby zacząć obowiązywać.
-      WYMAGA, aby główny przełącznik "Włącz funkcje beta" powyżej (i w interfejsie
-      webowym) był włączony — w przeciwnym razie ta podflaga jest ignorowana w czasie
-      wykonywania niezależnie od jej wartości.
+    description: 'Funkcja w fazie beta — domyślnie wyłączona. Dodaje narzędzie ha_get_dashboard_screenshot
+      oraz opcje include_screenshot / return_screenshot do narzędzi pobierania/zapisywania
+      pulpitów, dzięki czemu asystenci AI mogą kontrolować responsywne obrazy Lovelace.
+      Obsługuje stabilne nazwane widoki, pakiety dla telefonów/tabletów/komputerów
+      oraz wyjściowe formaty PNG/JPEG/WebP/BMP. Renderowanie działa w osobnej aplikacji:
+      Puppet projektu balloob lub WPE Screenshot Engine. Zainstaluj i skonfiguruj
+      jeden silnik przy użyciu własnego długoterminowego tokenu dostępu do Home Assistant.
+      HA OS / Supervised wykrywa uruchomiony silnik za pośrednictwem Supervisora;
+      wdrożenia Docker/Container uruchamiają go jako kontener pomocniczy (sidecar)
+      i ustawiają zmienną HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic ciężkiego nie
+      jest instalowane, dopóki tego nie włączysz i nie zainstalujesz silnika. Wymaga
+      ponownego uruchomienia, aby zaczęło obowiązywać. WYMAGA, aby główny przełącznik
+      „Enable beta features” powyżej (oraz w interfejsie webowym) był włączony — w
+      przeciwnym razie ta podopcja zostanie zignorowana podczas działania, niezależnie
+      od jej wartości w tym miejscu.'
   enable_auto_backup:
     name: Automatyczne tworzenie kopii zapasowych edycji
     description: Zapisuje migawkę encji przed jej zmianą przez każde wywołanie narzędzia

@@ -234,22 +234,20 @@ configuration:
       viene ignorato in esecuzione indipendentemente dal valore impostato qui.
   enable_dashboard_screenshot:
     name: Attiva la modalità screenshot delle dashboard (beta)
-    description: Funzionalità beta — disattivata per impostazione predefinita. Aggiunge
-      lo strumento ha_get_dashboard_screenshot oltre alle opzioni include_screenshot
-      / return_screenshot sugli strumenti di lettura/scrittura delle dashboard, in
-      modo che gli assistenti IA possano ispezionare una o più immagini Lovelace responsive
-      (ad es. per verificare una dashboard appena creata). Supporta viste denominate
-      stabili, batch per cellulare/tablet/desktop e output in formato PNG/JPEG/WebP/BMP.
-      Il rendering viene eseguito in un motore separato e opzionale — l'applicazione
-      (add-on) "Puppet" di balloob, Chromium senza interfaccia grafica — che installi
-      una volta (aggiungi il repository di balloob all'App store, quindi installa
-      "Puppet") e a cui fornisci un token di accesso a lungo termine; sulle distribuzioni
-      Docker/Container esegui quel motore come sidecar e imposti HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      Nessun componente pesante viene installato a meno che tu non abiliti questa
-      funzione e installi il motore. Richiede il riavvio per avere effetto. RICHIEDE
-      che l'interruttore principale "Enable beta features" sopra (e nell'interfaccia
-      web) sia attivo, altrimenti questo sotto-parametro viene ignorato in esecuzione
-      indipendentemente dal valore impostato qui.
+    description: 'Funzionalità beta — disabilitata per impostazione predefinita. Aggiunge
+      lo strumento ha_get_dashboard_screenshot e le opzioni include_screenshot / return_screenshot
+      sugli strumenti di lettura/scrittura delle dashboard, in modo che gli assistenti
+      IA possano ispezionare le immagini responsive di Lovelace. Supporta viste denominate
+      stabili, batch per cellulare/tablet/desktop e output PNG/JPEG/WebP/BMP. Il rendering
+      viene eseguito in un''app separata: Puppet di balloob o WPE Screenshot Engine.
+      Installa e configura un motore con il suo token di accesso a lungo termine di
+      Home Assistant. HA OS / Supervised rileva un motore avviato tramite Supervisor;
+      le distribuzioni Docker/Container lo eseguono come sidecar e impostano HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Non viene installato nulla di pesante a meno che tu non abiliti questa funzione
+      e installi un motore. Richiede il riavvio per avere effetto. RICHIEDE che l''interruttore
+      principale "Abilita funzionalità beta" sopra (e nell''interfaccia utente web)
+      sia attivo; altrimenti questo sotto-flag viene ignorato a runtime indipendentemente
+      dal suo valore qui.'
   enable_auto_backup:
     name: Backup automatico delle modifiche
     description: Salva un'istantanea di un'entità prima che ogni chiamata a uno strumento

@@ -223,20 +223,19 @@ configuration:
       ongeacht de waarde hiervan.
   enable_dashboard_screenshot:
     name: Dashboard-screenshotmodus inschakelen (bèta)
-    description: Bètafunctie — standaard uitgeschakeld. Voegt de tool ha_get_dashboard_screenshot
-      toe plus include_screenshot / return_screenshot-opties op de dashboard get/set-tools,
-      zodat AI-assistenten een of meer responsieve Lovelace-afbeeldingen kunnen inspecteren
-      (bijv. om een dashboard te verifiëren dat ze zojuist hebben gemaakt). Ondersteunt
+    description: 'Bètafunctie — standaard uitgeschakeld. Voegt de ha_get_dashboard_screenshot-tool
+      toe, plus include_screenshot- / return_screenshot-opties voor de dashboard get/set-tools,
+      zodat AI-assistenten responsieve Lovelace-afbeeldingen kunnen bekijken. Ondersteunt
       stabiele benoemde weergaven, mobiele/tablet/desktop-batches en PNG/JPEG/WebP/BMP-uitvoer.
-      Rendering wordt uitgevoerd in een afzonderlijke, optionele engine — balloob's
-      "Puppet" App (add-on), headless Chromium — die je eenmalig installeert (voeg
-      balloob's repository toe aan de App Store, installeer vervolgens "Puppet") en
-      waaraan je een langlevend toegangstoken geeft; op Docker/Container-implementaties
-      voer je die engine uit als een sidecar en stel je HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL
-      in. Er wordt niets zwaars geïnstalleerd tenzij je dit inschakelt én de engine
-      installeert. Vereist herstart om van kracht te worden. VEREIST dat de hoofdschakelaar
-      "Bètafuncties inschakelen" hierboven (en in de web-ui) aan staat — anders wordt
-      deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hiervan.
+      Het weergeven wordt uitgevoerd in een aparte app: balloob''s Puppet of WPE Screenshot
+      Engine. Installeer en configureer één engine met een eigen long-lived access
+      token voor Home Assistant. HA OS / Supervised ontdekt een gestarte engine via
+      Supervisor; Docker/Container-implementaties voeren deze uit als sidecar en stellen
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL in. Er wordt niets zwaars geïnstalleerd
+      tenzij je dit inschakelt en een engine installeert. Vereist een herstart om
+      te worden toegepast. VEREIST dat de hoofd-schakelaar "Enable beta features"
+      hierboven (en in de web-ui) aan staat — anders wordt deze sub-vlag tijdens runtime
+      genegeerd, ongeacht de waarde hier.'
   enable_auto_backup:
     name: Auto-backup bewerkingen
     description: Sla een snapshot van een entiteit op voordat een toolaanroep voor
