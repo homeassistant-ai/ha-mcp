@@ -5,6 +5,7 @@ import pytest
 from ha_mcp.utils.python_sandbox import (
     _EXECUTION_ERROR_TEXT_LIMIT,
     _SAFE_BUILTINS,
+    SAFE_METHODS,
     PythonSandboxError,
     PythonSandboxExecutionError,
     PythonSandboxValidationError,
@@ -76,6 +77,19 @@ class TestSecurityDocumentation:
 
         assert "while" not in allowed_section.lower()
         assert "- Loops: for, if/else, pass, break, continue" in docs
+
+    def test_documented_methods_match_enforced_allowlist(self):
+        """Agents avoid allowed methods the description omits, and hit
+        rejections for ones it lists but the validator refuses (#2902)."""
+        # Indented lines continue the entry above them.
+        entries = get_security_documentation().replace("\n  ", " ").splitlines()
+        documented = set()
+        for line in entries:
+            label, sep, names = line.partition(" methods: ")
+            if sep and label.startswith("- "):
+                documented.update(name.strip() for name in names.split(","))
+
+        assert documented == SAFE_METHODS
 
 
 class TestUnaryOperators:
@@ -473,6 +487,26 @@ class TestReplaceMethod:
         )
         result = safe_execute(expr, config)
         assert result["views"][0]["cards"][0]["content"] == "abc"
+
+
+class TestOneEndedTrimMethods:
+    """#2902: trimming one end of a string was rejected while ``strip`` passed."""
+
+    @pytest.mark.parametrize(
+        ("alias", "call", "expected"),
+        [
+            # The reporter's pattern: drop the full stop, then the space before it.
+            ("Kitchen lights .", ".rstrip('.').rstrip()", "Kitchen lights"),
+            ("  Kitchen lights", ".lstrip()", "Kitchen lights"),
+            ("Kitchen lights.", ".removesuffix('.')", "Kitchen lights"),
+            ("Old: Kitchen lights", ".removeprefix('Old: ')", "Kitchen lights"),
+        ],
+    )
+    def test_trimming_one_end_of_alias_is_allowed(self, alias, call, expected):
+        result = safe_execute(
+            f"config['alias'] = config['alias']{call}", {"alias": alias}
+        )
+        assert result["alias"] == expected
 
 
 class TestSafeExecute:
