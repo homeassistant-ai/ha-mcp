@@ -1775,6 +1775,7 @@ class TestVolumeRootFor:
     def test_rejects_non_volume_absolute(self):
         assert _volume_root_for("/etc/passwd") is None
         assert _volume_root_for("/config/configuration.yaml") is None
+        assert _volume_root_for("/backup/abc.tar") is None
         assert _volume_root_for("/") is None
 
     def test_respects_separator_boundary(self):

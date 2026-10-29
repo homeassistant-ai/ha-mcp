@@ -198,7 +198,7 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
   info.innerHTML =
     `<div class="feature-name">${escapeHtml(t('filesystem.custom.title', {}, 'Custom filesystem paths (advanced)'))}</div>` +
     `<div class="feature-help">${tHtml('filesystem.custom.help', {}, 'Extra paths (one per line) that file tools may <strong>read and write</strong>. Config-relative paths, including exact filenames such as <code>sensor.yaml</code>, and paths under <code>/share</code>, <code>/media</code>, and <code>/ssl</code> (read-only on HAOS and Supervised) are supported. Each entry allows that path and anything below it. Entries are matched literally; wildcards such as <code>*</code> are not supported. You can also manage these paths in Home Assistant under Settings → Devices & Services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configure; both locations edit the same setting and apply changes immediately.')}</div>` +
-    `<div class="feature-help">${tHtml('filesystem.custom.blocked', {paths: `<code>${escapeHtml(denyList)}</code>`}, 'Always blocked (cannot be added): {paths}, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.')}</div>`;
+    `<div class="feature-help">${tHtml('filesystem.custom.blocked', {paths: `<code>${escapeHtml(denyList)}</code>`}, 'Always blocked: {paths}, path traversal (<code>..</code>), and absolute paths outside allowed HAOS volumes.')}</div>`;
 
   const control = document.createElement('div');
   control.className = 'feature-control';
