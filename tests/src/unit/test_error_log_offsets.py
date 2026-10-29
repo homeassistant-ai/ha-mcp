@@ -38,5 +38,8 @@ def test_a_utc_offset_counts_as_the_logs_offset() -> None:
         2026-11-02 10:30:00.000 ERROR (MainThread) [a.b.c] boom
         2026-11-02 10:15:00.000+01:00 ERROR (MainThread) [a.b.c] boom
     """)
-    summary = _parse_error_log_structured(log)["summary"]
-    assert summary["window_end"] == "2026-11-02 10:30:00.000"
+    result = _parse_error_log_structured(log)
+    assert result["summary"]["window_end"] == "2026-11-02 10:30:00.000"
+    # 09:15Z, though it sorts last as text
+    assert result["summary"]["window_start"] == "2026-11-02 10:15:00.000+01:00"
+    assert result["top_issues"][0]["first_seen"] == "2026-11-02 10:15:00.000+01:00"
