@@ -54,6 +54,7 @@ from .test_component_ws_search import (
     FakeServices,
     FakeState,
     make_view,
+    stored_helpers,
     wsapi,
 )
 from .test_config_get_component_routing import RoutingClient as GetRoutingClient
@@ -412,7 +413,10 @@ class TestHelpersListSeam:
                 FakeState(
                     "input_boolean.guest_mode", "off", friendly_name="Current Guest"
                 )
-            ]
+            ],
+            data=stored_helpers(
+                {"input_boolean": [{"id": "guest_mode", "name": "Old Name"}]}
+            ),
         )
         monkeypatch.setattr(
             wsapi,
@@ -424,6 +428,7 @@ class TestHelpersListSeam:
                         name="Current Guest",
                         original_name="Old Name",
                         unique_id="guest_mode",
+                        platform="input_boolean",
                     )
                 }
             ),

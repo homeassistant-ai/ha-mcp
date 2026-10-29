@@ -254,6 +254,16 @@ class FakeEntityReg:
     def async_get(self, entity_id):
         return self._entries.get(entity_id)
 
+    def async_get_entity_id(self, domain, platform, unique_id):
+        return next(
+            (
+                e.entity_id
+                for e in self._entries.values()
+                if e.platform == platform and e.unique_id == unique_id
+            ),
+            None,
+        )
+
 
 class FakeErModule:
     """Faithful stand-in for the ``entity_registry`` module's device index.
@@ -607,11 +617,9 @@ class FakeSceneEntity:
 
 
 class FakeCollectionEntity:
-    """Stand-in for a CollectionEntity (input_boolean/schedule/counter/…).
-
-    Real collection helpers keep their full storage config on the entity as
-    ``_config`` (a schedule's weekday blocks, an input_datetime's has_date, …),
-    reachable via the domain's EntityComponent in ``hass.data['entity_components']``.
+    """Stand-in for an entity that keeps the config it was built from as ``_config``
+    (a zone, including the home zone built from the core configuration), reachable
+    via the domain's EntityComponent in ``hass.data['entity_components']``.
     """
 
     def __init__(self, entity_id, config, unique_id=None):
@@ -623,6 +631,38 @@ class FakeCollectionEntity:
 class FakeComponent:
     def __init__(self, entities):
         self.entities = list(entities)
+
+
+class FakeStorageCollection:
+    """Core's ``StorageCollection``: ``async_items()`` is what ``<type>/list`` sends."""
+
+    def __init__(self, items):
+        self._items = [dict(item) for item in items]
+
+    def async_items(self):
+        return list(self._items)
+
+
+class FakeStorageCollectionWs:
+    """Core's ``StorageCollectionWebsocket``, reached through ``<type>/create``."""
+
+    def __init__(self, items):
+        self.storage_collection = FakeStorageCollection(items)
+        self.create_schema = {}
+        self.update_schema = {}
+
+    async def ws_create_item(self, hass, connection, msg):  # pragma: no cover
+        raise AssertionError("never invoked")
+
+
+def stored_helpers(collections):
+    """``hass.data`` holding Core's WS handlers for ``{type: [stored items]}``."""
+    return {
+        "websocket_api": {
+            f"{helper_type}/create": (FakeStorageCollectionWs(items).ws_create_item, {})
+            for helper_type, items in collections.items()
+        }
+    }
 
 
 class FakeConfigEntry:
@@ -1293,35 +1333,47 @@ class TestHelpers:
         assert rec["match_in_name"] is False
         assert "deep_search_option_a" in json.dumps(rec["config"])
 
-    def test_collection_helper_search_matches_storage_body(self, empty_view):
-        # Search must match a schedule on a value that lives ONLY in the storage
-        # ``_config`` body (a weekday block time), not in the state attributes.
-        state = FakeState("schedule.work", "on", friendly_name="Work")
-        sched = FakeCollectionEntity(
-            "schedule.work",
-            {
-                "id": "work",
-                "name": "Work",
-                "monday": [{"from": "07:07:07", "to": "09:00:00"}],
-            },
-            unique_id="work",
+    def test_collection_helper_search_matches_stored_config_not_runtime_state(
+        self, monkeypatch
+    ):
+        # #2901: an input_select's options changed by set_options are runtime
+        # state. Search matches and emits the stored helper, not the state
+        # attributes.
+        state = FakeState(
+            "input_select.mode",
+            "runtime_x",
+            friendly_name="Mode",
+            options=["runtime_x"],
         )
-        h = FakeHass(
-            states=[state],
-            data={"entity_components": {"schedule": FakeComponent([sched])}},
+        view = make_view(
+            entity={
+                "input_select.mode": FakeRegEntry(
+                    "input_select.mode", platform="input_select", unique_id="mode"
+                )
+            }
         )
-        res = wsapi._do_search(
-            h,
-            {
-                "query": "07:07:07",
-                "search_types": ["helper"],
-                "include_config": True,
-            },
-        )
-        coll = [x for x in res["helpers"] if x["kind"] == "collection"]
-        assert coll, "a storage-body-only value must match the collection helper"
-        assert coll[0]["match_in_config"] is True
-        assert "07:07:07" in json.dumps(coll[0]["config"])
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        stored = {"id": "mode", "name": "Mode", "options": ["stored_a"]}
+        h = FakeHass(states=[state], data=stored_helpers({"input_select": [stored]}))
+
+        def search(query):
+            return [
+                x
+                for x in wsapi._do_search(
+                    h,
+                    {
+                        "query": query,
+                        "search_types": ["helper"],
+                        "include_config": True,
+                    },
+                )["helpers"]
+                if x["kind"] == "collection"
+            ]
+
+        (rec,) = search("stored_a")
+        assert rec["match_in_config"] is True
+        assert rec["config"] == stored
+        assert search("runtime_x") == []
 
     def test_collection_helper_body_withheld_without_include_config(self, empty_view):
         states = [
@@ -2451,322 +2503,6 @@ class TestBlueprintGet:
 # =============================================================================
 # config_get — withdrawn before release (raw_config freshness lag)
 # =============================================================================
-# =============================================================================
-# helpers_list — collection (live attrs) + flow (options, never entry.data)
-# =============================================================================
-class TestHelpersList:
-    def test_collection_helper_listed_with_body(self, empty_view):
-        states = [
-            FakeState(
-                "input_select.house_mode",
-                "day",
-                friendly_name="House Mode",
-                options=["day", "night"],
-            )
-        ]
-        res = wsapi._do_helpers_list(FakeHass(states=states), {})
-        coll = [h for h in res["helpers"] if h["kind"] == "collection"]
-        assert res["count"] == len(res["helpers"]) == 1
-        rec = coll[0]
-        assert rec["helper_type"] == "input_select"
-        assert rec["entity_id"] == "input_select.house_mode"
-        assert rec["object_id"] == "house_mode"
-        assert rec["name"] == "House Mode"
-        assert rec["config"]["options"] == ["day", "night"]
-
-    def test_rename_shows_current_values_issue_1794(self, monkeypatch):
-        # The storage collection name is stale ("Old Name"); the current name
-        # (state friendly_name + registry override) must win — issue #1794.
-        states = [
-            FakeState("input_boolean.guest_mode", "off", friendly_name="Current Guest")
-        ]
-        view = make_view(
-            entity={
-                "input_boolean.guest_mode": FakeRegEntry(
-                    "input_boolean.guest_mode",
-                    name="Current Guest",
-                    original_name="Old Name",
-                    unique_id="guest_mode",
-                )
-            }
-        )
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-        res = wsapi._do_helpers_list(FakeHass(states=states), {})
-        rec = next(h for h in res["helpers"] if h["kind"] == "collection")
-        assert rec["name"] == "Current Guest"
-        assert rec["storage_id"] == "guest_mode"
-        assert "Old Name" not in json.dumps(res)
-
-    def test_body_from_storage_config_surfaces_schedule_blocks(self, empty_view):
-        # Regression for the live e2e schedule-update failure: a schedule's weekday
-        # blocks live in the storage ``_config`` (reached via the EntityComponent),
-        # NOT the live state attributes, so listing must surface them + the real id.
-        state = FakeState(
-            "schedule.work",
-            "on",
-            friendly_name="Work",
-            next_event="2026-07-13T09:00:00+00:00",
-        )
-        sched = FakeCollectionEntity(
-            "schedule.work",
-            {
-                "id": "work",
-                "name": "Work",
-                "monday": [
-                    {"from": "07:00:00", "to": "09:00:00"},
-                    {"from": "17:00:00", "to": "19:00:00"},
-                ],
-            },
-            unique_id="work",
-        )
-        h = FakeHass(
-            states=[state],
-            data={"entity_components": {"schedule": FakeComponent([sched])}},
-        )
-        res = wsapi._do_helpers_list(h, {})
-        rec = next(r for r in res["helpers"] if r["helper_type"] == "schedule")
-        assert rec["storage_id"] == "work"
-        # The weekday blocks are absent from the state attributes but present here.
-        assert "monday" not in state.attributes
-        assert len(rec["config"]["monday"]) == 2
-
-    def test_body_falls_back_to_attrs_without_storage_entity(self, empty_view):
-        # A collection helper with no reachable entity (_config absent, e.g. a
-        # YAML-defined input_boolean or input_number's _attr_* layout) falls back
-        # to the state-attributes body.
-        states = [FakeState("input_boolean.legacy", "off", friendly_name="Legacy Flag")]
-        res = wsapi._do_helpers_list(
-            FakeHass(states=states), {}
-        )  # no entity_components
-        rec = next(r for r in res["helpers"] if r["helper_type"] == "input_boolean")
-        assert rec["config"]["friendly_name"] == "Legacy Flag"
-        assert rec["storage_id"] == "legacy"
-
-    def test_rename_current_name_wins_over_storage_body_name(self, monkeypatch):
-        # With a storage body present, the record ``name`` is still the CURRENT
-        # display name, not the (possibly stale) name inside the storage config.
-        state = FakeState(
-            "input_boolean.guest_mode", "off", friendly_name="Current Guest"
-        )
-        ent = FakeCollectionEntity(
-            "input_boolean.guest_mode",
-            {"id": "guest_mode", "name": "Old Name"},
-            unique_id="guest_mode",
-        )
-        view = make_view(
-            entity={
-                "input_boolean.guest_mode": FakeRegEntry(
-                    "input_boolean.guest_mode", name="Current Guest"
-                )
-            }
-        )
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-        h = FakeHass(
-            states=[state],
-            data={"entity_components": {"input_boolean": FakeComponent([ent])}},
-        )
-        rec = next(
-            r
-            for r in wsapi._do_helpers_list(h, {})["helpers"]
-            if r["kind"] == "collection"
-        )
-        assert rec["name"] == "Current Guest"
-        assert rec["storage_id"] == "guest_mode"
-
-    def test_flow_helper_options_and_entity_data_never_leaks(self, monkeypatch):
-        entry = FakeConfigEntry(
-            "template",
-            title="Sun Sensor",
-            options={"state": "{{ is_state('sun.sun', 'above_horizon') }}"},
-            data={"api_key": "DATA_SECRET_XYZ"},
-            entry_id="e1",
-        )
-        # A registry entity bound to the config entry supplies the CURRENT
-        # entity_id + display name (a rename updates the registry, not the entry
-        # title).
-        view = make_view(
-            entity={
-                "binary_sensor.sun_up": FakeRegEntry(
-                    "binary_sensor.sun_up",
-                    name="Sun Is Up",
-                    config_entry_id="e1",
-                )
-            }
-        )
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
-        flow = [h for h in res["helpers"] if h["kind"] == "flow"]
-        assert flow
-        rec = flow[0]
-        assert rec["helper_type"] == "template"
-        assert rec["entry_id"] == "e1"
-        assert rec["storage_id"] == "e1"
-        assert rec["entity_id"] == "binary_sensor.sun_up"
-        assert rec["name"] == "Sun Is Up"
-        assert rec["options"] == {"state": "{{ is_state('sun.sun', 'above_horizon') }}"}
-        serialized = json.dumps(res)
-        assert "DATA_SECRET_XYZ" not in serialized
-        assert "api_key" not in serialized
-
-    def test_flow_helper_options_secret_scrubbed(self, empty_view):
-        # Flow-helper options share config_entries' exposure class, so they pass
-        # through the SAME secret scrub — a resolved !secret is redacted here too.
-        secret = "s3cr3thelperopt"
-        entry = FakeConfigEntry(
-            "template",
-            title="Tmpl",
-            options={"token": secret, "keep": "kept"},
-            entry_id="e1",
-        )
-        res = wsapi._do_helpers_list(
-            FakeHass(config_entries=[entry]), {}, secret_values=frozenset({secret})
-        )
-        rec = next(h for h in res["helpers"] if h["kind"] == "flow")
-        assert rec["options"] == {"token": "**redacted**", "keep": "kept"}
-        assert secret not in json.dumps(res)
-
-    def test_flow_helper_scrub_off_by_default(self, empty_view):
-        # No secret_values (default) is a no-op — options pass through verbatim.
-        entry = FakeConfigEntry(
-            "template", title="Tmpl", options={"token": "plain"}, entry_id="e1"
-        )
-        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
-        rec = next(h for h in res["helpers"] if h["kind"] == "flow")
-        assert rec["options"] == {"token": "plain"}
-        assert "secret_scrub_degraded" not in res
-
-    def test_helpers_list_degraded_signalled_when_flow_included(self, empty_view):
-        entry = FakeConfigEntry(
-            "template", title="Tmpl", options={"token": "x"}, entry_id="e1"
-        )
-        res = wsapi._do_helpers_list(
-            FakeHass(config_entries=[entry]), {}, secret_scrub_degraded=True
-        )
-        assert res["secret_scrub_degraded"] is True
-
-    def test_helpers_list_no_degraded_signal_when_flow_excluded(self, empty_view):
-        # The signal only rides the flow path; it is suppressed when flow helpers
-        # are excluded (the scrubbed surface isn't emitted).
-        res = wsapi._do_helpers_list(
-            FakeHass(),
-            {"include_flow_helpers": False},
-            secret_scrub_degraded=True,
-        )
-        assert "secret_scrub_degraded" not in res
-
-    @pytest.mark.asyncio
-    async def test_helpers_list_prep_skips_read_without_flow(
-        self, monkeypatch, tmp_path
-    ):
-        # Perf gate: no secrets.yaml read when flow helpers are excluded.
-        calls = {"n": 0}
-
-        async def _spy(func, *args):
-            calls["n"] += 1
-            return func(*args)
-
-        h = FakeHass()
-        h.config = FakeConfig(tmp_path)
-        monkeypatch.setattr(h, "async_add_executor_job", _spy)
-        extra = await wsapi._helpers_list_prep(h, {"include_flow_helpers": False})
-        assert extra == {"secret_values": frozenset(), "secret_scrub_degraded": False}
-        assert calls["n"] == 0
-
-    @pytest.mark.asyncio
-    async def test_helpers_list_prep_loads_secrets_with_flow(self, tmp_path):
-        (tmp_path / "secrets.yaml").write_text(
-            "api_password: sekret\n", encoding="utf-8"
-        )
-        h = FakeHass()
-        h.config = FakeConfig(tmp_path)
-        extra = await wsapi._helpers_list_prep(h, {"type": wsapi.WS_HELPERS_LIST})
-        assert extra["secret_values"] == frozenset({"sekret"})
-        assert extra["secret_scrub_degraded"] is False
-
-    def test_flow_helper_without_registered_entity(self, empty_view):
-        entry = FakeConfigEntry(
-            "group", title="Living Room Group", options={"entities": []}, entry_id="e9"
-        )
-        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
-        rec = next(h for h in res["helpers"] if h["kind"] == "flow")
-        assert rec["entity_id"] is None
-        assert rec["name"] == "Living Room Group"
-
-    def test_helper_types_filter(self, empty_view):
-        states = [FakeState("input_boolean.guest", "off", "Guest")]
-        entry = FakeConfigEntry(
-            "template", title="Tmpl", options={"state": "x"}, entry_id="e1"
-        )
-        h = FakeHass(states=states, config_entries=[entry])
-        only_tmpl = wsapi._do_helpers_list(h, {"helper_types": ["template"]})
-        assert {r["helper_type"] for r in only_tmpl["helpers"]} == {"template"}
-        only_bool = wsapi._do_helpers_list(h, {"helper_types": ["input_boolean"]})
-        assert {r["helper_type"] for r in only_bool["helpers"]} == {"input_boolean"}
-
-    def test_include_flow_helpers_false(self, empty_view):
-        entry = FakeConfigEntry(
-            "template", title="Tmpl", options={"state": "x"}, entry_id="e1"
-        )
-        res = wsapi._do_helpers_list(
-            FakeHass(config_entries=[entry]), {"include_flow_helpers": False}
-        )
-        assert [r for r in res["helpers"] if r["kind"] == "flow"] == []
-
-    def test_zone_and_person_are_listed_but_search_unaffected(self, empty_view):
-        # helpers_list covers zone/person (consumer parity); search must not.
-        states = [
-            FakeState("zone.home", "zoning", friendly_name="Home"),
-            FakeState("person.alice", "home", friendly_name="Alice"),
-        ]
-        listed = wsapi._do_helpers_list(FakeHass(states=states), {})
-        kinds = {r["helper_type"] for r in listed["helpers"]}
-        assert kinds == {"zone", "person"}
-        assert {"zone", "person"} <= set(listed["covered_types"])
-        # search's helper surface excludes zone/person (unchanged behaviour).
-        searched = wsapi._do_search(
-            FakeHass(states=states), {"query": "home", "search_types": ["helper"]}
-        )
-        assert searched["helpers"] == []
-
-    def test_covered_types_advertises_the_full_enumerable_universe(self, empty_view):
-        # covered_types is the anti-silent-wrong signal the server gates fallback
-        # on: it must name every state-machine collection type + every flow type,
-        # so the server trusts a genuinely-empty result for those.
-        res = wsapi._do_helpers_list(FakeHass(), {})
-        covered = set(res["covered_types"])
-        # All 11 state-machine collection types the consumer accepts.
-        assert {
-            "input_boolean",
-            "input_number",
-            "input_text",
-            "input_select",
-            "input_datetime",
-            "input_button",
-            "counter",
-            "timer",
-            "schedule",
-            "zone",
-            "person",
-        } <= covered
-        # Flow types are covered too (they're enumerated by default).
-        assert {"template", "group", "utility_meter"} <= covered
-
-    def test_tag_is_not_covered_so_empty_is_not_authoritative(self, empty_view):
-        # tag has no state entity, so the component cannot enumerate it. A
-        # tag-only request returns empty AND omits tag from covered_types, telling
-        # the server to fall back to its legacy tag/list rather than trust it.
-        res = wsapi._do_helpers_list(FakeHass(), {"helper_types": ["tag"]})
-        assert res["helpers"] == []
-        assert "tag" not in res["covered_types"]
-
-    def test_covered_types_excludes_flow_when_disabled(self, empty_view):
-        res = wsapi._do_helpers_list(FakeHass(), {"include_flow_helpers": False})
-        covered = set(res["covered_types"])
-        assert "input_boolean" in covered
-        # No flow types are covered when flow enumeration is turned off.
-        assert covered.isdisjoint(wsapi.FLOW_HELPER_DOMAINS)
-
-
 # =============================================================================
 # overview — RAW slices (server runs its existing overview logic over them)
 # =============================================================================
