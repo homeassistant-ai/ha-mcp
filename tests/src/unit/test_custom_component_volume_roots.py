@@ -6,6 +6,7 @@ would make ha_write_file create the directory inside the container and report
 success for a file that never reaches backup storage.
 """
 
+import logging
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -36,7 +37,7 @@ def test_backup_entry_is_rejected(tmp_path):
     assert comp._normalize_extra_dir("/backup/llm", tmp_path) is None
 
 
-async def test_stored_backup_entry_is_dropped_on_load(monkeypatch, tmp_path):
+async def test_stored_backup_entry_is_dropped_on_load(monkeypatch, tmp_path, caplog):
     # Saved before /backup stopped being a root: dropped, with the existing
     # load-time warning; the other volume entries survive.
     stored = {"paths": ["/share/llm", "/backup", "/backup/x"]}
@@ -47,4 +48,7 @@ async def test_stored_backup_entry_is_dropped_on_load(monkeypatch, tmp_path):
     )
     hass = MagicMock()
     hass.config.config_dir = str(tmp_path)
-    assert await comp._load_allowed_paths(hass) == ["/share/llm"]
+    with caplog.at_level(logging.WARNING, logger=comp._LOGGER.name):
+        assert await comp._load_allowed_paths(hass) == ["/share/llm"]
+    assert "dropped 2 invalid entries" in caplog.text
+    assert "'/backup', '/backup/x'" in caplog.text
