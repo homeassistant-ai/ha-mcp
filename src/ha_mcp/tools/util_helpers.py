@@ -186,6 +186,20 @@ def normalized_path(path: str) -> str:
     return posixpath.normpath("/" + stripped)
 
 
+def supervisor_path(endpoint: str) -> str:
+    """``normalized_path`` of a Supervisor endpoint, with the ``/v2`` mount folded off.
+
+    Supervisor mounts the same handlers again under ``/v2`` when its
+    supervisor_v2_api feature flag is on (its own security middleware matches
+    both with ``^(?:/v2)?``), and the flag itself can be switched on through
+    ``supervisor/api``. Every guard on a Supervisor path classifies this form.
+    """
+    path = normalized_path(endpoint)
+    if path == "/v2" or path.startswith("/v2/"):
+        path = path[3:] or "/"
+    return path
+
+
 def is_credential_ws_command(
     command: str, params: Mapping[str, Any] | None = None
 ) -> bool:
@@ -196,13 +210,7 @@ def is_credential_ws_command(
         endpoint = (params or {}).get("endpoint")
         if not isinstance(endpoint, str):
             return False
-        path = normalized_path(endpoint)
-        # Supervisor mounts the same handlers again under /v2 when its
-        # supervisor_v2_api feature flag is on (its own security middleware
-        # matches both with ``^(?:/v2)?``), and the flag itself can be switched
-        # on through supervisor/api.
-        if path == "/v2" or path.startswith("/v2/"):
-            path = path[3:] or "/"
+        path = supervisor_path(endpoint)
         return any(
             path == root or path.startswith(root + "/")
             for root in _CREDENTIAL_SUPERVISOR_ENDPOINTS

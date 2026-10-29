@@ -8,7 +8,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..config import Settings, get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
-from .util_helpers import normalized_path
+from .util_helpers import normalized_path, supervisor_path
 
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
@@ -148,7 +148,7 @@ def _supervisor_backup_action(endpoint: Any, method: Any) -> str | None:
     """Classify a request against Supervisor's ``/backups`` API."""
     if not isinstance(endpoint, str):
         return None
-    path = normalized_path(endpoint)
+    path = supervisor_path(endpoint)
     if path != "/backups" and not path.startswith("/backups/"):
         return None
     verb = str(method).strip().lower()
