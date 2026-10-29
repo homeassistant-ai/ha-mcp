@@ -24,6 +24,7 @@ from ha_mcp.tools.component_api import ComponentCaps
 # The sibling module installs the homeassistant.* stubs the component needs, so
 # the component module is imported only after it.
 from .test_component_ws_search import (
+    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _Unauthorized,
@@ -338,6 +339,23 @@ class TestComponent:
         with pytest.raises(RuntimeError):
             await _run(hass, "update", uid="2", data={}, previous_uid="1")
 
+    @pytest.mark.parametrize("features", [0, None])
+    async def test_list_without_reordering_still_takes_an_update(
+        self, hass: Any, entity: _ListEntity, features: Any
+    ) -> None:
+        entity.supported_features = features
+        got = await _run(hass, "update", uid="2", data={"status": "completed"})
+        assert got["item"]["status"] == "completed"
+        assert entity.moves == []
+
+    async def test_list_without_features_refuses_a_move(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.supported_features = None
+        got = await _run(hass, "update", uid="2", data={}, previous_uid=None)
+        assert got["error"]["code"] == "not_supported"
+        assert hass.services.calls == []
+
     async def test_previous_uid_moves_only_on_update(
         self, hass: Any, entity: _ListEntity
     ) -> None:
@@ -354,24 +372,19 @@ class TestComponent:
         assert got["error"]["code"] == "unsupported"
 
 
-def test_core_parts_refuse_only_validation_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The real _core() over stand-ins for Core's modules: an integration's
-    # HomeAssistantError or ValueError must not count as a refusal.
-    class HAError(Exception):
-        pass
+class _HAError(Exception):
+    pass
 
-    class SVError(HAError):
-        pass
 
-    const = SimpleNamespace(
-        DATA_COMPONENT="todo",
-        DOMAIN="todo",
-        TodoListEntityFeature=SimpleNamespace(MOVE_TODO_ITEM=_MOVE),
-    )
+class _SVError(_HAError):
+    pass
+
+
+def _core_over_stand_ins(monkeypatch: pytest.MonkeyPatch, **const: Any) -> Any:
+    """The real _core() over stand-ins for Core's modules."""
+    const = {"DATA_COMPONENT": "todo", "DOMAIN": "todo"} | const
     todo = SimpleNamespace(
-        const=const,
+        const=SimpleNamespace(**const),
         entity=SimpleNamespace(TodoListEntity=_ListEntity, api_items_factory=dict),
         services=SimpleNamespace(_find_by_uid_or_summary=_find),
     )
@@ -379,18 +392,49 @@ def test_core_parts_refuse_only_validation_errors(
     modules = {
         "homeassistant.components.todo": todo,
         "homeassistant.exceptions": SimpleNamespace(
-            HomeAssistantError=HAError, ServiceValidationError=SVError
+            HomeAssistantError=_HAError, ServiceValidationError=_SVError
         ),
         "homeassistant.helpers": SimpleNamespace(config_validation=cv),
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
-    core = todo_items._core()
+    return todo_items._core()
+
+
+def test_core_parts_refuse_only_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An integration's HomeAssistantError or ValueError must not count as a
+    # refusal.
+    core = _core_over_stand_ins(
+        monkeypatch,
+        TodoListEntityFeature=SimpleNamespace(MOVE_TODO_ITEM=_MOVE),
+    )
     assert core is not None
-    assert SVError in core.refused
-    assert not [e for e in core.refused if issubclass(HAError, e)]
+    assert _SVError in core.refused
+    assert not [e for e in core.refused if issubclass(_HAError, e)]
     assert not [e for e in core.refused if issubclass(ValueError, e)]
-    assert core.error is HAError
+    assert core.error is _HAError
+
+
+def test_core_without_the_move_feature_has_no_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _core_over_stand_ins(monkeypatch) is None
+
+
+@pytest.mark.parametrize("previous_uid", [None, "1"])
+def test_command_schema_takes_previous_uid(previous_uid: str | None) -> None:
+    schema = _REAL_VOL.Schema(todo_items.command_specs(_REAL_VOL)[0][0])
+    msg = {
+        "type": todo_items.WS_TODO_ITEM,
+        "entity_id": LIST,
+        "action": "update",
+        "uid": "2",
+        "data": {},
+        "previous_uid": previous_uid,
+    }
+    assert schema(msg) == msg
 
 
 def test_command_registered_and_advertised(functional_ws) -> None:  # noqa: F811

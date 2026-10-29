@@ -67,11 +67,10 @@ async def todo_item(
 
 
 async def todo_call(
-    client: Any, entity_id: str, action: str, applied: str = "", **fields: Any
+    client: Any, entity_id: str, action: str, **fields: Any
 ) -> dict[str, Any] | None:
     """``todo_item`` for a tool: a refusal raises its tool error, and a write
-    sent without an answer is reported as unknown. ``applied`` says what an
-    earlier step of the same call already changed."""
+    sent without an answer is reported as unknown."""
     try:
         reply = await todo_item(client, entity_id, action, **fields)
     except HomeAssistantError as e:
@@ -81,7 +80,7 @@ async def todo_call(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"{WS_TODO_ITEM} {action} did not return its outcome, so "
-                f"whether it was applied is unknown: {e}{applied}",
+                f"whether it was applied is unknown: {e}",
                 context={"entity_id": entity_id, "write_outcome_unknown": True},
                 suggestions=["Check with ha_get_todo() before retrying"],
             )
@@ -93,7 +92,7 @@ async def todo_call(
     raise_tool_error(
         create_error_response(
             _REFUSAL_CODES.get(code, ErrorCode.SERVICE_CALL_FAILED),
-            f"{error.get('message', 'Unknown error')}{applied}",
+            str(error.get("message", "Unknown error")),
             context={"entity_id": entity_id, **fields},
             suggestions=["Rename the item named after the uid first"]
             if code == "namesake"
@@ -104,16 +103,16 @@ async def todo_call(
 
 
 async def todo_write(
-    client: Any, entity_id: str, action: str, applied: str = "", **fields: Any
+    client: Any, entity_id: str, action: str, **fields: Any
 ) -> dict[str, Any]:
     """``todo_call`` for a write whose item the component resolved: a None
     reply raises instead of falling back to Core's services."""
-    reply = await todo_call(client, entity_id, action, applied, **fields)
+    reply = await todo_call(client, entity_id, action, **fields)
     if reply is None:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
-                f"{WS_TODO_ITEM} {action} was not sent{applied}",
+                f"{WS_TODO_ITEM} {action} was not sent",
                 context={"entity_id": entity_id},
             )
         )

@@ -87,6 +87,23 @@ class TestTodoNativeContract:
                 listed = await mcp.call_tool_success("ha_get_todo", {"entity_id": LIST})
                 assert _names(listed)[0] == second
 
+                # An update with a move: through the component's bridge where it
+                # serves todo_item, through todo/item/move and todo.update_item
+                # otherwise.
+                updated = await mcp.call_tool_success(
+                    "ha_set_todo_item",
+                    {
+                        "entity_id": LIST,
+                        "item": first,
+                        "status": "completed",
+                        "move_after": "",
+                    },
+                )
+                assert updated["todo_item"]["uid"] == created[first]
+                assert updated["todo_item"]["status"] == "completed"
+                listed = await mcp.call_tool_success("ha_get_todo", {"entity_id": LIST})
+                assert _names(listed)[0] == first
+
                 removed = await mcp.call_tool_success(
                     "ha_remove_todo_item",
                     {"entity_id": LIST, "item": [first, created[second]]},

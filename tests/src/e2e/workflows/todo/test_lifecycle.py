@@ -384,7 +384,7 @@ class TestTodoErrorHandling:
             await mcp.call_tool_success(
                 "ha_set_todo_item", {"entity_id": todo_entity, "summary": item_name}
             )
-            await wait_for_item_in_list(mcp_client, todo_entity, item_name)
+            assert await wait_for_item_in_list(mcp_client, todo_entity, item_name)
 
             try:
                 # Try to update without any update fields

@@ -674,22 +674,18 @@ class TodoTools:
         updates: dict[str, Any],
         move_after: str | None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
-        """Update the row the component resolved, by its uid, and move it: the
-        component refuses the update when an item listed before it is named
-        after that uid, then moves it. A move alone takes Core's
+        """Update the row the component resolved, by its uid; the component
+        refuses the update when an item listed before it is named after that
+        uid, and moves the item after it. A move alone takes Core's
         todo/item/move."""
         uid = self._uid_of(rows[0], item, entity_id)
         warnings: list[str] = []
         if updates or move_after is None:
             # Core decides whether the update names anything to change.
-            move: dict[str, Any] = (
-                {}
-                if move_after is None
-                else {"previous_uid": self._previous_uid(rows, move_after, entity_id)}
-            )
-            reply = await todo_write(
-                self._client, entity_id, "update", uid=uid, data=updates, **move
-            )
+            fields: dict[str, Any] = {"uid": uid, "data": updates}
+            if move_after is not None:
+                fields["previous_uid"] = self._previous_uid(rows, move_after, entity_id)
+            reply = await todo_write(self._client, entity_id, "update", **fields)
             todo_item = reply["item"]
         else:
             await self._move_item(entity_id, item, rows, move_after)

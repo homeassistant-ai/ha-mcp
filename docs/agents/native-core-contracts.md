@@ -114,9 +114,9 @@ unchanged come back as a refusal; any other error leaves the outcome unknown. A
 restore hands it the snapshot's `due`, and it picks `due_date` or
 `due_datetime` with Core's own date validator. Without the component the tools
 call Core's todo services through WebSocket `call_service`, so Core's schema
-rejections reach the caller with their text; the REST service endpoint answers
-them with a bare 400, and a move goes to `todo/item/move` before the update. A
-move alone takes `todo/item/move` and `remove_completed` takes Core's
+rejections reach the caller with their text (the REST service endpoint answers
+them with a bare 400); on that path a move goes to `todo/item/move` before the
+update. A move alone takes `todo/item/move` and `remove_completed` takes Core's
 `remove_completed_items` on both paths.
 `ha_get_todo` filters with `todo.get_items`. Core's services skip an
 unavailable list, answering a write with success and `todo.get_items` with no

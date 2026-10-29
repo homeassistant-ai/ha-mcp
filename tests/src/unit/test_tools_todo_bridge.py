@@ -225,16 +225,23 @@ class TestBridge:
         assert [i["summary"] for i in client.items] == ["Rye", "Buy milk", "Pay"]
 
     @pytest.mark.parametrize(
-        ("code", "expected"),
+        ("code", "expected", "message"),
         [
-            ("not_supported", "VALIDATION_INVALID_PARAMETER"),
-            ("move_failed", "SERVICE_CALL_FAILED"),
+            (
+                "not_supported",
+                "VALIDATION_INVALID_PARAMETER",
+                f"{LIST} does not support reordering items",
+            ),
+            (
+                "move_failed",
+                "SERVICE_CALL_FAILED",
+                "The update was applied, but the move failed: gone",
+            ),
         ],
     )
     async def test_move_refusal_or_failure_reaches_the_caller(
-        self, tools: TodoTools, bridge: _Bridge, code: str, expected: str
+        self, tools: TodoTools, bridge: _Bridge, code: str, expected: str, message: str
     ) -> None:
-        message = "The update was applied, but the move failed: gone"
         bridge.replies["update"] = {
             "success": False,
             "error": {"code": code, "message": message},
