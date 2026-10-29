@@ -429,8 +429,10 @@ class TestCalendarEventLifecycle:
         list_args = {
             "entity_id": calendar_entity,
             "start": start.isoformat(),
-            # Window covers all 3 daily occurrences with an hour of slack.
-            "end": (start + timedelta(days=2, hours=1)).isoformat(),
+            # Home Assistant repeats the series in its local time zone, so a
+            # DST change inside it moves the last occurrence by an hour; a
+            # full extra day covers that. COUNT=3 bounds the series anyway.
+            "end": (start + timedelta(days=3)).isoformat(),
         }
 
         def _occurrences(data: dict) -> list[dict]:
