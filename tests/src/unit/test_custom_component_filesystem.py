@@ -1771,7 +1771,6 @@ class TestVolumeRootFor:
         assert _volume_root_for("/share/llm/notes.md") == "/share"
         assert _volume_root_for("/media/tts/out.mp3") == "/media"
         assert _volume_root_for("/ssl/fullchain.pem") == "/ssl"
-        assert _volume_root_for("/backup/abc.tar") == "/backup"
 
     def test_rejects_non_volume_absolute(self):
         assert _volume_root_for("/etc/passwd") is None
@@ -1780,10 +1779,10 @@ class TestVolumeRootFor:
 
     def test_respects_separator_boundary(self):
         # A sibling sharing a name prefix must NOT match (would be a string-
-        # prefix bug): '/shared' is not '/share', '/backups' is not '/backup'.
+        # prefix bug): '/shared' is not '/share', '/medias' is not '/media'.
         assert _volume_root_for("/shared") is None
         assert _volume_root_for("/shared/x") is None
-        assert _volume_root_for("/backups") is None
+        assert _volume_root_for("/medias") is None
         assert _volume_root_for("/ssl_extra/x") is None
 
 
@@ -1791,7 +1790,7 @@ class TestNormalizeVolumeDir:
     """_normalize_extra_dir accepts the fixed HAOS sibling-volume roots (#1586)."""
 
     def test_accepts_each_volume_root(self, tmp_path):
-        for root in ("/share", "/media", "/ssl", "/backup"):
+        for root in ("/share", "/media", "/ssl"):
             assert _normalize_extra_dir(root, tmp_path) == root
 
     def test_accepts_subdir_of_volume(self, tmp_path):
@@ -1812,7 +1811,7 @@ class TestNormalizeVolumeDir:
         assert _normalize_extra_dir("/share/.storage", tmp_path) is None
         assert _normalize_extra_dir("/share/.storage/auth", tmp_path) is None
         # secrets.yaml is always denied on a volume (volume reads are unmasked).
-        assert _normalize_extra_dir("/backup/secrets.yaml", tmp_path) is None
+        assert _normalize_extra_dir("/media/secrets.yaml", tmp_path) is None
 
     def test_traversal_collapsing_outside_volume_rejected(self, tmp_path):
         # normpath collapses '/share/../etc' -> '/etc', no longer a volume root.
@@ -1856,7 +1855,7 @@ class TestVolumePathEnforcement:
 
     def test_no_extra_dirs_blocks_all_volumes(self, tmp_path):
         assert _is_path_allowed_for_read(tmp_path, "/share/x", None) is False
-        assert _is_path_allowed_for_read(tmp_path, "/backup/x", []) is False
+        assert _is_path_allowed_for_read(tmp_path, "/media/x", []) is False
 
     def test_subdir_entry_respects_boundary(self, tmp_path):
         extra = ["/share/llm"]
