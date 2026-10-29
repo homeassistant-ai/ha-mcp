@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from ..helper_collections import collection_owner
 from .constants import (
     COLLECTION_HELPER_DOMAINS,
     ENTITY_COMPONENTS_KEY,
@@ -15,7 +16,13 @@ from .constants import (
     SEARCH_TYPE_SCENE,
 )
 from .flow_domains import OPTIONS_WITHHELD_CUSTOM
-from .registry import _iter_config_entries, _iter_states, _plainify, _RegistryView
+from .registry import (
+    _iter_config_entries,
+    _iter_states,
+    _plainify,
+    _reg_entity_id,
+    _RegistryView,
+)
 from .search_score import _config_score
 from .secrets import _scrub_secret_values
 
@@ -198,29 +205,43 @@ def _too_large(config_dict: dict[str, Any]) -> bool:
 
 
 # --- Helpers surface ---------------------------------------------------------
-def _collection_storage_index(
-    hass: HomeAssistant, domains: frozenset[str]
-) -> dict[str, tuple[dict[str, Any], str | None]]:
-    """Map collection-helper ``entity_id`` -> ``(storage body, storage id)``.
+def _stored_helpers(
+    hass: HomeAssistant, view: _RegistryView, domains: Iterable[str]
+) -> dict[str, list[tuple[dict[str, Any], str, str | None]]]:
+    """Each domain's stored helpers, read from Core's own storage collection.
 
-    Collection helpers keep their full storage config on the ``CollectionEntity``
-    as ``_config`` — a schedule's weekday blocks, an input_datetime's
-    ``has_date``/``has_time``, an input_boolean's ``initial`` — fields the live
-    state attributes do NOT carry. The ``StorageCollection`` that loaded them is a
-    setup-local (``helpers/collection.py`` writes nothing to ``hass.data``), so
-    the reachable in-process source is the domain's ``EntityComponent``
-    (``hass.data['entity_components'][domain]``, or ``hass.data[domain]`` for the
-    automation/script/scene pattern) and each entity's ``_config``.
-
-    Domains that decompose config into ``_attr_*`` instead of keeping ``_config``
-    (input_number / input_text / input_select) have no entry here; the caller
-    falls back to the state-attributes body for them (and for any YAML-defined
-    helper whose entity is absent). All access is getattr-guarded against drift.
+    The stock ``<domain>/list`` handler sends ``storage_collection.async_items()``,
+    so these are its items. Each comes with its id and its entity's entity_id
+    from the registry. A domain whose collection does not resolve is absent.
     """
-    index: dict[str, tuple[dict[str, Any], str | None]] = {}
+    stored: dict[str, list[tuple[dict[str, Any], str, str | None]]] = {}
+    for domain in domains:
+        owner = collection_owner(hass, domain)
+        if owner is None:
+            continue
+        try:
+            items = list(owner.storage_collection.async_items())
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
+            continue
+        stored[domain] = [
+            (dict(item), str(item["id"]), _reg_entity_id(view, domain, str(item["id"])))
+            for item in items
+            if isinstance(item, Mapping) and item.get("id") is not None
+        ]
+    return stored
+
+
+def _entity_configs(hass: HomeAssistant, domains: Iterable[str]) -> dict[str, Any]:
+    """Map ``entity_id`` -> the ``_config`` its entity was built from.
+
+    For a helper outside the storage (a YAML zone, the home zone) this is the
+    config it was defined with. The domain's ``EntityComponent`` is in
+    ``hass.data['entity_components'][domain]``. All access is getattr-guarded.
+    """
+    configs: dict[str, Any] = {}
     data = getattr(hass, "data", None)
     if not isinstance(data, Mapping):
-        return index
+        return configs
     instances = data.get(ENTITY_COMPONENTS_KEY)
     for domain in domains:
         component = (
@@ -235,21 +256,29 @@ def _collection_storage_index(
             continue
         for entity in entity_list:
             entity_id = getattr(entity, "entity_id", None)
-            if not entity_id:
-                continue
             raw = getattr(entity, "_config", None)
-            if not isinstance(raw, dict):
-                continue
-            storage_id = getattr(entity, "unique_id", None) or raw.get("id")
-            index[entity_id] = (
-                dict(raw),
-                str(storage_id) if storage_id is not None else None,
-            )
-    return index
+            if entity_id and isinstance(raw, dict):
+                configs[entity_id] = dict(raw)
+    return configs
+
+
+def _helper_bodies(
+    hass: HomeAssistant, view: _RegistryView, domains: Iterable[str]
+) -> dict[str, Any]:
+    """Map helper ``entity_id`` -> its config: the stored item, else the
+    ``_config`` of a helper outside the storage. A helper with neither has no
+    entry; the caller falls back to its state attributes."""
+    bodies = _entity_configs(hass, domains)
+    for rows in _stored_helpers(hass, view, domains).values():
+        for item, _item_id, entity_id in rows:
+            if entity_id:
+                bodies[entity_id] = item
+    return bodies
 
 
 def _search_helpers(
     hass: HomeAssistant,
+    view: _RegistryView,
     query_lower: str,
     *,
     match_all: bool,
@@ -268,12 +297,12 @@ def _search_helpers(
     results: list[dict[str, Any]] = []
 
     # Collection helpers: entities in the state machine, matched on entity_id /
-    # friendly_name AND the searchable config body. That body is the entity's real
-    # storage ``_config`` (a schedule's weekday blocks, an input_select's
-    # ``options`` + ``initial``, …) when reachable, falling back to the live state
-    # attributes otherwise (see _collection_storage_index). The name still comes
-    # from the CURRENT friendly_name, not the creation-time storage name.
-    storage = _collection_storage_index(hass, COLLECTION_HELPER_DOMAINS)
+    # friendly_name AND the searchable config body. That body is the stored
+    # helper (a schedule's weekday blocks, an input_select's stored ``options``
+    # + ``initial``, …), falling back to the live state attributes for a helper
+    # with no config (see _helper_bodies). The name still comes from the CURRENT
+    # friendly_name, not the creation-time storage name.
+    bodies = _helper_bodies(hass, view, COLLECTION_HELPER_DOMAINS)
     for state in _iter_states(hass):
         entity_id = getattr(state, "entity_id", "") or ""
         domain = entity_id.split(".")[0] if "." in entity_id else ""
@@ -282,9 +311,9 @@ def _search_helpers(
         attrs = getattr(state, "attributes", None) or {}
         name = attrs.get("friendly_name", entity_id)
         object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
-        stored = storage.get(entity_id)
+        stored = bodies.get(entity_id)
         if stored is not None:
-            body = _plainify(stored[0])
+            body = _plainify(stored)
         else:
             body = dict(attrs) if isinstance(attrs, Mapping) else {}
         if match_all:

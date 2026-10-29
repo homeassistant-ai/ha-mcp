@@ -359,9 +359,9 @@ class HelperConfigTools:
             return legacy
         result = raw.get("result") or {}
         if not _component_covers(result, helper_type):
-            # The component did not authoritatively enumerate this type (tag has
-            # no state entity for the from-states scan; or an older component
-            # sent no covered_types). Don't trust a partial/empty list: storage
+            # The component did not authoritatively enumerate this type (person
+            # and tag, whose <type>/list adds more than the stored items; or an
+            # older component sent no covered_types). Don't trust a partial/empty list: storage
             # types fall back to the legacy path silently; a flow type raises,
             # naming the failed loader read when the component reports one, else
             # the component-required error, rather than emptying out.

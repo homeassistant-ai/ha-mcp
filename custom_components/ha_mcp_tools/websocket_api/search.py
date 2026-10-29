@@ -186,9 +186,6 @@ def _do_search(  # noqa: PLR0915
         entities = [
             _project_entity(r, include_membership=membership_requested) for r in page
         ]
-        add_registry_failures(
-            location, view._access_failures, diagnostics, partial_reasons
-        )
 
     # --- Config surfaces (automations + scripts + scenes + helpers) ----------
     # One combined pagination window, mirroring the server's config branch.
@@ -215,6 +212,7 @@ def _do_search(  # noqa: PLR0915
             ("helper", rec)
             for rec in _search_helpers(
                 hass,
+                view,
                 query_lower,
                 match_all=match_all,
                 exact=exact,
@@ -224,6 +222,8 @@ def _do_search(  # noqa: PLR0915
                 custom_domains=custom_domains,
             )
         )
+    # After every phase: the helper phase reads the entity registry too.
+    add_registry_failures(location, view._access_failures, diagnostics, partial_reasons)
 
     combined.sort(key=lambda item: (-item[1]["score"], _sort_key(item[1])))
     config_total = len(combined)

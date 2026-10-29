@@ -34,7 +34,7 @@ from .registry import (
     _state_as_dict,
     _state_get,
 )
-from .search_config import _collection_storage_index
+from .search_config import _entity_configs, _stored_helpers
 from .secrets import _load_secret_scrub, _scrub_secret_values
 
 # All ws_* modules log through the websocket_api logger, so one logger
@@ -55,7 +55,7 @@ def _do_helpers_list(
     custom_domains: frozenset[str] = frozenset(),
     helper_flows_degraded: bool = False,
 ) -> dict[str, Any]:
-    """List collection helpers (live state bodies) + flow helpers (config-entry options).
+    """List collection helpers (stored items) + flow helpers (config-entry options).
 
     Flow-helper ``options`` come straight from ``ConfigEntry.options`` (``None``
     with ``options_withheld`` for a custom-only domain; see
@@ -71,24 +71,23 @@ def _do_helpers_list(
     through the SAME best-effort resolved-``!secret`` scrub for uniformity — a
     present-but-unreadable ``secrets.yaml`` degrades the scrub to a no-op and sets
     ``secret_scrub_degraded: true`` (present ONLY when degraded). Collection-helper
-    bodies (storage collection / live state attributes) are not scrubbed — they carry
-    no YAML-resolved secret.
+    bodies (stored items, or the config of a helper outside the storage) are not
+    scrubbed — they carry no YAML-resolved secret.
 
     ``covered_types`` names exactly the helper_type values this command can
-    enumerate (the state-machine collection domains + the flow domains, minus the
-    flow set when ``include_flow_helpers`` is false). It is the anti-silent-wrong
-    signal: for a requested helper_type NOT in ``covered_types`` (e.g. ``tag``,
-    which has no state entity), an empty ``helpers`` list means "cannot
-    enumerate", NOT "none exist" — the server must fall back to its legacy
-    ``<type>/list`` path rather than trust the emptiness.
+    enumerate the way ``<type>/list`` does (the collection domains whose storage
+    resolves + the flow domains, minus the flow set when ``include_flow_helpers``
+    is false). It is the anti-silent-wrong signal: for a requested helper_type NOT
+    in ``covered_types`` (e.g. ``person`` or ``tag``), an empty ``helpers`` list
+    means "cannot enumerate", NOT "none exist" — the server must fall back to its
+    legacy ``<type>/list`` path rather than trust the emptiness.
     """
     requested = params.get("helper_types")
     type_filter = frozenset(requested) if requested else None
     include_flow = params.get("include_flow_helpers", True)
 
     view = _resolve_registries(hass)
-    helpers = _collection_helpers_list(hass, view, type_filter)
-    covered = set(HELPERS_LIST_COLLECTION_DOMAINS)
+    helpers, covered = _collection_helpers_list(hass, view, type_filter)
     if include_flow:
         helpers.extend(
             _flow_helpers_list(
@@ -132,51 +131,80 @@ async def _helpers_list_prep(
 
 def _collection_helpers_list(
     hass: HomeAssistant, view: _RegistryView, type_filter: frozenset[str] | None
-) -> list[dict[str, Any]]:
-    """Collection helpers from the state machine (input_*, counter, timer, zone, …).
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Collection helpers (input_*, counter, timer, schedule, zone) and the types covered.
 
-    The record's ``config`` is the entity's real storage ``_config`` body when
-    reachable — so a schedule surfaces its weekday blocks, which the live state
-    attributes omit — falling back to the state attributes otherwise (see
-    :func:`_collection_storage_index`). ``name`` stays the CURRENT display name
-    (a rename updates the registry, not the storage body — issue #1794).
+    A stored helper's ``config`` is its item in Core's storage collection, what
+    ``<type>/list`` returns (see :func:`_stored_helpers`), and is listed with or
+    without a state. An entity of a covered type outside the storage (a YAML
+    helper, the home zone) follows with a null ``storage_id`` and the config it
+    was built from, else its state attributes. ``name`` is the CURRENT display
+    name (a rename updates the registry, not the stored item — issue #1794).
     """
-    out: list[dict[str, Any]] = []
-    storage = _collection_storage_index(hass, HELPERS_LIST_COLLECTION_DOMAINS)
+    # A stored helper the registry cannot place would be listed twice (again
+    # from its state); its type is left to the server's <type>/list.
+    stored = {
+        domain: rows
+        for domain, rows in _stored_helpers(
+            hass, view, HELPERS_LIST_COLLECTION_DOMAINS
+        ).items()
+        if all(entity_id for _item, _id, entity_id in rows)
+    }
+    wanted = [d for d in stored if type_filter is None or d in type_filter]
+    states: dict[str, Any] = {}
     for state in _iter_states(hass):
-        entity_id = getattr(state, "entity_id", "") or ""
-        domain = entity_id.split(".")[0] if "." in entity_id else ""
-        if domain not in HELPERS_LIST_COLLECTION_DOMAINS:
-            continue
-        if type_filter is not None and domain not in type_filter:
+        if isinstance(state_id := getattr(state, "entity_id", None), str):
+            states[state_id] = state
+    out: list[dict[str, Any]] = []
+    listed: set[str] = set()
+    for domain in wanted:
+        for item, storage_id, entity_id in stored[domain]:
+            if entity_id:
+                listed.add(entity_id)
+            reg = _reg_entity(view, entity_id) if entity_id else None
+            state = states.get(entity_id) if entity_id else None
+            attrs = getattr(state, "attributes", None) or {}
+            current = attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
+            out.append(
+                {
+                    "helper_type": domain,
+                    "kind": "collection",
+                    "entity_id": entity_id,
+                    "object_id": entity_id.split(".", 1)[1]
+                    if entity_id
+                    else storage_id,
+                    "name": str(
+                        current or _reg_name(reg) or item.get("name") or storage_id
+                    ),
+                    "storage_id": storage_id,
+                    "config": _plainify(item),
+                }
+            )
+    configs = _entity_configs(hass, wanted)
+    for unstored_id, state in states.items():
+        domain = unstored_id.split(".")[0] if "." in unstored_id else ""
+        if domain not in wanted or unstored_id in listed:
             continue
         attrs = getattr(state, "attributes", None) or {}
-        object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
-        reg = _reg_entity(view, entity_id)
-        # Current display name: state friendly_name reflects a registry rename;
-        # fall back to the registry name, then the object_id.
+        object_id = unstored_id.split(".", 1)[1]
         current = attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
-        name = current or _reg_name(reg) or object_id
-        # Prefer the real storage body + id; the state attributes omit fields like
-        # a schedule's weekday blocks.
-        stored = storage.get(entity_id)
-        if stored is not None:
-            body, storage_id = stored
-        else:
+        body = configs.get(unstored_id)
+        if body is None:
             body = dict(attrs) if isinstance(attrs, Mapping) else {}
-            storage_id = getattr(reg, "unique_id", None) or object_id
         out.append(
             {
                 "helper_type": domain,
                 "kind": "collection",
-                "entity_id": entity_id,
+                "entity_id": unstored_id,
                 "object_id": object_id,
-                "name": str(name),
-                "storage_id": storage_id,
+                "name": str(
+                    current or _reg_name(_reg_entity(view, unstored_id)) or object_id
+                ),
+                "storage_id": None,
                 "config": _plainify(body),
             }
         )
-    return out
+    return out, set(stored)
 
 
 def _flow_helpers_list(
