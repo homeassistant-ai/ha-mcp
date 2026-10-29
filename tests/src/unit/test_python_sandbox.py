@@ -68,6 +68,9 @@ while True:
         assert valid is True
 
 
+_METHOD_TYPES = {"List methods": list, "Dict methods": dict, "String methods": str}
+
+
 class TestSecurityDocumentation:
     """Test sandbox documentation shown to agents."""
 
@@ -79,7 +82,7 @@ class TestSecurityDocumentation:
         assert "- Loops: for, if/else, pass, break, continue" in docs
 
     @staticmethod
-    def _documented(*labels):
+    def _documented(*labels: str) -> set[str]:
         """The names the description lists under the given entry labels.
 
         Only those labels are read: a new entry label needs adding to the
@@ -87,21 +90,31 @@ class TestSecurityDocumentation:
         """
         # Indented lines continue the entry above them.
         entries = get_security_documentation().replace("\n  ", " ").splitlines()
-        names = set()
+        names: set[str] = set()
         for entry in entries:
             label, sep, listed = entry.partition(": ")
             if sep and label.removeprefix("- ") in labels:
                 names.update(name.strip() for name in listed.split(","))
         return names
 
-    def test_documented_methods_match_enforced_allowlist(self):
+    def test_documented_methods_match_enforced_allowlist(self) -> None:
         """Agents avoid allowed methods the description omits, and hit
         rejections for ones it lists but the validator refuses (#2902)."""
-        documented = self._documented("List methods", "Dict methods", "String methods")
+        documented = self._documented(*_METHOD_TYPES)
 
         assert documented == SAFE_METHODS
 
-    def test_documented_builtins_match_exposed_builtins(self):
+    @pytest.mark.parametrize(("label", "receiver"), list(_METHOD_TYPES.items()))
+    def test_documented_methods_exist_on_their_listed_type(
+        self, label: str, receiver: type
+    ) -> None:
+        """The validator matches method names only, so a method listed under
+        the wrong type passes validation and then fails on the receiver."""
+        misplaced = {m for m in self._documented(label) if not hasattr(receiver, m)}
+
+        assert misplaced == set()
+
+    def test_documented_builtins_match_exposed_builtins(self) -> None:
         """Agents avoid builtins the description omits, and hit NameErrors
         for ones it lists but the sandbox does not expose."""
         assert self._documented("Safe builtins") == set(_SAFE_BUILTINS)
@@ -517,7 +530,9 @@ class TestOneEndedTrimMethods:
             ("Old: Kitchen lights", ".removeprefix('Old: ')", "Kitchen lights"),
         ],
     )
-    def test_trimming_one_end_of_alias_is_allowed(self, alias, call, expected):
+    def test_trimming_one_end_of_alias_is_allowed(
+        self, alias: str, call: str, expected: str
+    ) -> None:
         result = safe_execute(
             f"config['alias'] = config['alias']{call}", {"alias": alias}
         )
