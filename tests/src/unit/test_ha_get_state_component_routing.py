@@ -262,6 +262,8 @@ async def test_capsless_component_uses_legacy_per_id() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert not _states_calls(ws)
     assert client.get_state_calls == 2
+    assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio
@@ -281,6 +283,7 @@ async def test_unknown_command_falls_back_to_legacy_silently() -> None:
     assert resp["data"]["states"]["light.a"]["state"] == "on"
     assert client.get_state_calls == 1
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio
@@ -300,6 +303,7 @@ async def test_command_error_falls_back_to_legacy_silently() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio
@@ -326,6 +330,7 @@ async def test_ws_connection_error_falls_back_to_legacy_rest() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
     # The component was tried exactly once before falling back.
     assert len(_states_calls(ws)) == 1
 
@@ -349,3 +354,4 @@ async def test_ws_establish_failure_falls_back_to_legacy_rest() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp

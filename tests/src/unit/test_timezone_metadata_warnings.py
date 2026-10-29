@@ -12,14 +12,16 @@ from ha_mcp.tools.response_helpers import add_timezone_metadata
 
 
 @pytest.fixture
-def tz_client():
+def tz_client() -> MagicMock:
     client = MagicMock()
     client.get_config = AsyncMock(return_value={"time_zone": "America/New_York"})
     return client
 
 
 @pytest.mark.asyncio
-async def test_a_payload_warning_reaches_the_top_level_not_data(tz_client):
+async def test_a_payload_warning_reaches_the_top_level_not_data(
+    tz_client: MagicMock,
+) -> None:
     """A warnings list in the payload is returned beside data, not inside it."""
     data = {"success": True, "warnings": ["attribute_keys was ignored"]}
     result = await add_timezone_metadata(tz_client, data)
@@ -28,7 +30,9 @@ async def test_a_payload_warning_reaches_the_top_level_not_data(tz_client):
 
 
 @pytest.mark.asyncio
-async def test_payload_and_timezone_warnings_come_back_as_one_list(tz_client):
+async def test_payload_and_timezone_warnings_come_back_as_one_list(
+    tz_client: MagicMock,
+) -> None:
     """Payload warnings and the wrapper's own fetch warning share one list.
 
     Without conversion the wrapper hands the caller's own dict through as
@@ -44,7 +48,9 @@ async def test_payload_and_timezone_warnings_come_back_as_one_list(tz_client):
 
 
 @pytest.mark.asyncio
-async def test_a_non_list_warnings_field_stays_payload_data(tz_client):
+async def test_a_non_list_warnings_field_stays_payload_data(
+    tz_client: MagicMock,
+) -> None:
     """Only a list is lifted; any other warnings value is payload data."""
     result = await add_timezone_metadata(tz_client, {"success": True, "warnings": 3})
     assert result["data"]["warnings"] == 3
@@ -52,7 +58,9 @@ async def test_a_non_list_warnings_field_stays_payload_data(tz_client):
 
 
 @pytest.mark.asyncio
-async def test_an_empty_warnings_list_leaves_no_warnings_key(tz_client):
+async def test_an_empty_warnings_list_leaves_no_warnings_key(
+    tz_client: MagicMock,
+) -> None:
     """An empty payload list is dropped, not returned as ``warnings: []``."""
     result = await add_timezone_metadata(tz_client, {"success": True, "warnings": []})
     assert "warnings" not in result

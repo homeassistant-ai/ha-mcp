@@ -327,6 +327,7 @@ class TestHaGetStateSingleEntity:
 
         data = result["data"]
         assert "warnings" not in data
+        assert "warnings" not in result
         assert data["attributes"] == {"brightness": 255}
 
     @pytest.mark.asyncio
@@ -420,6 +421,7 @@ class TestHaGetStateAttributeKeysWarningBulk:
         )
         data = result["data"]
         assert "warnings" not in data
+        assert "warnings" not in result
         assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 200}
 
 
@@ -639,6 +641,7 @@ class TestAttributeKeysTypoGuardBulk:
         data = result["data"]
         assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 255}
         assert "warnings" not in data
+        assert "warnings" not in result
 
 
 # Note: project_fields() typo-guard unit tests live in test_util_helpers.py

@@ -299,9 +299,9 @@ class StateMixin(SearchToolsBase):
         ``states`` capability, was downgraded (``unknown_command`` → invalidate the
         cached caps), or errored (logged). Falls back **silently** — unlike
         ``ha_search`` / ``ha_get_zone`` which append a ``warnings[]`` entry —
-        because ``ha_get_state``'s single- and bulk-mode responses do not share one
-        warnings channel; the ``log.warning`` preserves operator visibility and the
-        legacy REST path returns the byte-identical correct data either way.
+        because the legacy REST path returns the byte-identical correct data either
+        way, so the caller has nothing to act on; the ``log.warning`` preserves
+        operator visibility.
         ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
         SEPARATE transport, so a WS transport/connect failure
         (``HomeAssistantConnectionError``, covering both a pooled-WS drop and a
