@@ -1,6 +1,7 @@
 """Unit tests for the usage logger with ring buffer."""
 
 import asyncio
+import errno
 import logging
 import os
 import stat
@@ -13,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-import ha_mcp.utils.usage_logger as usage_logger_module
 from ha_mcp.utils.usage_logger import (
     _MAX_REDACT_DEPTH,
     _REDACTED_VALUE,
     AVG_LOG_ENTRIES_PER_TOOL,
     DEFAULT_RING_BUFFER_SIZE,
+    ToolUsageLog,
     UsageLogger,
     _redact_parameters,
     get_recent_logs,
@@ -530,7 +531,7 @@ class TestLogPathControlledByOthers:
         real_euid = os.geteuid()
         monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
         logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
-        monkeypatch.setattr(usage_logger_module, "_usage_logger", logger)
+        monkeypatch.setattr("ha_mcp.utils.usage_logger._usage_logger", logger)
         try:
             assert logger._disk_enabled is False
             _log_one(logger, tool_name="ha_kept_in_memory")
@@ -651,3 +652,77 @@ class TestLogPathControlledByOthers:
             logger.shutdown()
         [warning] = _disk_disabled_warnings(caplog)
         assert str(log_path) in warning
+
+    def test_log_directory_removed_and_recreated_resumes_writing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(mode=0o700)
+        log_path = log_dir / "usage.jsonl"
+        caplog.set_level(logging.WARNING, logger="ha_mcp.utils.usage_logger")
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            log_dir.rmdir()
+            _log_one(logger, tool_name="ha_while_gone")
+            _wait_for(logger._log_queue.empty)
+            time.sleep(0.2)
+            assert logger._disk_enabled is True
+            log_dir.mkdir(mode=0o700)
+            _log_one(logger, tool_name="ha_after_recreate")
+            _wait_for(lambda: log_path.exists() and log_path.read_text() != "")
+            assert "ha_after_recreate" in log_path.read_text()
+            assert "ha_while_gone" not in log_path.read_text()
+        finally:
+            logger.shutdown()
+        assert _disk_disabled_warnings(caplog) == []
+
+    @pytest.mark.parametrize("err", [errno.EMFILE, errno.ENFILE])
+    def test_out_of_descriptors_keeps_the_log_file_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int
+    ) -> None:
+        log_path = tmp_path / "usage.jsonl"
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+
+            def exhausted(path: str, flags: int) -> int:
+                raise OSError(err, os.strerror(err))
+
+            monkeypatch.setattr("ha_mcp.utils.usage_logger._private_opener", exhausted)
+            _log_one(logger)
+            _wait_for(logger._log_queue.empty)
+            time.sleep(0.2)
+            assert logger._disk_enabled is True
+        finally:
+            logger.shutdown()
+
+    def test_descriptor_is_closed_when_the_file_object_cannot_be_made(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_path = tmp_path / "usage.jsonl"
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        closed: list[int] = []
+        real_close = os.close
+
+        def failing_open(*args: object, **kwargs: object) -> None:
+            raise ValueError("cannot wrap the descriptor")
+
+        def tracking_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        try:
+            monkeypatch.setattr("builtins.open", failing_open)
+            monkeypatch.setattr(os, "close", tracking_close)
+            logger._write_log_entry(
+                ToolUsageLog(
+                    timestamp="2026-10-29T00:00:00+00:00",
+                    tool_name="ha_get_state",
+                    parameters={},
+                    execution_time_ms=1.0,
+                    success=True,
+                )
+            )
+            assert len(closed) == 1
+        finally:
+            monkeypatch.undo()
+            logger.shutdown()

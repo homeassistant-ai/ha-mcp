@@ -34,6 +34,12 @@ _PRIVATE_OPEN_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0
 # open(), so an error from the open can be told apart from one from the write.
 _APPEND_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0)
 
+# Open errors that say nothing about who controls the path: the logs directory
+# is gone for now, or the process or system is out of descriptors. The entry is
+# dropped and the next one tries again; every retry still goes through
+# O_NOFOLLOW and the fstat checks.
+_TRANSIENT_OPEN_ERRNOS = frozenset({errno.ENOENT, errno.EMFILE, errno.ENFILE})
+
 
 class UnsafeLogPathError(PermissionError):
     """The log path is not a private file and directory owned by this process."""
@@ -486,6 +492,17 @@ class UsageLogger:
         try:
             fd = _private_opener(str(self.log_file_path), _APPEND_FLAGS)
         except OSError as e:
+            if (
+                not isinstance(e, UnsafeLogPathError)
+                and e.errno in _TRANSIENT_OPEN_ERRNOS
+            ):
+                logger.debug(
+                    "Usage log entry dropped, %s could not be opened (%s); "
+                    "the next entry retries.",
+                    self.log_file_path,
+                    e,
+                )
+                return
             # The path was swapped after startup for something we will not or
             # cannot open (a link, a FIFO, a file of another user). Stop writing
             # instead of dropping every entry silently or retrying a path someone
@@ -498,8 +515,14 @@ class UsageLogger:
                 e,
             )
             return
+        # Until open() returns a file object, nothing owns fd; close it here.
         try:
-            with open(fd, "a", encoding="utf-8") as f:
+            f = open(fd, "a", encoding="utf-8")  # noqa: SIM115 - the with below owns it
+        except Exception:  # noqa: BLE001
+            os.close(fd)
+            return
+        try:
+            with f:
                 json.dump(asdict(log_entry), f, ensure_ascii=False)
                 f.write("\n")
         except Exception:  # noqa: BLE001
