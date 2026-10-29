@@ -798,7 +798,7 @@ class FilesystemTools:
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
-          `/media`; `/ssl` is read-only) configured in the ha-mcp settings UI
+          `/media`; `/ssl` is read-only on HAOS) configured in the ha-mcp settings UI
         Configuration files (configuration.yaml, etc.) cannot be written; path
         traversal (../) is blocked.
 
@@ -888,7 +888,7 @@ class FilesystemTools:
         deletion is permanent. Allowed directories:
         `www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom
         directories OR HAOS sibling volumes (`/share`, `/media`; `/ssl` is
-        read-only) configured in the ha-mcp settings UI. Configuration files
+        read-only on HAOS) configured in the ha-mcp settings UI. Configuration files
         cannot be deleted; path traversal (../) is blocked.
 
         EXAMPLE: ha_delete_file(path="www/deprecated-style.css", confirm=True)
