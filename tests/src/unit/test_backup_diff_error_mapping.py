@@ -5,6 +5,7 @@ The ``(edits, diff)`` path maps exceptions raised by
 
     FileNotFoundError         -> RESOURCE_NOT_FOUND
     (ValueError, LookupError) -> VALIDATION_INVALID_PARAMETER
+    TodoListNotLoaded         -> ENTITY_UNAVAILABLE
     ToolError                 -> re-raised unchanged (guard-pattern passthrough)
     any other Exception       -> exception_to_structured_error (INTERNAL_ERROR here)
 
@@ -24,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.backup_todo import TodoListNotLoaded
 from ha_mcp.config import Settings
 from ha_mcp.errors import ErrorCode
 
@@ -105,6 +107,11 @@ def _patched(diff_exc: BaseException) -> tuple[Any, Any]:
             LookupError("missing key"),
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             id="lookup_error_to_validation",
+        ),
+        pytest.param(
+            TodoListNotLoaded("todo.tasks"),
+            ErrorCode.ENTITY_UNAVAILABLE,
+            id="todo_list_not_loaded_to_entity_unavailable",
         ),
         # A neutral message ("boom" matches no keyword bucket in
         # _classify_by_message) so the generic funnel lands on INTERNAL_ERROR

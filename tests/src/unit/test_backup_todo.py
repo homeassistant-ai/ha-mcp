@@ -6,13 +6,16 @@ way Core's todo services do, so each test reads the list a restore leaves.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request
 
 from ha_mcp import backup_manager as bm
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_helper_target import safety_target as restore_safety_target
 from ha_mcp.backup_todo import (
     TodoListNotLoaded,
@@ -23,8 +26,11 @@ from ha_mcp.backup_todo import (
     safety_target,
 )
 from ha_mcp.client.rest_client import HomeAssistantCommandError, HomeAssistantError
+from ha_mcp.settings_ui import _handlers_backups as settings_ui
 
+from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
 from .test_backup_manager import _mk_handler, _mk_manager
+from .test_backup_restore_consumers import response_for
 
 LIST = "todo.tasks"
 
@@ -34,19 +40,27 @@ class _FakeList:
         self.items = [dict(i) for i in items]
         self.calls: list[dict[str, Any]] = []
         self.next_uid = 100
-        self.state = "2"
+        self.state: str | None = "2"
+        self.loaded = True
+        self.registered = True
         self.refuse: str | None = None
 
     async def state_of(self, _client: Any, path: str) -> Any:
-        return {"state": self.state} if path == f"states/{LIST}" else None
+        if path != f"states/{LIST}" or self.state is None:
+            return None
+        return {"state": self.state}
 
     async def send(self, _client: Any, message: dict[str, Any]) -> Any:
         message = dict(message)
         kind = message.pop("type")
         if kind == "todo/item/list":
-            if message["entity_id"] != LIST:
+            if message["entity_id"] != LIST or not self.loaded:
                 raise HomeAssistantCommandError("Entity not found", "not_found")
             return {"items": [dict(i) for i in self.items]}
+        if kind == "config/entity_registry/get":
+            if message["entity_id"] != LIST or not self.registered:
+                raise HomeAssistantCommandError("Entity not found", "not_found")
+            return {"entity_id": LIST}
         assert kind == "call_service"
         assert message["target"] == {"entity_id": LIST}
         self.calls.append(message)
@@ -91,6 +105,13 @@ def _no_component() -> Iterator[None]:
 
 
 @pytest.fixture
+def todo_manager(tmp_path: Any) -> Any:
+    mgr = _mk_manager(tmp_path)
+    mgr.register(bm.DomainHandler("todo_item", fetch_todo_item, restore_todo_item))
+    return mgr
+
+
+@pytest.fixture
 def fake(monkeypatch: pytest.MonkeyPatch) -> _FakeList:
     fake = _FakeList(
         [
@@ -119,8 +140,18 @@ class TestFetch:
 
     async def test_list_not_loaded_is_no_miss(self, fake: _FakeList) -> None:
         # Whether the item is on a list Core has not loaded is unknown.
+        fake.loaded = False
         with pytest.raises(TodoListNotLoaded):
-            await fetch_todo_item(object(), "todo.gone::Bread")
+            await fetch_todo_item(object(), f"{LIST}::Pay")
+
+    async def test_list_with_a_state_is_no_miss(self, fake: _FakeList) -> None:
+        fake.loaded = False
+        fake.registered = False
+        with pytest.raises(TodoListNotLoaded):
+            await fetch_todo_item(object(), f"{LIST}::Pay")
+
+    async def test_deleted_list_is_a_miss(self, fake: _FakeList) -> None:
+        assert await fetch_todo_item(object(), "todo.gone::Bread") is None
 
     async def test_uid_wins_over_an_item_named_like_it(self, fake: _FakeList) -> None:
         fake.items.insert(0, {"uid": "9", "summary": "2", "status": "needs_action"})
@@ -246,28 +277,35 @@ class TestRestoreGuards:
         with pytest.raises(bm.BackupRestoreError, match="unavailable") as excinfo:
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
         assert excinfo.value.outcome["apply_status"] == "not_applied"
+        assert excinfo.value.outcome["reason"] == "entity_unavailable"
         assert fake.calls == []
+
+    async def test_list_without_registry_entry_is_restored(
+        self, fake: _FakeList
+    ) -> None:
+        # A list set up without a unique id has a state but no registry entry.
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        assert snapshot is not None
+        fake.registered = False
+        fake.items[1]["summary"] = "Paid"
+        await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert fake.items[1]["summary"] == "Pay"
 
     async def test_list_not_loaded_is_refused_as_not_applied(
         self, fake: _FakeList, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
-        send = fake.send
-
-        async def not_loaded(client: Any, message: dict[str, Any]) -> Any:
-            if message["type"] == "todo/item/list":
-                raise HomeAssistantCommandError("Entity not found", "not_found")
-            return await send(client, message)
-
-        monkeypatch.setattr(bm, "_ws_send", not_loaded)
+        fake.loaded = False
         with pytest.raises(
             bm.BackupRestoreError, match="has not loaded the todo list"
         ) as excinfo:
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
         assert excinfo.value.outcome["apply_status"] == "not_applied"
+        assert excinfo.value.outcome["reason"] == "entity_unavailable"
         with pytest.raises(bm.BackupRestoreError) as safety:
             await safety_target(object(), f"{LIST}::Pay", snapshot)
         assert safety.value.outcome["apply_status"] == "not_applied"
+        assert safety.value.outcome["reason"] == "entity_unavailable"
         assert fake.calls == []
 
     async def test_snapshot_without_uid_updates_the_item_by_summary(
@@ -308,6 +346,24 @@ class TestRenamedItem:
         fake.items.pop(1)
         assert await safety_target(object(), f"{LIST}::Pay", {"uid": "2"}) is None
 
+    async def test_row_named_after_a_removed_items_uid_is_not_it(
+        self, fake: _FakeList, todo_manager: Any
+    ) -> None:
+        # The restore adds the item again and leaves that row alone, so it
+        # takes no safety backup of it and the diff finds the item missing.
+        path = await todo_manager.maybe_snapshot("todo_item", f"{LIST}::2")
+        assert path is not None
+        fake.items[1] = {"uid": "9", "summary": "2", "status": "needs_action"}
+        assert await safety_target(object(), f"{LIST}::2", {"uid": "2"}) is None
+        result = await todo_manager.diff_snapshot(path.name)
+        assert result["entity_missing"] is True
+
+    async def test_snapshot_without_uid_is_the_item_named_so(
+        self, fake: _FakeList
+    ) -> None:
+        item = {"summary": "Pay", "status": "needs_action"}
+        assert await safety_target(object(), f"{LIST}::Pay", item) == f"{LIST}::Pay"
+
     async def test_diff_reads_the_item_under_its_uid(self, tmp_path: Any) -> None:
         mgr = _mk_manager(tmp_path)
         handler = _mk_handler("todo_item", fetched={"uid": "2", "summary": "Pay"})
@@ -324,6 +380,120 @@ class TestRenamedItem:
         result = await mgr.diff_snapshot(path.name)
         assert keys == [f"{LIST}::2"]
         assert result["entity_missing"] is False
+
+
+class TestListNotLoadedCodes:
+    """A list Home Assistant has not loaded is ENTITY_UNAVAILABLE; one it no
+    longer has is ENTITY_NOT_FOUND. A disabled list may have no state (state
+    None) but keeps its registry entry."""
+
+    @staticmethod
+    async def _restore(
+        manager: Any, name: str, consumer: str, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[int | None, dict[str, Any]]:
+        if consumer == "settings":
+            response = response_for(monkeypatch, manager, name)
+            return response.status_code, response.json()
+        _patch_mcp(manager, monkeypatch)
+        with pytest.raises(ToolError) as caught:
+            await _dispatcher()(scope="edits", action="restore", backup_name=name)
+        return None, json.loads(str(caught.value))
+
+    @pytest.mark.parametrize("consumer", ["settings", "mcp"])
+    @pytest.mark.parametrize("state", ["unavailable", None])
+    @pytest.mark.parametrize("auto_backup", [True, False])
+    async def test_restore(
+        self,
+        fake: _FakeList,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        consumer: str,
+        state: str | None,
+        auto_backup: bool,
+    ) -> None:
+        mgr = _mk_manager(tmp_path, enable_auto_backup=auto_backup)
+        mgr.register(bm.DomainHandler("todo_item", fetch_todo_item, restore_todo_item))
+        path = await mgr.maybe_snapshot("todo_item", f"{LIST}::2", force=True)
+        assert path is not None
+        fake.loaded = False
+        fake.state = state
+        status, payload = await self._restore(mgr, path.name, consumer, monkeypatch)
+        assert status in (None, 409)
+        assert payload["error"]["code"] == "ENTITY_UNAVAILABLE"
+        assert payload["data"]["apply_status"] == "not_applied"
+        assert fake.calls == []
+
+    @pytest.mark.parametrize("consumer", ["settings", "mcp"])
+    @pytest.mark.parametrize("state", ["unavailable", None])
+    async def test_diff(
+        self,
+        fake: _FakeList,
+        todo_manager: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        consumer: str,
+        state: str | None,
+    ) -> None:
+        path = await todo_manager.maybe_snapshot("todo_item", f"{LIST}::2")
+        assert path is not None
+        fake.loaded = False
+        fake.state = state
+        if consumer == "settings":
+            monkeypatch.setattr(settings_ui, "_backup_mgr", lambda server: todo_manager)
+            response = await settings_ui._diff_backup(
+                None, Request({"type": "http", "path_params": {"name": path.name}})
+            )
+            assert response.status_code == 409
+            payload = json.loads(response.body)
+        else:
+            _patch_mcp(todo_manager, monkeypatch)
+            with pytest.raises(ToolError) as caught:
+                await _dispatcher()(scope="edits", action="diff", backup_name=path.name)
+            payload = json.loads(str(caught.value))
+            assert payload["backup_name"] == path.name
+        assert payload["error"]["code"] == "ENTITY_UNAVAILABLE"
+        assert "has not loaded the todo list" in payload["error"]["message"]
+
+    async def test_diff_of_a_deleted_list_finds_the_item_missing(
+        self, fake: _FakeList, todo_manager: Any
+    ) -> None:
+        path = await todo_manager.maybe_snapshot("todo_item", f"{LIST}::2")
+        assert path is not None
+        fake.loaded = False
+        fake.state = None
+        fake.registered = False
+        result = await todo_manager.diff_snapshot(path.name)
+        assert result["entity_missing"] is True
+
+    @pytest.mark.parametrize("consumer", ["settings", "mcp"])
+    @pytest.mark.parametrize("auto_backup", [True, False])
+    async def test_restore_to_a_deleted_list(
+        self,
+        fake: _FakeList,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        auto_backup: bool,
+        consumer: str,
+    ) -> None:
+        # With auto-backup the safety backup reads the list first; both ways
+        # a deleted list is not found.
+        mgr = _mk_manager(tmp_path, enable_auto_backup=auto_backup)
+        mgr.register(bm.DomainHandler("todo_item", fetch_todo_item, restore_todo_item))
+        path = await mgr.maybe_snapshot("todo_item", f"{LIST}::2", force=True)
+        assert path is not None
+        fake.loaded = False
+        fake.state = None
+        fake.registered = False
+        status, payload = await self._restore(mgr, path.name, consumer, monkeypatch)
+        assert status in (None, 404)
+        assert payload["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert "no longer exists" in payload["error"]["message"]
+        assert fake.calls == []
+
+
+def _patch_mcp(manager: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("ha_mcp.tools.backup.get_backup_manager", lambda *args: manager)
+    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+    monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
 
 
 class TestReviewGaps:

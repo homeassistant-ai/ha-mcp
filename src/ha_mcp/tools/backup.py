@@ -33,7 +33,9 @@ from ..backup_manager import (
     MandatoryBackupError,
     SnapshotInUseError,
     get_backup_manager,
+    restore_error_code,
 )
+from ..backup_todo import TodoListNotLoaded
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
@@ -542,6 +544,14 @@ async def _edits_diff(
                 context={"backup_name": bname},
             )
         )
+    except TodoListNotLoaded as err:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_UNAVAILABLE,
+                str(err),
+                context={"backup_name": bname},
+            )
+        )
     except ToolError:
         raise
     except Exception as err:  # noqa: BLE001
@@ -619,13 +629,7 @@ async def _edits_restore(
             )
         )
     except BackupRestoreError as err:
-        code = {
-            "snapshot_not_found": ErrorCode.RESOURCE_NOT_FOUND,
-            "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
-            "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
-            "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
-            "entry_deleted": ErrorCode.RESOURCE_NOT_FOUND,
-        }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
+        code = restore_error_code(err)
         hint = "Inspect the current configuration and restore outcome before retrying"
         suggestions = list(err.outcome.get("suggestions") or [hint])
         if err.outcome.get("safety_backup"):

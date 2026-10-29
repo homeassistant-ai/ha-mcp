@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .backup_entities import fetch_entity
 from .backup_entity_ids import _manager
 from .client.rest_client import HomeAssistantCommandError, HomeAssistantError
 from .config import get_global_settings
@@ -87,6 +88,8 @@ async def fetch_todo_item(client: Any, entity_id: str) -> dict[str, Any] | None:
         return None
     items = await list_items(client, todo_entity)
     if items is None:
+        if await _list_gone(client, todo_entity):
+            return None
         raise TodoListNotLoaded(todo_entity)
     item = await _find(client, todo_entity, items, ref)
     if not item:
@@ -140,13 +143,22 @@ async def safety_target(client: Any, entity_id: str, config: Any) -> str | None:
     try:
         item = await fetch_todo_item(client, key)
     except TodoListNotLoaded as err:
-        raise _not_applied(f"{err}; nothing was restored") from err
+        raise _unavailable(f"{err}; nothing was restored") from err
     except bm._CAPTURE_TRANSIENT_ERRORS as err:
         raise bm.MandatoryBackupError(
             f"the todo list could not be read: {type(err).__name__}",
             safe_detail="the todo list could not be read",
         ) from err
-    return key if item else None
+    return key if snapshot_item(config, item) else None
+
+
+def snapshot_item(config: Any, item: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``item`` when it is the snapshot's item: once the item with the
+    snapshot's uid is gone, a row named after that uid is another item."""
+    uid = config.get("uid") if isinstance(config, dict) else None
+    if item is None or (uid and item.get("uid") != uid):
+        return None
+    return item
 
 
 def _due_field(due: str) -> str:
@@ -197,20 +209,35 @@ async def _call(
     )
 
 
-def _not_applied(message: str) -> HomeAssistantError:
+def _not_applied(message: str, **outcome: Any) -> HomeAssistantError:
     error: HomeAssistantError = _manager().BackupRestoreError(
-        message, apply_status="not_applied"
+        message, apply_status="not_applied", **outcome
     )
     return error
+
+
+def _unavailable(message: str) -> HomeAssistantError:
+    return _not_applied(message, reason="entity_unavailable")
+
+
+async def _list_gone(client: Any, todo_entity: str) -> bool:
+    """Whether Home Assistant no longer has the list. Core answers a deleted
+    list as one it has not loaded. A deleted list has neither a state nor a
+    registry entry; a disabled one keeps its entry. So does a list without a
+    unique id that Home Assistant has not loaded, which is taken as deleted."""
+    state = await _manager()._rest_get_or_none(client, f"states/{todo_entity}")
+    return state is None and await fetch_entity(client, todo_entity) is None
 
 
 async def _require_available(client: Any, todo_entity: str) -> None:
     # Core skips an unavailable list: a write changes nothing and succeeds.
     state = await _manager()._rest_get_or_none(client, f"states/{todo_entity}")
-    if state is None:
-        raise _not_applied(f"Todo list {todo_entity} no longer exists")
-    if state.get("state") == "unavailable":
+    if state is None and await fetch_entity(client, todo_entity) is None:
         raise _not_applied(
+            f"Todo list {todo_entity} no longer exists", reason="entity_not_found"
+        )
+    if state is not None and state.get("state") == "unavailable":
+        raise _unavailable(
             f"Todo list {todo_entity} is unavailable, so nothing would be restored"
         )
 
@@ -282,7 +309,7 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
     await _require_available(client, todo_entity)
     items = await list_items(client, todo_entity)
     if items is None:
-        raise _not_applied(f"{TodoListNotLoaded(todo_entity)}; nothing was restored")
+        raise _unavailable(f"{TodoListNotLoaded(todo_entity)}; nothing was restored")
     current = (
         next((i for i in items if i.get("uid") == uid), None)
         if uid

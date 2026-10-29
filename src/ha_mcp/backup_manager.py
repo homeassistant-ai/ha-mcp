@@ -105,12 +105,14 @@ from .backup_integrations import fetch_integration, restore_integration
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
+from .backup_todo import snapshot_item as todo_snapshot_item
 from .backup_zones import fetch_zone, restore_zone
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .errors import ErrorCode
 from .storage_helper_types import SIMPLE_HELPER_TYPES
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
@@ -197,6 +199,19 @@ class BackupRestoreError(HomeAssistantError):
             "apply_status": apply_status,
             "verification_status": verification_status,
         }
+
+
+def restore_error_code(err: BackupRestoreError) -> ErrorCode:
+    """The error code a refused or failed restore is reported with."""
+    return {
+        "snapshot_not_found": ErrorCode.RESOURCE_NOT_FOUND,
+        "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
+        "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
+        "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
+        "entry_deleted": ErrorCode.RESOURCE_NOT_FOUND,
+        "entity_unavailable": ErrorCode.ENTITY_UNAVAILABLE,
+        "entity_not_found": ErrorCode.ENTITY_NOT_FOUND,
+    }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
 
 
 class InvalidBackupSnapshotError(ValueError):
@@ -1703,6 +1718,7 @@ class BackupManager:
             # leaves the registry alone, so the icon is no difference.
             current.pop("registry_icon", None)
         if domain == "todo_item" and isinstance(data["config"], dict):
+            current = todo_snapshot_item(data["config"], current)
             # Older snapshots carry the list's completion time, which the
             # fetch now leaves out.
             data["config"].pop("completed", None)
