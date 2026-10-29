@@ -602,12 +602,9 @@ class LogbookLogSourceMixin:
                     order,
                 )
 
-            wrapped = await add_timezone_metadata(self._client, logbook_data)
             if transport_warnings:
-                # Top-level, alongside the other tool warnings: nesting these
-                # under ``data`` would hide them from the warning merger.
-                wrapped["warnings"] = transport_warnings + wrapped.get("warnings", [])
-            return wrapped
+                logbook_data["warnings"] = transport_warnings
+            return await add_timezone_metadata(self._client, logbook_data)
 
         except ToolError:
             raise

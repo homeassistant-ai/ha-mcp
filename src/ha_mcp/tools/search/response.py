@@ -500,20 +500,9 @@ def _build_hidden_ids(registry_result: Any) -> set[str]:
 def _apply_search_outcome(
     response: dict[str, Any],
     label: str,
-    outcome: dict[str, Any],
+    payload: dict[str, Any],
 ) -> None:
-    """Apply one gather outcome (entities or configs) to the response dict in-place.
-
-    Both ``_ha_search_entities`` and ``_ha_deep_search`` return their search dict
-    directly. The entity builders no longer wrap it via ``add_timezone_metadata``:
-    entity-search records carry none of the timestamp fields that enrichment
-    converts, so it was a discarded ``/api/config`` fetch. The ``{"data": ...}``
-    unwrap is kept as a defensive no-op so a future wrapped payload still reads
-    correctly.
-    """
-    payload = (
-        outcome["data"] if isinstance(outcome, dict) and "data" in outcome else outcome
-    )
+    """Apply one gather outcome (entities or configs) to the response dict in-place."""
     if label == "entities":
         response["entities"] = payload.get("results", [])
         response["entity_total_matches"] = payload.get("total_matches", 0)

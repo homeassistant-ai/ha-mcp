@@ -397,10 +397,9 @@ class TestHaGetStateAttributeKeysWarningBulk:
             attribute_keys=["brightness"],
         )
 
-        data = result["data"]
-        assert "warnings" in data
-        assert any("attribute_keys" in w for w in data["warnings"])
-        assert data["states"]["light.kitchen"] == {"state": "on"}
+        assert "warnings" not in result["data"]
+        assert any("attribute_keys" in w for w in result["warnings"])
+        assert result["data"]["states"]["light.kitchen"] == {"state": "on"}
 
     @pytest.mark.asyncio
     async def test_bulk_no_warning_when_attributes_in_fields(
@@ -625,11 +624,10 @@ class TestAttributeKeysTypoGuardBulk:
             entity_id=["light.kitchen"],
             attribute_keys=["typo_attr"],
         )
-        data = result["data"]
-        assert data["states"]["light.kitchen"]["attributes"] == {}
-        assert "warnings" in data
-        assert any("attribute_keys" in w for w in data["warnings"])
-        assert any("brightness" in w for w in data["warnings"])
+        assert result["data"]["states"]["light.kitchen"]["attributes"] == {}
+        assert "warnings" not in result["data"]
+        assert any("attribute_keys" in w for w in result["warnings"])
+        assert any("brightness" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_known_attribute_key_bulk_no_warning(self, get_states_tool):

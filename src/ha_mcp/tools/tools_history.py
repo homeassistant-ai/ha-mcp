@@ -502,8 +502,8 @@ class HistoryTools:
                 message="recorder query complete",
             )
             # Wrap first so the outer {"data": ..., "metadata": ...} shape
-            # is always present; then project the inner data dict in-place
-            # when caller requested field projection.
+            # is always present; then project the inner data dict and lift
+            # the typo warning project_fields may add to it.
             _r = await add_timezone_metadata(
                 self._client, inner, convert_timestamps=False
             )
@@ -980,7 +980,7 @@ async def _fetch_history(
             "summary": summary_until is not None,
         },
     }
-    if summary_until is not None:  # ha_get_history drops an empty list
+    if summary_until is not None:  # add_timezone_metadata drops an empty list
         history_data["warnings"] = summary_warnings(result_data, summaries, start_ts)
 
     return history_data
