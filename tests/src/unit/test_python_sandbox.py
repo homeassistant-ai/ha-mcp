@@ -1,5 +1,7 @@
 """Tests for Python expression sandbox."""
 
+from typing import Any
+
 import pytest
 
 from ha_mcp.utils.python_sandbox import (
@@ -20,26 +22,26 @@ from ha_mcp.utils.python_sandbox import (
 class TestValidateExpression:
     """Test expression validation."""
 
-    def test_simple_assignment(self):
+    def test_simple_assignment(self) -> None:
         """Test simple dictionary assignment."""
         expr = "config['views'][0]['icon'] = 'mdi:lamp'"
         valid, error = validate_expression(expr)
         assert valid is True
         assert error == ""
 
-    def test_list_append(self):
+    def test_list_append(self) -> None:
         """Test list append method."""
         expr = "config['views'][0]['cards'].append({'type': 'button'})"
         valid, error = validate_expression(expr)
         assert valid is True
 
-    def test_deletion(self):
+    def test_deletion(self) -> None:
         """Test deletion operation."""
         expr = "del config['views'][0]['cards'][2]"
         valid, error = validate_expression(expr)
         assert valid is True
 
-    def test_loop_with_conditional(self):
+    def test_loop_with_conditional(self) -> None:
         """Test for loop with conditional."""
         expr = """
 for view in config['views']:
@@ -50,7 +52,7 @@ for view in config['views']:
         valid, error = validate_expression(expr)
         assert valid is True
 
-    def test_while_loop_rejected(self):
+    def test_while_loop_rejected(self) -> None:
         """Regression for issue #1461: while loops can hang in-process exec."""
         expr = """
 while True:
@@ -61,7 +63,7 @@ while True:
         assert "While" in error
         assert "for-loop" in error
 
-    def test_list_comprehension(self):
+    def test_list_comprehension(self) -> None:
         """Test list comprehension."""
         expr = "config['entities'] = [e for e in config.get('entities', []) if 'light' in e]"
         valid, error = validate_expression(expr)
@@ -74,7 +76,7 @@ _METHOD_TYPES = {"List methods": list, "Dict methods": dict, "String methods": s
 class TestSecurityDocumentation:
     """Test sandbox documentation shown to agents."""
 
-    def test_while_loop_not_documented_as_allowed(self):
+    def test_while_loop_not_documented_as_allowed(self) -> None:
         docs = get_security_documentation()
         allowed_section = docs.split("FORBIDDEN:", 1)[0]
 
@@ -123,24 +125,24 @@ class TestSecurityDocumentation:
 class TestUnaryOperators:
     """Regression tests for issue #1115 — negative numbers in expressions."""
 
-    def test_negative_number_literal(self):
+    def test_negative_number_literal(self) -> None:
         valid, error = validate_expression("x = -1")
         assert valid is True, error
 
-    def test_unary_plus_literal(self):
+    def test_unary_plus_literal(self) -> None:
         valid, error = validate_expression("x = +1")
         assert valid is True, error
 
-    def test_bitwise_invert(self):
+    def test_bitwise_invert(self) -> None:
         valid, error = validate_expression("x = ~1")
         assert valid is True, error
 
-    def test_negative_in_dict_value(self):
+    def test_negative_in_dict_value(self) -> None:
         expr = 'config["views"][0]["min"] = -10'
         valid, error = validate_expression(expr)
         assert valid is True, error
 
-    def test_dashboard_view_with_negative_axis_range(self):
+    def test_dashboard_view_with_negative_axis_range(self) -> None:
         """Reproduces issue #1115: appending a card with a negative gauge min."""
         config = {"views": [{"cards": []}]}
         expr = (
@@ -150,7 +152,7 @@ class TestUnaryOperators:
         result = safe_execute(expr, config)
         assert result["views"][0]["cards"][0]["min"] == -5000
 
-    def test_negation_in_arithmetic(self):
+    def test_negation_in_arithmetic(self) -> None:
         config = {"value": 5}
         expr = 'config["value"] = -config["value"]'
         result = safe_execute(expr, config)
@@ -165,7 +167,7 @@ class TestSafeNodes1159:
     legitimate Python idioms. These tests pin the gap shut.
     """
 
-    def test_pass_statement(self):
+    def test_pass_statement(self) -> None:
         """`pass` is a no-op; rejecting it forced agents to invent dummy expressions."""
         expr = """
 for view in config['views']:
@@ -175,7 +177,7 @@ for view in config['views']:
         valid, error = validate_expression(expr)
         assert valid is True, error
 
-    def test_generator_expression_executes(self):
+    def test_generator_expression_executes(self) -> None:
         """`sum(x for x in ...)` validates AND runs."""
         config = {
             "views": [{"cards": [{"type": "tile"}, {"type": "btn"}, {"type": "tile"}]}]
@@ -184,49 +186,49 @@ for view in config['views']:
         result = safe_execute(expr, config)
         assert result["count"] == 2
 
-    def test_ternary_expression_executes(self):
+    def test_ternary_expression_executes(self) -> None:
         """`x if c else y` validates AND runs."""
         config = {"state": "on"}
         expr = "config['icon'] = 'mdi:on' if config.get('state') == 'on' else 'mdi:off'"
         result = safe_execute(expr, config)
         assert result["icon"] == "mdi:on"
 
-    def test_keyword_argument_in_call_executes(self):
+    def test_keyword_argument_in_call_executes(self) -> None:
         """`sorted(..., key=len, reverse=True)` validates AND runs (sorted/len are safe builtins)."""
         config = {"items": ["aaa", "b", "cc"]}
         expr = "config['items'] = sorted(config['items'], key=len, reverse=True)"
         result = safe_execute(expr, config)
         assert result["items"] == ["aaa", "cc", "b"]
 
-    def test_starred_unpacking_in_list_executes(self):
+    def test_starred_unpacking_in_list_executes(self) -> None:
         """`[*existing, new]` validates AND runs."""
         config = {"cards": [{"type": "a"}, {"type": "b"}]}
         expr = "config['cards'] = [*config['cards'], {'type': 'c'}]"
         result = safe_execute(expr, config)
         assert [c["type"] for c in result["cards"]] == ["a", "b", "c"]
 
-    def test_dict_double_star_unpacking_executes(self):
+    def test_dict_double_star_unpacking_executes(self) -> None:
         """`{**existing, 'k': v}` validates AND runs (Dict node, not Starred)."""
         config = {"view": {"icon": "old", "title": "Home"}}
         expr = "config['view'] = {**config['view'], 'icon': 'mdi:home'}"
         result = safe_execute(expr, config)
         assert result["view"] == {"icon": "mdi:home", "title": "Home"}
 
-    def test_slice_expression_executes(self):
+    def test_slice_expression_executes(self) -> None:
         """`list[:N]` validates AND runs."""
         config = {"cards": list(range(10))}
         expr = "config['cards'] = config['cards'][:5]"
         result = safe_execute(expr, config)
         assert result["cards"] == [0, 1, 2, 3, 4]
 
-    def test_slice_with_step_executes(self):
+    def test_slice_with_step_executes(self) -> None:
         """`list[::2]` — slice with step (uses ast.Slice with step field)."""
         config = {"cards": list(range(10))}
         expr = "config['cards'] = config['cards'][::2]"
         result = safe_execute(expr, config)
         assert result["cards"] == [0, 2, 4, 6, 8]
 
-    def test_lambda_as_kwarg_executes(self):
+    def test_lambda_as_kwarg_executes(self) -> None:
         """`sorted(..., key=lambda x: ...)` — the canonical lambda use case.
 
         Previously broken: ast.Lambda was whitelisted but the ast.arguments
@@ -239,7 +241,7 @@ for view in config['views']:
         result = safe_execute(expr, config)
         assert [i["n"] for i in result["items"]] == [1, 2, 3]
 
-    def test_fstring_executes(self):
+    def test_fstring_executes(self) -> None:
         """f-strings (`ast.JoinedStr` / `ast.FormattedValue`) — common in
         transform expressions like setting `name = f"{prefix}_thing"`."""
         config = {"prefix": "lr", "card": {}}
@@ -247,14 +249,14 @@ for view in config['views']:
         result = safe_execute(expr, config)
         assert result["card"]["entity"] == "light.lr_main"
 
-    def test_fstring_with_format_spec_executes(self):
+    def test_fstring_with_format_spec_executes(self) -> None:
         """f-strings with format specifiers exercise the FormattedValue node fully."""
         config = {"score": 7.5, "card": {}}
         expr = "config['card']['label'] = f\"{config['score']:.1f}/10\""
         result = safe_execute(expr, config)
         assert result["card"]["label"] == "7.5/10"
 
-    def test_match_family_includes_hint(self):
+    def test_match_family_includes_hint(self) -> None:
         """Sub-pattern Match nodes get the same hint as Match itself.
 
         These nodes are unreachable today (Match itself is rejected at the
@@ -295,7 +297,7 @@ for view in config['views']:
             )
             assert "if/elif/else" in _NODE_SUGGESTIONS[node_name]
 
-    def test_compositional_pattern_executes(self):
+    def test_compositional_pattern_executes(self) -> None:
         """Realistic agent code: ternary inside a comprehension, kwarg call,
         starred unpacking — all in one transform."""
         config = {
@@ -322,7 +324,7 @@ config['cards'] = [*config['cards'], *config['extras']]
         tiers = [c.get("tier") for c in result["cards"]]
         assert tiers == ["gold", "silver", None]
 
-    def test_reporter_pattern_executes(self):
+    def test_reporter_pattern_executes(self) -> None:
         """End-to-end: reconstruct cards list with conditional skip via `pass`.
 
         This is the exact shape of the transform from issue #1159 — pass branch
@@ -357,7 +359,7 @@ config['views'][0]['cards'] = new_cards
 class TestErrorSuggestions1159:
     """Issue #1159 — node-rejection errors should hint at the right alternative."""
 
-    def test_try_block_includes_hint(self):
+    def test_try_block_includes_hint(self) -> None:
         """try/except is rejected with the exact mapped hint."""
         expr = "try:\n    config['x'] = 1\nexcept Exception:\n    config['x'] = 0"
         valid, error = validate_expression(expr)
@@ -367,7 +369,7 @@ class TestErrorSuggestions1159:
             "validate inputs with isinstance/in/.get() instead of try/except"
         )
 
-    def test_function_def_includes_hint(self):
+    def test_function_def_includes_hint(self) -> None:
         """Function definitions are rejected with the exact mapped hint."""
         expr = "def helper():\n    return 1"
         valid, error = validate_expression(expr)
@@ -377,7 +379,7 @@ class TestErrorSuggestions1159:
             "use a list comprehension or inline the logic"
         )
 
-    def test_match_statement_includes_hint(self):
+    def test_match_statement_includes_hint(self) -> None:
         """match/case (3.10+) is rejected with the mapped hint."""
         expr = "match config:\n    case _:\n        config['x'] = 1"
         valid, error = validate_expression(expr)
@@ -387,7 +389,7 @@ class TestErrorSuggestions1159:
             "use if/elif/else or a dict lookup instead of match/case"
         )
 
-    def test_unmapped_node_falls_back_to_generic(self):
+    def test_unmapped_node_falls_back_to_generic(self) -> None:
         """Nodes without a mapped suggestion produce a bare 'Forbidden node type: X'.
 
         ``raise`` is a deliberately unmapped node — it isn't in SAFE_NODES
@@ -405,91 +407,91 @@ class TestErrorSuggestions1159:
 class TestBlockedOperations:
     """Test that dangerous operations are blocked."""
 
-    def test_block_import(self):
+    def test_block_import(self) -> None:
         """Test that imports are blocked."""
         expr = "import os"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "import" in error.lower()
 
-    def test_block_from_import(self):
+    def test_block_from_import(self) -> None:
         """Test that from imports are blocked."""
         expr = "from os import system"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "import" in error.lower()
 
-    def test_block_dunder_import(self):
+    def test_block_dunder_import(self) -> None:
         """Test that __import__ is blocked."""
         expr = "__import__('os')"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "import" in error.lower() or "forbidden" in error.lower()
 
-    def test_block_open(self):
+    def test_block_open(self) -> None:
         """Test that open() is blocked."""
         expr = "open('/etc/passwd')"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "open" in error.lower()
 
-    def test_block_eval(self):
+    def test_block_eval(self) -> None:
         """Test that eval is blocked."""
         expr = "eval('print(1)')"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "eval" in error.lower()
 
-    def test_block_exec(self):
+    def test_block_exec(self) -> None:
         """Test that exec is blocked."""
         expr = "exec('import os')"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "exec" in error.lower()
 
-    def test_block_dunder_class(self):
+    def test_block_dunder_class(self) -> None:
         """Test that __class__ access is blocked."""
         expr = "config.__class__"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "dunder" in error.lower() or "__class__" in error
 
-    def test_block_dunder_bases(self):
+    def test_block_dunder_bases(self) -> None:
         """Test that __bases__ access is blocked."""
         expr = "().__class__.__bases__[0]"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "dunder" in error.lower()
 
-    def test_block_function_def(self):
+    def test_block_function_def(self) -> None:
         """Test that function definitions are blocked."""
         expr = "def evil(): pass"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "function" in error.lower()
 
-    def test_block_class_def(self):
+    def test_block_class_def(self) -> None:
         """Test that class definitions are blocked."""
         expr = "class Evil: pass"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "class" in error.lower()
 
-    def test_block_forbidden_method(self):
+    def test_block_forbidden_method(self) -> None:
         """Test that non-whitelisted methods are blocked."""
         expr = "config.some_random_method()"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "method" in error.lower()
 
-    def test_block_subscript_call(self):
+    def test_block_subscript_call(self) -> None:
         """Test that calls on subscript results are blocked."""
         expr = "config['fn']()"
         valid, error = validate_expression(expr)
         assert valid is False
         assert "Subscript" in error
 
-    def test_block_chained_call(self):
+    def test_block_chained_call(self) -> None:
         """Test that calls on method results are blocked."""
         expr = "config.get('fn')()"
         valid, error = validate_expression(expr)
@@ -500,14 +502,14 @@ class TestBlockedOperations:
 class TestReplaceMethod:
     """``str.replace`` is in the safe whitelist — pure, side-effect-free."""
 
-    def test_replace_validates(self):
+    def test_replace_validates(self) -> None:
         valid, error = validate_expression(
             "config['views'][0]['cards'][0]['content'] = "
             "config['views'][0]['cards'][0]['content'].replace('\\\\', '')"
         )
         assert valid is True, error
 
-    def test_replace_executes(self):
+    def test_replace_executes(self) -> None:
         config = {"views": [{"cards": [{"content": "a\\b\\c"}]}]}
         expr = (
             "config['views'][0]['cards'][0]['content'] = "
@@ -542,14 +544,14 @@ class TestOneEndedTrimMethods:
 class TestSafeExecute:
     """Test safe execution of expressions."""
 
-    def test_simple_update(self):
+    def test_simple_update(self) -> None:
         """Test simple dictionary update."""
         config = {"views": [{"icon": "old"}]}
         expr = "config['views'][0]['icon'] = 'new'"
         result = safe_execute(expr, config)
         assert result["views"][0]["icon"] == "new"
 
-    def test_list_append(self):
+    def test_list_append(self) -> None:
         """Test list append."""
         config = {"views": [{"cards": []}]}
         expr = "config['views'][0]['cards'].append({'type': 'button'})"
@@ -557,14 +559,14 @@ class TestSafeExecute:
         assert len(result["views"][0]["cards"]) == 1
         assert result["views"][0]["cards"][0]["type"] == "button"
 
-    def test_deletion(self):
+    def test_deletion(self) -> None:
         """Test deletion."""
         config = {"views": [{"cards": [1, 2, 3]}]}
         expr = "del config['views'][0]['cards'][1]"
         result = safe_execute(expr, config)
         assert result["views"][0]["cards"] == [1, 3]
 
-    def test_pattern_update(self):
+    def test_pattern_update(self) -> None:
         """Test pattern-based update with loop."""
         config = {
             "views": [
@@ -587,14 +589,14 @@ for card in config['views'][0]['cards']:
         assert result["views"][0]["cards"][1]["icon"] == "mdi:lightbulb"
         assert result["views"][0]["cards"][2]["icon"] == "old"  # Not a light
 
-    def test_blocked_expression_raises(self):
+    def test_blocked_expression_raises(self) -> None:
         """Test that blocked expressions raise PythonSandboxValidationError."""
         config = {}
         expr = "import os"
         with pytest.raises(PythonSandboxValidationError):
             safe_execute(expr, config)
 
-    def test_execution_error_raises(self):
+    def test_execution_error_raises(self) -> None:
         """Test that execution errors are caught."""
         config = {}
         expr = "config['nonexistent']['key'] = 'value'"
@@ -605,13 +607,13 @@ for card in config['views'][0]['cards']:
 class TestSafeExecuteExpression:
     """Tests for the generalized safe_execute_expression."""
 
-    def test_custom_variable_name(self):
+    def test_custom_variable_name(self) -> None:
         """Supports arbitrary variable names, not just 'config'."""
         expr = "response = [x for x in response if x > 1]"
         result = safe_execute_expression(expr, {"response": [1, 2, 3]}, "response")
         assert result == [2, 3]
 
-    def test_reassignment_returns_new_object(self):
+    def test_reassignment_returns_new_object(self) -> None:
         """Reassignment inside the expression is reflected in the return value.
 
         The old safe_execute semantics returned the original reference, which
@@ -622,7 +624,7 @@ class TestSafeExecuteExpression:
         result = safe_execute_expression(expr, {"response": {}}, "response")
         assert result == {"filtered": True}
 
-    def test_in_place_mutation(self):
+    def test_in_place_mutation(self) -> None:
         """In-place mutations on mutable values are returned as expected."""
         original = [1, 2, 3]
         expr = "response.append(4)"
@@ -630,17 +632,17 @@ class TestSafeExecuteExpression:
         assert result == [1, 2, 3, 4]
         assert original == [1, 2, 3, 4]  # same reference, mutated
 
-    def test_missing_result_key_raises(self):
+    def test_missing_result_key_raises(self) -> None:
         """If result_key is not in variables, raise PythonSandboxValidationError up front."""
         with pytest.raises(PythonSandboxValidationError, match="result_key"):
             safe_execute_expression("response = 1", {"other": 1}, "response")
 
-    def test_validation_failure_raises(self):
+    def test_validation_failure_raises(self) -> None:
         """Invalid expressions raise PythonSandboxValidationError."""
         with pytest.raises(PythonSandboxValidationError):
             safe_execute_expression("import os", {"response": None}, "response")
 
-    def test_execution_error_raises(self):
+    def test_execution_error_raises(self) -> None:
         """Runtime errors raise PythonSandboxExecutionError."""
         with pytest.raises(PythonSandboxExecutionError):
             safe_execute_expression(
@@ -649,7 +651,7 @@ class TestSafeExecuteExpression:
                 "response",
             )
 
-    def test_mixed_shape_list_with_isinstance(self):
+    def test_mixed_shape_list_with_isinstance(self) -> None:
         """Transforms handle heterogeneous list[dict | str] using isinstance.
 
         The WebSocket message list is intentionally heterogeneous (parsed JSON
@@ -670,21 +672,21 @@ class TestSafeExecuteExpression:
         result = safe_execute_expression(expr, {"response": messages}, "response")
         assert result == [{"level": "ERROR", "text": "Boom"}]
 
-    def test_str_coercion_available(self):
+    def test_str_coercion_available(self) -> None:
         """str() is in the safe builtins for text-content matching."""
         messages = [{"level": "ERROR"}, "plain string", 42]
         expr = "response = [m for m in response if 'ERROR' in str(m)]"
         result = safe_execute_expression(expr, {"response": messages}, "response")
         assert result == [{"level": "ERROR"}]
 
-    def test_builtins_do_not_include_open(self):
+    def test_builtins_do_not_include_open(self) -> None:
         """Dangerous builtins like open remain blocked at AST validation."""
         with pytest.raises(PythonSandboxValidationError):
             safe_execute_expression(
                 "open('/etc/passwd')", {"response": None}, "response"
             )
 
-    def test_builtins_do_not_include_getattr(self):
+    def test_builtins_do_not_include_getattr(self) -> None:
         """getattr remains blocked at AST validation."""
         with pytest.raises(PythonSandboxValidationError):
             safe_execute_expression(
@@ -693,7 +695,7 @@ class TestSafeExecuteExpression:
                 "response",
             )
 
-    def test_safe_execute_wrapper_still_works(self):
+    def test_safe_execute_wrapper_still_works(self) -> None:
         """safe_execute should remain backward-compatible with existing callers."""
         config = {"views": [{"icon": "old"}]}
         result = safe_execute("config['views'][0]['icon'] = 'new'", config)
@@ -708,12 +710,12 @@ class TestSandboxErrorSubclasses:
     can branch on the subclass to give the user the right suggestion.
     """
 
-    def test_subclasses_inherit_base(self):
+    def test_subclasses_inherit_base(self) -> None:
         """Backward compat: callers catching the base class still work."""
         assert issubclass(PythonSandboxValidationError, PythonSandboxError)
         assert issubclass(PythonSandboxExecutionError, PythonSandboxError)
 
-    def test_validation_error_is_distinct_from_execution_error(self):
+    def test_validation_error_is_distinct_from_execution_error(self) -> None:
         """A validation failure should not match an execution-error catcher."""
         with pytest.raises(PythonSandboxValidationError):
             safe_execute("import os", {})
@@ -725,7 +727,7 @@ class TestSandboxErrorSubclasses:
         except PythonSandboxValidationError:
             pass  # Expected: the validation error is caught here, not above.
 
-    def test_execution_error_is_distinct_from_validation_error(self):
+    def test_execution_error_is_distinct_from_validation_error(self) -> None:
         """A runtime failure should not match a validation-error catcher."""
         with pytest.raises(PythonSandboxExecutionError):
             safe_execute("config['nope']['x'] = 1", {})
@@ -736,7 +738,7 @@ class TestSandboxErrorSubclasses:
         except PythonSandboxExecutionError:
             pass  # Expected: the execution error is caught here, not above.
 
-    def test_execution_error_truncates_long_exception_text(self):
+    def test_execution_error_truncates_long_exception_text(self) -> None:
         """Runtime exception text is capped so embedded config/data isn't pasted whole.
 
         HA dashboards/automations may carry tokens or device IDs that get
@@ -758,7 +760,7 @@ class TestSandboxErrorSubclasses:
         # nothing close to that survived.
         assert len(text) < len(long_key)
 
-    def test_memory_error_propagates(self):
+    def test_memory_error_propagates(self) -> None:
         """Resource-exhaustion errors must not be reframed as user-input failures.
 
         MemoryError / RecursionError from exec() aren't transform-syntax
@@ -797,14 +799,16 @@ class TestBuiltinsIsolation:
             ("__doc__", "del __doc__"),
         ],
     )
-    def test_direct_interpreter_internal_names_rejected(self, name, expr):
+    def test_direct_interpreter_internal_names_rejected(
+        self, name: str, expr: str
+    ) -> None:
         valid, error = validate_expression(expr)
 
         assert valid is False
         assert name in error
         assert "interpreter internals" in error
 
-    def test_subsequent_real_execution_sees_pristine_builtins(self):
+    def test_subsequent_real_execution_sees_pristine_builtins(self) -> None:
         """After a per-call copy is mutated, real executions still resolve
         len/range/etc. from the unmodified _SAFE_BUILTINS source — guards
         against a shallow-copy regression.
@@ -816,13 +820,15 @@ class TestBuiltinsIsolation:
         )
         assert result == 3
 
-    def test_builtin_replacement_does_not_persist_between_executions(self):
+    def test_builtin_replacement_does_not_persist_between_executions(self) -> None:
         from unittest.mock import patch
 
         original_builtins = dict(_SAFE_BUILTINS)
         mutated_builtins = None
 
-        def mutate_execution_builtins(_expr, safe_globals, safe_locals):
+        def mutate_execution_builtins(
+            _expr: str, safe_globals: dict[str, Any], safe_locals: dict[str, Any]
+        ) -> None:
             nonlocal mutated_builtins
             mutated_builtins = safe_globals["__builtins__"]
             mutated_builtins["len"] = lambda value: 999
@@ -845,7 +851,7 @@ class TestFormatSandboxError:
     """Issue #1159 — caller-facing helper that picks message + suggestions
     based on the exception subclass."""
 
-    def test_validation_error_suggestions_point_at_syntax(self):
+    def test_validation_error_suggestions_point_at_syntax(self) -> None:
         err = PythonSandboxValidationError("Forbidden node type: Try")
         message, suggestions = format_sandbox_error(err, "try: pass\nexcept: pass")
         assert message.startswith("Expression validation failed:")
@@ -858,7 +864,7 @@ class TestFormatSandboxError:
         # syntax errors.
         assert not any("backslash" in s.lower() for s in suggestions)
 
-    def test_execution_error_suggestions_point_at_data(self):
+    def test_execution_error_suggestions_point_at_data(self) -> None:
         err = PythonSandboxExecutionError("KeyError: 'foo'")
         message, suggestions = format_sandbox_error(err, "config['foo']['bar'] = 1")
         assert message.startswith("Expression raised at runtime:")
@@ -869,7 +875,7 @@ class TestFormatSandboxError:
             for s in suggestions
         )
 
-    def test_expression_preview_truncates_long_input(self):
+    def test_expression_preview_truncates_long_input(self) -> None:
         long_expr = "config['x'] = " + ("'a' + " * 50) + "'end'"
         err = PythonSandboxExecutionError("boom")
         _, suggestions = format_sandbox_error(err, long_expr)
@@ -878,20 +884,20 @@ class TestFormatSandboxError:
         # Body of the preview (after "Expression: ") is exactly 100 chars + "..."
         assert len(preview) <= len("Expression: ") + 103
 
-    def test_plain_base_error_falls_back_to_validation_form(self):
+    def test_plain_base_error_falls_back_to_validation_form(self) -> None:
         """A bare PythonSandboxError (no subclass) should not look like a runtime failure."""
         err = PythonSandboxError("legacy")
         message, suggestions = format_sandbox_error(err, "x = 1")
         assert message.startswith("Expression validation failed:")
         assert any("syntax" in s.lower() for s in suggestions)
 
-    def test_default_variable_name_omits_target_hint(self):
+    def test_default_variable_name_omits_target_hint(self) -> None:
         """The default `config` callers don't get a redundant variable-name hint."""
         err = PythonSandboxValidationError("Forbidden node type: Try")
         _, suggestions = format_sandbox_error(err, "try: pass\nexcept: pass")
         assert not any("Operate on the" in s and "variable" in s for s in suggestions)
 
-    def test_non_default_variable_name_prepends_hint(self):
+    def test_non_default_variable_name_prepends_hint(self) -> None:
         """A non-`config` caller (e.g. addons with `response`) gets a leading
         'Operate on the `<name>` variable' suggestion so the agent knows what
         to mutate."""
@@ -903,7 +909,7 @@ class TestFormatSandboxError:
             "Operate on the `response` variable (in-place or reassign)"
         )
 
-    def test_line_continuation_error_gets_specific_hint(self):
+    def test_line_continuation_error_gets_specific_hint(self) -> None:
         """A backslash-escape mistake outside string literals produces a
         targeted hint that comes BEFORE the generic 'Check expression
         syntax' so the agent recovers on the first retry instead of
@@ -926,7 +932,7 @@ class TestFormatSandboxError:
         )
         assert hint_idx < generic_idx
 
-    def test_line_continuation_with_response_variable_orders_correctly(self):
+    def test_line_continuation_with_response_variable_orders_correctly(self) -> None:
         """When BOTH the variable-name prepend AND the backslash-escape hint
         fire (addon caller passes `response` and emits a backslash-escape),
         the variable-name hint must remain at index 0 — agents need the
