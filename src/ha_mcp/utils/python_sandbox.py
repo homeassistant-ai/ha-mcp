@@ -168,7 +168,9 @@ _NODE_SUGGESTIONS: dict[str, str] = {
 
 _INTERPRETER_INTERNAL_NAMES = frozenset({"__builtins__", "__name__", "__doc__"})
 
-# Whitelist of safe methods that can be called
+# Whitelist of safe methods that can be called. Calls are matched by
+# attribute name only, whatever the receiver's type, so each entry must be
+# safe on every built-in type that has a method of that name.
 SAFE_METHODS = {
     # List methods
     "append",
@@ -188,7 +190,7 @@ SAFE_METHODS = {
     "keys",
     "values",
     "items",
-    # String methods (for entity filtering)
+    # String methods
     "startswith",
     "endswith",
     "lower",

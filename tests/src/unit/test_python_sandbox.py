@@ -80,7 +80,11 @@ class TestSecurityDocumentation:
 
     @staticmethod
     def _documented(*labels):
-        """The names the description lists under the given entry labels."""
+        """The names the description lists under the given entry labels.
+
+        Only those labels are read: a new entry label needs adding to the
+        caller's list.
+        """
         # Indented lines continue the entry above them.
         entries = get_security_documentation().replace("\n  ", " ").splitlines()
         names = set()
