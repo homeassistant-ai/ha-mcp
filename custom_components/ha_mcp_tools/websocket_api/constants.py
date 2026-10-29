@@ -270,29 +270,21 @@ COLLECTION_HELPER_DOMAINS = frozenset(helper_collections.FRONTEND_HELPER_DOMAINS
 FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 
 # Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the
-# collection helpers ``search`` indexes PLUS zone/person, which are state-machine
-# entities the server's ``ha_config_list_helpers`` also accepts. Kept SEPARATE
-# from :data:`COLLECTION_HELPER_DOMAINS` so search behaviour is unchanged — zones
-# and persons are not indexed as "helpers" by ``ha_mcp_tools/search``.
+# collection helpers ``search`` indexes PLUS zone, which ``ha_get_zone`` and the
+# server's ``ha_config_list_helpers`` read through it. Kept SEPARATE from
+# :data:`COLLECTION_HELPER_DOMAINS` so zones are not indexed as "helpers" by
+# ``ha_mcp_tools/search``.
 #
-# ``tag`` is deliberately EXCLUDED: tags are a storage collection with no state
-# entity (the server reaches them via ``tag/list``, and its create/list paths
-# special-case ``tag`` precisely because it has no entity_id), so a from-states
-# scan can never enumerate them. Advertising it as covered would make an empty
-# result indistinguishable from "no tags exist" (a silent-wrong listing); it is
-# left OUT of ``covered_types`` so the server falls back to its legacy
-# ``tag/list`` path for that type. See :func:`_do_helpers_list`.
-HELPERS_LIST_COLLECTION_DOMAINS = COLLECTION_HELPER_DOMAINS | frozenset(
-    {"zone", "person"}
-)
+# Each is read from its storage collection, which is exactly what its stock
+# ``<type>/list`` handler sends. ``person/list`` also sends the YAML persons
+# and ``tag/list`` adds registry names, so those two are left OUT of
+# ``covered_types`` and the server lists them with ``person/list`` /
+# ``tag/list``. See :func:`_do_helpers_list`.
+HELPERS_LIST_COLLECTION_DOMAINS = COLLECTION_HELPER_DOMAINS | frozenset({"zone"})
 
 # Every ``EntityComponent`` self-registers here (core's
-# ``entity_component.DATA_INSTANCES``). Collection-helper domains (input_*,
-# counter, timer, schedule) do NOT set ``hass.data[DOMAIN]`` and their
-# ``StorageCollection`` is a setup-local (``helpers/collection.py`` writes
-# nothing to ``hass.data``), so this registry is how their component — and thus
-# each entity's storage ``_config`` body — is reached. See
-# :func:`_collection_storage_index`.
+# ``entity_component.DATA_INSTANCES``), so this is how each entity's ``_config``
+# is reached for a helper outside the storage. See :func:`_entity_configs`.
 ENTITY_COMPONENTS_KEY = "entity_components"
 
 _SPLIT_RE = re.compile(r"[._\-\s]+")

@@ -143,6 +143,18 @@ def _reg_entity(view: _RegistryView, entity_id: str) -> Any:
     return _call_lookup(view, "entity", "async_get", entity_id)
 
 
+def _reg_entity_id(view: _RegistryView, platform: str, unique_id: str) -> str | None:
+    """The entity_id the registry holds for a helper's storage id."""
+    getter = getattr(view.entity, "async_get_entity_id", None)
+    if getter is None:
+        return None
+    try:
+        return getter(platform, platform, unique_id)  # type: ignore[no-any-return]
+    except Exception:  # noqa: BLE001
+        view._access_failures.add("entity")
+        return None
+
+
 def _device(view: _RegistryView, device_id: str | None) -> Any:
     if not device_id:
         return None

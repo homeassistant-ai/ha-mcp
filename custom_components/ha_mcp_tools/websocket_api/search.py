@@ -215,6 +215,7 @@ def _do_search(  # noqa: PLR0915
             ("helper", rec)
             for rec in _search_helpers(
                 hass,
+                view,
                 query_lower,
                 match_all=match_all,
                 exact=exact,

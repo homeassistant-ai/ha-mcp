@@ -23,14 +23,15 @@ the info handshake carries no capability entry:
   services, entity/device/area registries, ``hass.config``, persistent
   notifications, repairs issues) in one call, so the server builds its existing
   overview envelope with no extra HA round-trips.
-* ``ha_mcp_tools/helpers_list`` — collection helpers (live state-attribute
-  bodies) AND flow helpers (``ConfigEntry.options``/``title``/``entry_id`` —
+* ``ha_mcp_tools/helpers_list`` — collection helpers (the stored items
+  ``<type>/list`` returns) AND flow helpers (``ConfigEntry.options``/``title``/``entry_id`` —
   never ``entry.data``), each with the CURRENT entity_id + display name from the
   registry (renamed helpers show current values — issue #1794), closing the
   documented "flow helpers cannot be listed" gap with no OptionsFlow dance. The
   response's ``covered_types`` names which helper_type values were authoritatively
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
-  uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
+  uncovered type (``person`` and ``tag``, whose lists add more than the stored
+  items) instead of trusting an
   empty result. A custom-only helper integration is listed with ``options: None``
   and ``options_withheld`` (see ``flow_domains._flow_helper_domains``).
 * ``ha_mcp_tools/states`` — a bulk state read: ``State.as_dict()`` for each
