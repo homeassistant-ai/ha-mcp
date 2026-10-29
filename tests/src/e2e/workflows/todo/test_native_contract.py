@@ -100,3 +100,31 @@ class TestTodoNativeContract:
                         "ha_remove_todo_item",
                         {"entity_id": LIST, "item": summary},
                     )
+
+
+@pytest.mark.todo
+@pytest.mark.requires_component_surface
+async def test_component_resolves_with_cores_own_lookup(mcp_client, ha_client) -> None:
+    """The todo_item bridge finds Core's todo parts on this Core: a missing
+    one would answer ``unsupported`` and every write would fall back."""
+    summary = f"e2e-bridge-{uuid.uuid4().hex[:8]}"
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            created = await mcp.call_tool_success(
+                "ha_set_todo_item", {"entity_id": LIST, "summary": summary}
+            )
+            reply = await ha_client.send_websocket_message(
+                {
+                    "type": "ha_mcp_tools/todo_item",
+                    "entity_id": LIST,
+                    "action": "resolve",
+                    "refs": [summary],
+                }
+            )
+            assert reply.get("success") is True, reply
+            assert reply["result"]["success"] is True, reply
+            assert reply["result"]["items"][0]["uid"] == created["todo_item"]["uid"]
+        finally:
+            await safe_call_tool(
+                mcp_client, "ha_remove_todo_item", {"entity_id": LIST, "item": summary}
+            )

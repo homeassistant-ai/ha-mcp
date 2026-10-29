@@ -554,3 +554,39 @@ class TestRestoreThroughTheComponent:
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
         assert excinfo.value.outcome["apply_status"] == "not_applied"
         assert fake.items[1]["summary"] == "Pay"
+
+    async def test_re_added_item_not_told_apart_is_reported_as_added(
+        self, fake: _FakeList, bridge: _Bridge
+    ) -> None:
+        # A retry would add the item twice, so this is no not-applied refusal.
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items.pop(1)
+
+        async def add_unclear(*args: Any, **fields: Any) -> dict[str, Any]:
+            reply = await bridge(*args, **fields)
+            return reply | {"item": None} if args[2] == "add" else reply
+
+        with (
+            patch("ha_mcp.backup_todo.todo_item", add_unclear),
+            pytest.raises(HomeAssistantError, match="Re-added 'Pay'") as excinfo,
+        ):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert not isinstance(excinfo.value, bm.BackupRestoreError)
+        assert [c[0] for c in bridge.calls] == ["add"]
+
+    async def test_write_without_answer_is_no_refusal(
+        self, fake: _FakeList, bridge: _Bridge
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+
+        async def lost(*args: Any, **fields: Any) -> dict[str, Any]:
+            if args[2] == "resolve":
+                return await bridge(*args, **fields)
+            raise HomeAssistantError("connection lost")
+
+        with (
+            patch("ha_mcp.backup_todo.todo_item", lost),
+            pytest.raises(HomeAssistantError, match="connection lost") as excinfo,
+        ):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert not isinstance(excinfo.value, bm.BackupRestoreError)

@@ -43,6 +43,10 @@ class _ServiceValidationError(_CoreError):
     pass
 
 
+class _Invalid(Exception):
+    pass
+
+
 @dataclasses.dataclass
 class _Item:
     uid: str
@@ -123,8 +127,7 @@ def hass(entity: _ListEntity, monkeypatch: pytest.MonkeyPatch) -> Any:
         list_entity=_ListEntity,
         items_factory=_items_factory,
         find=_find,
-        invalid=(ValueError, _ServiceValidationError),
-        error=_CoreError,
+        refused=(_Invalid, _ServiceValidationError),
         date=date.fromisoformat,
     )
     monkeypatch.setattr(todo_items, "_core", lambda: core)
@@ -189,18 +192,34 @@ class TestComponent:
         assert got["error"]["code"] == "not_loaded"
 
     @pytest.mark.parametrize(
-        ("error", "code"),
-        [
-            (_ServiceValidationError("no due date"), "invalid"),
-            (_CoreError("down"), "failed"),
-        ],
+        "error", [_ServiceValidationError("no due date"), _Invalid("bad status")]
     )
     async def test_core_refusal_that_changed_nothing(
-        self, hass: Any, error: Exception, code: str
+        self, hass: Any, error: Exception
     ) -> None:
         hass.services.raise_ = error
         got = await _run(hass, "update", uid="2", data={"status": "completed"})
-        assert got["error"] == {"code": code, "message": str(error)}
+        assert got["error"] == {"code": "invalid", "message": str(error)}
+
+    @pytest.mark.parametrize("error", [_CoreError("timeout"), ValueError("bad json")])
+    async def test_integration_error_is_raised_though_the_rows_are_unchanged(
+        self, hass: Any, error: Exception
+    ) -> None:
+        # The integration may have reached its backend before it failed.
+        hass.services.raise_ = error
+        with pytest.raises(type(error)):
+            await _run(hass, "update", uid="2", data={"status": "completed"})
+
+    async def test_a_row_without_uid_does_not_break_the_reply(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.todo_items.append(_Item(None, "No uid"))  # type: ignore[arg-type]
+        got = await _run(hass, "remove", refs=["Milk"])
+        assert [row["uid"] for row in got["removed"]] == ["1"]
+
+    async def test_data_shaped_like_a_refusal_goes_to_core(self, hass: Any) -> None:
+        await _run(hass, "add", data={"item": "Eggs", "success": False})
+        assert hass.services.calls[0][1] == {"item": "Eggs", "success": False}
 
     async def test_error_after_the_list_changed_is_raised(self, hass: Any) -> None:
         hass.services.raise_ = _ServiceValidationError("listener failed")
@@ -225,6 +244,13 @@ class TestComponent:
     ) -> None:
         await _run(hass, "update", uid="2", data={}, due=due)
         assert hass.services.calls[0][1] == {"item": "2", **sent}
+
+    async def test_clear_of_a_due_date_names_due_date(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.todo_items.append(_Item("4", "D", due=date(2026, 11, 1)))
+        await _run(hass, "update", uid="4", data={}, due=None)
+        assert hass.services.calls[0][1] == {"item": "4", "due_date": None}
 
     async def test_clear_of_an_item_without_due_sends_no_field(self, hass: Any) -> None:
         await _run(hass, "update", uid="1", data={"status": "completed"}, due=None)

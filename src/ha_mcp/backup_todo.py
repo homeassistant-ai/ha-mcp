@@ -1,24 +1,24 @@
 """Todo item backups: an item as Core's ``todo/item/list`` reports it.
 
 The backup key is ``<todo entity>::<item>``, where ``item`` is the item's
-uid; a backup taken before the tools resolved items keys it by what the tool
-was given, which may be its summary. A key finds the item with that uid, else
-the one Core's todo services act on for that value. The snapshot is Core's item row (uid, summary, status, and
-description and due where set) plus ``todo_entity_id``; it leaves out
-``completed``, the time the list sets when an item is completed, which
-follows the restored status. A restore's safety backup and the diff follow the item
-by the snapshot's uid, so a rename since the backup does not lose it.
+uid (its summary when it has none); a backup from an earlier ha-mcp version
+keys it by what the tool was given, which may be its summary. A key finds the
+item with that uid, else the one Core's todo services act on for that value.
+The snapshot is Core's item row (uid, summary, status, and description and due
+where set) plus ``todo_entity_id``; it leaves out ``completed``, the time the
+list sets when an item is completed, which follows the restored status. A
+restore's safety backup and the diff follow the item by the snapshot's uid, so
+a rename since the backup does not lose it.
 
 An item still on the list under its uid gets its summary, status,
 description and due back through ``todo.update_item``; a description or due
 date the snapshot has none of is cleared. A removed item is added again with
-``todo.add_item`` and then given its status. With the component installed,
-both go through its ``ha_mcp_tools/todo_item`` bridge, which writes by uid
-and picks the due field with Core's own date validator. A list Home Assistant
-has not loaded, or one that is unavailable, refuses the restore before
-anything is written. The snapshot holds no position
-and Core's services cannot set a uid, so a re-added item gets a new uid and
-goes where the list adds new items.
+``todo.add_item`` and then given its status. When the component serves
+``todo_item``, both go through its bridge, which updates by uid and picks the
+due field with Core's own date validator. A restore to a list Home Assistant
+has not loaded, or to an unavailable one, is refused before anything is
+written. The snapshot holds no position and Core's services cannot set a uid,
+so a re-added item gets a new uid and goes where the list adds new items.
 """
 
 from __future__ import annotations
@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 class TodoListNotLoaded(HomeAssistantError):
     """Home Assistant holds no loaded todo list under the entity id, so
     whether the item is on it is unknown."""
+
+    def __init__(self, todo_entity: str) -> None:
+        super().__init__(f"Home Assistant has not loaded the todo list {todo_entity}")
 
 
 def find_item(items: list[dict[str, Any]], ref: str) -> dict[str, Any] | None:
@@ -73,9 +76,7 @@ async def _find(
     if reply is None:
         return find_item(items, ref)
     if not reply.get("success"):
-        raise TodoListNotLoaded(
-            f"Home Assistant has not loaded the todo list {todo_entity}"
-        )
+        raise TodoListNotLoaded(todo_entity)
     found: dict[str, Any] | None = reply["items"][0]
     return found
 
@@ -86,9 +87,7 @@ async def fetch_todo_item(client: Any, entity_id: str) -> dict[str, Any] | None:
         return None
     items = await list_items(client, todo_entity)
     if items is None:
-        raise TodoListNotLoaded(
-            f"Home Assistant has not loaded the todo list {todo_entity}"
-        )
+        raise TodoListNotLoaded(todo_entity)
     item = await _find(client, todo_entity, items, ref)
     if not item:
         return None
@@ -100,8 +99,8 @@ async def fetch_todo_item(client: Any, entity_id: str) -> dict[str, Any] | None:
 async def back_up_items(
     client: Any, todo_entity: str, items: list[dict[str, Any] | None], tool_name: str
 ) -> list[str]:
-    """Back up each item before a write, under its uid; the reasons a backup
-    that was due was not taken."""
+    """Back up the given items, each under its uid (its summary when it has
+    none); returns why a backup that was due was not taken."""
     settings = get_global_settings()
     if not getattr(settings, "enable_auto_backup", False):
         return []
@@ -141,9 +140,7 @@ async def safety_target(client: Any, entity_id: str, config: Any) -> str | None:
     try:
         item = await fetch_todo_item(client, key)
     except TodoListNotLoaded as err:
-        raise bm.BackupRestoreError(
-            f"{err}; nothing was restored", apply_status="not_applied"
-        ) from err
+        raise _not_applied(f"{err}; nothing was restored") from err
     except bm._CAPTURE_TRANSIENT_ERRORS as err:
         raise bm.MandatoryBackupError(
             f"the todo list could not be read: {type(err).__name__}",
@@ -218,11 +215,6 @@ async def _require_available(client: Any, todo_entity: str) -> None:
         )
 
 
-def _refusal(reply: dict[str, Any]) -> str:
-    message = (reply.get("error") or {}).get("message", "Unknown error")
-    return f"{message}; nothing was restored"
-
-
 async def _completed_again(todo_entity: str, summary: Any, mark: Any) -> Any:
     """Mark a re-added item completed. The add is applied by then, so any
     failure says so, since restoring again would add the item twice."""
@@ -239,23 +231,25 @@ async def _completed_again(todo_entity: str, summary: Any, mark: Any) -> Any:
 async def _restore_by_bridge(
     client: Any, todo_entity: str, config: Any, current: dict[str, Any] | None
 ) -> Any:
-    """The restore through the component, by uid; None when the component
-    does not serve it."""
+    """The restore through the component, an update going by uid; None when
+    the component does not serve it."""
     summary = config.get("summary")
     status = config.get("status")
     if current is not None:
+        action = "update"
         data = {"rename": summary, "status": status} | _description(config, current)
         fields = {"uid": current["uid"], "data": data}
     else:
+        action = "add"
         fields = {"data": {"item": summary} | _description(config, {})}
-    action = "add" if current is None else "update"
     reply = await todo_item(
         client, todo_entity, action, due=config.get("due"), **fields
     )
     if reply is None:
         return None
     if not reply.get("success"):
-        raise _not_applied(_refusal(reply))
+        message = (reply.get("error") or {}).get("message", "Unknown error")
+        raise _not_applied(f"{message}; nothing was restored")
     if current is not None or status != "completed":
         return reply
 
@@ -288,10 +282,7 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
     await _require_available(client, todo_entity)
     items = await list_items(client, todo_entity)
     if items is None:
-        raise _not_applied(
-            f"Home Assistant has not loaded the todo list {todo_entity}, so "
-            "nothing was restored"
-        )
+        raise _not_applied(f"{TodoListNotLoaded(todo_entity)}; nothing was restored")
     current = (
         next((i for i in items if i.get("uid") == uid), None)
         if uid

@@ -3,9 +3,10 @@
 Core's todo services act on the first row whose uid or summary equals the
 value given (``_find_by_uid_or_summary``) and answer without the row they
 wrote. This bridge resolves with that same function, calls the services
-(their schema, feature checks, availability filter and context apply) and
-reads the stored rows from the list entity, so the server keeps no copy of
-Core's item resolution or of its schema's coercions.
+(their schema, feature checks and context apply) and reads the stored rows
+from the list entity, so with the bridge the server needs no copy of Core's
+item resolution or of its schema's coercions. It refuses an unavailable list
+itself: Core's services would skip it and answer success.
 """
 
 from __future__ import annotations
@@ -32,14 +33,19 @@ def _failure(code: str, message: str) -> dict[str, Any]:
     return {"success": False, "error": {"code": code, "message": message}}
 
 
+class _Refused(Exception):
+    """A write refused before Core's service was called."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.failure = _failure(code, message)
+
+
 def _core() -> SimpleNamespace | None:
     """Core's todo parts this bridge uses, or None on a Core without them."""
     try:
         from homeassistant.components.todo import const, entity, services
-        from homeassistant.exceptions import (
-            HomeAssistantError,
-            ServiceValidationError,
-        )
+        from homeassistant.exceptions import ServiceValidationError
         from homeassistant.helpers import config_validation as cv
     except ImportError:
         return None
@@ -49,9 +55,13 @@ def _core() -> SimpleNamespace | None:
         list_entity=getattr(entity, "TodoListEntity", None),
         items_factory=getattr(entity, "api_items_factory", None),
         find=getattr(services, "_find_by_uid_or_summary", None),
-        # Core's refusals of the call's input; any other error is a failure.
-        invalid=(*_INVALID_ERRORS, ServiceValidationError),
-        error=HomeAssistantError,
+        # What Core's todo services raise before they call the list entity:
+        # their schema and their own checks. Any other error may come after
+        # the integration reached its backend, so its outcome is unknown.
+        refused=(
+            *(e for e in _INVALID_ERRORS if e is not ValueError),
+            ServiceValidationError,
+        ),
         date=cv.date,
     )
     return None if None in vars(core).values() else core
@@ -81,22 +91,22 @@ def _due(core: SimpleNamespace, value: str | None, current: Any) -> dict[str, An
 def _service_data(
     core: SimpleNamespace, msg: dict[str, Any], before: list[Any]
 ) -> tuple[dict[str, Any], Any]:
-    """The service data for a write and the row an update targets, or a
-    failure. An update goes by uid; Core finds the row by the first uid or
-    summary equal to it, so a row named after the uid is refused."""
+    """The service data for a write and the row an update targets. An update
+    goes by uid; Core changes the first row whose uid or summary equals it, so
+    the update is refused when an earlier row is named after the uid."""
     data = dict(msg.get("data") or {})
     current = None
     if msg["action"] == "update":
         uid = msg["uid"]
         current = next((i for i in before if i.uid == uid), None)
         if current is None:
-            return _failure("item_not_found", f"No item with uid {uid!r}"), None
+            raise _Refused("item_not_found", f"No item with uid {uid!r}")
         if core.find(uid, before) is not current:
-            return _failure(
+            raise _Refused(
                 "namesake",
                 f"Another item is named {uid!r}, so Home Assistant would change "
                 "that one; nothing was changed",
-            ), None
+            )
         data["item"] = uid
     elif msg["action"] == "remove":
         data["item"] = msg["refs"]
@@ -112,17 +122,19 @@ def _outcome(
     current: Any,
     after: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """The rows the write produced, read from the list entity."""
+    """The added or updated row as the list entity holds it afterwards, or
+    the rows a removal took off, as they were before it. A row may lack a
+    uid (``api_items_factory`` drops None fields)."""
     known = {i.uid for i in before}
     if msg["action"] == "add":
-        added = [row for row in after if row["uid"] not in known]
+        added = [row for row in after if row.get("uid") not in known]
         return {"success": True, "item": added[0] if len(added) == 1 else None}
     if msg["action"] == "update":
-        stored = next((row for row in after if row["uid"] == current.uid), None)
+        stored = next((row for row in after if row.get("uid") == current.uid), None)
         return {"success": True, "item": stored}
     # Another client's removal of a row the call did not name is not this call's.
     asked = {found.uid for ref in msg["refs"] if (found := core.find(ref, before))}
-    gone = asked - {row["uid"] for row in after}
+    gone = asked - {row.get("uid") for row in after}
     removed = [_row(core, i) for i in before if i.uid in gone]
     return {"success": True, "removed": removed}
 
@@ -134,9 +146,10 @@ async def _write(
         # Core's services skip an unavailable list and still answer success.
         return _failure("list_unavailable", f"{entity.entity_id} is unavailable")
     before = list(entity.todo_items or ())
-    data, current = _service_data(core, msg, before)
-    if data.get("success") is False:
-        return data
+    try:
+        data, current = _service_data(core, msg, before)
+    except _Refused as refused:
+        return refused.failure
     rows_before = [_row(core, i) for i in before]
     try:
         await hass.services.async_call(
@@ -147,11 +160,10 @@ async def _write(
             blocking=True,
             context=msg.get("ha_mcp_context"),
         )
-    except (*core.invalid, core.error) as err:
+    except core.refused as err:
         if [_row(core, i) for i in entity.todo_items or ()] != rows_before:
             raise  # the list changed, so this is no refusal
-        code = "invalid" if isinstance(err, core.invalid) else "failed"
-        return _failure(code, str(err))
+        return _failure("invalid", str(err))
     after = [_row(core, i) for i in entity.todo_items or ()]
     return _outcome(core, msg, before, current, after)
 

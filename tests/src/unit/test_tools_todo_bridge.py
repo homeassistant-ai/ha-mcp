@@ -13,7 +13,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantError
 from ha_mcp.tools.tools_todo import TodoTools
 
-from .test_tools_todo import LIST, _error, _FakeClient
+from .test_tools_todo import LIST, _error, _FakeClient, _no_component  # noqa: F401
 
 
 @pytest.fixture
@@ -26,15 +26,6 @@ def tools(client: _FakeClient) -> TodoTools:
     return TodoTools(client)
 
 
-@pytest.fixture(autouse=True)
-def _no_component() -> Iterator[None]:
-    """Unless a test installs the bridge, writes take Core's WebSocket commands."""
-    with patch(
-        "ha_mcp.tools.component_todo.get_component_caps", AsyncMock(return_value=None)
-    ):
-        yield
-
-
 class _Bridge:
     """The component's ``todo_item`` over the fake list: Core's first-match
     lookup for names, writes by uid, rows read back."""
@@ -43,6 +34,8 @@ class _Bridge:
         self.client = client
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.refusal: dict[str, str] | None = None
+        # A reply per action that stands in for what the component answers.
+        self.replies: dict[str, dict[str, Any] | None] = {}
 
     def _find(self, ref: str) -> dict[str, Any] | None:
         return next(
@@ -54,6 +47,8 @@ class _Bridge:
     ) -> dict[str, Any] | None:
         assert entity_id == LIST
         self.calls.append((action, fields))
+        if action in self.replies:
+            return self.replies[action]
         if self.refusal and action != "resolve":
             return {"success": False, "error": self.refusal}
         if action == "resolve":
@@ -163,9 +158,9 @@ class TestBridge:
     async def test_write_without_answer_is_an_unknown_outcome(
         self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
     ) -> None:
-        async def lost(*_args: Any, **fields: Any) -> Any:
-            if _args[2] == "resolve":
-                return await _Bridge(client)(*_args, **fields)
+        async def lost(*args: Any, **fields: Any) -> Any:
+            if args[2] == "resolve":
+                return await bridge(*args, **fields)
             raise HomeAssistantError("connection lost")
 
         with (
@@ -176,21 +171,81 @@ class TestBridge:
         assert _error(excinfo)["error"]["code"] == "SERVICE_CALL_FAILED"
         assert _error(excinfo)["write_outcome_unknown"] is True
 
+    async def test_move_below_a_row_named_after_the_uid_is_refused_first(
+        self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
+    ) -> None:
+        # After the move, Core's first match for "2" would be x.
+        client.items.append({"uid": "x", "summary": "2", "status": "needs_action"})
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(
+                LIST, item="Pay", move_after="x", status="needs_action"
+            )
+        assert _error(excinfo)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert not [c for c in client.calls if c["type"] == "todo/item/move"]
+        assert [c[0] for c in bridge.calls] == ["resolve"]
+
+    async def test_core_refusal_comes_through_as_invalid_input(
+        self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
+    ) -> None:
+        bridge.refusal = {"code": "invalid", "message": "no description support"}
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(LIST, item="Pay", description="x")
+        error = _error(excinfo)["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "no description support" in error["message"]
+
+    async def test_new_item_not_told_apart_is_a_warning(
+        self, tools: TodoTools, bridge: _Bridge
+    ) -> None:
+        bridge.replies["add"] = {"success": True, "item": None}
+        got = await tools.ha_set_todo_item(LIST, summary="Eggs")
+        assert got["todo_item"] is None
+        assert "not confirmed" in got["message"]
+        assert got["warnings"][0].startswith("Could not tell the new item apart")
+
+    @pytest.mark.parametrize(("move_after", "applied"), [(None, False), ("", True)])
+    async def test_write_not_sent_after_the_resolve_is_a_connection_failure(
+        self,
+        tools: TodoTools,
+        bridge: _Bridge,
+        move_after: str | None,
+        applied: bool,
+    ) -> None:
+        bridge.replies["update"] = None
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(
+                LIST, item="Pay", status="needs_action", move_after=move_after
+            )
+        error = _error(excinfo)["error"]
+        assert error["code"] == "CONNECTION_FAILED"
+        assert ("the move was applied" in error["message"]) is applied
+
+    async def test_removal_still_on_the_list_read_back_is_a_warning(
+        self, tools: TodoTools, bridge: _Bridge
+    ) -> None:
+        bridge.replies["remove"] = {"success": True, "removed": []}
+        got = await tools.ha_remove_todo_item(LIST, item="Pay")
+        assert got["warnings"][0].startswith("The list read back after the removal")
+
 
 class _Snapshots:
-    def __init__(self) -> None:
+    def __init__(self, client: _FakeClient) -> None:
+        self.client = client
         self.keys: list[str] = []
+        # The list and the number of service writes when each backup was taken.
+        self.seen: list[tuple[list[dict[str, Any]], int]] = []
 
     async def maybe_snapshot(self, domain: str, entity_id: str, **kwargs: Any) -> None:
         assert domain == "todo_item"
         self.keys.append(entity_id)
+        self.seen.append(([dict(i) for i in self.client.items], self.client.writes))
         if entity_id.endswith("::3"):
             kwargs["skip_reasons"].append("No pre-write backup of 3")
 
 
 @pytest.fixture
-def snapshots() -> Iterator[_Snapshots]:
-    fake = _Snapshots()
+def snapshots(client: _FakeClient) -> Iterator[_Snapshots]:
+    fake = _Snapshots(client)
     settings = type("S", (), {"enable_auto_backup": True})()
     with (
         patch("ha_mcp.backup_todo.get_global_settings", return_value=settings),
@@ -222,6 +277,58 @@ class TestBackups:
     ) -> None:
         await tools.ha_set_todo_item(LIST, item="Pay", rename="Paid")
         assert snapshots.keys == [f"{LIST}::2"]
+
+    @pytest.mark.parametrize(
+        "write",
+        [
+            {"item": ["Pay"]},
+            {"remove_completed": True},
+        ],
+    )
+    async def test_backup_is_taken_before_the_removal(
+        self,
+        tools: TodoTools,
+        client: _FakeClient,
+        snapshots: _Snapshots,
+        write: dict[str, Any],
+    ) -> None:
+        await tools.ha_remove_todo_item(LIST, **write)
+        items, writes = snapshots.seen[0]
+        assert writes == 0
+        assert "2" in [i["uid"] for i in items]
+
+    async def test_backup_is_taken_before_the_bridge_update(
+        self,
+        tools: TodoTools,
+        client: _FakeClient,
+        bridge: _Bridge,
+        snapshots: _Snapshots,
+    ) -> None:
+        await tools.ha_set_todo_item(LIST, item="Pay", rename="Paid")
+        items, _ = snapshots.seen[0]
+        assert next(i for i in items if i["uid"] == "2")["summary"] == "Pay"
+        assert client.items[1]["summary"] == "Paid"
+
+    async def test_update_names_a_backup_not_taken(
+        self, tools: TodoTools, client: _FakeClient, snapshots: _Snapshots
+    ) -> None:
+        got = await tools.ha_set_todo_item(LIST, item="Bread", rename="Rye")
+        assert got["warnings"] == ["No pre-write backup of 3"]
+
+    async def test_capture_error_is_a_warning_and_the_write_goes_ahead(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        settings = type("S", (), {"enable_auto_backup": True})()
+        with (
+            patch("ha_mcp.backup_todo.get_global_settings", return_value=settings),
+            patch(
+                "ha_mcp.backup_manager.get_backup_manager",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            got = await tools.ha_remove_todo_item(LIST, item="Pay")
+        assert got["warnings"] == ["No pre-write backup was taken: OSError"]
+        assert client.services() == [("remove_item", {"item": ["Pay"]})]
 
     async def test_no_backup_with_auto_backup_off(
         self, tools: TodoTools, client: _FakeClient

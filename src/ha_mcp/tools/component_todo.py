@@ -6,7 +6,8 @@ todo services and reads the stored rows back from the list entity.
 the caller uses Core's WebSocket commands instead: the capability is absent,
 the command was not sent, Core answered ``unknown_command``, or the component
 lacks Core's todo parts. A reply with ``success: False`` is the component's
-refusal, given before anything was written.
+refusal: a check before the write, or Core's schema or validation error after
+which the list's rows were unchanged.
 """
 
 from __future__ import annotations
@@ -25,14 +26,13 @@ from .helpers import raise_tool_error
 WS_TODO_ITEM = "ha_mcp_tools/todo_item"
 CAPABILITY = "todo_item"
 
-# The component's refusal codes as the tool error codes they stand for.
+# ``unsupported`` is absent: ``todo_item`` turns it into the fallback.
 _REFUSAL_CODES = {
     "not_loaded": ErrorCode.ENTITY_UNAVAILABLE,
     "list_unavailable": ErrorCode.ENTITY_UNAVAILABLE,
     "item_not_found": ErrorCode.RESOURCE_NOT_FOUND,
     "namesake": ErrorCode.VALIDATION_INVALID_PARAMETER,
     "invalid": ErrorCode.VALIDATION_INVALID_PARAMETER,
-    "failed": ErrorCode.SERVICE_CALL_FAILED,
 }
 
 
@@ -78,8 +78,8 @@ async def todo_call(
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"{WS_TODO_ITEM} {action} got no answer, so whether it was "
-                f"applied is unknown: {e}{applied}",
+                f"{WS_TODO_ITEM} {action} did not return its outcome, so "
+                f"whether it was applied is unknown: {e}{applied}",
                 context={"entity_id": entity_id, "write_outcome_unknown": True},
                 suggestions=["Check with ha_get_todo() before retrying"],
             )
@@ -104,8 +104,8 @@ async def todo_call(
 async def todo_write(
     client: Any, entity_id: str, action: str, applied: str = "", **fields: Any
 ) -> dict[str, Any]:
-    """``todo_call`` for a write after the component resolved its item, so
-    the component serves it."""
+    """``todo_call`` for a write whose item the component resolved: a None
+    reply raises instead of falling back to Core's services."""
     reply = await todo_call(client, entity_id, action, applied, **fields)
     if reply is None:
         raise_tool_error(

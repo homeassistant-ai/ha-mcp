@@ -7,13 +7,13 @@ This module provides tools for managing Home Assistant todo lists including:
 - Creating, updating and moving todo items
 - Removing items from a todo list
 
-Item writes go through the component's ``ha_mcp_tools/todo_item`` bridge
-when it is installed: it resolves an item with Core's own lookup, calls Core's
-todo services and reads the stored row back from the list entity. Without the
-component they go through Core's todo services over WebSocket; the REST
-service endpoint answers a schema rejection with a bare 400. A move goes
-through Core's ``todo/item/move`` command on both paths. Either way Core
-validates the write and its own error text reaches the caller.
+Adding, updating and removing named items go through the component's
+``ha_mcp_tools/todo_item`` bridge when the component serves it (see
+``component_todo``), and through Core's todo services over WebSocket
+otherwise; the REST service endpoint answers a schema rejection with a bare
+400. A move (``todo/item/move``) and ``remove_completed`` use Core's
+WebSocket commands on both paths. Either way Core validates the write and
+its own error text reaches the caller.
 """
 
 import json
@@ -89,20 +89,30 @@ def _raise_core_failure(
 def _removed(
     before: list[dict[str, Any]],
     after: list[dict[str, Any]] | None,
-    item: str | list[str] | None,
-    remove_completed: bool,
+    refs: list[str] | None,
 ) -> list[dict[str, Any]] | None:
-    """The asked-for items gone after a removal; another client's removal of
-    an item the call did not ask for is not this call's. None when the list
-    was not read back."""
+    """The asked-for items gone after a removal (``refs`` None: the completed
+    ones); another client's removal of an item the call did not ask for is
+    not this call's. None when the list was not read back."""
     if after is None:
         return None
     kept = {i.get("uid") for i in after}
     gone = [i for i in before if i.get("uid") not in kept]
-    if remove_completed:
+    if refs is None:
         return [i for i in gone if i.get("status") == "completed"]
-    refs = {item} if isinstance(item, str) else set(item or [])
-    return [i for i in gone if {i.get("uid"), i.get("summary")} & refs]
+    return [i for i in gone if {i.get("uid"), i.get("summary")} & set(refs)]
+
+
+def _refuse_namesake(entity_id: str, ref: str, item: str) -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Another item on {entity_id} is named {ref!r}, so Home "
+            "Assistant would change that one; nothing was changed",
+            context={"entity_id": entity_id, "item": item},
+            suggestions=["Rename the item named after the uid first"],
+        )
+    )
 
 
 def _require_todo_entity(entity_id: str) -> None:
@@ -277,7 +287,7 @@ class TodoTools:
         self, entity_id: str, refs: list[str]
     ) -> tuple[list[dict[str, Any] | None], list[dict[str, Any]] | None]:
         """The row each ref names, the one Core's todo services act on, and
-        the list as read when the component did not resolve them."""
+        the list as read, or None when the component resolved them."""
         reply = await todo_call(self._client, entity_id, "resolve", refs=refs)
         if reply is not None:
             return reply["items"], None
@@ -494,8 +504,8 @@ class TodoTools:
         support, and says which. The reply carries `todo_item`, the item as
         Home Assistant stores it afterwards, uid included, or null with a
         warning when it cannot be read back. With auto-backup on, an updated
-        item is backed up first; a backup that could not be taken is named in
-        `warnings`.
+        item is backed up first; `warnings` names a backup that was not taken
+        because the item could not be read or the backup could not start.
 
         EXAMPLES:
         - Add item: ha_set_todo_item("todo.tasks", summary="Pay bills", due_date="2024-12-31")
@@ -643,6 +653,7 @@ class TodoTools:
             todo_item, warnings = await self._update_item_ws(
                 entity_id, item, rows, items, updates, move_after
             )
+        warnings = backup_warnings + warnings
         response: dict[str, Any] = {
             "success": True,
             "entity_id": entity_id,
@@ -650,8 +661,8 @@ class TodoTools:
             "todo_item": todo_item,
             "message": f"Updated '{item}' in {entity_id}",
         }
-        if backup_warnings + warnings:
-            response["warnings"] = backup_warnings + warnings
+        if warnings:
+            response["warnings"] = warnings
         return response
 
     async def _update_by_uid(
@@ -663,19 +674,29 @@ class TodoTools:
         move_after: str | None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
         """Move and update the row the component resolved, by its uid; the
-        component refuses a uid that another item is named after."""
+        component refuses the update when an item listed before it is named
+        after that uid."""
         uid = self._uid_of(rows[0], item, entity_id)
+        update = bool(updates) or move_after is None
+        if (
+            update
+            and move_after
+            and any(
+                i.get("uid") != uid and i.get("summary") == uid
+                for i in await self._list_items(entity_id)
+            )
+        ):
+            # A move below another item can put a row named after the uid
+            # before it; refused before the move, as the component would
+            # refuse the update after it.
+            _refuse_namesake(entity_id, uid, item)
         applied = ""
         if move_after is not None:
             # Moved first, so a list without reordering refuses before the
             # update is written.
-            previous = (
-                self._uid_of(rows[1], move_after, entity_id) if move_after else None
-            )
-            await self._move_item(entity_id, item, uid, previous)
-            applied = "; the move was applied"
+            applied = await self._move_item(entity_id, item, uid, rows, move_after)
         warnings: list[str] = []
-        if updates or move_after is None:
+        if update:
             # Core decides whether the update names anything to change.
             reply = await todo_write(
                 self._client, entity_id, "update", applied, uid=uid, data=updates
@@ -683,9 +704,9 @@ class TodoTools:
             todo_item = reply["item"]
         else:
             after, warnings = await self._read_back(entity_id)
-            todo_item = next((i for i in after or [] if i.get("uid") == uid), None)
             if after is None:
                 return None, warnings
+            todo_item = next((i for i in after if i.get("uid") == uid), None)
         if todo_item is None:
             warnings.append(_not_read_back(item))
         return todo_item, warnings
@@ -716,25 +737,13 @@ class TodoTools:
                 i is not target and i.get("summary") == uid for i in items
             )
         if update and uid and resolves_elsewhere:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Another item on {entity_id} is named {ref!r}, so Home "
-                    "Assistant would change that one; nothing was changed",
-                    context={"entity_id": entity_id, "item": item},
-                    suggestions=["Rename the item named after the uid first"],
-                )
-            )
+            _refuse_namesake(entity_id, ref, item)
         applied = ""
         if move_after is not None:
             # Moved first, so a list without reordering refuses before the
             # update is written.
             moved = self._uid_of(target, item, entity_id)
-            previous = (
-                self._uid_of(rows[1], move_after, entity_id) if move_after else None
-            )
-            await self._move_item(entity_id, item, moved, previous)
-            applied = "; the move was applied"
+            applied = await self._move_item(entity_id, item, moved, rows, move_after)
         if update:
             # Core decides whether the update names anything to change.
             await self._todo_service(
@@ -765,16 +774,22 @@ class TodoTools:
         return str(found["uid"])
 
     async def _move_item(
-        self, entity_id: str, item: str, uid: str, previous_uid: str | None
-    ) -> None:
-        """Core's todo/item/move, which takes uids; without ``previous_uid``
-        the item goes to the top."""
+        self,
+        entity_id: str,
+        item: str,
+        uid: str,
+        rows: list[dict[str, Any] | None],
+        move_after: str,
+    ) -> str:
+        """Core's todo/item/move, which takes uids; an empty ``move_after``
+        puts the item at the top. Returns the note for a later failure."""
         message = {"type": "todo/item/move", "entity_id": entity_id, "uid": uid}
-        if previous_uid:
-            message["previous_uid"] = previous_uid
+        if move_after:
+            message["previous_uid"] = self._uid_of(rows[1], move_after, entity_id)
         await self._write(
             "todo/item/move", message, {"entity_id": entity_id, "item": item}
         )
+        return "; the move was applied"
 
     @tool(
         name="ha_remove_todo_item",
@@ -815,8 +830,9 @@ class TodoTools:
         status="completed". `removed` lists the items the call asked for that
         are gone afterwards; with remove_completed=True that includes a
         completed item another client removed meanwhile. With auto-backup on,
-        each item is backed up before it is removed; a backup that could not
-        be taken is named in `warnings`.
+        each item is backed up before it is removed; `warnings` names a backup
+        not taken because the item could not be read or the backup could not
+        start.
 
         EXAMPLES:
         - ha_remove_todo_item("todo.shopping_list", "Buy milk")
@@ -893,7 +909,7 @@ class TodoTools:
         )
         await self._todo_service("remove_completed_items", entity_id, {})
         after, read_warnings = await self._read_back(entity_id)
-        return _removed(before, after, None, True), warnings + read_warnings
+        return _removed(before, after, None), warnings + read_warnings
 
     async def _remove_items(
         self, entity_id: str, item: str | list[str]
@@ -922,12 +938,14 @@ class TodoTools:
         warnings = await back_up_items(
             self._client, entity_id, rows, "ha_remove_todo_item"
         )
+        read_warnings: list[str] = []
         if before is None:
             reply = await todo_write(self._client, entity_id, "remove", refs=refs)
-            return reply["removed"], warnings
-        await self._todo_service("remove_item", entity_id, {"item": refs})
-        after, read_warnings = await self._read_back(entity_id)
-        removed = _removed(before, after, refs, False)
+            removed = reply["removed"]
+        else:
+            await self._todo_service("remove_item", entity_id, {"item": refs})
+            after, read_warnings = await self._read_back(entity_id)
+            removed = _removed(before, after, refs)
         if removed == []:
             # Core refuses to remove an item it does not hold, so an
             # unchanged list is a stale read.

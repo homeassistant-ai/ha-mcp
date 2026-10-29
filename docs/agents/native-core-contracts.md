@@ -98,19 +98,22 @@ same test the frontend's restart dialog applies). When the recorder or the
 backup manager does not answer, it says so in `warnings` instead of claiming
 the check passed.
 
-The todo item writes prefer the component's `ha_mcp_tools/todo_item` bridge
-(capability `todo_item`). It resolves an item value with Core's own
-`_find_by_uid_or_summary`, calls Core's todo services in process (so their
-schema, feature checks and context apply) and reads the stored rows back from
-the list entity. An update goes by the uid it resolved, and the bridge refuses
-one whose uid another item is named after, since Core would change that item.
-It also refuses a write to an unavailable list, which Core's services would
-skip while answering success. A restore hands it the snapshot's `due`, and it
-picks `due_date` or `due_datetime` with Core's own date validator. Without the
+Todo item adds, updates and removals by name prefer the component's
+`ha_mcp_tools/todo_item` bridge (capability `todo_item`). It resolves an item
+value with Core's own `_find_by_uid_or_summary`, calls Core's todo services in
+process (so their schema, feature checks and context apply) and reads the
+stored rows back from the list entity. An update goes by the uid it resolved,
+and the bridge refuses the update when an item listed before it is named after
+that uid, since Core would change that item instead. It also refuses a write to
+an unavailable list (see below). Only Core's schema and validation errors that
+left the rows unchanged come back as a refusal; any other error leaves the
+outcome unknown. A restore hands it the snapshot's `due`, and it picks
+`due_date` or `due_datetime` with Core's own date validator. Without the
 component the tools call Core's todo services through WebSocket `call_service`,
 so Core's schema rejections reach the caller with their text; the REST service
-endpoint answers them with a bare 400. A reorder takes `todo/item/move` on both
-paths. `ha_get_todo` filters with `todo.get_items`. Core's services skip an
+endpoint answers them with a bare 400. A reorder takes `todo/item/move` and
+`remove_completed` takes Core's `remove_completed_items` on both paths.
+`ha_get_todo` filters with `todo.get_items`. Core's services skip an
 unavailable list, answering a write with success and `todo.get_items` with no
 match, so the tools refuse a write to one and read its items with
 `todo/item/list`, which still answers for a loaded list entity. A list that
@@ -118,11 +121,11 @@ Core holds only as its `restored` placeholder state (no loaded entity, for
 example while its integration is not set up) is refused, as `todo/item/list`
 answers it with "Entity not found"; a restore to it is refused as not applied.
 With auto-backup on, the tools back up each item an update or a removal
-changes, under its uid. A todo item backup restores an edited item with
-`todo.update_item` under its uid, which the safety backup and the diff also
-follow. The snapshot holds no position and Core's services cannot set a uid, so
-a removed item comes back through `todo.add_item` with a new uid, at the place
-the list gives new items.
+changes, under its uid (its summary when it has none). A todo item backup
+restores an edited item with `todo.update_item` under its uid, which the safety
+backup and the diff also follow. The snapshot holds no position and Core's
+services cannot set a uid, so a removed item comes back through `todo.add_item`
+with a new uid, at the place the list gives new items.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
