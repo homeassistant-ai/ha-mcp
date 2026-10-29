@@ -141,7 +141,15 @@ def _collection_helpers_list(
     was built from, else its state attributes. ``name`` is the CURRENT display
     name (a rename updates the registry, not the stored item — issue #1794).
     """
-    stored = _stored_helpers(hass, view, HELPERS_LIST_COLLECTION_DOMAINS)
+    # A stored helper the registry cannot place would be listed twice (again
+    # from its state); its type is left to the server's <type>/list.
+    stored = {
+        domain: rows
+        for domain, rows in _stored_helpers(
+            hass, view, HELPERS_LIST_COLLECTION_DOMAINS
+        ).items()
+        if all(entity_id for _item, _id, entity_id in rows)
+    }
     wanted = [d for d in stored if type_filter is None or d in type_filter]
     states: dict[str, Any] = {}
     for state in _iter_states(hass):
