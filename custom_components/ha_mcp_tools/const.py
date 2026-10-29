@@ -100,13 +100,15 @@ DENY_READ_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
 # directory list; access is then enforced against the volume root exactly as a
 # config-relative entry is enforced against the config dir (issue #1586).
 #
-# The component runs inside HA Core, so a volume is reachable only if the HA
-# Core container actually mounts it (the standard HAOS/Supervised mounts are
-# config/share/media/ssl/backup). An unmounted or non-existent root simply
-# yields a "not found" at use time — adding it is harmless. As with the
-# config-relative list, a configured volume grants BOTH read and write, and the
+# The component runs inside HA Core, so only volumes the Core container mounts
+# are offered: on HAOS and Supervised, /share and /media read-write and /ssl
+# read-only (supervisor/docker/homeassistant.py). /backup is not mounted into
+# Core; a write there would create the directory inside the container and
+# report success for a file that never reaches backup storage (issue #2875).
+# As with the config-relative list, a configured volume grants BOTH read and
+# write in this allowlist (the OS still refuses writes under /ssl), and the
 # non-overridable deny floor (.storage / secrets.yaml) still applies.
-ALLOWED_VOLUME_ROOTS = ("/share", "/media", "/ssl", "/backup")
+ALLOWED_VOLUME_ROOTS = ("/share", "/media", "/ssl")
 
 # Files allowed for managed YAML editing
 ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]

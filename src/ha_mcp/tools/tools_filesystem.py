@@ -580,7 +580,7 @@ class FilesystemTools:
         - `packages/`, plus the folder bound by `homeassistant: packages:` when
           it has another name
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
-          `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
+          `/media`, `/ssl`) configured in the ha-mcp settings UI
         Path traversal (../) is blocked.
 
         EXAMPLE: ha_list_files(path="www/", pattern="*.css")
@@ -696,7 +696,7 @@ class FilesystemTools:
         - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`, `blueprints/**`
         - `custom_components/**/*.py` (read-only)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
-          `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
+          `/media`, `/ssl`) configured in the ha-mcp settings UI
         Path traversal (../) is blocked.
 
         EXAMPLE: ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
@@ -798,7 +798,7 @@ class FilesystemTools:
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
-          `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
+          `/media`; `/ssl` is read-only) configured in the ha-mcp settings UI
         Configuration files (configuration.yaml, etc.) cannot be written; path
         traversal (../) is blocked.
 
@@ -887,8 +887,8 @@ class FilesystemTools:
         recent auto-backup snapshot; a binary file has no snapshot and its
         deletion is permanent. Allowed directories:
         `www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom
-        directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`,
-        `/backup`) configured in the ha-mcp settings UI. Configuration files
+        directories OR HAOS sibling volumes (`/share`, `/media`; `/ssl` is
+        read-only) configured in the ha-mcp settings UI. Configuration files
         cannot be deleted; path traversal (../) is blocked.
 
         EXAMPLE: ha_delete_file(path="www/deprecated-style.css", confirm=True)
