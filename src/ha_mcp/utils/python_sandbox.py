@@ -194,6 +194,10 @@ SAFE_METHODS = {
     "lower",
     "upper",
     "strip",
+    "lstrip",
+    "rstrip",
+    "removeprefix",
+    "removesuffix",
     "split",
     "join",
     "replace",
@@ -513,7 +517,8 @@ PYTHON TRANSFORM SECURITY:
 - Slicing: config['views'][0]['cards'][1:3]
 - Assignment: config['key'] = 'value'
 - Deletion: del config['key'] or config.pop('key')
-- List methods: append, insert, pop, remove, clear, extend
+- List methods: append, insert, pop, remove, clear, extend, index, count, sort,
+  reverse
 - Dict methods: update, get, setdefault, keys, values, items
 - Loops: for, if/else, pass, break, continue
 - Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)
@@ -522,7 +527,8 @@ PYTHON TRANSFORM SECURITY:
 - Dict unpacking (**) in calls and dict literals: {**d, 'k': v}
 - Keyword arguments: func(key=value)
 - Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])
-- String methods: startswith, endswith, lower, upper, strip, split, join, replace
+- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,
+  removeprefix, removesuffix, split, join, replace
 - Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
   min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,
   tuple, set
