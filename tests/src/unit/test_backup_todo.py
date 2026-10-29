@@ -6,13 +6,16 @@ way Core's todo services do, so each test reads the list a restore leaves.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.backup_helper_target import safety_target as restore_safety_target
 from ha_mcp.backup_todo import (
+    TodoListNotLoaded,
     current_key,
     fetch_todo_item,
     find_item,
@@ -80,6 +83,13 @@ class _FakeList:
                 row.pop(key, None)
 
 
+@pytest.fixture(autouse=True)
+def _no_component() -> Iterator[None]:
+    """Without the component a restore takes Core's todo services."""
+    with patch("ha_mcp.backup_todo.todo_item", AsyncMock(return_value=None)):
+        yield
+
+
 @pytest.fixture
 def fake(monkeypatch: pytest.MonkeyPatch) -> _FakeList:
     fake = _FakeList(
@@ -107,8 +117,16 @@ class TestFetch:
     async def test_unknown_item_is_a_miss(self, fake: _FakeList) -> None:
         assert await fetch_todo_item(object(), f"{LIST}::Bread") is None
 
-    async def test_unknown_list_is_a_miss(self, fake: _FakeList) -> None:
-        assert await fetch_todo_item(object(), "todo.gone::Bread") is None
+    async def test_list_not_loaded_is_no_miss(self, fake: _FakeList) -> None:
+        # Whether the item is on a list Core has not loaded is unknown.
+        with pytest.raises(TodoListNotLoaded):
+            await fetch_todo_item(object(), "todo.gone::Bread")
+
+    async def test_uid_wins_over_an_item_named_like_it(self, fake: _FakeList) -> None:
+        fake.items.insert(0, {"uid": "9", "summary": "2", "status": "needs_action"})
+        got = await fetch_todo_item(object(), f"{LIST}::2")
+        assert got is not None
+        assert got["summary"] == "Pay"
 
     async def test_key_without_item_is_a_miss(self, fake: _FakeList) -> None:
         assert await fetch_todo_item(object(), f"{LIST}::") is None
@@ -225,8 +243,29 @@ class TestRestoreGuards:
         # Core skips an unavailable list and still answers success.
         snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
         fake.state = "unavailable"
-        with pytest.raises(HomeAssistantError, match="unavailable"):
+        with pytest.raises(bm.BackupRestoreError, match="unavailable") as excinfo:
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert excinfo.value.outcome["apply_status"] == "not_applied"
+        assert fake.calls == []
+
+    async def test_list_not_loaded_is_refused_as_not_applied(
+        self, fake: _FakeList, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        send = fake.send
+
+        async def not_loaded(client: Any, message: dict[str, Any]) -> Any:
+            if message["type"] == "todo/item/list":
+                raise HomeAssistantCommandError("Entity not found", "not_found")
+            return await send(client, message)
+
+        monkeypatch.setattr(bm, "_ws_send", not_loaded)
+        with pytest.raises(bm.BackupRestoreError) as excinfo:
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert excinfo.value.outcome["apply_status"] == "not_applied"
+        with pytest.raises(bm.BackupRestoreError) as safety:
+            await safety_target(object(), f"{LIST}::Pay", snapshot)
+        assert safety.value.outcome["apply_status"] == "not_applied"
         assert fake.calls == []
 
     async def test_snapshot_without_uid_updates_the_item_by_summary(
@@ -353,8 +392,9 @@ class TestSnapshotFieldsAndGuards:
     ) -> None:
         snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
         fake.items.insert(0, {"uid": "9", "summary": "2", "status": "needs_action"})
-        with pytest.raises(HomeAssistantError, match="nothing was restored"):
+        with pytest.raises(bm.BackupRestoreError, match="nothing was restored") as e:
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert e.value.outcome["apply_status"] == "not_applied"
         assert fake.calls == []
 
     async def test_foreign_new_item_is_not_completed(
@@ -435,3 +475,82 @@ class TestSnapshotFieldsAndGuards:
             "No safety backup was taken: todo_item Pay no longer exists, "
             "so this restore overwrites none of its state."
         ]
+
+
+class _Bridge:
+    """The component's ``todo_item`` over the fake list."""
+
+    def __init__(self, fake: _FakeList) -> None:
+        self.fake = fake
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.refusal: dict[str, str] | None = None
+
+    async def __call__(
+        self, _client: Any, entity_id: str, action: str, **fields: Any
+    ) -> dict[str, Any]:
+        assert entity_id == LIST
+        if action == "resolve":
+            found = [find_item(self.fake.items, ref) for ref in fields["refs"]]
+            return {"success": True, "items": found}
+        self.calls.append((action, fields))
+        if self.refusal:
+            return {"success": False, "error": self.refusal}
+        if action == "add":
+            self.fake.next_uid += 1
+            row = {"uid": str(self.fake.next_uid), "summary": fields["data"]["item"]}
+            self.fake.items.append(row | {"status": "needs_action"})
+            return {"success": True, "item": dict(self.fake.items[-1])}
+        row = next(i for i in self.fake.items if i["uid"] == fields["uid"])
+        row.update({k: v for k, v in fields["data"].items() if k == "status"})
+        return {"success": True, "item": dict(row)}
+
+
+@pytest.fixture
+def bridge(fake: _FakeList) -> Iterator[_Bridge]:
+    component = _Bridge(fake)
+    with patch("ha_mcp.backup_todo.todo_item", component):
+        yield component
+
+
+class TestRestoreThroughTheComponent:
+    """With the component, a restore writes by uid and hands Core's own date
+    validator the snapshot's due as listed."""
+
+    async def test_edited_item_is_updated_by_uid(
+        self, fake: _FakeList, bridge: _Bridge
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert bridge.calls == [
+            (
+                "update",
+                {
+                    "uid": "2",
+                    "data": {"rename": "Pay", "status": "completed"},
+                    "due": "2026-11-01",
+                },
+            )
+        ]
+        assert fake.calls == []
+
+    async def test_removed_completed_item_is_added_then_completed(
+        self, fake: _FakeList, bridge: _Bridge
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        fake.items.pop(1)
+        await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert bridge.calls == [
+            ("add", {"data": {"item": "Pay"}, "due": "2026-11-01"}),
+            ("update", {"uid": "101", "data": {"status": "completed"}}),
+        ]
+        assert fake.items[-1]["status"] == "completed"
+
+    async def test_refusal_is_not_applied(
+        self, fake: _FakeList, bridge: _Bridge
+    ) -> None:
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        bridge.refusal = {"code": "namesake", "message": "Another item is named"}
+        with pytest.raises(bm.BackupRestoreError, match="Another item") as excinfo:
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert excinfo.value.outcome["apply_status"] == "not_applied"
+        assert fake.items[1]["summary"] == "Pay"

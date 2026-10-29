@@ -4,7 +4,9 @@ comes back, through a fake WebSocket that holds one list."""
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -133,6 +135,15 @@ class _FakeClient:
         ]
 
 
+@pytest.fixture(autouse=True)
+def _no_component() -> Iterator[None]:
+    """Without the component every write takes Core's WebSocket commands."""
+    with patch(
+        "ha_mcp.tools.component_todo.get_component_caps", AsyncMock(return_value=None)
+    ):
+        yield
+
+
 @pytest.fixture
 def client() -> _FakeClient:
     return _FakeClient()
@@ -202,7 +213,7 @@ class TestGetTodo:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo(LIST, status="completed")
         error = _error(excinfo)["error"]
-        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert error["code"] == "ENTITY_UNAVAILABLE"
         assert "status" in error["message"]
         assert client.calls == []
 
@@ -216,7 +227,7 @@ class TestGetTodo:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo(LIST)
         error = _error(excinfo)["error"]
-        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert error["code"] == "ENTITY_UNAVAILABLE"
         assert "placeholder" in error["message"]
         assert client.calls == []
 
@@ -253,6 +264,15 @@ class TestSetTodoItem:
         await tools.ha_set_todo_item(LIST, item="Pay", description="", due_date=" ")
         assert client.services() == [
             ("update_item", {"item": "2", "description": None, "due_date": None})
+        ]
+
+    async def test_update_sends_a_value_as_given(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Core stores a description as given, on create and on update alike.
+        await tools.ha_set_todo_item(LIST, item="Pay", description="  electric  ")
+        assert client.services() == [
+            ("update_item", {"item": "2", "description": "  electric  "})
         ]
 
     async def test_update_without_changes_is_judged_by_core(
@@ -362,16 +382,28 @@ class TestRemoveTodoItem:
             await tools.ha_remove_todo_item(LIST, item=["Pay", " "])
         assert client.calls == []
 
-    async def test_core_not_found_comes_through(
+    async def test_unknown_item_is_refused_before_anything_is_removed(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_remove_todo_item(LIST, item=["Pay", "Nope"])
+        error = _error(excinfo)["error"]
+        assert error["code"] == "RESOURCE_NOT_FOUND"
+        assert "'Nope'" in error["message"]
+        assert client.services() == []
+
+    async def test_core_refusal_comes_through(
         self, tools: TodoTools, client: _FakeClient
     ) -> None:
         client.refuse["remove_item"] = (
             "service_validation_error",
-            "Unable to find To-do item: Nope",
+            "Entity todo.tasks does not support removing items",
         )
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_remove_todo_item(LIST, item="Nope")
-        assert "Unable to find To-do item" in _error(excinfo)["error"]["message"]
+            await tools.ha_remove_todo_item(LIST, item="Pay")
+        error = _error(excinfo)["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "does not support removing items" in error["message"]
 
 
 class TestOutcomes:
@@ -383,11 +415,13 @@ class TestOutcomes:
     ) -> None:
         # Core skips an unavailable list and still answers success.
         client.state = "unavailable"
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as set_refusal:
             await tools.ha_set_todo_item(LIST, summary="Eggs")
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as remove_refusal:
             await tools.ha_remove_todo_item(LIST, item="Pay")
         assert client.calls == []
+        for refusal in (set_refusal, remove_refusal):
+            assert _error(refusal)["error"]["code"] == "ENTITY_UNAVAILABLE"
 
     async def test_failed_read_back_keeps_the_applied_add(
         self, tools: TodoTools, client: _FakeClient
@@ -482,19 +516,46 @@ class TestOutcomes:
         assert "without an item list" in _error(excinfo)["error"]["message"]
         assert client.services() == []
 
-    @pytest.mark.parametrize(
-        ("given", "sent"),
-        [
-            ("[Work] Call Bob", "[Work] Call Bob"),
-            ('["Pay", "Bread"]', ["Pay", "Bread"]),
-        ],
-    )
-    async def test_item_names_and_stringified_lists(
-        self, client: _FakeClient, given: str, sent: Any
+    async def test_string_naming_an_item_is_that_item(
+        self, tools: TodoTools, client: _FakeClient
     ) -> None:
-        from ha_mcp.tools.tools_todo import _items_if_json_list
+        client.items += [
+            {"uid": "4", "summary": "Milk", "status": "needs_action"},
+            {"uid": "5", "summary": '["Milk"]', "status": "needs_action"},
+        ]
+        first = await tools.ha_remove_todo_item(LIST, item='["Milk"]')
+        assert [i["uid"] for i in first["removed"]] == ["5"]
+        # Once no item has that name, the string is the list it holds.
+        second = await tools.ha_remove_todo_item(LIST, item='["Milk"]')
+        assert [i["uid"] for i in second["removed"]] == ["4"]
+        assert client.services() == [
+            ("remove_item", {"item": ['["Milk"]']}),
+            ("remove_item", {"item": ["Milk"]}),
+        ]
 
-        assert _items_if_json_list(given) == sent
+    async def test_stringified_list_names_its_items(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        got = await tools.ha_remove_todo_item(LIST, item='["Pay", "Bread"]')
+        assert [i["uid"] for i in got["removed"]] == ["2", "3"]
+
+    async def test_item_named_like_an_empty_list_is_removed(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        client.items.append({"uid": "6", "summary": "[]", "status": "needs_action"})
+        got = await tools.ha_remove_todo_item(LIST, item="[]")
+        assert [i["uid"] for i in got["removed"]] == ["6"]
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_remove_todo_item(LIST, item="[]")
+        assert "as a list it names no item" in _error(excinfo)["error"]["message"]
+
+    async def test_unknown_name_that_is_no_list_is_not_found(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_remove_todo_item(LIST, item="[Work] Call Bob")
+        assert _error(excinfo)["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert client.services() == []
 
 
 class TestReviewGaps:
@@ -682,7 +743,7 @@ class TestTargetsAndReplies:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", status="needs_action")
         error = _error(excinfo)["error"]
-        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "nothing was changed" in error["message"]
         assert client.services() == []
 

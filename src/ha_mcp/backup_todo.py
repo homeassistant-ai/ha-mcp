@@ -1,8 +1,9 @@
 """Todo item backups: an item as Core's ``todo/item/list`` reports it.
 
-The backup key is ``<todo entity>::<item>``, where ``item`` is what the tool
-was given: the item's uid or its summary, which Core's todo services both
-accept. The snapshot is Core's item row (uid, summary, status, and
+The backup key is ``<todo entity>::<item>``, where ``item`` is the item's
+uid; a backup taken before the tools resolved items keys it by what the tool
+was given, which may be its summary. A key finds the item with that uid, else
+the one Core's todo services act on for that value. The snapshot is Core's item row (uid, summary, status, and
 description and due where set) plus ``todo_entity_id``; it leaves out
 ``completed``, the time the list sets when an item is completed, which
 follows the restored status. A restore's safety backup and the diff follow the item
@@ -11,19 +12,33 @@ by the snapshot's uid, so a rename since the backup does not lose it.
 An item still on the list under its uid gets its summary, status,
 description and due back through ``todo.update_item``; a description or due
 date the snapshot has none of is cleared. A removed item is added again with
-``todo.add_item`` and then given its status. The snapshot holds no position
+``todo.add_item`` and then given its status. With the component installed,
+both go through its ``ha_mcp_tools/todo_item`` bridge, which writes by uid
+and picks the due field with Core's own date validator. A list Home Assistant
+has not loaded, or one that is unavailable, refuses the restore before
+anything is written. The snapshot holds no position
 and Core's services cannot set a uid, so a re-added item gets a new uid and
 goes where the list adds new items.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .backup_entity_ids import _manager
 from .client.rest_client import HomeAssistantCommandError, HomeAssistantError
+from .config import get_global_settings
+from .tools.component_todo import todo_item
 
 _LIST = "todo/item/list"
+
+logger = logging.getLogger(__name__)
+
+
+class TodoListNotLoaded(HomeAssistantError):
+    """Home Assistant holds no loaded todo list under the entity id, so
+    whether the item is on it is unknown."""
 
 
 def find_item(items: list[dict[str, Any]], ref: str) -> dict[str, Any] | None:
@@ -47,16 +62,69 @@ async def list_items(client: Any, todo_entity: str) -> list[dict[str, Any]] | No
     return items
 
 
+async def _find(
+    client: Any, todo_entity: str, items: list[dict[str, Any]], ref: str
+) -> dict[str, Any] | None:
+    """The item with uid ``ref``, else the one Core resolves ``ref`` to."""
+    exact = next((i for i in items if i.get("uid") == ref), None)
+    if exact is not None:
+        return exact
+    reply = await todo_item(client, todo_entity, "resolve", refs=[ref])
+    if reply is None:
+        return find_item(items, ref)
+    if not reply.get("success"):
+        raise TodoListNotLoaded(
+            f"Home Assistant has not loaded the todo list {todo_entity}"
+        )
+    found: dict[str, Any] | None = reply["items"][0]
+    return found
+
+
 async def fetch_todo_item(client: Any, entity_id: str) -> dict[str, Any] | None:
     todo_entity, _, ref = entity_id.partition("::")
     if not todo_entity or not ref:
         return None
-    item = find_item(await list_items(client, todo_entity) or [], ref)
+    items = await list_items(client, todo_entity)
+    if items is None:
+        raise TodoListNotLoaded(
+            f"Home Assistant has not loaded the todo list {todo_entity}"
+        )
+    item = await _find(client, todo_entity, items, ref)
     if not item:
         return None
     return {"todo_entity_id": todo_entity} | {
         k: v for k, v in item.items() if k != "completed"
     }
+
+
+async def back_up_items(
+    client: Any, todo_entity: str, items: list[dict[str, Any] | None], tool_name: str
+) -> list[str]:
+    """Back up each item before a write, under its uid; the reasons a backup
+    that was due was not taken."""
+    settings = get_global_settings()
+    if not getattr(settings, "enable_auto_backup", False):
+        return []
+    refs = dict.fromkeys(
+        ref
+        for item in items
+        if item and (ref := item.get("uid") or item.get("summary"))
+    )
+    skipped: list[str] = []
+    bm = _manager()
+    try:
+        mgr = bm.get_backup_manager(client, settings)
+        for ref in refs:
+            await mgr.maybe_snapshot(
+                "todo_item",
+                f"{todo_entity}::{ref}",
+                tool_name=tool_name,
+                skip_reasons=skipped,
+            )
+    except bm._CAPTURE_TRANSIENT_ERRORS as err:
+        logger.warning("Todo item backup failed: %s", err)
+        skipped.append(f"No pre-write backup was taken: {type(err).__name__}")
+    return skipped
 
 
 def current_key(entity_id: str, config: Any) -> str:
@@ -72,6 +140,10 @@ async def safety_target(client: Any, entity_id: str, config: Any) -> str | None:
     bm = _manager()
     try:
         item = await fetch_todo_item(client, key)
+    except TodoListNotLoaded as err:
+        raise bm.BackupRestoreError(
+            f"{err}; nothing was restored", apply_status="not_applied"
+        ) from err
     except bm._CAPTURE_TRANSIENT_ERRORS as err:
         raise bm.MandatoryBackupError(
             f"the todo list could not be read: {type(err).__name__}",
@@ -86,15 +158,20 @@ def _due_field(due: str) -> str:
     return "due_datetime" if "T" in due else "due_date"
 
 
-def _field_values(snapshot: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    """Description and due as the snapshot had them. A field only the current
-    item has is sent as None, which Core takes as a clear; a field neither
-    has is left out, since Core refuses one the list does not support."""
-    fields: dict[str, Any] = {}
+def _description(snapshot: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """The description as the snapshot had it. One only the current item has
+    is sent as None, which Core takes as a clear; one neither has is left
+    out, since Core refuses a field the list does not support."""
     if snapshot.get("description") is not None:
-        fields["description"] = snapshot["description"]
-    elif current.get("description") is not None:
-        fields["description"] = None
+        return {"description": snapshot["description"]}
+    if current.get("description") is not None:
+        return {"description": None}
+    return {}
+
+
+def _field_values(snapshot: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Description and due as the snapshot had them, for Core's services."""
+    fields = _description(snapshot, current)
     if (due := snapshot.get("due")) is not None:
         fields[_due_field(due)] = due
     elif (current_due := current.get("due")) is not None:
@@ -123,15 +200,83 @@ async def _call(
     )
 
 
+def _not_applied(message: str) -> HomeAssistantError:
+    error: HomeAssistantError = _manager().BackupRestoreError(
+        message, apply_status="not_applied"
+    )
+    return error
+
+
 async def _require_available(client: Any, todo_entity: str) -> None:
     # Core skips an unavailable list: a write changes nothing and succeeds.
     state = await _manager()._rest_get_or_none(client, f"states/{todo_entity}")
     if state is None:
-        raise HomeAssistantError(f"Todo list {todo_entity} no longer exists")
+        raise _not_applied(f"Todo list {todo_entity} no longer exists")
     if state.get("state") == "unavailable":
-        raise HomeAssistantError(
+        raise _not_applied(
             f"Todo list {todo_entity} is unavailable, so nothing would be restored"
         )
+
+
+def _refusal(reply: dict[str, Any]) -> str:
+    message = (reply.get("error") or {}).get("message", "Unknown error")
+    return f"{message}; nothing was restored"
+
+
+async def _completed_again(todo_entity: str, summary: Any, mark: Any) -> Any:
+    """Mark a re-added item completed. The add is applied by then, so any
+    failure says so, since restoring again would add the item twice."""
+    try:
+        return await mark()
+    except Exception as err:
+        raise HomeAssistantError(
+            f"Re-added {summary!r} to {todo_entity}, but marking it completed "
+            f"failed or got no answer ({err}); check its status before restoring "
+            "again, which would add it a second time"
+        ) from err
+
+
+async def _restore_by_bridge(
+    client: Any, todo_entity: str, config: Any, current: dict[str, Any] | None
+) -> Any:
+    """The restore through the component, by uid; None when the component
+    does not serve it."""
+    summary = config.get("summary")
+    status = config.get("status")
+    if current is not None:
+        data = {"rename": summary, "status": status} | _description(config, current)
+        fields = {"uid": current["uid"], "data": data}
+    else:
+        fields = {"data": {"item": summary} | _description(config, {})}
+    action = "add" if current is None else "update"
+    reply = await todo_item(
+        client, todo_entity, action, due=config.get("due"), **fields
+    )
+    if reply is None:
+        return None
+    if not reply.get("success"):
+        raise _not_applied(_refusal(reply))
+    if current is not None or status != "completed":
+        return reply
+
+    async def mark() -> Any:
+        if reply["item"] is None:
+            raise HomeAssistantError("the re-added item could not be told apart")
+        marked = await todo_item(
+            client,
+            todo_entity,
+            "update",
+            uid=reply["item"]["uid"],
+            data={"status": status},
+        )
+        if not marked or not marked.get("success"):
+            error = (marked or {}).get("error") or {}
+            raise HomeAssistantError(
+                error.get("message", "the component did not run it")
+            )
+        return marked
+
+    return await _completed_again(todo_entity, summary, mark)
 
 
 async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
@@ -143,15 +288,22 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
     await _require_available(client, todo_entity)
     items = await list_items(client, todo_entity)
     if items is None:
-        raise HomeAssistantError(f"Todo list {todo_entity} no longer exists")
+        raise _not_applied(
+            f"Home Assistant has not loaded the todo list {todo_entity}, so "
+            "nothing was restored"
+        )
     current = (
         next((i for i in items if i.get("uid") == uid), None)
         if uid
         else find_item(items, summary)
     )
+    if current is None or current.get("uid"):
+        result = await _restore_by_bridge(client, todo_entity, config, current)
+        if result is not None:
+            return result
     if current is not None:
         if uid and find_item(items, uid) is not current:
-            raise HomeAssistantError(
+            raise _not_applied(
                 f"Another item on {todo_entity} is named {uid!r}, so Home "
                 "Assistant would update that one; nothing was restored"
             )
@@ -169,7 +321,8 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
     if status != "completed":
         return result
     known = {i.get("uid") for i in items}
-    try:
+
+    async def mark() -> Any:
         after = await list_items(client, todo_entity) or []
         added = [i for i in after if i.get("uid") not in known]
         if (
@@ -185,9 +338,5 @@ async def restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
             "update_item",
             {"item": added[0]["uid"], "status": status},
         )
-    except Exception as err:
-        raise HomeAssistantError(
-            f"Re-added {summary!r} to {todo_entity}, but marking it completed "
-            f"failed or got no answer ({err}); check its status before restoring "
-            "again, which would add it a second time"
-        ) from err
+
+    return await _completed_again(todo_entity, summary, mark)

@@ -748,10 +748,11 @@ async def get_entity_state_or_none(
 
 
 def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
-    """Map Core's WS error code: ``invalid_format`` is the caller's input,
-    ``not_found`` an item Core does not hold (e.g. a YAML-configured helper)."""
+    """Map Core's WS error code: ``invalid_format``, ``service_validation_error``
+    and ``not_supported`` are the caller's input, ``not_found`` an item Core
+    does not hold (e.g. a YAML-configured helper)."""
     code = result.get("error_code")
-    if code == "invalid_format":
+    if code in ("invalid_format", "service_validation_error", "not_supported"):
         return ErrorCode.VALIDATION_INVALID_PARAMETER
     if code == "not_found":
         return ErrorCode.RESOURCE_NOT_FOUND
