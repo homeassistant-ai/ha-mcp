@@ -78,18 +78,29 @@ class TestSecurityDocumentation:
         assert "while" not in allowed_section.lower()
         assert "- Loops: for, if/else, pass, break, continue" in docs
 
+    @staticmethod
+    def _documented(*labels):
+        """The names the description lists under the given entry labels."""
+        # Indented lines continue the entry above them.
+        entries = get_security_documentation().replace("\n  ", " ").splitlines()
+        names = set()
+        for entry in entries:
+            label, sep, listed = entry.partition(": ")
+            if sep and label.removeprefix("- ") in labels:
+                names.update(name.strip() for name in listed.split(","))
+        return names
+
     def test_documented_methods_match_enforced_allowlist(self):
         """Agents avoid allowed methods the description omits, and hit
         rejections for ones it lists but the validator refuses (#2902)."""
-        # Indented lines continue the entry above them.
-        entries = get_security_documentation().replace("\n  ", " ").splitlines()
-        documented = set()
-        for line in entries:
-            label, sep, names = line.partition(" methods: ")
-            if sep and label.startswith("- "):
-                documented.update(name.strip() for name in names.split(","))
+        documented = self._documented("List methods", "Dict methods", "String methods")
 
         assert documented == SAFE_METHODS
+
+    def test_documented_builtins_match_exposed_builtins(self):
+        """Agents avoid builtins the description omits, and hit NameErrors
+        for ones it lists but the sandbox does not expose."""
+        assert self._documented("Safe builtins") == set(_SAFE_BUILTINS)
 
 
 class TestUnaryOperators:
