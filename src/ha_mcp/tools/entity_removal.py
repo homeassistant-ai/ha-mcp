@@ -16,6 +16,7 @@ from ..client.rest_client import HomeAssistantConnectionError, HomeAssistantErro
 from ..errors import ErrorCode
 from .config_helpers.listing import listed_items
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
+from .helpers import exception_to_structured_error
 
 
 def _unread(entity_id: str, reason: Any) -> list[str]:
@@ -96,7 +97,11 @@ async def remove_registry_entries(
             errors.append(
                 {
                     "entity_id": eid,
-                    "code": ErrorCode.CONNECTION_FAILED.value,
+                    # CONNECTION_FAILED, CONNECTION_TIMEOUT for a timed-out
+                    # command, or AUTH_* when the token was rejected on reconnect.
+                    "code": exception_to_structured_error(exc, raise_error=False)[
+                        "error"
+                    ]["code"],
                     "message": str(exc),
                 }
             )

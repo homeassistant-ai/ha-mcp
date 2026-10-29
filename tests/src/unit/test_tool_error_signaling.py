@@ -8,6 +8,7 @@ Issue #518: Tool errors were not being signaled via isError in MCP protocol resp
 
 import json
 import logging
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -15,6 +16,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
 from ha_mcp.errors import ErrorCode, create_error_response, create_validation_error
@@ -380,6 +382,56 @@ class TestSchemaAndAuthClassification:
         exc = HomeAssistantConnectionError("WebSocket not authenticated")
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.parametrize(
+        ("cause", "expected"),
+        [
+            (
+                HomeAssistantAuthError("WebSocket authentication failed"),
+                "AUTH_INVALID_TOKEN",
+            ),
+            (
+                HomeAssistantAdminRequiredError("config/x is admin-only"),
+                "AUTH_INSUFFICIENT_PERMISSIONS",
+            ),
+            (OSError("Connection refused"), "CONNECTION_FAILED"),
+        ],
+        ids=["auth-cause", "admin-cause", "transport-cause"],
+    )
+    def test_connection_error_classified_by_auth_cause(self, cause, expected):
+        """A connection error raised from an auth rejection classifies as auth.
+
+        send_websocket_message wraps a failure to obtain a client in
+        ``HomeAssistantConnectionError(...) from`` the original, so a token
+        the WebSocket manager saw rejected on (re)connect arrives wrapped.
+        The cause is classified, so an admin refusal keeps its own code; any
+        other cause keeps the connection classification.
+        """
+        try:
+            raise HomeAssistantConnectionError(str(cause)) from cause
+        except HomeAssistantConnectionError as exc:
+            result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == expected
+
+    async def test_auth_rejected_on_connect_classifies_through_real_transport(self):
+        """The real send_websocket_message wrap, not a built shape, reaches
+        the mapper as an auth error."""
+        async with HomeAssistantClient(
+            "http://ha.local:8123", "test-token", verify_ssl=True
+        ) as client:
+            with (
+                patch(
+                    "ha_mcp.client.websocket_client.get_websocket_client",
+                    new_callable=AsyncMock,
+                    side_effect=HomeAssistantAuthError(
+                        "WebSocket authentication failed: Invalid token"
+                    ),
+                ),
+                pytest.raises(HomeAssistantConnectionError) as exc_info,
+            ):
+                await client.send_websocket_message({"type": "get_states"})
+        result = exception_to_structured_error(exc_info.value, raise_error=False)
+        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
 
 
 class TestClassifiedGuidanceSurvivesCallerSuggestions:
