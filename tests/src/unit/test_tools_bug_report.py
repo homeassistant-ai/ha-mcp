@@ -241,7 +241,7 @@ class TestBugReportTool:
         result = await ha_report_issue_func()
 
         status = result["diagnostic_info"]["tools_entry_status"]
-        assert status == "set up, but the component is pre-0.5.0 (update via HACS)"
+        assert status.startswith("set up, but the component is pre-0.5.0")
 
     @pytest.mark.asyncio
     async def test_tools_entry_status_probe_failure_degrades(

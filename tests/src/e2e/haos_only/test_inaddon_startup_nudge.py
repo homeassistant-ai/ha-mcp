@@ -44,6 +44,8 @@ NUDGE_LOGGER = "ha_mcp.hacs_auto_refresh"
 NUDGE_BOOT_LOG_PHRASES = (
     "HACS auto-refresh: startup pass due",
     "HACS auto-refresh: pass not due",
+    # The nudge is opt-in; an install that has not opted in logs this per boot.
+    "HACS auto-refresh: off",
 )
 
 # Real-world HAOS budgets (a 60 s warm-up starved in CI: two back-to-back

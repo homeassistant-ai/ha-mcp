@@ -120,7 +120,10 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
                 "Describing card types needs the ha_mcp_tools custom component "
                 "with dashboard card support.",
                 suggestions=[
-                    "Install or update the HA-MCP Custom Component through HACS",
+                    (
+                        "Install or update the HA-MCP Custom Component through "
+                        "HACS (the Marketplace on Home Assistant 2026.11+)"
+                    ),
                     "Restart Home Assistant after the update completes",
                 ],
                 context={"action": "describe", "card_type": card_type},

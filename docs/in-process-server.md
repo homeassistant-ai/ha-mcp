@@ -51,8 +51,8 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 Three floors apply, from the outside in:
 
-- **HACS installs the component only on Home Assistant 2026.8.0 or newer**
-  (`hacs.json`), the floor the config flow also enforces for the in-process
+- **HACS (the Marketplace from 2026.11) installs the component only on Home
+  Assistant 2026.8.0 or newer** (`hacs.json`), the floor the config flow also enforces for the in-process
   server entry.
 - **The integration does not load at all before Core 2026.7.** From component
   2.1.3 the manifest declares `voluptuous-openapi`, and earlier Core releases
@@ -69,8 +69,10 @@ run current `ha-mcp` servers.
 
 The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
-1. **Install the component.** Install **HA-MCP Custom Component** from HACS
-   (custom repository `homeassistant-ai/ha-mcp`; an install from the earlier
+1. **Install the component.** Install **HA-MCP Custom Component** from HACS,
+   or on Home Assistant 2026.11+ from the built-in **Marketplace** after accepting
+   its first-run warning and connecting GitHub there (**Add from link**, as an
+   **Integration**) (custom repository `homeassistant-ai/ha-mcp`; an install from the earlier
    `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same
    releases, so it needs no change), or, without
    HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
@@ -153,7 +155,7 @@ local:
 1. Add a conversation-agent integration (for a fully local setup: **Ollama**).
 2. In that agent's settings, under **Control Home Assistant**, select
    **HA-MCP Server (tool search)** (alongside or instead of the built-in
-   Assist API).
+   **Device control** API, called **Assist** before Home Assistant 2026.11).
 3. Talk to the agent from the **Assist chat** dialog, the companion apps, or a
    **voice satellite** whose pipeline uses that agent — "create an automation
    that turns off the lights when everyone leaves" now runs through the
@@ -179,8 +181,10 @@ panel** (the new **LLM API** toggle next to enabled/pinned/security-gated).
 It is deny-by-default for **beta** tools, **developer-mode** tools, and the
 **restart / reload / backup** family — a hidden tool is simply invisible to
 agents (absent from the catalog and from search results) while staying fully
-available to your regular MCP clients. Changes apply on the agent's next
-message, no restart. A tool disabled globally is off for everything,
+available to your regular MCP clients. Hiding a tool takes effect on its next
+call, no restart. Showing one takes effect on the agent's next message, or from
+Home Assistant 2026.11 in its next conversation, since Core keeps an agent's
+tool list for the whole conversation. A tool disabled globally is off for everything,
 everywhere; the security gate and Read Only Mode apply to agent calls exactly
 as to any MCP client.
 
@@ -193,6 +197,10 @@ Notes:
 - On Home Assistant 2026.10+, each tool carries its title and its read-only /
   destructive / idempotent / open-world hints, so agents and approval
   prompts can tell a lookup from a change.
+- Home Assistant 2026.11 adds its own administrator-only **Home Assistant**
+  API, whose tools (logs, history, templates, search, integrations, system
+  health) overlap some of this toolset. Selecting both on one agent works:
+  Core prefixes only tool names that clash, with the API's ID.
 - With Home Assistant 2026.10+'s own Model Context Protocol server turned
   on, **Settings → System → AI** also lists this API's own URL
   (`/api/mcp/<api id>`). External MCP clients signed in as an administrator
@@ -256,13 +264,22 @@ Configure there just reports that.)
 The server is part of the component release. Each HA-MCP Custom Component
 release names the exact `ha-mcp` build it was released with as an integration
 requirement, and Home Assistant installs it like any integration's Python
-packages. For HACS-managed installs, update the component through HACS; manual
+packages. For HACS- or Marketplace-managed installs, update the component from
+its update entity under **Settings → System → Updates**; manual
 installs can replace the component files with the new release. Either path
 carries the matching server, and restarting Home Assistant after the update
 installs both. The component never downloads or swaps the server on its own.
 
-**Development builds** follow the main branch. Turn on the HACS **Pre-release**
-switch for the HA-MCP Custom Component repository to receive them; each
+HACS, and the Marketplace with GitHub connected, check a custom repository
+such as HA-MCP for updates every 48 hours (the Marketplace without GitHub does
+not check it in the background). To have a newly updated server ask for that
+check right away, turn on **Refresh the component in HACS after an update** in
+the settings panel's Advanced settings (Operations); installs that already did
+this before it became optional keep it on.
+
+**Development builds** follow the main branch. Turn on the **Pre-release**
+switch of the HA-MCP Custom Component repository (in HACS, or on its Marketplace
+device, where the entity starts disabled, on Home Assistant 2026.11+) to receive them; each
 pre-release pins the exact `ha-mcp-dev` build published from the same commit.
 Turn the switch off to return to stable releases with the next stable update.
 Moving between the two swaps `ha-mcp-dev` and `ha-mcp` as described below.
@@ -285,8 +302,8 @@ a time.
 
 If a server installed through the override needs a newer version of the custom
 component than the one you have, a repair issue titled **Update the HA-MCP Custom
-Component via HACS** appears under **Settings → Repairs**. The server keeps
-running; update the component via HACS to clear it.
+Component** appears under **Settings → Repairs**. The server keeps
+running; update the component to clear it.
 
 ### Upgrading from component 2.x
 
@@ -298,8 +315,8 @@ defaults apply to newly created server entries.
 **Update controls change:** the **Release channel** and **Automatic server
 updates** options and the server update entity are gone (the entity is removed
 from the registry on the first start). A 2.x install on the `dev` channel moves
-to the stable server with this release; turn on the HACS **Pre-release** switch
-to keep receiving development builds.
+to the stable server with this release; turn on the **Pre-release** switch (HACS,
+or the Marketplace on 2026.11+) to keep receiving development builds.
 
 **Existing OAuth clients may need configuration:** in secret-URL (`none`) mode,
 the callback allowlist applies to existing installations too. A client whose
@@ -516,7 +533,7 @@ reads `Requirements for ha_mcp_tools not found`. Fix the cause the log
 names above that line, then restart Home Assistant.
 
 **Nothing happens after updating the component.** Home Assistant loads custom
-integration code at startup, so after HACS (or a manual copy) delivers a new
+integration code at startup, so after HACS, the Marketplace or a manual copy delivers a new
 version you must **restart Home Assistant** for the update to take effect.
 
 **Skill guidance is empty after installing from a GitHub tarball.** The **ha-mcp

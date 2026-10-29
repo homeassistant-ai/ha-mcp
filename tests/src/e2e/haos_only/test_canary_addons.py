@@ -185,7 +185,7 @@ async def test_beta_image_versions_match_manifest(ha_client: Any) -> None:
 
 
 async def test_hacs_available_in_emitted_image(mcp_client: Any) -> None:
-    """The emitted qcow2 boots with HACS loaded and reachable through MCP.
+    """The emitted qcow2 boots with HACS (the Marketplace on 2026.11+) reachable via MCP.
 
     The post-shutdown seed state also contains HACS files and a config entry,
     so this validates final runtime availability rather than isolating which

@@ -32,6 +32,7 @@ from .component_api import (
     is_unknown_command,
 )
 from .config_helpers.registry import validate_registry_ids
+from .entity_expose_batch import apply_bulk_expose, changed_entity_ids
 from .entity_param_parsing import (
     _parse_aliases_param,
     _parse_categories_param,
@@ -255,6 +256,13 @@ def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "original_device_class": entry.get("original_device_class"),
         "options": entry.get("options", {}),
     }
+
+
+def _expose_update(parsed_expose_to: dict[str, bool], unchanged: bool) -> str:
+    """The updates entry for expose_to; Core 2026.11+ says when nothing changed."""
+    if unchanged:
+        return f"expose_to={parsed_expose_to} (already set, nothing changed)"
+    return f"expose_to={parsed_expose_to}"
 
 
 def _extract_ws_error(result: dict[str, Any]) -> str:
@@ -767,15 +775,18 @@ class EntityTools:
         has_registry_updates: bool,
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
-    ) -> tuple[dict[str, bool] | None, dict[str, Any]]:
-        """Apply expose_to changes via separate WebSocket API. Returns (exposure_result, entity_entry)."""
-        if not parsed_expose_to:
-            return None, entity_entry
+    ) -> tuple[dict[str, bool] | None, dict[str, Any], bool]:
+        """Apply expose_to changes; returns (exposure_result, entity_entry, unchanged)."""
+        if parsed_expose_to is None:
+            return None, entity_entry, False
+        if not parsed_expose_to and entity_entry:
+            return None, entity_entry, True
 
         # Group by should_expose value for efficient API calls
         expose_true = [a for a, v in parsed_expose_to.items() if v]
         expose_false = [a for a, v in parsed_expose_to.items() if not v]
         succeeded: dict[str, bool] = {}
+        changed: set[str] | None = set()
 
         for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
             if not assistants:
@@ -819,13 +830,17 @@ class EntityTools:
             # Track successful exposures
             for a in assistants:
                 succeeded[a] = should_expose
+            reported = changed_entity_ids(expose_result)
+            changed = (
+                None if reported is None or changed is None else changed | reported
+            )
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
+        unchanged = changed is not None and entity_id not in changed
 
         # Exposure mutates the registry entry's options, so refetch to return the
-        # post-exposure state. This is unconditional: the method returns early on
-        # an empty expose_to (line 695) and any exposure failure already raised
-        # above, so reaching here always means at least one exposure was applied.
+        # post-exposure state. An empty expose_to applies nothing and lands
+        # here only when no earlier phase read the entry.
         get_msg: dict[str, Any] = {
             "type": "config/entity_registry/get",
             "entity_id": entity_id,
@@ -862,7 +877,7 @@ class EntityTools:
                 )
             )
 
-        return exposure_result, entity_entry
+        return exposure_result, entity_entry, unchanged
 
     def _build_entity_response(
         self,
@@ -1061,7 +1076,7 @@ class EntityTools:
                 updates_made.append(f"device_name -> {new_device_name}")
 
             # Phase 6: Expose to assistants
-            exposure_result, entity_entry = await self._apply_expose_to(
+            exposure_result, entity_entry, unchanged = await self._apply_expose_to(
                 entity_id,
                 parsed_expose_to,
                 entity_entry,
@@ -1070,7 +1085,7 @@ class EntityTools:
                 device_rename_result,
             )
             if parsed_expose_to is not None:
-                updates_made.append(f"expose_to={parsed_expose_to}")
+                updates_made.append(_expose_update(parsed_expose_to, unchanged))
 
         # Phase 7: Build response
         return self._build_entity_response(
@@ -1083,52 +1098,6 @@ class EntityTools:
             device_rename_result,
             device_name_warning,
         )
-
-    async def _bulk_apply_expose(
-        self,
-        entity_ids: list[str],
-        parsed_expose_to: dict[str, bool],
-    ) -> str | None:
-        """Expose/hide many entities in one homeassistant/expose_entity call per set.
-
-        The command's schema accepts the full entity_ids list, so bulk exposure
-        needs at most two WS calls (one for the assistants being turned on, one
-        for those being turned off) regardless of entity count — not one per
-        entity. Returns None on success, or the error message on the first
-        failing set. A failure is batch-level: it applies to every id in the
-        list, so the caller maps the returned message onto all of them.
-        """
-        expose_true = [a for a, v in parsed_expose_to.items() if v]
-        expose_false = [a for a, v in parsed_expose_to.items() if not v]
-        applied: list[str] = []
-        for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
-            if not assistants:
-                continue
-            logger.info(
-                f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
-                f"entities {'to' if should_expose else 'from'} {assistants}"
-            )
-            result = await self._client.send_websocket_message(
-                {
-                    "type": "homeassistant/expose_entity",
-                    "assistants": assistants,
-                    "entity_ids": entity_ids,
-                    "should_expose": should_expose,
-                }
-            )
-            if not result.get("success"):
-                error = _extract_ws_error(result)
-                if applied:
-                    # The earlier assistant group already changed — say so, or
-                    # the all-failed report implies no exposure was touched.
-                    error = (
-                        f"{error} (note: expose changes for "
-                        f"{', '.join(applied)} were already applied before "
-                        "this failure)"
-                    )
-                return error
-            applied.extend(assistants)
-        return None
 
     async def _bulk_registry_phase(
         self,
@@ -1214,7 +1183,9 @@ class EntityTools:
         entity_entry; a refetch failure keeps the pre-exposure snapshot since
         the exposure already committed.
         """
-        expose_error = await self._bulk_apply_expose(eligible_ids, parsed_expose_to)
+        expose_error, changed = await apply_bulk_expose(
+            self._client, eligible_ids, parsed_expose_to, _extract_ws_error
+        )
         if expose_error is not None:
             failed = [
                 {"entity_id": eid, "error": f"Exposure failed: {expose_error}"}
@@ -1223,7 +1194,8 @@ class EntityTools:
             return [], failed
 
         for eid in eligible_ids:
-            updates_by_id[eid].append(f"expose_to={parsed_expose_to}")
+            unchanged = changed is not None and eid not in changed
+            updates_by_id[eid].append(_expose_update(parsed_expose_to, unchanged))
         refetched_raw, refetch_errors = await self._get_entries_raw(eligible_ids)
         for eid in eligible_ids:
             if eid in refetched_raw:

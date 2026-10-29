@@ -350,7 +350,7 @@ class EmbeddedServerManager:
         if self._paired_spec is None and not self._pip_spec_override:
             _LOGGER.warning(
                 "This component's manifest pins no ha-mcp server; running "
-                "whichever ha-mcp is installed. Reinstall the integration from HACS"
+                "whichever ha-mcp is installed. Reinstall from HACS or the Marketplace"
             )
         self._pip_spec = self._resolve_pip_spec()
 
