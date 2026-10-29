@@ -7,6 +7,7 @@ success for a file the user never sees. Kept out of
 """
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,14 +33,16 @@ import custom_components.ha_mcp_tools as comp  # noqa: E402
 
 
 @pytest.fixture
-def volume_root(tmp_path, monkeypatch):
+def volume_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A volume root under tmp_path, standing in for /ssl; not created."""
     root = tmp_path / "ssl"
     monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(root),))
     return root
 
 
-def test_write_to_unmounted_volume_is_refused_not_faked(volume_root, tmp_path):
+def test_write_to_unmounted_volume_is_refused_not_faked(
+    volume_root: Path, tmp_path: Path
+) -> None:
     target = volume_root / "probe" / "x.txt"
 
     result = comp._write_file_sync(
@@ -50,7 +53,9 @@ def test_write_to_unmounted_volume_is_refused_not_faked(volume_root, tmp_path):
     assert not volume_root.exists()
 
 
-def test_write_below_mounted_volume_still_creates_directories(volume_root, tmp_path):
+def test_write_below_mounted_volume_still_creates_directories(
+    volume_root: Path, tmp_path: Path
+) -> None:
     volume_root.mkdir()
     target = volume_root / "probe" / "x.txt"
 
