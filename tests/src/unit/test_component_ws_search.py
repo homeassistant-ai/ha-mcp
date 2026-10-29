@@ -31,9 +31,11 @@ import asyncio
 import json
 import logging
 import sys
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -254,7 +256,9 @@ class FakeEntityReg:
     def async_get(self, entity_id):
         return self._entries.get(entity_id)
 
-    def async_get_entity_id(self, domain, platform, unique_id):
+    def async_get_entity_id(
+        self, domain: str, platform: str, unique_id: str
+    ) -> str | None:
         return next(
             (
                 e.entity_id
@@ -636,26 +640,30 @@ class FakeComponent:
 class FakeStorageCollection:
     """Core's ``StorageCollection``: ``async_items()`` is what ``<type>/list`` sends."""
 
-    def __init__(self, items):
+    def __init__(self, items: Iterable[Mapping[str, Any]]) -> None:
         self._items = [dict(item) for item in items]
 
-    def async_items(self):
+    def async_items(self) -> list[dict[str, Any]]:
         return list(self._items)
 
 
 class FakeStorageCollectionWs:
     """Core's ``StorageCollectionWebsocket``, reached through ``<type>/create``."""
 
-    def __init__(self, items):
+    def __init__(self, items: Iterable[Mapping[str, Any]]) -> None:
         self.storage_collection = FakeStorageCollection(items)
         self.create_schema = {}
         self.update_schema = {}
 
-    async def ws_create_item(self, hass, connection, msg):  # pragma: no cover
+    async def ws_create_item(  # pragma: no cover
+        self, hass: Any, connection: Any, msg: dict[str, Any]
+    ) -> None:
         raise AssertionError("never invoked")
 
 
-def stored_helpers(collections):
+def stored_helpers(
+    collections: Mapping[str, Iterable[Mapping[str, Any]]],
+) -> dict[str, Any]:
     """``hass.data`` holding Core's WS handlers for ``{type: [stored items]}``."""
     return {
         "websocket_api": {
@@ -1374,6 +1382,24 @@ class TestHelpers:
         assert rec["match_in_config"] is True
         assert rec["config"] == stored
         assert search("runtime_x") == []
+
+    def test_helper_search_reports_an_unreadable_entity_registry(self, monkeypatch):
+        # A stored helper whose entity the registry cannot name falls back to its
+        # state attributes; the search says it is partial instead of hiding it.
+        class RaisingRegistry(FakeEntityReg):
+            def async_get_entity_id(
+                self, domain: str, platform: str, unique_id: str
+            ) -> str | None:
+                raise RuntimeError("registry unavailable")
+
+        view = wsapi._RegistryView(entity=RaisingRegistry({}))
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        h = FakeHass(
+            states=[FakeState("input_select.mode", "x", friendly_name="Mode")],
+            data=stored_helpers({"input_select": [{"id": "mode", "name": "Mode"}]}),
+        )
+        res = wsapi._do_search(h, {"query": "mode", "search_types": ["helper"]})
+        assert res["partial"] is True
 
     def test_collection_helper_body_withheld_without_include_config(self, empty_view):
         states = [

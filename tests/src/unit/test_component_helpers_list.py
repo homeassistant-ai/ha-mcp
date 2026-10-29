@@ -7,6 +7,9 @@ returns); flow helpers from ``ConfigEntry.options``, never ``entry.data``.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,7 +31,11 @@ from .test_component_ws_search import (
 @pytest.mark.usefixtures("empty_view")
 class TestHelpersList:
     @staticmethod
-    def _stored_world(collections, states=(), entries=()):
+    def _stored_world(
+        collections: dict[str, list[dict[str, Any]]],
+        states: Iterable[FakeState] = (),
+        entries: Iterable[tuple[str, str, str, str | None]] = (),
+    ) -> tuple[FakeHass, Any]:
         """A hass whose helpers live in Core's storage collections, plus a view
         whose registry binds each ``(entity_id, platform, unique_id)``."""
         view = make_view(
@@ -41,7 +48,9 @@ class TestHelpersList:
         )
         return FakeHass(states=states, data=stored_helpers(collections)), view
 
-    def test_listing_reports_stored_config_not_runtime_state(self, monkeypatch):
+    def test_listing_reports_stored_config_not_runtime_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # #2901: input_select.set_options changes only the runtime options; the
         # listing must report the stored helper, as input_select/list does, not
         # the state attributes (runtime options, editable, friendly_name).
@@ -70,7 +79,9 @@ class TestHelpersList:
         assert rec["storage_id"] == "mode"
         assert rec["entity_id"] == "input_select.mode"
 
-    def test_rename_shows_current_values_issue_1794(self, monkeypatch):
+    def test_rename_shows_current_values_issue_1794(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # The stored name is the creation-time one; a rename only changes the
         # registry, so the record's name is the current one.
         hass, view = self._stored_world(
@@ -94,7 +105,9 @@ class TestHelpersList:
         assert rec["name"] == "Current Guest"
         assert rec["storage_id"] == "guest_mode"
 
-    def test_helper_without_state_is_still_listed(self, monkeypatch):
+    def test_helper_without_state_is_still_listed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # A disabled helper has no state but is still stored, and <type>/list
         # lists it; the listing must not drop it.
         hass, view = self._stored_world(
@@ -107,7 +120,7 @@ class TestHelpersList:
         assert rec["name"] == "Visits"
         assert rec["config"]["step"] == 2
 
-    def test_helper_outside_storage_has_no_storage_id(self):
+    def test_helper_outside_storage_has_no_storage_id(self) -> None:
         # A YAML-defined helper is not in <type>/list; its record says so with a
         # null storage id, so the server can leave it out of a storage listing.
         hass = FakeHass(
@@ -118,7 +131,22 @@ class TestHelpersList:
         assert rec["entity_id"] == "input_boolean.legacy"
         assert rec["storage_id"] is None
 
-    def test_flow_helper_options_and_entity_data_never_leaks(self, monkeypatch):
+    def test_type_with_a_helper_the_registry_cannot_place_is_left_to_its_list(
+        self,
+    ) -> None:
+        # Without its registry entry a stored helper cannot be told apart from
+        # its state, so listing both would show it twice; <type>/list lists it.
+        hass = FakeHass(
+            states=[FakeState("counter.visits", "1", friendly_name="Visits")],
+            data=stored_helpers({"counter": [{"id": "visits", "name": "Visits"}]}),
+        )
+        res = wsapi._do_helpers_list(hass, {"helper_types": ["counter"]})
+        assert res["helpers"] == []
+        assert "counter" not in res["covered_types"]
+
+    def test_flow_helper_options_and_entity_data_never_leaks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         entry = FakeConfigEntry(
             "template",
             title="Sun Sensor",
@@ -153,7 +181,7 @@ class TestHelpersList:
         assert "DATA_SECRET_XYZ" not in serialized
         assert "api_key" not in serialized
 
-    def test_flow_helper_options_secret_scrubbed(self):
+    def test_flow_helper_options_secret_scrubbed(self) -> None:
         # Flow-helper options share config_entries' exposure class, so they pass
         # through the SAME secret scrub — a resolved !secret is redacted here too.
         secret = "s3cr3thelperopt"
@@ -170,7 +198,7 @@ class TestHelpersList:
         assert rec["options"] == {"token": "**redacted**", "keep": "kept"}
         assert secret not in json.dumps(res)
 
-    def test_flow_helper_scrub_off_by_default(self):
+    def test_flow_helper_scrub_off_by_default(self) -> None:
         # No secret_values (default) is a no-op — options pass through verbatim.
         entry = FakeConfigEntry(
             "template", title="Tmpl", options={"token": "plain"}, entry_id="e1"
@@ -180,7 +208,7 @@ class TestHelpersList:
         assert rec["options"] == {"token": "plain"}
         assert "secret_scrub_degraded" not in res
 
-    def test_helpers_list_degraded_signalled_when_flow_included(self):
+    def test_helpers_list_degraded_signalled_when_flow_included(self) -> None:
         entry = FakeConfigEntry(
             "template", title="Tmpl", options={"token": "x"}, entry_id="e1"
         )
@@ -189,7 +217,7 @@ class TestHelpersList:
         )
         assert res["secret_scrub_degraded"] is True
 
-    def test_helpers_list_no_degraded_signal_when_flow_excluded(self):
+    def test_helpers_list_no_degraded_signal_when_flow_excluded(self) -> None:
         # The signal only rides the flow path; it is suppressed when flow helpers
         # are excluded (the scrubbed surface isn't emitted).
         res = wsapi._do_helpers_list(
@@ -218,7 +246,9 @@ class TestHelpersList:
         assert calls["n"] == 0
 
     @pytest.mark.asyncio
-    async def test_helpers_list_prep_loads_secrets_with_flow(self, tmp_path):
+    async def test_helpers_list_prep_loads_secrets_with_flow(
+        self, tmp_path: Path
+    ) -> None:
         (tmp_path / "secrets.yaml").write_text(
             "api_password: sekret\n", encoding="utf-8"
         )
@@ -228,7 +258,7 @@ class TestHelpersList:
         assert extra["secret_values"] == frozenset({"sekret"})
         assert extra["secret_scrub_degraded"] is False
 
-    def test_flow_helper_without_registered_entity(self):
+    def test_flow_helper_without_registered_entity(self) -> None:
         entry = FakeConfigEntry(
             "group", title="Living Room Group", options={"entities": []}, entry_id="e9"
         )
@@ -237,7 +267,7 @@ class TestHelpersList:
         assert rec["entity_id"] is None
         assert rec["name"] == "Living Room Group"
 
-    def test_helper_types_filter(self):
+    def test_helper_types_filter(self) -> None:
         states = [FakeState("input_boolean.guest", "off", "Guest")]
         entry = FakeConfigEntry(
             "template", title="Tmpl", options={"state": "x"}, entry_id="e1"
@@ -252,7 +282,7 @@ class TestHelpersList:
         only_bool = wsapi._do_helpers_list(h, {"helper_types": ["input_boolean"]})
         assert {r["helper_type"] for r in only_bool["helpers"]} == {"input_boolean"}
 
-    def test_include_flow_helpers_false(self):
+    def test_include_flow_helpers_false(self) -> None:
         entry = FakeConfigEntry(
             "template", title="Tmpl", options={"state": "x"}, entry_id="e1"
         )
@@ -261,7 +291,7 @@ class TestHelpersList:
         )
         assert [r for r in res["helpers"] if r["kind"] == "flow"] == []
 
-    def test_home_zone_is_listed_but_search_unaffected(self):
+    def test_home_zone_is_listed_but_search_unaffected(self) -> None:
         # ha_get_zone lists the home zone, which is outside the zone storage;
         # search's helper surface leaves zones out.
         states = [FakeState("zone.home", "zoning", friendly_name="Home", radius=1)]
@@ -282,7 +312,7 @@ class TestHelpersList:
         searched = wsapi._do_search(hass, {"query": "home", "search_types": ["helper"]})
         assert searched["helpers"] == []
 
-    def test_covered_types_names_only_types_read_like_their_list_command(self):
+    def test_covered_types_names_only_types_read_like_their_list_command(self) -> None:
         # covered_types tells the server which types it may trust an empty list
         # for. person/list adds YAML persons and tag/list adds registry names, so
         # those two, and a type whose storage did not load, are left to the
@@ -310,7 +340,7 @@ class TestHelpersList:
         assert covered.isdisjoint({"timer", "person", "tag"})
         assert {"template", "group", "utility_meter"} <= covered
 
-    def test_covered_types_excludes_flow_when_disabled(self):
+    def test_covered_types_excludes_flow_when_disabled(self) -> None:
         res = wsapi._do_helpers_list(
             FakeHass(data=stored_helpers({"input_boolean": []})),
             {"include_flow_helpers": False},
