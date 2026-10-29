@@ -429,9 +429,7 @@ class TestCalendarEventLifecycle:
         list_args = {
             "entity_id": calendar_entity,
             "start": start.isoformat(),
-            # Home Assistant repeats the series in its local time zone, so a
-            # DST change inside it moves the last occurrence by an hour; a
-            # full extra day covers that. COUNT=3 bounds the series anyway.
+            # A full extra day: a DST change shifts a local-time occurrence 1h.
             "end": (start + timedelta(days=3)).isoformat(),
         }
 
