@@ -84,3 +84,18 @@ async def test_token_rejected_on_reconnect_is_reported_as_auth() -> None:
 
     assert result["errors"][0]["code"] == "AUTH_INVALID_TOKEN"
     assert result["not_attempted"] == ["sensor.b"]
+
+
+async def test_timed_out_removal_is_reported_as_a_timeout() -> None:
+    """send_websocket_message wraps a command timeout in a connection error
+    with the timeout's text; the per-id error names it as a timeout."""
+    client = _make_client()
+    client.send_websocket_message = AsyncMock(
+        side_effect=HomeAssistantConnectionError("Command timeout")
+    )
+    tool = _register(client)["ha_remove_entity"]
+
+    result = await tool(entity_id=["sensor.a", "sensor.b"])
+
+    assert result["errors"][0]["code"] == "CONNECTION_TIMEOUT"
+    assert result["not_attempted"] == ["sensor.b"]
