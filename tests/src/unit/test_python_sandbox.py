@@ -87,8 +87,8 @@ class TestSecurityDocumentation:
     def _documented(*labels: str) -> set[str]:
         """The names the description lists under the given entry labels.
 
-        Only those labels are read: a new entry label needs adding to the
-        caller's list.
+        Only those labels are read: a new method entry needs adding to
+        `_METHOD_TYPES` with its type, any other new entry to the caller's list.
         """
         # Indented lines continue the entry above them.
         entries = get_security_documentation().replace("\n  ", " ").splitlines()
@@ -106,7 +106,7 @@ class TestSecurityDocumentation:
 
         assert documented == SAFE_METHODS
 
-    @pytest.mark.parametrize(("label", "receiver"), list(_METHOD_TYPES.items()))
+    @pytest.mark.parametrize(("label", "receiver"), _METHOD_TYPES.items())
     def test_documented_methods_exist_on_their_listed_type(
         self, label: str, receiver: type
     ) -> None:
@@ -144,7 +144,7 @@ class TestUnaryOperators:
 
     def test_dashboard_view_with_negative_axis_range(self) -> None:
         """Reproduces issue #1115: appending a card with a negative gauge min."""
-        config = {"views": [{"cards": []}]}
+        config: dict[str, Any] = {"views": [{"cards": []}]}
         expr = (
             'config["views"][0]["cards"].append('
             '{"type": "gauge", "entity": "sensor.power", "min": -5000, "max": 5000})'
@@ -553,7 +553,7 @@ class TestSafeExecute:
 
     def test_list_append(self) -> None:
         """Test list append."""
-        config = {"views": [{"cards": []}]}
+        config: dict[str, Any] = {"views": [{"cards": []}]}
         expr = "config['views'][0]['cards'].append({'type': 'button'})"
         result = safe_execute(expr, config)
         assert len(result["views"][0]["cards"]) == 1
@@ -591,14 +591,14 @@ for card in config['views'][0]['cards']:
 
     def test_blocked_expression_raises(self) -> None:
         """Test that blocked expressions raise PythonSandboxValidationError."""
-        config = {}
+        config: dict[str, Any] = {}
         expr = "import os"
         with pytest.raises(PythonSandboxValidationError):
             safe_execute(expr, config)
 
     def test_execution_error_raises(self) -> None:
         """Test that execution errors are caught."""
-        config = {}
+        config: dict[str, Any] = {}
         expr = "config['nonexistent']['key'] = 'value'"
         with pytest.raises(PythonSandboxExecutionError):
             safe_execute(expr, config)
@@ -842,6 +842,7 @@ class TestBuiltinsIsolation:
             _SAFE_BUILTINS.clear()
             _SAFE_BUILTINS.update(original_builtins)
 
+        assert mutated_builtins is not None
         assert mutated_builtins is not _SAFE_BUILTINS
         assert mutated_builtins["len"] is not len
         assert _SAFE_BUILTINS["len"] is len
