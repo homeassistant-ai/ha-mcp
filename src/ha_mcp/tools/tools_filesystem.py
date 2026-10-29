@@ -797,8 +797,8 @@ class FilesystemTools:
         - `themes/` - Theme YAML files
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
-        - Plus any custom directories OR HAOS sibling volumes (`/share`,
-          `/media`; `/ssl` is read-only on HAOS) configured in the ha-mcp settings UI
+        - Plus custom directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`)
+          from the ha-mcp settings UI; `/ssl` is read-only on HAOS and Supervised
         Configuration files (configuration.yaml, etc.) cannot be written; path
         traversal (../) is blocked.
 
@@ -887,9 +887,9 @@ class FilesystemTools:
         recent auto-backup snapshot; a binary file has no snapshot and its
         deletion is permanent. Allowed directories:
         `www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom
-        directories OR HAOS sibling volumes (`/share`, `/media`; `/ssl` is
-        read-only on HAOS) configured in the ha-mcp settings UI. Configuration files
-        cannot be deleted; path traversal (../) is blocked.
+        directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`) configured
+        in the ha-mcp settings UI; `/ssl` is read-only on HAOS and Supervised.
+        Configuration files cannot be deleted; path traversal (../) is blocked.
 
         EXAMPLE: ha_delete_file(path="www/deprecated-style.css", confirm=True)
         """
