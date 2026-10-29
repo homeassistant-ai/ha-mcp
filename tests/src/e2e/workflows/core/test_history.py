@@ -534,10 +534,9 @@ class TestGetHistoryStatisticsSource:
         inner_data = data.get("data", data)
         # May succeed but with warnings or empty data
         if inner_data.get("success") or "entities" in inner_data:
-            if inner_data.get("warnings"):
-                logger.info(
-                    f"Properly warned about no statistics: {inner_data['warnings']}"
-                )
+            # warnings sit beside data, not inside it
+            if data.get("warnings"):
+                logger.info(f"Properly warned about no statistics: {data['warnings']}")
             entities_data = inner_data.get("entities", [])
             if entities_data and entities_data[0].get("count") == 0:
                 logger.info(
