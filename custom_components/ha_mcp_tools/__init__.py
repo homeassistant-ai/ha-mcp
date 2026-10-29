@@ -692,7 +692,7 @@ def _volume_root_for(abs_path: str) -> str | None:
     ``abs_path`` falls within, or ``None`` (issue #1586).
 
     Boundary-aware on a path-separator: ``/share`` and ``/share/x`` match
-    ``/share``; ``/shared`` and ``/backups`` do NOT (a string-prefix match would
+    ``/share``; ``/shared`` and ``/medias`` do NOT (a string-prefix match would
     wrongly admit them). ``abs_path`` must already be ``posixpath.normpath``'d —
     the volume roots are inherently POSIX and the component only runs on HA Core
     (Linux), so we never use the host ``os.sep`` here.
@@ -756,8 +756,8 @@ def _normalize_volume_dir(entry: str) -> str | None:
     Returns the cleaned absolute path, or ``None`` if it is not at/under a known
     volume root or hits the deny floor. POSIX-normalized regardless of host OS
     (the roots are inherently POSIX and the component only runs on HA Core).
-    Existence is NOT required (mirrors config-relative extra dirs); an unmounted
-    volume just yields ``not found`` at use time.
+    Existence is NOT required; a write refuses an unmounted root (/ssl, /share on
+    Container) rather than create it in the container layer (issue #2875).
     """
     normalized = posixpath.normpath(entry)
     root = _volume_root_for(normalized)
@@ -1426,20 +1426,20 @@ def _write_file_sync(
     exists = target_file.exists()
     if exists and not overwrite:
         return {"_error": "exists_no_overwrite"}
+    # Never create a missing volume root (see _normalize_volume_dir, #2875).
+    root = _volume_root_for(posixpath.normpath(str(target_file)))
+    if root is not None and not os.path.isdir(root):
+        return {"_error": "no_parent", "parent": root}
     if create_dirs:
         target_file.parent.mkdir(parents=True, exist_ok=True)
     elif not target_file.parent.exists():
         # Config-relative parents report relative to the config dir; an absolute
-        # HAOS sibling-volume parent (issue #1586) is not under it, so report it
-        # absolute rather than raising ValueError on relative_to.
+        # volume parent (issue #1586) is not under it, so report it absolute.
         try:
             parent = str(target_file.parent.relative_to(config_dir))
         except ValueError:
             parent = str(target_file.parent)
-        return {
-            "_error": "no_parent",
-            "parent": parent,
-        }
+        return {"_error": "no_parent", "parent": parent}
     target_file.write_text(content)
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
