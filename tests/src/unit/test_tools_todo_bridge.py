@@ -69,6 +69,13 @@ class _Bridge:
                 row["summary"] = data["rename"]
             if "status" in data:
                 row["status"] = data["status"]
+            if "previous_uid" in fields:
+                # After the update, by uid, as the component moves it.
+                previous = fields["previous_uid"]
+                message = {"uid": row["uid"]} | (
+                    {"previous_uid": previous} if previous else {}
+                )
+                self.client._move(message)
             return {"success": True, "item": dict(row)}
         asked = {row["uid"] for r in fields["refs"] if (row := self._find(r))}
         removed = [i for i in self.client.items if i["uid"] in asked]
@@ -85,7 +92,7 @@ def bridge(client: _FakeClient) -> Iterator[_Bridge]:
 
 class TestBridge:
     """With the component, writes go by the uid it resolved with Core's own
-    lookup; only a move goes through Core's todo/item/move."""
+    lookup; only a move alone goes through Core's todo/item/move."""
 
     async def test_create_returns_the_row_the_component_read(
         self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
@@ -102,6 +109,22 @@ class TestBridge:
         assert bridge.calls[-1] == ("update", {"uid": "2", "data": {"rename": "Paid"}})
         assert got["todo_item"]["summary"] == "Paid"
         assert client.services() == []
+
+    async def test_update_naming_no_field_still_goes_to_the_component(
+        self, tools: TodoTools, bridge: _Bridge
+    ) -> None:
+        # Core decides whether an update names anything to change.
+        await tools.ha_set_todo_item(LIST, item="Pay")
+        assert ("update", {"uid": "2", "data": {}}) in bridge.calls
+
+    async def test_move_alone_not_read_back_is_a_warning(
+        self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
+    ) -> None:
+        client.drop = "todo/item/list"
+        got = await tools.ha_set_todo_item(LIST, item="Bread", move_after="Buy milk")
+        assert got["todo_item"] is None
+        assert len(got["warnings"]) == 1
+        assert "could not be read back" in got["warnings"][0]
 
     async def test_namesake_refusal_is_invalid_input(
         self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
@@ -168,21 +191,59 @@ class TestBridge:
             pytest.raises(ToolError) as excinfo,
         ):
             await tools.ha_remove_todo_item(LIST, item="Pay")
-        assert _error(excinfo)["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert _error(excinfo)["write_outcome_unknown"] is True
+        error = _error(excinfo)
+        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "did not return its outcome" in error["error"]["message"]
+        assert error["write_outcome_unknown"] is True
 
-    async def test_move_below_a_row_named_after_the_uid_is_refused_first(
+    async def test_update_with_a_move_goes_to_the_component_in_one_call(
         self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
     ) -> None:
-        # After the move, Core's first match for "2" would be x.
+        # Below x, a row named "2" comes first; the component updates before it
+        # moves, so the update still lands on Pay.
         client.items.append({"uid": "x", "summary": "2", "status": "needs_action"})
-        with pytest.raises(ToolError) as excinfo:
-            await tools.ha_set_todo_item(
-                LIST, item="Pay", move_after="x", status="needs_action"
-            )
-        assert _error(excinfo)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        got = await tools.ha_set_todo_item(
+            LIST, item="Pay", move_after="x", status="needs_action"
+        )
         assert not [c for c in client.calls if c["type"] == "todo/item/move"]
-        assert [c[0] for c in bridge.calls] == ["resolve"]
+        assert bridge.calls[1] == (
+            "update",
+            {"uid": "2", "data": {"status": "needs_action"}, "previous_uid": "x"},
+        )
+        assert [i["uid"] for i in client.items] == ["1", "3", "x", "2"]
+        assert got["todo_item"]["status"] == "needs_action"
+        assert client.items[2]["status"] == "needs_action"
+
+    async def test_move_to_the_top_with_an_update_sends_no_previous_uid(
+        self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
+    ) -> None:
+        await tools.ha_set_todo_item(LIST, item="Bread", move_after="", rename="Rye")
+        assert bridge.calls[1] == (
+            "update",
+            {"uid": "3", "data": {"rename": "Rye"}, "previous_uid": None},
+        )
+        assert [i["summary"] for i in client.items] == ["Rye", "Buy milk", "Pay"]
+
+    @pytest.mark.parametrize(
+        ("code", "expected"),
+        [
+            ("not_supported", "VALIDATION_INVALID_PARAMETER"),
+            ("move_failed", "SERVICE_CALL_FAILED"),
+        ],
+    )
+    async def test_move_refusal_or_failure_reaches_the_caller(
+        self, tools: TodoTools, bridge: _Bridge, code: str, expected: str
+    ) -> None:
+        message = "The update was applied, but the move failed: gone"
+        bridge.replies["update"] = {
+            "success": False,
+            "error": {"code": code, "message": message},
+        }
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(LIST, item="Pay", move_after="", status="x")
+        error = _error(excinfo)["error"]
+        assert error["code"] == expected
+        assert error["message"] == message
 
     async def test_core_refusal_comes_through_as_invalid_input(
         self, tools: TodoTools, client: _FakeClient, bridge: _Bridge
@@ -203,13 +264,13 @@ class TestBridge:
         assert "not confirmed" in got["message"]
         assert got["warnings"][0].startswith("Could not tell the new item apart")
 
-    @pytest.mark.parametrize(("move_after", "applied"), [(None, False), ("", True)])
+    @pytest.mark.parametrize("move_after", [None, ""])
     async def test_write_not_sent_after_the_resolve_is_a_connection_failure(
         self,
         tools: TodoTools,
+        client: _FakeClient,
         bridge: _Bridge,
         move_after: str | None,
-        applied: bool,
     ) -> None:
         bridge.replies["update"] = None
         with pytest.raises(ToolError) as excinfo:
@@ -218,7 +279,8 @@ class TestBridge:
             )
         error = _error(excinfo)["error"]
         assert error["code"] == "CONNECTION_FAILED"
-        assert ("the move was applied" in error["message"]) is applied
+        # The move goes with the update, so nothing was moved either.
+        assert not [c for c in client.calls if c["type"] == "todo/item/move"]
 
     async def test_removal_still_on_the_list_read_back_is_a_warning(
         self, tools: TodoTools, bridge: _Bridge

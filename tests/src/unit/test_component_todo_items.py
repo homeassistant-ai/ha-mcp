@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import sys
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -61,11 +62,29 @@ def _find(ref: str, items: list[_Item]) -> _Item | None:
     return next((i for i in items if ref in (i.uid, i.summary)), None)
 
 
+_MOVE = 8
+
+
 class _ListEntity:
     def __init__(self, items: list[_Item]) -> None:
         self.entity_id = LIST
         self.todo_items = items
         self.available = True
+        self.supported_features = _MOVE
+        self.move_error: Exception | None = None
+        # (uid, previous_uid, rows as they were when the move came)
+        self.moves: list[tuple[str, str | None, list[str]]] = []
+
+    async def async_move_todo_item(self, uid: str, previous_uid: str | None) -> None:
+        self.moves.append((uid, previous_uid, [i.summary for i in self.todo_items]))
+        if self.move_error is not None:
+            raise self.move_error
+        row = next(i for i in self.todo_items if i.uid == uid)
+        self.todo_items.remove(row)
+        at = 0
+        if previous_uid is not None:
+            at = [i.uid for i in self.todo_items].index(previous_uid) + 1
+        self.todo_items.insert(at, row)
 
 
 class _Services:
@@ -125,9 +144,11 @@ def hass(entity: _ListEntity, monkeypatch: pytest.MonkeyPatch) -> Any:
         component_key="todo_component",
         domain="todo",
         list_entity=_ListEntity,
+        can_move=_MOVE,
         items_factory=_items_factory,
         find=_find,
         refused=(_Invalid, _ServiceValidationError),
+        error=_CoreError,
         date=date.fromisoformat,
     )
     monkeypatch.setattr(todo_items, "_core", lambda: core)
@@ -217,6 +238,15 @@ class TestComponent:
         got = await _run(hass, "remove", refs=["Milk"])
         assert [row["uid"] for row in got["removed"]] == ["1"]
 
+    async def test_add_and_update_read_back_past_a_row_without_uid(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.todo_items.insert(0, _Item(None, "No uid"))  # type: ignore[arg-type]
+        added = await _run(hass, "add", data={"item": "Eggs"})
+        assert added["item"]["summary"] == "Eggs"
+        updated = await _run(hass, "update", uid="2", data={"status": "completed"})
+        assert updated["item"]["uid"] == "2"
+
     async def test_data_shaped_like_a_refusal_goes_to_core(self, hass: Any) -> None:
         await _run(hass, "add", data={"item": "Eggs", "success": False})
         assert hass.services.calls[0][1] == {"item": "Eggs", "success": False}
@@ -260,6 +290,60 @@ class TestComponent:
         got = await _run(hass, "update", data={})
         assert got["error"]["code"] == "invalid"
 
+    async def test_update_then_move_by_uid(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        # Below x, the row named "2" comes first; the update goes before the
+        # move, on the order Core resolves "2" in, so it changes Pay.
+        entity.todo_items.append(_Item("x", "2"))
+        got = await _run(
+            hass, "update", uid="2", data={"status": "completed"}, previous_uid="x"
+        )
+        assert got["item"]["status"] == "completed"
+        assert entity.moves == [("2", "x", ["Milk", "Pay", "Milk", "2"])]
+        assert [i.uid for i in entity.todo_items] == ["1", "3", "x", "2"]
+        assert entity.todo_items[2].status == "needs_action"
+
+    async def test_move_to_the_top(self, hass: Any, entity: _ListEntity) -> None:
+        await _run(hass, "update", uid="3", data={}, previous_uid=None)
+        assert entity.moves[0][:2] == ("3", None)
+        assert [i.uid for i in entity.todo_items] == ["3", "1", "2"]
+
+    async def test_list_without_reordering_refuses_before_the_update(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.supported_features = 0
+        got = await _run(hass, "update", uid="2", data={}, previous_uid=None)
+        assert got["error"]["code"] == "not_supported"
+        assert hass.services.calls == []
+        assert entity.moves == []
+
+    async def test_failed_move_after_the_update_says_it_was_applied(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.move_error = _CoreError("backend gone")
+        got = await _run(
+            hass, "update", uid="2", data={"status": "completed"}, previous_uid="1"
+        )
+        assert got["error"] == {
+            "code": "move_failed",
+            "message": "The update was applied, but the move failed: backend gone",
+        }
+        assert entity.todo_items[1].status == "completed"
+
+    async def test_unexpected_move_error_is_raised(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        entity.move_error = RuntimeError("bug")
+        with pytest.raises(RuntimeError):
+            await _run(hass, "update", uid="2", data={}, previous_uid="1")
+
+    async def test_previous_uid_moves_only_on_update(
+        self, hass: Any, entity: _ListEntity
+    ) -> None:
+        await _run(hass, "remove", refs=["Pay"], previous_uid="1")
+        assert entity.moves == []
+
     async def test_core_without_its_todo_parts_is_unsupported(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -268,6 +352,45 @@ class TestComponent:
             SimpleNamespace(data={}), {"entity_id": LIST, "action": "resolve"}
         )
         assert got["error"]["code"] == "unsupported"
+
+
+def test_core_parts_refuse_only_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The real _core() over stand-ins for Core's modules: an integration's
+    # HomeAssistantError or ValueError must not count as a refusal.
+    class HAError(Exception):
+        pass
+
+    class SVError(HAError):
+        pass
+
+    const = SimpleNamespace(
+        DATA_COMPONENT="todo",
+        DOMAIN="todo",
+        TodoListEntityFeature=SimpleNamespace(MOVE_TODO_ITEM=_MOVE),
+    )
+    todo = SimpleNamespace(
+        const=const,
+        entity=SimpleNamespace(TodoListEntity=_ListEntity, api_items_factory=dict),
+        services=SimpleNamespace(_find_by_uid_or_summary=_find),
+    )
+    cv = SimpleNamespace(date=date.fromisoformat)
+    modules = {
+        "homeassistant.components.todo": todo,
+        "homeassistant.exceptions": SimpleNamespace(
+            HomeAssistantError=HAError, ServiceValidationError=SVError
+        ),
+        "homeassistant.helpers": SimpleNamespace(config_validation=cv),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    core = todo_items._core()
+    assert core is not None
+    assert SVError in core.refused
+    assert not [e for e in core.refused if issubclass(HAError, e)]
+    assert not [e for e in core.refused if issubclass(ValueError, e)]
+    assert core.error is HAError
 
 
 def test_command_registered_and_advertised(functional_ws) -> None:  # noqa: F811

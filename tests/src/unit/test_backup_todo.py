@@ -260,7 +260,9 @@ class TestRestoreGuards:
             return await send(client, message)
 
         monkeypatch.setattr(bm, "_ws_send", not_loaded)
-        with pytest.raises(bm.BackupRestoreError) as excinfo:
+        with pytest.raises(
+            bm.BackupRestoreError, match="has not loaded the todo list"
+        ) as excinfo:
             await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
         assert excinfo.value.outcome["apply_status"] == "not_applied"
         with pytest.raises(bm.BackupRestoreError) as safety:

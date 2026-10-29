@@ -6,7 +6,10 @@ wrote. This bridge resolves with that same function, calls the services
 (their schema, feature checks and context apply) and reads the stored rows
 from the list entity, so with the bridge the server needs no copy of Core's
 item resolution or of its schema's coercions. It refuses an unavailable list
-itself: Core's services would skip it and answer success.
+itself: Core's services would skip it and answer success. An update can also
+move the item: the move follows the update and goes by uid, as Core's
+``todo/item/move`` does, so the update's item value resolves on the order the
+list had, which the bridge checked.
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ def _core() -> SimpleNamespace | None:
     """Core's todo parts this bridge uses, or None on a Core without them."""
     try:
         from homeassistant.components.todo import const, entity, services
-        from homeassistant.exceptions import ServiceValidationError
+        from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
         from homeassistant.helpers import config_validation as cv
     except ImportError:
         return None
@@ -53,15 +56,20 @@ def _core() -> SimpleNamespace | None:
         component_key=getattr(const, "DATA_COMPONENT", None),
         domain=getattr(const, "DOMAIN", None),
         list_entity=getattr(entity, "TodoListEntity", None),
+        can_move=getattr(
+            getattr(const, "TodoListEntityFeature", None), "MOVE_TODO_ITEM", None
+        ),
         items_factory=getattr(entity, "api_items_factory", None),
         find=getattr(services, "_find_by_uid_or_summary", None),
-        # What Core's todo services raise before they call the list entity:
-        # their schema and their own checks. Any other error may come after
+        # What Core's todo services raise when they refuse a call: their
+        # schema and their own checks. An integration may raise these too,
+        # so _write also compares the rows. Any other error may come after
         # the integration reached its backend, so its outcome is unknown.
         refused=(
             *(e for e in _INVALID_ERRORS if e is not ValueError),
             ServiceValidationError,
         ),
+        error=HomeAssistantError,
         date=cv.date,
     )
     return None if None in vars(core).values() else core
@@ -125,8 +133,8 @@ def _outcome(
     """The added or updated row as the list entity holds it afterwards, or
     the rows a removal took off, as they were before it. A row may lack a
     uid (``api_items_factory`` drops None fields)."""
-    known = {i.uid for i in before}
     if msg["action"] == "add":
+        known = {i.uid for i in before}
         added = [row for row in after if row.get("uid") not in known]
         return {"success": True, "item": added[0] if len(added) == 1 else None}
     if msg["action"] == "update":
@@ -150,6 +158,12 @@ async def _write(
         data, current = _service_data(core, msg, before)
     except _Refused as refused:
         return refused.failure
+    moves = msg["action"] == "update" and "previous_uid" in msg
+    if moves and not (entity.supported_features or 0) & core.can_move:
+        # What Core's todo/item/move checks, asked before the update is written.
+        return _failure(
+            "not_supported", f"{entity.entity_id} does not support reordering items"
+        )
     rows_before = [_row(core, i) for i in before]
     try:
         await hass.services.async_call(
@@ -164,6 +178,17 @@ async def _write(
         if [_row(core, i) for i in entity.todo_items or ()] != rows_before:
             raise  # the list changed, so this is no refusal
         return _failure("invalid", str(err))
+    if moves:
+        # After the update, which Core resolved on the order as it was; the
+        # move goes by uid, as Core's todo/item/move does.
+        try:
+            await entity.async_move_todo_item(
+                uid=msg["uid"], previous_uid=msg["previous_uid"]
+            )
+        except core.error as err:
+            return _failure(
+                "move_failed", f"The update was applied, but the move failed: {err}"
+            )
     after = [_row(core, i) for i in entity.todo_items or ()]
     return _outcome(core, msg, before, current, after)
 
@@ -210,6 +235,8 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
                 vol.Optional("uid"): str,
                 vol.Optional("data"): dict,
                 vol.Optional("due"): vol.Any(str, None),
+                # update only: move the item below this uid, or to the top for None
+                vol.Optional("previous_uid"): vol.Any(str, None),
             },
             do_todo_item,
             prep,

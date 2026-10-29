@@ -11,9 +11,10 @@ Adding, updating and removing named items go through the component's
 ``ha_mcp_tools/todo_item`` bridge when the component serves it (see
 ``component_todo``), and through Core's todo services over WebSocket
 otherwise; the REST service endpoint answers a schema rejection with a bare
-400. A move (``todo/item/move``) and ``remove_completed`` use Core's
-WebSocket commands on both paths. Either way Core validates the write and
-its own error text reaches the caller.
+400. A move together with an update goes through the bridge too; a move alone
+(``todo/item/move``) and ``remove_completed`` use Core's WebSocket commands
+on both paths. Either way Core validates the write and its own error text
+reaches the caller.
 """
 
 import json
@@ -100,7 +101,7 @@ def _removed(
     gone = [i for i in before if i.get("uid") not in kept]
     if refs is None:
         return [i for i in gone if i.get("status") == "completed"]
-    return [i for i in gone if {i.get("uid"), i.get("summary")} & set(refs)]
+    return [i for i in gone if i.get("uid") in refs or i.get("summary") in refs]
 
 
 def _refuse_namesake(entity_id: str, ref: str, item: str) -> NoReturn:
@@ -673,36 +674,25 @@ class TodoTools:
         updates: dict[str, Any],
         move_after: str | None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
-        """Move and update the row the component resolved, by its uid; the
+        """Update the row the component resolved, by its uid, and move it: the
         component refuses the update when an item listed before it is named
-        after that uid."""
+        after that uid, then moves it. A move alone takes Core's
+        todo/item/move."""
         uid = self._uid_of(rows[0], item, entity_id)
-        update = bool(updates) or move_after is None
-        if (
-            update
-            and move_after
-            and any(
-                i.get("uid") != uid and i.get("summary") == uid
-                for i in await self._list_items(entity_id)
-            )
-        ):
-            # A move below another item can put a row named after the uid
-            # before it; refused before the move, as the component would
-            # refuse the update after it.
-            _refuse_namesake(entity_id, uid, item)
-        applied = ""
-        if move_after is not None:
-            # Moved first, so a list without reordering refuses before the
-            # update is written.
-            applied = await self._move_item(entity_id, item, uid, rows, move_after)
         warnings: list[str] = []
-        if update:
+        if updates or move_after is None:
             # Core decides whether the update names anything to change.
+            move: dict[str, Any] = (
+                {}
+                if move_after is None
+                else {"previous_uid": self._previous_uid(rows, move_after, entity_id)}
+            )
             reply = await todo_write(
-                self._client, entity_id, "update", applied, uid=uid, data=updates
+                self._client, entity_id, "update", uid=uid, data=updates, **move
             )
             todo_item = reply["item"]
         else:
+            await self._move_item(entity_id, item, rows, move_after)
             after, warnings = await self._read_back(entity_id)
             if after is None:
                 return None, warnings
@@ -738,12 +728,9 @@ class TodoTools:
             )
         if update and uid and resolves_elsewhere:
             _refuse_namesake(entity_id, ref, item)
-        applied = ""
-        if move_after is not None:
-            # Moved first, so a list without reordering refuses before the
-            # update is written.
-            moved = self._uid_of(target, item, entity_id)
-            applied = await self._move_item(entity_id, item, moved, rows, move_after)
+        # Moved first, so a list without reordering refuses before the update
+        # is written.
+        applied = await self._move_item(entity_id, item, rows, move_after)
         if update:
             # Core decides whether the update names anything to change.
             await self._todo_service(
@@ -773,19 +760,31 @@ class TodoTools:
             )
         return str(found["uid"])
 
+    def _previous_uid(
+        self, rows: list[dict[str, Any] | None], move_after: str, entity_id: str
+    ) -> str | None:
+        """The uid of the item ``move_after`` names; None for the top."""
+        return self._uid_of(rows[1], move_after, entity_id) if move_after else None
+
     async def _move_item(
         self,
         entity_id: str,
         item: str,
-        uid: str,
         rows: list[dict[str, Any] | None],
-        move_after: str,
+        move_after: str | None,
     ) -> str:
-        """Core's todo/item/move, which takes uids; an empty ``move_after``
-        puts the item at the top. Returns the note for a later failure."""
-        message = {"type": "todo/item/move", "entity_id": entity_id, "uid": uid}
-        if move_after:
-            message["previous_uid"] = self._uid_of(rows[1], move_after, entity_id)
+        """Core's todo/item/move of ``rows[0]``, which takes uids; an empty
+        ``move_after`` puts the item at the top, None moves nothing. Returns
+        the note for a later failure."""
+        if move_after is None:
+            return ""
+        message = {
+            "type": "todo/item/move",
+            "entity_id": entity_id,
+            "uid": self._uid_of(rows[0], item, entity_id),
+        }
+        if previous_uid := self._previous_uid(rows, move_after, entity_id):
+            message["previous_uid"] = previous_uid
         await self._write(
             "todo/item/move", message, {"entity_id": entity_id, "item": item}
         )

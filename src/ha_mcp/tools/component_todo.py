@@ -7,7 +7,8 @@ the caller uses Core's WebSocket commands instead: the capability is absent,
 the command was not sent, Core answered ``unknown_command``, or the component
 lacks Core's todo parts. A reply with ``success: False`` is the component's
 refusal: a check before the write, or Core's schema or validation error after
-which the list's rows were unchanged.
+which the list's rows were unchanged. The one exception is ``move_failed``: the
+update was applied and the move after it failed, as its message says.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ _REFUSAL_CODES = {
     "not_loaded": ErrorCode.ENTITY_UNAVAILABLE,
     "list_unavailable": ErrorCode.ENTITY_UNAVAILABLE,
     "item_not_found": ErrorCode.RESOURCE_NOT_FOUND,
+    "not_supported": ErrorCode.VALIDATION_INVALID_PARAMETER,
     "namesake": ErrorCode.VALIDATION_INVALID_PARAMETER,
     "invalid": ErrorCode.VALIDATION_INVALID_PARAMETER,
 }

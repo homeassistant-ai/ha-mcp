@@ -378,17 +378,30 @@ class TestTodoErrorHandling:
                 pytest.skip("No todo lists available for testing")
 
             todo_entity = list_result["todo_lists"][0]["entity_id"]
+            item_name = f"E2E No Field {int(time.time())}"
 
-            # Try to update without any update fields
-            await mcp.call_tool_failure(
-                "ha_set_todo_item",
-                {
-                    "entity_id": todo_entity,
-                    "item": "some_item",
-                    # No rename, status, description, or due_date provided
-                },
-                expected_error="at least one of",
+            # An existing item, so the refusal is Core's and not a missing item
+            await mcp.call_tool_success(
+                "ha_set_todo_item", {"entity_id": todo_entity, "summary": item_name}
             )
+            await wait_for_item_in_list(mcp_client, todo_entity, item_name)
+
+            try:
+                # Try to update without any update fields
+                await mcp.call_tool_failure(
+                    "ha_set_todo_item",
+                    {
+                        "entity_id": todo_entity,
+                        "item": item_name,
+                        # No rename, status, description, or due_date provided
+                    },
+                    expected_error="at least one of",
+                )
+            finally:
+                await mcp_client.call_tool(
+                    "ha_remove_todo_item",
+                    {"entity_id": todo_entity, "item": item_name},
+                )
             logger.info("Update validation test passed")
 
 

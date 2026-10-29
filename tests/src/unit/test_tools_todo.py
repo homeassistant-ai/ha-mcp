@@ -438,6 +438,7 @@ class TestOutcomes:
         client.read_back_fails = True
         got = await tools.ha_remove_todo_item(LIST, item="Pay")
         assert got["removed"] is None
+        assert len(got["warnings"]) == 1
         assert "could not be read back" in got["warnings"][0]
 
     async def test_unchanged_list_after_a_removal_is_flagged(
