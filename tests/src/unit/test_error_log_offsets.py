@@ -28,3 +28,15 @@ def test_lines_from_before_the_upgrade_take_the_logs_offset() -> None:
     summary = _parse_error_log_structured(log)["summary"]
     assert summary["window_start"] == "2026-11-02 08:00:00.000"
     assert summary["window_end"] == "2026-11-02 09:00:00.000+10:00"
+
+
+def test_a_utc_offset_counts_as_the_logs_offset() -> None:
+    # +00:00 is a zero offset, not a missing one: the offset-less line takes
+    # it (10:30Z) rather than the later +01:00 (09:30Z).
+    log = textwrap.dedent("""\
+        2026-11-02 10:00:00.000+00:00 ERROR (MainThread) [a.b.c] boom
+        2026-11-02 10:30:00.000 ERROR (MainThread) [a.b.c] boom
+        2026-11-02 10:15:00.000+01:00 ERROR (MainThread) [a.b.c] boom
+    """)
+    summary = _parse_error_log_structured(log)["summary"]
+    assert summary["window_end"] == "2026-11-02 10:30:00.000"
