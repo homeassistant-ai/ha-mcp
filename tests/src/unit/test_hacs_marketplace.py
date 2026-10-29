@@ -11,7 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ha_mcp.tools.hacs_backend import StoreApi, detect_store_api
 from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 from ha_mcp.tools.tools_hacs import HacsTools
@@ -228,6 +231,35 @@ class TestNativeFieldsReachTheCaller:
         assert result["additional_info"] == "# README"
         assert "replaces_built_in" in result
         assert "readme_note" in result
+
+    async def test_a_slow_releases_fetch_leaves_the_info_and_warns(self, tools):
+        # The releases command reaches GitHub; timing out must not cost the
+        # repository info, and the warning sits beside data, not inside it.
+        ws = _ws(
+            _ok({"id": "1", "full_name": "o/r", "pending_upgrade": False}),
+            HomeAssistantCommandTimeout("timed out"),
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_hacs.detect_store_api",
+                new=AsyncMock(return_value=MARKETPLACE),
+            ),
+            patch(
+                "ha_mcp.client.websocket_client.get_websocket_client",
+                new=AsyncMock(return_value=ws),
+            ),
+            patch(
+                "ha_mcp.tools.response_helpers.fetch_ha_timezone",
+                new=AsyncMock(return_value=("UTC", False)),
+            ),
+        ):
+            out = await tools.ha_get_hacs_info(
+                action="info", repository_id="1", include_releases=True
+            )
+        assert out["data"]["full_name"] == "o/r"
+        assert "warnings" not in out["data"]
+        assert out["warnings"] == ["Releases unavailable: timed out"]
+        assert ws.send_command.await_args_list[1].kwargs["_wait_timeout"] == 60.0
 
     async def test_release_notes_come_from_the_update_entity(self, tools):
         detail = {

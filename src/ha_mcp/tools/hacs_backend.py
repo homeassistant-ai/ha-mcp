@@ -8,7 +8,10 @@ talk to whichever API the instance serves, Marketplace first.
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
-from ..client.rest_client import HomeAssistantCommandError
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
 
@@ -204,30 +207,36 @@ async def fetch_releases(
     """The repository's GitHub releases and the notes of versions not installed.
 
     Release notes come from HACS's own command, or on the Marketplace from the
-    repository's update entity, the way the update dialog shows them.
+    repository's update entity, the way the update dialog shows them. Both
+    reach GitHub, so they get the 60 s budget the store's installs get, and a
+    failure or timeout becomes a warning: the repository info already arrived.
     """
     out: dict[str, Any] = {}
     warnings: list[str] = []
     try:
         reply = await ws_client.send_command(
-            api.command("releases"), repository_id=repository_id
+            api.command("releases"), _wait_timeout=60.0, repository_id=repository_id
         )
         out["github_releases"] = reply.get("result") or []
-    except HomeAssistantCommandError as err:
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as err:
         warnings.append(f"Releases unavailable: {err}")
 
     try:
         if not api.is_marketplace:
             reply = await ws_client.send_command(
-                "hacs/repository/release_notes", repository=repository_id
+                "hacs/repository/release_notes",
+                _wait_timeout=60.0,
+                repository=repository_id,
             )
             out["release_notes"] = reply.get("result") or []
         elif info.get("pending_upgrade") and info.get("update_entity_id"):
             reply = await ws_client.send_command(
-                "update/release_notes", entity_id=info["update_entity_id"]
+                "update/release_notes",
+                _wait_timeout=60.0,
+                entity_id=info["update_entity_id"],
             )
             out["release_notes"] = reply.get("result")
-    except HomeAssistantCommandError as err:
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as err:
         warnings.append(f"Release notes unavailable: {err}")
     if warnings:
         out["warnings"] = warnings
