@@ -143,7 +143,10 @@ def _collection_helpers_list(
     """
     stored = _stored_helpers(hass, view, HELPERS_LIST_COLLECTION_DOMAINS)
     wanted = [d for d in stored if type_filter is None or d in type_filter]
-    states = {getattr(s, "entity_id", None): s for s in _iter_states(hass)}
+    states: dict[str, Any] = {}
+    for state in _iter_states(hass):
+        if isinstance(state_id := getattr(state, "entity_id", None), str):
+            states[state_id] = state
     out: list[dict[str, Any]] = []
     listed: set[str] = set()
     for domain in wanted:
@@ -151,7 +154,8 @@ def _collection_helpers_list(
             if entity_id:
                 listed.add(entity_id)
             reg = _reg_entity(view, entity_id) if entity_id else None
-            attrs = getattr(states.get(entity_id), "attributes", None) or {}
+            state = states.get(entity_id) if entity_id else None
+            attrs = getattr(state, "attributes", None) or {}
             current = attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
             out.append(
                 {
@@ -169,24 +173,24 @@ def _collection_helpers_list(
                 }
             )
     configs = _entity_configs(hass, wanted)
-    for entity_id, state in states.items():
-        domain = entity_id.split(".")[0] if entity_id and "." in entity_id else ""
-        if domain not in wanted or entity_id in listed:
+    for unstored_id, state in states.items():
+        domain = unstored_id.split(".")[0] if "." in unstored_id else ""
+        if domain not in wanted or unstored_id in listed:
             continue
         attrs = getattr(state, "attributes", None) or {}
-        object_id = entity_id.split(".", 1)[1]
+        object_id = unstored_id.split(".", 1)[1]
         current = attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
-        body = configs.get(entity_id)
+        body = configs.get(unstored_id)
         if body is None:
             body = dict(attrs) if isinstance(attrs, Mapping) else {}
         out.append(
             {
                 "helper_type": domain,
                 "kind": "collection",
-                "entity_id": entity_id,
+                "entity_id": unstored_id,
                 "object_id": object_id,
                 "name": str(
-                    current or _reg_name(_reg_entity(view, entity_id)) or object_id
+                    current or _reg_name(_reg_entity(view, unstored_id)) or object_id
                 ),
                 "storage_id": None,
                 "config": _plainify(body),
