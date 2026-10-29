@@ -1383,6 +1383,28 @@ class TestHelpers:
         assert rec["config"] == stored
         assert search("runtime_x") == []
 
+    def test_helper_search_matches_config_of_a_helper_outside_the_storage(
+        self, empty_view
+    ):
+        # A YAML schedule's weekday blocks live only in the config its entity
+        # was built from, not in its state attributes; search still matches them.
+        sched = FakeCollectionEntity(
+            "schedule.work",
+            {"name": "Work", "monday": [{"from": "07:07:07", "to": "09:00:00"}]},
+        )
+        h = FakeHass(
+            states=[FakeState("schedule.work", "on", friendly_name="Work")],
+            data={
+                **stored_helpers({"schedule": []}),
+                "entity_components": {"schedule": FakeComponent([sched])},
+            },
+        )
+        res = wsapi._do_search(
+            h, {"query": "07:07:07", "search_types": ["helper"], "include_config": True}
+        )
+        assert [x["entity_id"] for x in res["helpers"]] == ["schedule.work"]
+        assert res["helpers"][0]["match_in_config"] is True
+
     def test_helper_search_reports_an_unreadable_entity_registry(self, monkeypatch):
         # A stored helper whose entity the registry cannot name falls back to its
         # state attributes; the search says it is partial instead of hiding it.
