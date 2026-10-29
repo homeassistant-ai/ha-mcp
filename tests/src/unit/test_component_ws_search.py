@@ -1400,6 +1400,7 @@ class TestHelpers:
         )
         res = wsapi._do_search(h, {"query": "mode", "search_types": ["helper"]})
         assert res["partial"] is True
+        assert [x["entity_id"] for x in res["helpers"]] == ["input_select.mode"]
 
     def test_collection_helper_body_withheld_without_include_config(self, empty_view):
         states = [
