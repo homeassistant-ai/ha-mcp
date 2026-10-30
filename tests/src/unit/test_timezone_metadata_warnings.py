@@ -4,11 +4,15 @@ A tool's ``warnings`` is a top-level list, never nested in a payload key, so
 the wrapper lifts a ``warnings`` list out of the payload it wraps.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.response_helpers import add_timezone_metadata
+from ha_mcp.tools.tools_history import HistoryTools
+
+from .test_tools_history import _HISTORY_INNER, _no_real_caps_probe  # noqa: F401
 
 
 @pytest.fixture
@@ -65,3 +69,26 @@ async def test_an_empty_warnings_list_leaves_no_warnings_key(
     result = await add_timezone_metadata(tz_client, {"success": True, "warnings": []})
     assert "warnings" not in result
     assert "warnings" not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_history_warnings_are_one_top_level_list_in_order(
+    tz_client: MagicMock,
+) -> None:
+    """``ha_get_history`` returns payload, timezone and ``fields`` warnings as
+    one top-level list, in the order they arise, with none left in ``data``."""
+    tz_client.get_config.side_effect = HomeAssistantConnectionError("down")
+    inner = {**_HISTORY_INNER, "warnings": ["payload warning"]}
+    with patch(
+        "ha_mcp.tools.tools_history._fetch_history",
+        new_callable=AsyncMock,
+        return_value=inner,
+    ):
+        result = await HistoryTools(tz_client).ha_get_history(
+            entity_ids="sensor.temp", fields=["nonexistent"]
+        )
+    assert "warnings" not in result["data"]
+    payload, timezone, typo = result["warnings"]
+    assert payload == "payload warning"
+    assert "timezone" in timezone
+    assert "nonexistent" in typo

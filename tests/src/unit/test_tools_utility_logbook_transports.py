@@ -266,6 +266,7 @@ class TestLogbookTransports:
         )
         assert "name" not in by_entity["light.kitchen"]
         assert any("carry no 'name'" in w for w in result["warnings"])
+        assert "warnings" not in result["data"]
 
     @pytest.mark.asyncio
     async def test_device_websocket_empty_result_has_no_name_warning(self) -> None:
