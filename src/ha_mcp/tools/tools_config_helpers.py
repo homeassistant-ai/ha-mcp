@@ -212,25 +212,27 @@ class HelperConfigTools:
         # silent empty). Storage/collection types keep the legacy fallback.
         is_flow = helper_type not in SIMPLE_HELPER_TYPES
 
-        # Prefer the custom component's in-process listing when it advertises
-        # the capability: one WS round-trip that joins the entity registry, so
-        # each record carries the current entity_id + display name (the #1794
-        # stale-id fix, shipped additively) instead of only the storage id.
-        # Fall back cleanly for storage types when the component is absent,
-        # downlevel, or errors — the taxonomy lives in
-        # ``_list_helpers_via_component``. The legacy body below is untouched.
-        caps = await get_component_caps(self._client)
-        if component_supports(caps, "helpers_list"):
-            component_response = await self._list_helpers_via_component(
-                helper_type, is_flow=is_flow
-            )
-            if component_response is not None:
-                return _paginate_helpers_response(component_response, offset, limit)
-        if is_flow:
-            # No usable component path and the legacy body cannot serve flow
-            # helpers: hard error rather than an empty or misleading list.
-            _raise_flow_requires_component(helper_type)
         try:
+            # Prefer the custom component's in-process listing when it advertises
+            # the capability: one WS round-trip that joins the entity registry, so
+            # each record carries the current entity_id + display name (the #1794
+            # stale-id fix, shipped additively) instead of only the storage id.
+            # Fall back cleanly for storage types when the component is absent,
+            # downlevel, or errors — the taxonomy lives in
+            # ``_list_helpers_via_component``.
+            # Inside the ``try`` so an error the fallback re-raises reaches the
+            # structured-error handler below.
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "helpers_list"):
+                component_response = await self._list_helpers_via_component(
+                    helper_type, is_flow=is_flow
+                )
+                if component_response is not None:
+                    return _paginate_helpers_response(component_response, offset, limit)
+            if is_flow:
+                # No usable component path and the legacy body cannot serve flow
+                # helpers: hard error rather than an empty or misleading list.
+                _raise_flow_requires_component(helper_type)
             result = await self._client.send_websocket_message(
                 {"type": f"{helper_type}/list"}
             )

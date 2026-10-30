@@ -344,8 +344,8 @@ async def test_raised_command_falls_back_with_warning() -> None:
 async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> None:
     """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → for a STORAGE type, legacy ``{type}/list`` AND a ``warnings[]``
-    entry, not a propagated error. The legacy body rides the never-raising bridge,
-    so it does not die identically on a pooled-WS drop."""
+    entry, not a propagated error, when the legacy read still answers. On a dead
+    socket the legacy read fails too (see the dead-socket test below)."""
     caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
@@ -366,6 +366,39 @@ async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> No
     assert record["entity_id"] == "input_boolean.foo"
     assert record["name"] == "New Name"
     assert record["original_name"] == "Old Name"
+
+
+class DeadBridgeClient(RoutingClient):
+    """The legacy list rides the same dead socket, so the bridge raises too."""
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        raise HomeAssistantConnectionError(
+            "Failed to connect to Home Assistant WebSocket"
+        )
+
+
+@pytest.mark.asyncio
+async def test_storage_type_with_a_dead_socket_is_a_structured_error() -> None:
+    """The component read and its legacy fallback both fail to connect: the
+    tool reports a structured connection error, not a raw exception."""
+    caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
+    list_helpers = _build_list_helpers(DeadBridgeClient())
+
+    with (
+        patch_ws_establish_failure(
+            caps_ws,
+            tools_config_helpers,
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
+        ),
+        pytest.raises(ToolError) as excinfo,
+    ):
+        await list_helpers(helper_type="input_boolean")
+
+    payload = json.loads(str(excinfo.value))
+    assert payload["error"]["code"] == "CONNECTION_FAILED"
+    assert payload["helper_type"] == "input_boolean"
 
 
 @pytest.mark.asyncio
