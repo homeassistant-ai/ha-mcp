@@ -6,41 +6,48 @@ it needs is imported before that window closes.
 
 from __future__ import annotations
 
+import logging
+import socket
+from collections.abc import Callable
 from typing import Any
 
 from .const import BIND_HOST_ALL
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class DirectListener:
-    """Host/Origin guard default, IPv6 guard and sockets for the direct port."""
+    """IPv6 guard and dual-stack sockets for the direct port's "Local network"."""
 
     def __init__(self, bind_host: str, port: int) -> None:
-        """Load what the bundled ha-mcp provides for ``bind_host``."""
+        """Load the bundled ha-mcp's listener helpers for ``bind_host``."""
         self._bind_host = bind_host
         self._port = port
-        self._sockets: list[Any] = []
-        self._helpers: tuple[Any, ...] | None = None
-        _default_host_origin_guard_off()
+        self._sockets: list[socket.socket] = []
+        self._guard: Callable[[Any], Any] | None = None
+        self._bind_sockets: Callable[[str, int], list[Any] | None] | None = None
+        self._announce: Callable[[list[Any], str, int], None] | None = None
         if bind_host != BIND_HOST_ALL:
             return
         try:
-            from ha_mcp.config import get_global_settings
-            from ha_mcp.ipv6_lan_guard import IPv6LanGuard, parse_allowed_networks
+            from ha_mcp.ipv6_lan_guard import (
+                IPv6LanGuard,
+                configured_allowed_networks,
+            )
             from ha_mcp.listen_sockets import (
                 announce_when_listening,
                 wildcard_listen_sockets,
             )
         except ImportError:
-            # A bundled ha-mcp older than #2915 has neither helper: "Local
-            # network" keeps its IPv4-only bind, as before.
+            _LOGGER.info(
+                "The bundled ha-mcp predates IPv6 listening: Local network "
+                "accepts IPv4 clients only"
+            )
             return
-        allowed = parse_allowed_networks(get_global_settings().ipv6_allowed_networks)
-        self._helpers = (
-            IPv6LanGuard,
-            allowed,
-            wildcard_listen_sockets,
-            announce_when_listening,
-        )
+        allowed = configured_allowed_networks()
+        self._guard = lambda app: IPv6LanGuard(app, allowed_networks=allowed)
+        self._bind_sockets = wildcard_listen_sockets
+        self._announce = announce_when_listening
 
     def wrap(self, app: Any) -> tuple[Any, bool]:
         """Return the app to serve and uvicorn's ``proxy_headers`` flag.
@@ -50,19 +57,20 @@ class DirectListener:
         guard re-applies proxy-header handling after its own check, so
         uvicorn's is turned off.
         """
-        if self._helpers is None:
+        if self._guard is None:
             return app, True
-        guard, allowed, _bind, _announce = self._helpers
-        return guard(app, allowed_networks=allowed), False
+        return self._guard(app), False
 
     def bind(self) -> dict[str, Any]:
         """Return uvicorn ``serve()`` kwargs, binding IPv4 and IPv6 for "Local network"."""
-        if self._helpers is None:
+        if self._bind_sockets is None or self._announce is None:
             return {}
-        _guard, _allowed, bind, announce = self._helpers
-        self._sockets = bind(self._bind_host, self._port)
-        announce(self._sockets, self._bind_host, self._port)
-        return {"sockets": self._sockets}
+        sockets = self._bind_sockets(self._bind_host, self._port)
+        if not sockets:
+            return {}
+        self._sockets = sockets
+        self._announce(sockets, self._bind_host, self._port)
+        return {"sockets": sockets}
 
     def close(self) -> None:
         """Release the sockets: uvicorn closes them only on a clean shutdown.
@@ -74,14 +82,14 @@ class DirectListener:
             sock.close()
 
 
-def _default_host_origin_guard_off() -> None:
+def default_host_origin_guard_off() -> None:
     """Turn fastmcp's Host/Origin (DNS-rebinding) guard off by default.
 
-    fastmcp >= 3.4.3 ships it on, and it would 421 the direct LAN listener
-    (bind 0.0.0.0:9584 by default), reached on arbitrary hosts. Default it off
-    to match the CLI / add-on entry points. Guard only the import: a bundled
-    ha-mcp old enough to lack the helper also predates the guard, so there is
-    nothing to disable.
+    fastmcp >= 3.4.3 ships it on, and it would 421 the direct listener on the
+    Local network choice (0.0.0.0:9584), reached on arbitrary hosts. Default it
+    off to match the CLI / add-on entry points. Guard only the import: a
+    bundled ha-mcp old enough to lack the helper also predates the guard, so
+    there is nothing to disable.
     """
     try:
         from ha_mcp.transport_security import ensure_host_origin_guard_default_off

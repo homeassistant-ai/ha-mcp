@@ -36,14 +36,12 @@ def stage_dev_addon_tree(repo_root: Path, staging: Path) -> None:
     The addon dir is the build context, so the files its Dockerfile copies
     from elsewhere in the repo are staged into it, the Dockerfile's COPY lines
     are rewritten to match, and ``image:`` is removed so Supervisor builds
-    instead of pulling. Shared by the image bake and the dev env's in-place
-    app update (``.github/dev-ha-env/stage_app_repo.py``).
+    instead of pulling.
     """
     dev_addon_src = repo_root / "homeassistant-addon-dev"
     copy_addon_tree(dev_addon_src, staging)
 
     # Files outside the addon dir that the Dockerfile COPYs from.
-    # Mirrors the addon-repo-branch manual steps.
     for name in STABLE_ADDON_FILES:
         shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
     for name in DEV_ADDON_REPO_FILES:
@@ -59,9 +57,8 @@ def stage_dev_addon_tree(repo_root: Path, staging: Path) -> None:
 
     # Dockerfile in homeassistant-addon-dev/ uses
     # ``COPY homeassistant-addon/start.py /`` because it's authored to
-    # be built from the repo root context. Inside /supervisor/addons/local/ the
-    # build context is the addon dir itself, so the path needs to be
-    # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
+    # be built from the repo root context. Supervisor builds with the addon
+    # dir itself as the context, so the path needs to be ``COPY start.py /``.
     dockerfile = staging / "Dockerfile"
     patched = dockerfile.read_text()
     for name in STABLE_ADDON_FILES:
@@ -81,10 +78,10 @@ def stage_dev_addon_tree(repo_root: Path, staging: Path) -> None:
     # Strip the ``image:`` field from config.yaml. Production dev-addon
     # ships built images at ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch};
     # when Supervisor sees ``image:``, it tries to PULL from GHCR rather
-    # than build from the local Dockerfile. Per-PR version bumps produce
-    # tags that don't exist in GHCR → 404 → addon update fails.
-    # Removing the field forces Supervisor to build locally from the
-    # Dockerfile it sees in /supervisor/addons/local/ha_mcp_dev/.
+    # than build from the staged Dockerfile, and a locally bumped version has
+    # no GHCR tag (404 → addon update fails). Without the field Supervisor
+    # builds from the staged Dockerfile, from the local store or an app
+    # repository alike.
     config_yaml = staging / "config.yaml"
     config_lines = [
         ln

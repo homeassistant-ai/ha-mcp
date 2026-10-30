@@ -295,6 +295,23 @@ def _check_advanced_bounds_choices(fname: str, coerced: Any) -> JSONResponse | N
     return None
 
 
+def _check_ipv6_networks(fname: str, value: str) -> JSONResponse | None:
+    """Reject allowlist entries that are not IPv6 networks, naming them."""
+    from ..ipv6_lan_guard import invalid_allowed_networks
+
+    invalid = invalid_allowed_networks(value)
+    if not invalid:
+        return None
+    return JSONResponse(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"{fname!r} has entries that are not IPv6 networks: {', '.join(invalid)}.",
+            suggestions=["Enter IPv6 networks such as 2001:db8:5::/48."],
+        ),
+        status_code=400,
+    )
+
+
 def _validate_one_advanced_field(
     fname: str,
     raw: Any,
@@ -343,6 +360,8 @@ def _validate_one_advanced_field(
     if coerce_err is not None:
         return None, is_addon_synced, coerce_err
     bounds_err = _check_advanced_bounds_choices(fname, coerced)
+    if bounds_err is None and fname == "ipv6_allowed_networks":
+        bounds_err = _check_ipv6_networks(fname, coerced)
     if bounds_err is not None:
         return None, is_addon_synced, bounds_err
     return coerced, is_addon_synced, None

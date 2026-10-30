@@ -135,7 +135,7 @@ def test_app_hands_dual_stack_sockets_to_the_server(
     class _Mcp:
         def run(self, **kwargs: Any) -> None:
             seen.update(kwargs)
-            for sock in kwargs["sockets"]:
+            for sock in kwargs["sockets"] or []:
                 sock.close()
 
     assert start._run_mcp_server(_Mcp(), "0.0.0.0", _a_free_port(), "/p", {}) == 0
@@ -145,3 +145,44 @@ def test_app_hands_dual_stack_sockets_to_the_server(
     assert seen["uvicorn_config"]["proxy_headers"] is False
     families = {sock.family for sock in seen["sockets"]}
     assert families == {socket.AF_INET, socket.AF_INET6}
+
+
+def test_app_with_a_specific_host_keeps_uvicorns_own_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An MCP_HOST override binds exactly that host, unguarded, with uvicorn's
+    # proxy-header handling intact for a reverse proxy in front of it.
+    monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", listen_sockets)
+    start = _load(_REPO / "homeassistant-addon/start.py", "addon_start_ut2")
+    seen: dict[str, Any] = {}
+
+    class _Mcp:
+        def run(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+
+    assert start._run_mcp_server(_Mcp(), "127.0.0.1", _a_free_port(), "/p", {}) == 0
+    assert seen["sockets"] is None
+    assert "middleware" not in seen
+    assert "proxy_headers" not in seen["uvicorn_config"]
+
+
+def test_a_failed_family_releases_the_one_already_bound() -> None:
+    _require_ipv6_loopback()
+    order = [
+        info[0]
+        for info in socket.getaddrinfo(
+            None, 0, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE
+        )
+    ]
+    first, second = order[0], order[1]
+    loopback = {socket.AF_INET: "127.0.0.1", socket.AF_INET6: "::1"}
+    with socket.socket(second, socket.SOCK_STREAM) as taken:
+        taken.bind((loopback[second], 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        with pytest.raises(OSError):
+            listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
+        # The family that bound before the other failed must be closed again:
+        # a plain bind on its loopback succeeds only then.
+        with socket.socket(first, socket.SOCK_STREAM) as probe:
+            probe.bind((loopback[first], port))

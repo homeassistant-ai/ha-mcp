@@ -445,10 +445,9 @@ def _ipv6_lan_guard() -> dict[str, Any]:
     """
     from starlette.middleware import Middleware
 
-    from ha_mcp.config import get_global_settings
-    from ha_mcp.ipv6_lan_guard import IPv6LanGuard, parse_allowed_networks
+    from ha_mcp.ipv6_lan_guard import IPv6LanGuard, configured_allowed_networks
 
-    allowed = parse_allowed_networks(get_global_settings().ipv6_allowed_networks)
+    allowed = configured_allowed_networks()
     return {"middleware": [Middleware(IPv6LanGuard, allowed_networks=allowed)]}
 
 
@@ -470,10 +469,10 @@ def _run_mcp_server(
         )
 
         sockets = wildcard_listen_sockets(bind_host, port)
-        guard: dict[str, Any] = {}
+        guard_kwargs: dict[str, Any] = {}
         if sockets is not None:
             announce_when_listening(sockets, bind_host, port)
-            guard = _ipv6_lan_guard()
+            guard_kwargs = _ipv6_lan_guard()
             uvicorn_config = {**uvicorn_config, "proxy_headers": False}
         # Do not pass log_level here: fastmcp's temporary_log_level would
         # rebuild its rich log handlers at the default 80-column width,
@@ -486,7 +485,7 @@ def _run_mcp_server(
             path=secret_path,
             stateless_http=True,
             uvicorn_config=uvicorn_config,
-            **guard,
+            **guard_kwargs,
         )
     except KeyboardInterrupt:
         log_info("Interrupted, exiting")

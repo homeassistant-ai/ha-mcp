@@ -1318,10 +1318,9 @@ def stage_dev_addon_source(qcow2: Path) -> None:
     of a full first-install (~5 min).
 
     The dev addon's Dockerfile expects ``start.py``, ``src/`` and the
-    ``DEV_ADDON_REPO_FILES`` at the build-context root — same shape as the
-    addon-repo-branch flow used for manual fork testing (see
-    ``~/ha-mcp-fork/FORK-DEV.md``). We mirror that prep here so the
-    in-HAOS build succeeds without any additional setup at install time.
+    ``DEV_ADDON_REPO_FILES`` at the build-context root, which
+    ``dev_addon_tree.stage_dev_addon_tree`` lays out, so the in-HAOS build
+    succeeds without any additional setup at install time.
     """
     repo_root = Path(__file__).resolve().parent.parent.parent
     dev_addon_src = repo_root / "homeassistant-addon-dev"

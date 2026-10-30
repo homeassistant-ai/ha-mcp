@@ -83,7 +83,7 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
-from .embedded_listen import DirectListener
+from .embedded_listen import DirectListener, default_host_origin_guard_off
 from .embedded_worker_teardown import (
     shutdown_server_resources_bounded,
     teardown_worker_loop,
@@ -1572,7 +1572,8 @@ class EmbeddedServerManager:
         # uvicorn.Config defaults + _lifespan_manager), pinned by ha-mcp.
         import uvicorn
 
-        # Loads the listener's ha_mcp helpers inside the import window below.
+        # The listener's ha_mcp imports happen before the import window closes.
+        default_host_origin_guard_off()
         listener = DirectListener(self._bind_host, self._port)
 
         # The cold import — the multi-minute window that crashed in #1904 —
@@ -1624,8 +1625,13 @@ class EmbeddedServerManager:
                         "listener started"
                     )
                     return
+                try:
+                    serve_kwargs = listener.bind()
+                except OSError as err:
+                    # Report a busy port as uvicorn does for its own bind.
+                    raise SystemExit(3) from err
                 stop_task = asyncio.create_task(stop_event.wait())
-                serve_task = asyncio.create_task(uv_server.serve(**listener.bind()))
+                serve_task = asyncio.create_task(uv_server.serve(**serve_kwargs))
                 done, _pending = await asyncio.wait(
                     {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
                 )
