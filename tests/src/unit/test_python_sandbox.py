@@ -107,14 +107,15 @@ class TestSecurityDocumentation:
         assert documented == SAFE_METHODS
 
     @pytest.mark.parametrize(("label", "receiver"), _METHOD_TYPES.items())
-    def test_documented_methods_exist_on_their_listed_type(
+    def test_each_method_entry_lists_its_types_allowed_methods(
         self, label: str, receiver: type
     ) -> None:
         """The validator matches method names only, so a method listed under
-        the wrong type passes validation and then fails on the receiver."""
-        misplaced = {m for m in self._documented(label) if not hasattr(receiver, m)}
+        the wrong type passes validation and then fails on the receiver, and
+        an agent reading one entry skips an allowed method it leaves out."""
+        allowed = {m for m in SAFE_METHODS if hasattr(receiver, m)}
 
-        assert misplaced == set()
+        assert self._documented(label) == allowed
 
     def test_documented_builtins_match_exposed_builtins(self) -> None:
         """Agents avoid builtins the description omits, and hit NameErrors
