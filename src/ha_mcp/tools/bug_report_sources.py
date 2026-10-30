@@ -4,6 +4,7 @@ identifiers, and Home Assistant's install facts. None of them raises."""
 import contextlib
 import ipaddress
 import logging
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -146,6 +147,9 @@ _HA_INSTALL_KEYS = (
 
 
 def _add_host(host: str, hosts: set[str], addresses: set[str]) -> None:
+    # A configured URL may spell the name as an absolute FQDN (trailing dot);
+    # logs never do, so the stored name must not carry it.
+    host = host.rstrip(".")
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
@@ -183,41 +187,62 @@ async def _ws_result(client: Any, command: str) -> Any:
     return reply.get("result")
 
 
+async def _read_identifiers(
+    client: Any, command: str, consume: Callable[[Any], None]
+) -> str | None:
+    """Run one read and hand its result to ``consume``; a failure becomes the
+    reason text for the caller's warning instead of an exception."""
+    try:
+        consume(await _ws_result(client, command))
+    except Exception as e:  # noqa: BLE001
+        # The error text could carry the very hostnames being collected, so
+        # only Home Assistant's error code or the exception type is reported.
+        reason = str(e) if isinstance(e, _UnsuccessfulReply) else type(e).__name__
+        logger.info("Known-identifier read failed at %s: %s", command, reason)
+        return f"{command}: {reason}"
+    return None
+
+
 async def collect_known_identifiers(
     client: Any,
 ) -> tuple[KnownIdentifiers, str | None]:
     """Read this instance's URLs and interface addresses for redaction.
 
     Returns the identifiers and, when a read failed, one warning for the
-    caller. What was collected before the failure is kept: the server's own
-    Home Assistant host needs no read at all, and ``network/url`` answers a
-    non-admin token while ``network`` (``require_admin`` in Core) does not.
+    caller. The reads are independent and whatever was collected is kept: the
+    server's own Home Assistant host needs no read at all, ``network/url``
+    answers a non-admin token while ``network`` (``require_admin`` in Core)
+    does not, and a transient failure of one read must not drop the other.
     Loopback addresses are left out: they identify nobody.
     """
     hosts: set[str] = set()
     addresses: set[str] = set()
     _add_url_host(getattr(client, "base_url", None), hosts, addresses)
-    warning = None
-    command = "network/url"
-    try:
-        urls = await _ws_result(client, command)
+
+    def _urls(urls: Any) -> None:
         for key in ("internal", "external", "cloud"):
             _add_url_host(urls.get(key), hosts, addresses)
-        command = "network"
-        network = await _ws_result(client, command)
+
+    def _adapters(network: Any) -> None:
         for adapter in network.get("adapters") or []:
             for entry in (adapter.get("ipv4") or []) + (adapter.get("ipv6") or []):
                 if entry.get("address"):
                     _add_host(str(entry["address"]), hosts, addresses)
-    except Exception as e:  # noqa: BLE001
-        # The error text could carry the very hostnames being collected, so
-        # only Home Assistant's error code or the exception type is reported.
-        reason = str(e) if isinstance(e, _UnsuccessfulReply) else type(e).__name__
-        logger.info("Known-identifier read failed at %s: %s", command, reason)
-        warning = (
-            f"Known-identifier redaction is partial ({command}: {reason}); "
-            "review hostnames and addresses by hand."
+
+    failures = [
+        failure
+        for failure in (
+            await _read_identifiers(client, "network/url", _urls),
+            await _read_identifiers(client, "network", _adapters),
         )
+        if failure
+    ]
+    warning = (
+        f"Known-identifier redaction is partial ({'; '.join(failures)}); "
+        "review hostnames and addresses by hand."
+        if failures
+        else None
+    )
     return KnownIdentifiers(frozenset(hosts), frozenset(addresses)), warning
 
 

@@ -3,8 +3,9 @@
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from ha_mcp.client.rest_client import ErrorLogPage
@@ -52,7 +53,8 @@ HA_INFO = {
 def _ws_client(replies: dict[str, Any], base_url: str) -> SimpleNamespace:
     async def send(message: dict[str, Any]) -> dict[str, Any]:
         # Every identifier read carries its own short deadline (#2916 review).
-        assert message["_wait_timeout"] == bug_report_sources._IDENTIFIER_READ_TIMEOUT_S
+        # Well under the client's 30 s default command wait.
+        assert 0 < message["_wait_timeout"] <= 10
         return replies[message["type"]]
 
     return SimpleNamespace(send_websocket_message=send, base_url=base_url)
@@ -113,6 +115,35 @@ class TestCollectKnownIdentifiers:
         assert warning is None
 
     @pytest.mark.asyncio
+    async def test_absolute_fqdn_is_stored_without_its_trailing_dot(self) -> None:
+        replies = {"network/url": _ok({}), "network": _ok({"adapters": []})}
+        client = _ws_client(replies, "http://ha.example.net.:8123")
+        identifiers, _ = await collect_known_identifiers(client)
+        assert identifiers.hosts == frozenset({"ha.example.net"})
+
+    @pytest.mark.asyncio
+    async def test_failed_url_read_still_reads_the_adapters(self) -> None:
+        """The two reads are independent: a transient failure of one must not
+        drop what the other would have contributed."""
+        replies = {
+            "network/url": {
+                "success": False,
+                "error": "Command failed: timeout",
+                "error_code": "timeout",
+            },
+            "network": _ok(NETWORK),
+        }
+        client = _ws_client(replies, "http://ha.example.net:8123")
+        identifiers, warning = await collect_known_identifiers(client)
+        assert identifiers == KnownIdentifiers(
+            hosts=frozenset({"ha.example.net"}),
+            addresses=frozenset({"192.168.1.150", "fe80::364d:ad1c:8b5b:e0f5"}),
+        )
+        assert warning is not None
+        assert "network/url: timeout" in warning
+        assert "network:" not in warning.replace("network/url:", "")
+
+    @pytest.mark.asyncio
     async def test_failed_adapter_read_keeps_what_was_read_and_warns(self) -> None:
         """``network`` is admin-only in Core while ``network/url`` is not, so a
         non-admin token must still get the URL hosts redacted."""
@@ -147,11 +178,13 @@ class TestCollectKnownIdentifiers:
         identifiers, warning = await collect_known_identifiers(client)
         assert identifiers == KnownIdentifiers(hosts=frozenset({"ha.example.net"}))
         assert warning is not None
-        assert "network/url: ConnectionError" in warning
+        assert "network/url: ConnectionError; network: ConnectionError" in warning
         assert "ha.example.net" not in warning
 
 
-def _ws_with_event(event_response: Any = None, error: Exception | None = None):
+def _ws_with_event(
+    event_response: Any = None, error: Exception | None = None
+) -> MagicMock:
     ws = MagicMock()
     ws.send_command_with_event = AsyncMock(
         return_value=({"success": True}, event_response), side_effect=error
@@ -241,8 +274,11 @@ class TestReportRedactsKnownIdentifiers:
     can see, so before the known-identifier pass it reached the report."""
 
     def _report(
-        self, monkeypatch, replies: dict[str, Any], install: dict[str, Any] | None
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        replies: dict[str, Any],
+        install: dict[str, Any] | None,
+    ) -> tools_bug_report.BugReportTools:
         client = _ws_client(replies, "http://127.0.0.1:8123")
         client.get_config = AsyncMock(return_value={"version": "2026.10.4"})
         client.get_states = AsyncMock(return_value=[])
@@ -295,6 +331,26 @@ class TestReportRedactsKnownIdentifiers:
             "7.0.0-1017-azure (x86_64, container amd64); Python 3.14.9" in body
         )
         assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_bare_known_address_is_redacted_in_the_addon_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The app log is scrubbed at fetch time, inside the identifier scope,
+        so the real Supervisor read is mocked rather than the fetcher."""
+        install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
+        replies = {"network/url": _ok(NETWORK_URL), "network": _ok(NETWORK)}
+        report = self._report(monkeypatch, replies, install)
+        monkeypatch.setattr(
+            tools_bug_report, "_detect_installation_method", lambda: "addon"
+        )
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        addon_log = httpx.Response(200, text="INFO ha_mcp: upstream is 172.17.0.3\n")
+        with patch("httpx.AsyncClient.get", return_value=addon_log):
+            result = await report.ha_report_issue(report_type="runtime_bug")
+        assert "172.17.0.3" not in result["addon_logs"]
+        assert "upstream is [IP]" in result["addon_logs"]
+        assert "upstream is [IP]" in result["issue_body"]
 
     @pytest.mark.asyncio
     async def test_failed_identifier_read_is_reported_not_fatal(
