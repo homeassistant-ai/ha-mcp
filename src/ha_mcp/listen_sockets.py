@@ -13,12 +13,9 @@ from __future__ import annotations
 import errno
 import logging
 import socket
-import threading
-import time
+from collections.abc import Callable
 
 ALL_INTERFACES_V4 = "0.0.0.0"
-# Cold starts import for minutes before uvicorn listens (#1904).
-_ANNOUNCE_TIMEOUT_SECONDS = 900
 
 
 def wildcard_listen_sockets(host: str, port: int) -> list[socket.socket] | None:
@@ -36,7 +33,7 @@ def wildcard_listen_sockets(host: str, port: int) -> list[socket.socket] | None:
             None, port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE
         ):
             try:
-                sock = socket.socket(family, kind, proto)
+                sock = _ListenSocket(family, kind, proto)
             except OSError:
                 continue
             sockets.append(sock)
@@ -63,30 +60,34 @@ def announce_when_listening(sockets: list[socket.socket], host: str, port: int) 
     """Log uvicorn's "Uvicorn running on ..." line once ``sockets`` are serving.
 
     uvicorn skips that line when handed pre-bound sockets, assuming a process
-    manager logged it. Emit the same text on uvicorn's own logger at the moment
-    uvicorn would have (its listen() call, after application startup), so the
-    startup log reads exactly as it did with a plain host bind.
+    manager logged it. The sockets log it themselves from the ``listen()`` call
+    that starts serving them, which is the point in uvicorn's startup where it
+    would have logged it, on its thread, so the startup log reads as before.
     """
+    pending = {id(sock) for sock in sockets}
 
-    def _wait() -> None:
-        deadline = time.monotonic() + _ANNOUNCE_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
-            try:
-                if all(
-                    sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
-                    for sock in sockets
-                ):
-                    break
-            except OSError:
-                return  # closed before it ever served: startup failed
-            time.sleep(0.05)
-        else:
-            return  # never started serving: uvicorn logged why
-        logging.getLogger("uvicorn.error").info(
-            "Uvicorn running on %s://%s:%d (Press CTRL+C to quit)", "http", host, port
-        )
+    def listened(sock: socket.socket) -> None:
+        pending.discard(id(sock))
+        if not pending:
+            logging.getLogger("uvicorn.error").info(
+                "Uvicorn running on %s://%s:%d (Press CTRL+C to quit)",
+                "http",
+                host,
+                port,
+            )
 
-    # Named after the caller (uvicorn's own thread) so log formats that show
-    # the thread name read the same too.
-    name = threading.current_thread().name
-    threading.Thread(target=_wait, name=name, daemon=True).start()
+    for sock in sockets:
+        if isinstance(sock, _ListenSocket):
+            sock.on_listen = listened
+
+
+class _ListenSocket(socket.socket):
+    """A socket that reports the ``listen()`` call that starts serving it."""
+
+    on_listen: Callable[[socket.socket], None] | None = None
+
+    def listen(self, *args: int) -> None:
+        super().listen(*args)
+        if self.on_listen is not None:
+            callback, self.on_listen = self.on_listen, None
+            callback(self)

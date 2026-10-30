@@ -7,7 +7,6 @@ import importlib.util
 import logging
 import socket
 import sys
-import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -81,9 +80,7 @@ def test_port_in_use_is_reported_not_skipped() -> None:
 def test_machine_without_ipv6_still_serves_ipv4(
     monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    real_socket = socket.socket
-
-    class _NoIPv6Socket(real_socket):
+    class _NoIPv6Socket(listen_sockets._ListenSocket):
         def __init__(self, family: int = -1, *args: Any, **kwargs: Any) -> None:
             if failure == "socket" and family == socket.AF_INET6:
                 raise OSError(errno.EAFNOSUPPORT, "Address family not supported")
@@ -94,7 +91,7 @@ def test_machine_without_ipv6_still_serves_ipv4(
                 raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
             super().bind(address)
 
-    monkeypatch.setattr(listen_sockets.socket, "socket", _NoIPv6Socket)
+    monkeypatch.setattr(listen_sockets, "_ListenSocket", _NoIPv6Socket)
     port = _free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
@@ -107,23 +104,21 @@ def test_machine_without_ipv6_still_serves_ipv4(
             sock.close()
 
 
-def test_startup_line_logged_once_serving(caplog: pytest.LogCaptureFixture) -> None:
+def test_startup_line_logged_when_every_socket_serves(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _require_ipv6_loopback()
     port = _free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
-    assert sockets is not None
+    assert sockets is not None and len(sockets) == 2
     caplog.set_level(logging.INFO, logger="uvicorn.error")
+    line = f"Uvicorn running on http://0.0.0.0:{port} (Press CTRL+C to quit)"
     try:
         listen_sockets.announce_when_listening(sockets, "0.0.0.0", port)
-        time.sleep(0.3)
-        assert "Uvicorn running" not in caplog.text, "logged before serving"
-        for sock in sockets:
-            sock.listen()
-        deadline = time.monotonic() + 5
-        while "Uvicorn running" not in caplog.text and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert f"Uvicorn running on http://0.0.0.0:{port} (Press CTRL+C to quit)" in (
-            caplog.text
-        )
+        sockets[0].listen()
+        assert line not in caplog.text, "logged before every socket served"
+        sockets[1].listen()
+        assert caplog.text.count(line) == 1
     finally:
         for sock in sockets:
             sock.close()
