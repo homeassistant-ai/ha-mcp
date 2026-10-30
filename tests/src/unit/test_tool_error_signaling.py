@@ -399,7 +399,9 @@ class TestSchemaAndAuthClassification:
         ],
         ids=["auth-cause", "admin-cause", "transport-cause", "other-cause"],
     )
-    def test_connection_error_classified_by_auth_cause(self, cause, expected):
+    def test_connection_error_classified_by_auth_cause(
+        self, cause: Exception, expected: str
+    ) -> None:
         """A connection error raised from an auth rejection classifies as auth.
 
         send_websocket_message wraps a failure to obtain a client in
@@ -414,7 +416,9 @@ class TestSchemaAndAuthClassification:
             result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == expected
 
-    async def test_auth_rejected_on_connect_classifies_through_real_transport(self):
+    async def test_auth_rejected_on_connect_classifies_through_real_transport(
+        self,
+    ) -> None:
         """The real send_websocket_message wrap, not a built shape, reaches
         the mapper as an auth error."""
         async with HomeAssistantClient(
@@ -434,7 +438,7 @@ class TestSchemaAndAuthClassification:
         result = exception_to_structured_error(exc_info.value, raise_error=False)
         assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
 
-    async def test_registry_read_keeps_the_auth_cause(self):
+    async def test_registry_read_keeps_the_auth_cause(self) -> None:
         """The reconfigure registry read re-raises a connection error without
         replacing its cause, so a rejected token still classifies as auth."""
         from ha_mcp.tools.config_entry_identity import _registry_rows
