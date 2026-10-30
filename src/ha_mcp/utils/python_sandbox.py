@@ -521,7 +521,7 @@ PYTHON TRANSFORM SECURITY:
 - Deletion: del config['key'] or config.pop('key')
 - List methods: append, insert, pop, remove, clear, extend, index, count, sort,
   reverse
-- Dict methods: update, get, setdefault, keys, values, items
+- Dict methods: update, get, setdefault, keys, values, items, pop, clear
 - Loops: for, if/else, pass, break, continue
 - Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)
 - Ternary: x if condition else y
@@ -530,7 +530,7 @@ PYTHON TRANSFORM SECURITY:
 - Keyword arguments: func(key=value)
 - Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])
 - String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,
-  removeprefix, removesuffix, split, join, replace
+  removeprefix, removesuffix, split, join, replace, count, index
 - Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
   min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,
   tuple, set
