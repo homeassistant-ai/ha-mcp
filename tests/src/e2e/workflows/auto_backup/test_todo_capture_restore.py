@@ -122,7 +122,7 @@ class TestTodoCaptureRestore:
             )
 
             backup = await _wait_for_backup(
-                mcp_client, domain="todo_item", entity_id=f"{todo_list}::{summary}"
+                mcp_client, domain="todo_item", entity_id=f"{todo_list}::{uid}"
             )
             await _restore(mcp, backup)
 
@@ -148,8 +148,8 @@ class TestTodoCaptureRestore:
                 {"entity_id": todo_list, "summary": summary, "description": "d"},
             )
             uid = added["todo_item"]["uid"]
-            # Completed by uid, so this edit's backup has another key than the
-            # removal's.
+            # Both this edit and the removal back the item up under its uid;
+            # the list gives the removal's, the newest, first.
             await mcp.call_tool_success(
                 "ha_set_todo_item",
                 {"entity_id": todo_list, "item": uid, "status": "completed"},
@@ -159,7 +159,7 @@ class TestTodoCaptureRestore:
             )
 
             backup = await _wait_for_backup(
-                mcp_client, domain="todo_item", entity_id=f"{todo_list}::{summary}"
+                mcp_client, domain="todo_item", entity_id=f"{todo_list}::{uid}"
             )
             await _restore(mcp, backup)
 
