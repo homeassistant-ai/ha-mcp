@@ -10,7 +10,7 @@ import pytest
 
 from ha_mcp import __version__
 from ha_mcp.client.rest_client import ErrorLogPage
-from ha_mcp.tools.bug_report_templates import _sanitize_log_text
+from ha_mcp.tools.bug_report_redaction import _sanitize_log_text
 from ha_mcp.tools.tools_bug_report import (
     _detect_mcp_transport,
     _fetch_addon_logs,
@@ -1137,7 +1137,7 @@ class TestFetchCoreErrorLog:
 
     @pytest.mark.asyncio
     async def test_truncates_to_recent_tail(self):
-        from ha_mcp.tools.tools_bug_report import _CORE_LOG_MAX_CHARS
+        from ha_mcp.tools.bug_report_sources import _CORE_LOG_MAX_CHARS
 
         client = MagicMock()
         client.get_error_log = AsyncMock(
@@ -1156,7 +1156,7 @@ class TestFetchCoreErrorLog:
         """Pinned because the fetch is wrapped in a deliberately broad except:
         a signature drift would otherwise surface as a silently empty log
         section rather than a failure (#2279)."""
-        from ha_mcp.tools.tools_bug_report import _CORE_LOG_WINDOW_LINES
+        from ha_mcp.tools.bug_report_sources import _CORE_LOG_WINDOW_LINES
 
         client = MagicMock()
         client.get_error_log = AsyncMock(
@@ -1258,7 +1258,7 @@ class TestFetchAddonLogs:
         # the signature characters would leak. Under the fixed sanitize-then-
         # truncate order, the entire JWT is replaced with [REDACTED_JWT]
         # before the cut, so nothing from the JWT survives.
-        from ha_mcp.tools.tools_bug_report import _ADDON_LOG_MAX_CHARS
+        from ha_mcp.tools.bug_report_sources import _ADDON_LOG_MAX_CHARS
 
         jwt = (
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -1295,7 +1295,7 @@ class TestFetchAddonLogs:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
         with (
             patch("httpx.AsyncClient.get", return_value=fake_response),
-            caplog.at_level("INFO", logger="ha_mcp.tools.tools_bug_report"),
+            caplog.at_level("INFO", logger="ha_mcp.tools.bug_report_sources"),
         ):
             result = await _fetch_addon_logs()
 
