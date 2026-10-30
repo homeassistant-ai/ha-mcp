@@ -51,6 +51,62 @@ class TestSanitizeLogText:
         assert "10.0.0.5" not in result
         assert "[IP]" in result
 
+    def test_redacts_quoted_ipv4_after_keyword(self):
+        assert _sanitize_log_text("host='203.0.113.7' refused") == "host='[IP]' refused"
+        assert _sanitize_log_text('host="203.0.113.7" refused') == 'host="[IP]" refused'
+        result = _sanitize_log_text(
+            "HTTPConnectionPool(host='203.0.113.7', port=32400): Max retries exceeded"
+        )
+        assert "203.0.113.7" not in result
+        assert "host='[IP]'" in result
+        assert "port=32400" in result
+
+    def test_redacts_dashed_ipv4_in_plex_direct_hostname(self):
+        # Plex's wildcard DNS encodes the server address in the leftmost label.
+        hex_label = "0123456789abcdef0123456789abcdef"
+        cases = [
+            f"https://203-0-113-7.{hex_label}.plex.direct:32400/library",
+            f"HTTPSConnectionPool(host='203-0-113-7.{hex_label}.plex.direct', port=32400)",
+        ]
+        for text in cases:
+            result = _sanitize_log_text(text)
+            assert "203-0-113-7" not in result, result
+            assert "[IP].[REDACTED_HEX].plex.direct" in result, result
+
+    def test_preserves_dashed_numbers_outside_plex_direct(self):
+        for text in ("build 1-2-3-4 starting", "resolved 1-2-3-4.example.com"):
+            assert _sanitize_log_text(text) == text
+
+    def test_redacts_lan_hostnames(self):
+        result = _sanitize_log_text("GET http://nas.home.lan:5000/api failed")
+        assert result == "GET http://[HOST]:5000/api failed"
+        result = _sanitize_log_text("HTTPConnectionPool(host='nas.home.lan', port=80)")
+        assert "nas.home.lan" not in result
+        assert "host='[HOST]'" in result
+
+    def test_preserves_words_containing_lan(self):
+        for text in ("plan the route", "iface wlan0 up", "foo.language set"):
+            assert _sanitize_log_text(text) == text
+
+    def test_redacts_tailnet_hostnames(self):
+        for text in (
+            "https://machine.tailnet-name.ts.net/api failed",
+            "resolving machine.tailnet-name.ts.net failed",
+        ):
+            result = _sanitize_log_text(text)
+            assert "tailnet-name" not in result, result
+            assert "[TAILNET_HOST]" in result, result
+        assert _sanitize_log_text("visit sports.net") == "visit sports.net"
+
+    def test_redacts_graph_calendar_id(self):
+        text = (
+            "GET https://graph.microsoft.com/v1.0/me/calendars/"
+            "AAMkAGI2TGuLAAA-x_y=/calendarView?startDateTime=2026-01-01 failed"
+        )
+        result = _sanitize_log_text(text)
+        assert "AAMkAGI2TGuLAAA" not in result
+        assert "/me/calendars/[CALENDAR_ID]/calendarView?" in result
+
     def test_preserves_four_segment_version_strings(self):
         # Regression: bare four-segment values without network context (e.g.
         # version banners) were being mangled by the IPv4 rule.

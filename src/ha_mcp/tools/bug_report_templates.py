@@ -23,14 +23,28 @@ _IPV4 = rf"(?:{_IPV4_OCTET}\.){{3}}{_IPV4_OCTET}"
 # IP followed by :port or /CIDR — always a network address, never a version.
 _IPV4_WITH_PORT_OR_CIDR_RE = re.compile(rf"\b{_IPV4}(?::\d+|/\d{{1,2}})\b(?!\.\d)")
 
-# IP preceded by a network keyword (from, to, host=, addr=, etc.).
+# IP preceded by a network keyword (from, to, host=, host='...', addr=, etc.).
 _IPV4_AFTER_KEYWORD_RE = re.compile(
-    rf"\b((?:from|to|host|hostname|addr|address|ip|src|dst|server|client|peer|via)\b\s*[=:]?\s*){_IPV4}\b(?!\.\d)",
+    rf"\b((?:from|to|host|hostname|addr|address|ip|src|dst|server|client|peer|via)\b\s*[=:]?\s*['\"]?){_IPV4}\b(?!\.\d)",
     re.IGNORECASE,
 )
 
 # IP appearing inside a URL (`scheme://1.2.3.4...`).
 _IPV4_IN_URL_RE = re.compile(rf"(://){_IPV4}\b(?!\.\d)")
+
+# Plex wildcard DNS puts the server address in ``1-2-3-4.<hex>.plex.direct``.
+_PLEX_DIRECT_DASHED_IPV4_RE = re.compile(
+    rf"\b(?:{_IPV4_OCTET}-){{3}}{_IPV4_OCTET}(?=\.[^\s.]+\.plex\.direct\b)",
+    re.IGNORECASE,
+)
+# Internal hostnames. A match starts only where a name starts, so a long dotted
+# run stays linear instead of being rescanned from every label.
+_LAN_HOST_RE = re.compile(r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)+lan\b", re.IGNORECASE)
+_TAILNET_HOST_RE = re.compile(
+    r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)+ts\.net\b", re.IGNORECASE
+)
+# Microsoft Graph calendar ID in a URL path.
+_GRAPH_CALENDAR_ID_RE = re.compile(r"(/me/calendars/)[^/?#\s'\"]+", re.IGNORECASE)
 
 
 def _format_version_value(diagnostic_info: dict[str, Any]) -> str:
@@ -160,8 +174,10 @@ def _sanitize_log_text(text: str) -> str:
     review (see ``_generate_anonymization_guide``). Rules cover the most common
     leak shapes seen in HA add-on logs:
     JWTs, bearer tokens, long hex tokens, ``key=value`` style credentials,
-    URL userinfo, IPv4 addresses with network context, and the MCP connect-URL
-    secret path (the add-on's LAN auth).
+    URL userinfo, IPv4 addresses with network context (including quoted and
+    ``*.plex.direct`` dashed forms), ``.lan`` and tailnet ``.ts.net`` hostnames,
+    Microsoft Graph calendar IDs, and the MCP connect-URL secret path (the
+    add-on's LAN auth).
     """
     # JWT tokens (header.payload.signature)
     text = re.sub(
@@ -212,6 +228,10 @@ def _sanitize_log_text(text: str) -> str:
     text = _IPV4_WITH_PORT_OR_CIDR_RE.sub("[IP]", text)
     text = _IPV4_IN_URL_RE.sub(r"\1[IP]", text)
     text = _IPV4_AFTER_KEYWORD_RE.sub(r"\1[IP]", text)
+    text = _PLEX_DIRECT_DASHED_IPV4_RE.sub("[IP]", text)
+    text = _TAILNET_HOST_RE.sub("[TAILNET_HOST]", text)
+    text = _LAN_HOST_RE.sub("[HOST]", text)
+    text = _GRAPH_CALENDAR_ID_RE.sub(r"\1[CALENDAR_ID]", text)
     # MCP connect-URL secret path — the add-on's LAN auth. Redact by the
     # configured value (catches custom paths) and the generated
     # ``/private_<token>`` convention. Only bug-report output is scrubbed here;

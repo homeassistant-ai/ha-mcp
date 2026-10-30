@@ -1259,7 +1259,7 @@ Before submitting your bug report, please review and anonymize:
 
 ### MUST ANONYMIZE (security-sensitive):
 - API tokens, passwords, secrets -> Replace with "[REDACTED]"
-- IP addresses (internal/external) -> Replace with "192.168.x.x" or "[IP]"
+- IP addresses and internal hostnames (.lan, .ts.net) -> Replace with "[IP]" or "[HOST]"
 - MAC addresses -> Replace with "[MAC]"
 - Email addresses -> Replace with "user@example.com"
 - Phone numbers -> Replace with "[PHONE]"
