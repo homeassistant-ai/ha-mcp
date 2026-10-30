@@ -167,6 +167,17 @@ async def test_new_lan_prefix_is_served_once_the_routes_refresh(
     assert seen_clients == [(_LAN, 1)]
 
 
+@pytest.mark.parametrize("proxy", ["127.0.0.1", "::1"])
+async def test_local_proxy_on_either_loopback_forwards_its_client(
+    routes: str, monkeypatch: pytest.MonkeyPatch, proxy: str
+) -> None:
+    # uvicorn's own default since 0.53, which the guard replaces in the stack.
+    monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+    forwarded = [(b"x-forwarded-for", _INTERNET.encode())]
+    _sent, seen = await _call({"routes_file": routes}, (proxy, 1), forwarded)
+    assert seen == {"client": (_INTERNET, 0)}
+
+
 async def test_default_trusted_proxy_comes_from_forwarded_allow_ips(
     routes: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

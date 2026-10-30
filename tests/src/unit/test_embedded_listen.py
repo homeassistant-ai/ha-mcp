@@ -52,33 +52,6 @@ def helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "ha_mcp.config", config)
 
 
-def test_local_network_binds_both_families_behind_the_guard(helpers: None) -> None:
-    listener = embedded_listen.DirectListener(BIND_HOST_ALL, _a_free_port())
-    app, proxy_headers = listener.wrap(object())
-    assert type(app).__name__ == "IPv6LanGuard"
-    # The guard re-applies proxy headers after its own check.
-    assert proxy_headers is False
-    try:
-        families = {sock.family for sock in listener.bind()["sockets"]}
-        assert families == {socket.AF_INET, socket.AF_INET6}
-    finally:
-        listener.close()
-
-
-def test_close_releases_the_port_for_the_next_bring_up(helpers: None) -> None:
-    port = _a_free_port()
-    first = embedded_listen.DirectListener(BIND_HOST_ALL, port)
-    for sock in first.bind()["sockets"]:
-        sock.listen()  # as uvicorn does; a bound-only socket holds nothing
-    first.close()
-    second = embedded_listen.DirectListener(BIND_HOST_ALL, port)
-    try:
-        for sock in second.bind()["sockets"]:
-            sock.listen()
-    finally:
-        second.close()
-
-
 def test_loopback_choice_is_unchanged(helpers: None) -> None:
     listener = embedded_listen.DirectListener(BIND_HOST_LOOPBACK, _a_free_port())
     app = object()

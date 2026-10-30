@@ -134,8 +134,11 @@ class IPv6LanGuard:
         trusted_proxies: str | None = None,
         routes_file: str = _ROUTES_FILE,
     ) -> None:
-        # Same default as uvicorn's own Config, which this replaces in the stack.
-        trusted = trusted_proxies or os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1")
+        # uvicorn's own Config default (since 0.53), which this replaces in the
+        # stack: a local proxy may reach the server over either loopback.
+        trusted = trusted_proxies or os.environ.get(
+            "FORWARDED_ALLOW_IPS", "127.0.0.1,::1"
+        )
         self._app = ProxyHeadersMiddleware(app, trusted_hosts=trusted)
         self._allowed = _ALWAYS_LOCAL + tuple(allowed_networks)
         self._routes_file = routes_file
