@@ -35,15 +35,11 @@ from pathlib import Path
 from typing import Any
 
 if __package__:  # imported by the unit tests
-    from .dev_addon_tree import (
-        stage_dev_addon_tree,
-    )
+    from .dev_addon_tree import stage_dev_addon_tree
     from .python_base import copy_addon_tree
     from .supervisor_logs import log_supervisor_tail
 else:  # python3 tests/haos_image_build/build_image.py
-    from dev_addon_tree import (
-        stage_dev_addon_tree,
-    )
+    from dev_addon_tree import stage_dev_addon_tree
     from python_base import copy_addon_tree
     from supervisor_logs import log_supervisor_tail
 

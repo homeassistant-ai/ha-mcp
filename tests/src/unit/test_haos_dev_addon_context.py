@@ -19,7 +19,7 @@ from tests.src import haos_runtime
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "tests" / "haos_image_build"))
 
-import build_image  # noqa: E402
+import dev_addon_tree  # noqa: E402
 
 # Copied as a tree by its own step.
 _STAGED_SEPARATELY = {"src"}
@@ -37,7 +37,7 @@ def _repo_files_the_dockerfile_copies() -> set[str]:
 
 
 @pytest.mark.parametrize(
-    "module", [build_image, haos_runtime], ids=["image bake", "per-PR refresh"]
+    "module", [dev_addon_tree, haos_runtime], ids=["image bake", "per-PR refresh"]
 )
 def test_the_staged_dev_app_context_holds_every_file_the_dockerfile_copies(
     module: object,
