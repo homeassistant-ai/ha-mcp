@@ -26,7 +26,12 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..backup_todo import back_up_items, find_item, service_message
+from ..backup_todo import (
+    back_up_items,
+    find_item,
+    service_message,
+    unbacked_removals,
+)
 from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
@@ -827,7 +832,8 @@ class TodoTools:
         completed item another client removed meanwhile. With auto-backup on,
         each item is backed up before it is removed; `warnings` names a backup
         not taken because the item could not be read or the backup could not
-        start.
+        start, and with remove_completed=True an item gone afterwards that was
+        not completed when the list was read, so was not backed up.
 
         EXAMPLES:
         - ha_remove_todo_item("todo.shopping_list", "Buy milk")
@@ -904,7 +910,8 @@ class TodoTools:
         )
         await self._todo_service("remove_completed_items", entity_id, {})
         after, read_warnings = await self._read_back(entity_id)
-        return _removed(before, after, None), warnings + read_warnings
+        warnings += unbacked_removals(before, after) + read_warnings
+        return _removed(before, after, None), warnings
 
     async def _remove_items(
         self, entity_id: str, item: str | list[str]

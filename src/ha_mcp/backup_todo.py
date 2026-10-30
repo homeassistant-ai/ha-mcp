@@ -129,6 +129,25 @@ async def back_up_items(
     return skipped
 
 
+def unbacked_removals(
+    before: list[dict[str, Any]], after: list[dict[str, Any]] | None
+) -> list[str]:
+    """Why an item gone after ``remove_completed_items`` has no backup: Core
+    picks the completed items when it runs the service, so one completed
+    after the list was read and backed up is removed without a backup. An
+    item another client deleted meanwhile is named the same way."""
+    settings = get_global_settings()
+    if after is None or not getattr(settings, "enable_auto_backup", False):
+        return []
+    kept = {i.get("uid") for i in after}
+    return [
+        f"'{i.get('summary')}' is gone from the list, but it was not completed "
+        "when the list was read, so no backup of it was taken"
+        for i in before
+        if i.get("status") != "completed" and i.get("uid") not in kept
+    ]
+
+
 def current_key(entity_id: str, config: Any) -> str:
     """The key that finds the snapshot's item now: its uid where it has one."""
     uid = config.get("uid") if isinstance(config, dict) else None

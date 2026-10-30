@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.backup_todo import unbacked_removals
 from ha_mcp.client.rest_client import HomeAssistantError
 from ha_mcp.tools.tools_todo import TodoTools
 
@@ -303,13 +304,23 @@ class _Snapshots:
         self.keys: list[str] = []
         # The list and the number of service writes when each backup was taken.
         self.seen: list[tuple[list[dict[str, Any]], int]] = []
+        # Another client's change while a backup is taken.
+        self.during: Any = None
 
     async def maybe_snapshot(self, domain: str, entity_id: str, **kwargs: Any) -> None:
         assert domain == "todo_item"
         self.keys.append(entity_id)
         self.seen.append(([dict(i) for i in self.client.items], self.client.writes))
+        if self.during:
+            self.during()
         if entity_id.endswith("::3"):
             kwargs["skip_reasons"].append("No pre-write backup of 3")
+
+
+_GONE = (
+    "'Buy milk' is gone from the list, but it was not completed when "
+    "the list was read, so no backup of it was taken"
+)
 
 
 @pytest.fixture
@@ -340,6 +351,50 @@ class TestBackups:
         got = await tools.ha_remove_todo_item(LIST, remove_completed=True)
         assert snapshots.keys == [f"{LIST}::2", f"{LIST}::3"]
         assert got["warnings"] == ["No pre-write backup of 3"]
+
+    async def test_remove_completed_names_an_item_completed_after_the_read(
+        self, tools: TodoTools, client: _FakeClient, snapshots: _Snapshots
+    ) -> None:
+        # Another client completes "Buy milk" while the backups are taken, so
+        # Core's remove_completed_items removes it too.
+        snapshots.during = lambda: client.items[0].update(status="completed")
+        got = await tools.ha_remove_todo_item(LIST, remove_completed=True)
+        assert snapshots.keys == [f"{LIST}::2", f"{LIST}::3"]
+        assert client.items == []
+        assert [i["uid"] for i in got["removed"]] == ["2", "3"]
+        assert got["warnings"] == ["No pre-write backup of 3", _GONE]
+
+    async def test_remove_completed_names_an_open_item_deleted_meanwhile(
+        self, tools: TodoTools, client: _FakeClient, snapshots: _Snapshots
+    ) -> None:
+        def delete_buy_milk() -> None:
+            client.items = [i for i in client.items if i["uid"] != "1"]
+
+        # Another client deletes the open "Buy milk" while the backups are taken.
+        snapshots.during = delete_buy_milk
+        got = await tools.ha_remove_todo_item(LIST, remove_completed=True)
+        assert [i["uid"] for i in got["removed"]] == ["2", "3"]
+        assert got["warnings"] == ["No pre-write backup of 3", _GONE]
+
+    async def test_remove_completed_names_nothing_gone_when_the_read_back_fails(
+        self, tools: TodoTools, client: _FakeClient, snapshots: _Snapshots
+    ) -> None:
+        client.read_back_fails = True
+        got = await tools.ha_remove_todo_item(LIST, remove_completed=True)
+        assert got["removed"] is None
+        assert got["warnings"][0] == "No pre-write backup of 3"
+        assert len(got["warnings"]) == 2
+        assert "could not be read back" in got["warnings"][1]
+
+    @pytest.mark.parametrize(("enabled", "count"), [(True, 1), (False, 0)])
+    def test_unbacked_removal_is_named_only_with_auto_backup_on(
+        self, enabled: bool, count: int
+    ) -> None:
+        settings = type("S", (), {"enable_auto_backup": enabled})()
+        before = [{"uid": "1", "summary": "Buy milk", "status": "needs_action"}]
+        with patch("ha_mcp.backup_todo.get_global_settings", return_value=settings):
+            assert len(unbacked_removals(before, [])) == count
+            assert unbacked_removals(before, None) == []
 
     async def test_update_backs_up_the_resolved_item(
         self, tools: TodoTools, client: _FakeClient, snapshots: _Snapshots
