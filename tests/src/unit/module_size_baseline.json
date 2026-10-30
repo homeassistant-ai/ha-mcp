@@ -1,6 +1,6 @@
 {
   "custom_components/ha_mcp_tools/__init__.py": 3619,
-  "custom_components/ha_mcp_tools/embedded_server.py": 2395,
+  "custom_components/ha_mcp_tools/embedded_server.py": 2393,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py": 1147,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py": 1314,
   "homeassistant-addon-webhook-proxy-dev/start.py": 1948,
@@ -36,7 +36,7 @@
   "src/ha_mcp/tools/tools_system.py": 1933,
   "src/ha_mcp/tools/tools_updates.py": 1083,
   "tests/addon/test_webhook_proxy.py": 7341,
-  "tests/haos_image_build/build_image.py": 2772,
+  "tests/haos_image_build/build_image.py": 2695,
   "tests/src/e2e/error_handling/test_network_errors.py": 1150,
   "tests/src/e2e/tools/test_create_custom_tool.py": 2037,
   "tests/src/e2e/tools/test_search_entities.py": 2387,
