@@ -27,7 +27,6 @@ from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 from .._version import is_running_in_addon
 from ..client.rest_client import (
     HomeAssistantAPIError,
-    HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
@@ -454,10 +453,10 @@ async def _supervisor_api_call_via_core(
             }
         )
     except HomeAssistantCommandNotSent:
+        # Nothing was sent (a token rejected on connect, say): keep the error.
         raise
     except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as exc:
-        # Reads, and a token rejected before anything was sent, keep their error.
-        if verb in {"GET", "HEAD"} or isinstance(exc.__cause__, HomeAssistantAuthError):
+        if verb in {"GET", "HEAD"}:
             raise
         # send_websocket_message re-raises a command timeout as the cause.
         timed_out = HomeAssistantCommandTimeout in {type(exc), type(exc.__cause__)}

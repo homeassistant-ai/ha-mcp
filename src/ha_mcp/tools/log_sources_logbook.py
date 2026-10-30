@@ -24,6 +24,7 @@ from typing import Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -346,7 +347,12 @@ class LogbookLogSourceMixin:
         except HomeAssistantConnectionError as exc:
             if _wrapped_timeout(exc):
                 self._raise_logbook_timeout(command["start_time"], command["end_time"])
-            self._raise_logbook_ws_required(command.get("device_ids"))
+            if isinstance(exc.__cause__, HomeAssistantAuthError):
+                # A token rejected on connect is not a WebSocket outage.
+                exception_to_structured_error(
+                    exc, context={"device_ids": command.get("device_ids")}
+                )
+            self._raise_logbook_ws_required(command.get("device_ids"), reason=str(exc))
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):
                 raise

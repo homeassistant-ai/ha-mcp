@@ -4,8 +4,8 @@ Off-host, Supervisor calls go through Core's ``supervisor/api`` WebSocket
 command, and ``send_websocket_message`` wraps every no-answer failure in a
 ``HomeAssistantConnectionError`` raised from the original. A write with no
 answer is reported as an unknown outcome, but a token rejected while obtaining
-a client means the command was never sent, so it is classified as the auth
-failure it is.
+a client means the command was never sent: that arrives as
+``HomeAssistantCommandNotSent`` and is classified as the auth failure it is.
 """
 
 import json
@@ -16,14 +16,18 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.tools_addons import _supervisor_api_call
 
 
-def _wrapped(cause: Exception) -> HomeAssistantConnectionError:
-    error = HomeAssistantConnectionError(str(cause))
+def _wrapped(
+    cause: Exception,
+    wrapper: type[HomeAssistantConnectionError] = HomeAssistantConnectionError,
+) -> HomeAssistantConnectionError:
+    error = wrapper(str(cause))
     error.__cause__ = cause
     return error
 
@@ -40,7 +44,10 @@ async def _call(monkeypatch, error: Exception, method: str, endpoint: str) -> di
 async def test_offhost_write_with_rejected_token_is_auth_not_unknown_outcome(
     monkeypatch,
 ) -> None:
-    rejected = _wrapped(HomeAssistantAuthError("WebSocket authentication failed"))
+    rejected = _wrapped(
+        HomeAssistantAuthError("WebSocket authentication failed"),
+        HomeAssistantCommandNotSent,
+    )
     payload = await _call(
         monkeypatch, rejected, "POST", "/addons/core_mosquitto/restart"
     )

@@ -7,9 +7,14 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.rest_client import HomeAssistantAuthError
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from .dashboard_read_errors import CONFIG_NOT_FOUND_CODE
-from .helpers import extract_tool_error_message, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    extract_tool_error_message,
+    raise_tool_error,
+)
 
 _MODE_SUGGESTIONS = [
     "Use a storage-mode dashboard created through the Home Assistant UI or API",
@@ -104,6 +109,25 @@ def raise_dashboard_edit_error(
             },
         )
     )
+
+
+def raise_dashboard_write_not_sent(
+    exc: Exception, url_path: str | None, action: str
+) -> NoReturn:
+    """A save that never left the process; a token rejected on connect keeps its
+    auth code instead of reading as a connection failure."""
+    if isinstance(exc.__cause__, HomeAssistantAuthError):
+        exception_to_structured_error(
+            exc,
+            context={
+                "action": action,
+                "url_path": url_path,
+                "reason": "write_not_sent",
+                "write_committed": False,
+                "post_write_verified": False,
+            },
+        )
+    raise_dashboard_edit_error(url_path, "write_not_sent", str(exc), False, action)
 
 
 def raise_dashboard_edit_fetch_error(

@@ -18,6 +18,8 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -314,6 +316,21 @@ class TestLogbookTransports:
             await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
         payload = json.loads(str(exc_info.value))
         assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert "Last error: no WS" in payload["error"]["message"]
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_device_filter_with_a_rejected_token_is_an_auth_error(
+        self,
+    ) -> None:
+        unsent = HomeAssistantCommandNotSent("WebSocket authentication failed")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        client = self._client(ws_error=unsent)
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "AUTH_INVALID_TOKEN"
         client.get_logbook.assert_not_awaited()
 
     @pytest.mark.parametrize(

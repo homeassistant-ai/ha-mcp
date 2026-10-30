@@ -16,6 +16,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import _restore_group
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
@@ -315,18 +316,26 @@ class TestServiceFailures:
         assert payload["write_outcome_unknown"] is True
         assert "ha_config_list_groups" in payload["error"]["suggestion"]
 
+    @pytest.mark.parametrize(
+        ("cause", "code"),
+        [
+            (None, "CONNECTION_FAILED"),
+            (HomeAssistantAuthError("authentication failed"), "AUTH_INVALID_TOKEN"),
+        ],
+        ids=["not_authenticated", "token_rejected_on_connect"],
+    )
     async def test_unsent_command_is_not_reported_as_possibly_applied(
-        self, tools, mock_client
+        self, tools, mock_client, cause, code
     ):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantCommandNotSent("not authenticated")
-        )
+        unsent = HomeAssistantCommandNotSent("not authenticated")
+        unsent.__cause__ = cause
+        mock_client.send_websocket_message = AsyncMock(side_effect=unsent)
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_group(object_id="lights")
 
         payload = json.loads(str(exc_info.value))
-        assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert payload["error"]["code"] == code
         assert "write_outcome_unknown" not in payload
 
     async def test_non_schema_error_carries_no_prefix_hint(self, tools, mock_client):

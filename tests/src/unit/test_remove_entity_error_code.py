@@ -8,6 +8,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
 
@@ -72,10 +73,11 @@ async def test_lost_connection_keeps_what_the_bulk_run_already_removed() -> None
 
 
 async def test_token_rejected_on_reconnect_is_reported_as_auth() -> None:
-    """The transport wraps a rejected token in a connection error; the
-    per-id error names it as an auth failure."""
+    """A token rejected on reconnect arrives as a command that was never sent,
+    raised from the auth error: the per-id error names the auth failure, and
+    the failing id is listed as not attempted too."""
     client = _make_client()
-    rejected = HomeAssistantConnectionError("WebSocket authentication failed")
+    rejected = HomeAssistantCommandNotSent("WebSocket authentication failed")
     rejected.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
     client.send_websocket_message = AsyncMock(side_effect=rejected)
     tool = _register(client)["ha_remove_entity"]
@@ -83,7 +85,7 @@ async def test_token_rejected_on_reconnect_is_reported_as_auth() -> None:
     result = await tool(entity_id=["sensor.a", "sensor.b"])
 
     assert result["errors"][0]["code"] == "AUTH_INVALID_TOKEN"
-    assert result["not_attempted"] == ["sensor.b"]
+    assert result["not_attempted"] == ["sensor.a", "sensor.b"]
 
 
 async def test_timed_out_removal_is_reported_as_a_timeout() -> None:

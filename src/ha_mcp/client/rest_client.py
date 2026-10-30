@@ -90,11 +90,12 @@ class HomeAssistantConnectionError(HomeAssistantError):
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
     """A WS command that provably never left the process.
 
-    Raised by ``HomeAssistantWebSocketClient.send_command`` ONLY at its single
-    provably-never-sent site: the entry-guard reject (socket not authenticated), where
-    nothing is transmitted. Subclass of ``HomeAssistantConnectionError`` so every
-    existing broad handler is unaffected, yet a write consumer can catch this type
-    FIRST to fall back to the legacy path safely — the write provably never happened,
+    Raised where nothing is transmitted: the entry-guard reject in
+    ``HomeAssistantWebSocketClient.send_command`` (socket not authenticated), and
+    ``send_websocket_message`` when no attempt obtained a client. Subclass of
+    ``HomeAssistantConnectionError`` so every existing broad handler is unaffected,
+    yet a write consumer can catch this type FIRST to fall back to the legacy path
+    safely — the write provably never happened,
     so a legacy first fire cannot double-apply. A ``send_json_message`` failure is NOT
     this type: ``websocket.send()`` raising does not prove the frame was untransmitted
     (bytes may already be on the socket when the close surfaces), so send_command
@@ -1955,12 +1956,11 @@ class HomeAssistantClient:
 
         max_retries = 2
         retry_delay = 0.5  # seconds
+        # Whether an earlier attempt got past acquisition, so may have sent.
+        sent_before = False
 
         for attempt in range(max_retries):
             # Whether the failure happened before a usable connection existed.
-            # Failing to obtain one is transport death whatever class the
-            # manager raises; an auth failure or the pool-lock guard's bare
-            # ``Exception`` is not a connection error; type cannot decide this.
             acquiring = True
             try:
                 # Use per-client WebSocket keyed to this client's credentials
@@ -1996,19 +1996,16 @@ class HomeAssistantClient:
                         f"retrying after {retry_delay}s: {error_str}"
                     )
                     await asyncio.sleep(retry_delay)
+                    sent_before = sent_before or not acquiring
                     continue
 
                 # Phase first, type second. Failing before a client exists is
-                # evidence about the transport whatever class was raised; an
-                # auth failure or the pool-lock guard's bare ``Exception`` is not
-                # a no-answer class, so that case cannot be decided by type.
-                # Past acquisition only the no-answer classes count:
-                # ``send_command`` deliberately re-raises the original
-                # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
-                # rather than wrapping it, to keep at-most-once semantics for
-                # write callers, so those arrive here untranslated. Anything
-                # else (a ``ValueError`` from building the message, say) is a
-                # bug rather than evidence about the connection.
+                # evidence about the transport whatever class was raised (an
+                # auth failure, the pool-lock guard's bare ``Exception``). Past
+                # acquisition only the no-answer classes count: ``send_command``
+                # re-raises the original ``ConnectionClosed`` /
+                # ``ConnectionResetError`` from the send to keep at-most-once
+                # semantics for writes; anything else is a bug, not evidence.
                 if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
                     # One error channel for "no answer came back" (#1947): the
                     # caller decides the policy, rather than every consumer
@@ -2020,6 +2017,9 @@ class HomeAssistantClient:
                     logger.error(
                         f"WebSocket transport failed ({message.get('type')}): {e}"
                     )
+                    if acquiring and not sent_before:
+                        # No attempt reached the send, so nothing was applied.
+                        raise HomeAssistantCommandNotSent(error_str) from e
                     if isinstance(e, HomeAssistantConnectionError):
                         # Already the right class — re-raise unchanged so
                         # subtypes (``HomeAssistantCommandNotSent``) and the
