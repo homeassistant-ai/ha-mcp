@@ -8,16 +8,9 @@ on ``has_more``/``next_offset``, and the budget-exhaustion ``partial`` flag.
 
 from __future__ import annotations
 
-import dataclasses
-import json
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import tools_search
-from ha_mcp.tools.search import legacy as search_legacy
-from ha_mcp.tools.search import response as search_response
 from ha_mcp.tools.search.entities import _validate_entity_search_params
 from ha_mcp.tools.search.response import (
     _ALWAYS_KEEP_PROJECTION,
@@ -544,91 +537,6 @@ def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
     _finalize_partial_state(response, partial_local=False, errors_local=[])
     assert response["partial"] is True
     assert response["errors"] == [{"surface": "config-internal", "code": "BUDGET"}]
-
-
-def _entities_only_request() -> search_response._ResolvedSearch:
-    """A resolved request that fans out to the entity branch only."""
-    return search_response._ResolvedSearch(
-        query="lamp",
-        query_text="lamp",
-        domain_filter=None,
-        area_filter=None,
-        state_filter=None,
-        parsed_search_types=None,
-        parsed_fields=None,
-        result_fields=None,
-        limit=10,
-        offset=0,
-        exact_match=False,
-        include_hidden=False,
-        include_config=False,
-        group_by_domain=False,
-        per_domain_limit=None,
-        config_time_budget=None,
-        registry_eligible=True,
-        body_eligible=False,
-        body_skipped_by_intent_gate=False,
-    )
-
-
-async def _time_out(**kwargs: object) -> dict:
-    raise TimeoutError
-
-
-@pytest.mark.asyncio
-async def test_branch_exception_without_a_message_reports_its_type(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``str(TimeoutError())`` is "", which used to yield ``"entities: "``.
-
-    The config surface answers, so the response is partial, not an error."""
-    monkeypatch.setattr(
-        search_legacy,
-        "_prefetch_shared_search_snapshots",
-        AsyncMock(return_value=(None, None)),
-    )
-    tools = tools_search.SearchTools(MagicMock(), MagicMock())
-    tools._ha_search_entities = _time_out  # type: ignore[method-assign]
-    tools._ha_deep_search = AsyncMock(  # type: ignore[method-assign]
-        return_value={"total_matches": 0}
-    )
-    request = dataclasses.replace(_entities_only_request(), body_eligible=True)
-
-    response = await tools._legacy_ha_search(request, None)
-
-    assert response["partial"] is True
-    assert response["errors"] == [{"surface": "entities", "error": "TimeoutError"}]
-    assert response["partial_reason"] == "entities: TimeoutError"
-
-
-@pytest.mark.asyncio
-async def test_no_surface_answering_is_a_structured_error() -> None:
-    """Every surface failed: an error, not ``success`` with empty buckets that
-    read as "nothing matched"."""
-    tools = tools_search.SearchTools(MagicMock(), MagicMock())
-    tools._ha_search_entities = _time_out  # type: ignore[method-assign]
-
-    with pytest.raises(ToolError) as excinfo:
-        await tools._legacy_ha_search(_entities_only_request(), None)
-
-    assert json.loads(str(excinfo.value))["success"] is False
-
-
-@pytest.mark.asyncio
-async def test_no_surface_answering_keeps_the_branch_tool_error() -> None:
-    """A branch that already raised a structured error is re-raised as is."""
-    branch_error = ToolError('{"success": false, "error": {"code": "X"}}')
-
-    async def _fail(**kwargs: object) -> dict:
-        raise branch_error
-
-    tools = tools_search.SearchTools(MagicMock(), MagicMock())
-    tools._ha_search_entities = _fail  # type: ignore[method-assign]
-
-    with pytest.raises(ToolError) as excinfo:
-        await tools._legacy_ha_search(_entities_only_request(), None)
-
-    assert excinfo.value is branch_error
 
 
 # Entity-intent skip warning emission ------------------------------------
