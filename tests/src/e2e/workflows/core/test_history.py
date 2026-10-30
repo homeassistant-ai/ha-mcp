@@ -528,25 +528,12 @@ class TestGetHistoryStatisticsSource:
             },
         )
 
-        data = parse_mcp_result(result)
+        data = assert_mcp_success(result, "Statistics for sun.sun")
 
-        # Statistics data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        # May succeed but with warnings or empty data
-        if inner_data.get("success") or "entities" in inner_data:
-            # sun.sun records no statistics, so the warning is always there,
-            # beside data and not inside it.
-            assert "warnings" not in inner_data
-            assert any(
-                "No statistics found for: sun.sun" in w for w in data["warnings"]
-            )
-            entities_data = inner_data.get("entities", [])
-            if entities_data and entities_data[0].get("count") == 0:
-                logger.info(
-                    "Entity returned 0 statistics (expected for non-numeric entity)"
-                )
-        else:
-            logger.info("Properly returned error for entity without state_class")
+        # sun.sun records no statistics, so the warning is always there,
+        # beside data and not inside it.
+        assert "warnings" not in data.get("data", data)
+        assert any("No statistics found for: sun.sun" in w for w in data["warnings"])
 
 
 @pytest.mark.core
