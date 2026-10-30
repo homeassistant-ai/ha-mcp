@@ -166,23 +166,41 @@ def test_app_with_a_specific_host_keeps_uvicorns_own_bind(
     assert "proxy_headers" not in seen["uvicorn_config"]
 
 
-def test_a_failed_family_releases_the_one_already_bound() -> None:
+def test_a_failed_family_releases_the_one_already_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _IPv6Refused(listen_sockets._ListenSocket):
+        def bind(self, address: Any) -> None:
+            if self.family == socket.AF_INET6:
+                raise OSError(errno.EACCES, "Permission denied")
+            super().bind(address)
+
+    monkeypatch.setattr(listen_sockets, "_ListenSocket", _IPv6Refused)
+    port = _a_free_port()
+    with pytest.raises(OSError):
+        listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
+    # The IPv4 socket bound before IPv6 failed must be closed again: a plain
+    # bind on its loopback succeeds only then.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", port))
+
+
+def test_port_held_on_ipv6_only_keeps_the_ipv4_listener(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Before IPv6 was added the server bound IPv4 alone; another process
+    # holding the port on IPv6 must not stop it from starting.
     _require_ipv6_loopback()
-    order = [
-        info[0]
-        for info in socket.getaddrinfo(
-            None, 0, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE
-        )
-    ]
-    first, second = order[0], order[1]
-    loopback = {socket.AF_INET: "127.0.0.1", socket.AF_INET6: "::1"}
-    with socket.socket(second, socket.SOCK_STREAM) as taken:
-        taken.bind((loopback[second], 0))
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as taken:
+        taken.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        taken.bind(("::1", 0))
         taken.listen()
         port = taken.getsockname()[1]
-        with pytest.raises(OSError):
-            listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
-        # The family that bound before the other failed must be closed again:
-        # a plain bind on its loopback succeeds only then.
-        with socket.socket(first, socket.SOCK_STREAM) as probe:
-            probe.bind((loopback[first], port))
+        sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
+    assert sockets is not None
+    try:
+        assert [sock.family for sock in sockets] == [socket.AF_INET]
+        assert "already in use on IPv6" in caplog.text
+    finally:
+        for sock in sockets:
+            sock.close()

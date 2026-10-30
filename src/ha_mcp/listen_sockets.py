@@ -15,6 +15,8 @@ import logging
 import socket
 from collections.abc import Callable
 
+logger = logging.getLogger(__name__)
+
 ALL_INTERFACES_V4 = "0.0.0.0"
 
 
@@ -23,8 +25,9 @@ def wildcard_listen_sockets(host: str, port: int) -> list[_ListenSocket] | None:
 
     Returns ``None`` for any other host, which uvicorn then binds itself. Like
     asyncio's ``create_server(host=None)``, a family the machine has disabled is
-    skipped; any other bind error (such as the port being in use) is raised.
-    Raises ``OSError`` too when no family can be bound.
+    skipped. IPv6 is also skipped, with a warning, when another process holds
+    the port there while IPv4 bound. Any other bind error (such as the port
+    being in use on IPv4) is raised, and so is ``OSError`` when no family binds.
     """
     if host != ALL_INTERFACES_V4:
         return None
@@ -44,11 +47,10 @@ def wildcard_listen_sockets(host: str, port: int) -> list[_ListenSocket] | None:
             try:
                 sock.bind(address)
             except OSError as err:
-                if family == socket.AF_INET6 and err.errno == errno.EADDRNOTAVAIL:
-                    sockets.remove(sock)
-                    sock.close()
-                    continue
-                raise
+                if not _ipv6_bind_skippable(err, family, sockets, port):
+                    raise
+                sockets.remove(sock)
+                sock.close()
     except BaseException:
         for opened in sockets:
             opened.close()
@@ -56,6 +58,24 @@ def wildcard_listen_sockets(host: str, port: int) -> list[_ListenSocket] | None:
     if not sockets:
         raise OSError(f"No address family could bind port {port}")
     return sockets
+
+
+def _ipv6_bind_skippable(
+    err: OSError, family: int, sockets: list[_ListenSocket], port: int
+) -> bool:
+    """Return True when a failed IPv6 bind should leave the server on IPv4."""
+    if family != socket.AF_INET6:
+        return False
+    if err.errno == errno.EADDRNOTAVAIL:
+        return True  # IPv6 disabled with sysctl
+    # Another process holding the port on IPv6 only must not stop the IPv4
+    # listener the server had before IPv6 was added.
+    if err.errno == errno.EADDRINUSE and any(
+        sock.family == socket.AF_INET for sock in sockets
+    ):
+        logger.warning("Port %d is already in use on IPv6; serving IPv4 only", port)
+        return True
+    return False
 
 
 def announce_when_listening(sockets: list[_ListenSocket], host: str, port: int) -> None:

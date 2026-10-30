@@ -11,6 +11,7 @@ usage: stage_app_repo.py <out dir> <version>
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -22,14 +23,18 @@ from dev_addon_tree import stage_dev_addon_tree  # noqa: E402
 # Distinct from the image's local app (local_ha_mcp_dev), so both can be
 # installed; only one may run at a time, since both bind port 9583.
 SLUG = "ha_mcp_branch"
+MARKER = "name: ha-mcp branch build\n"
 
 
 def _clear(out: Path) -> None:
     """Empty a previous staging of ``out``, keeping its ``.git``."""
     leftovers = [child for child in out.iterdir() if child.name != ".git"]
-    if leftovers and not (out / "repository.yaml").is_file():
+    manifest = out / "repository.yaml"
+    if leftovers and not (
+        manifest.is_file() and manifest.read_text().startswith(MARKER)
+    ):
         sys.exit(
-            f"{out} is not an earlier staging (no repository.yaml); refusing to empty it"
+            f"{out} is not an earlier staging of this script; refusing to empty it"
         )
     for child in leftovers:
         if child.is_dir():
@@ -42,11 +47,15 @@ def main() -> None:
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     out, version = Path(sys.argv[1]).resolve(), sys.argv[2]
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]*", version):
+        sys.exit(f"{version!r} is not a version (use e.g. 9.1.0-test.1)")
+    if out.is_relative_to(REPO_ROOT):
+        sys.exit(f"{out} is inside the checkout it copies; stage outside it")
     out.mkdir(parents=True, exist_ok=True)
     _clear(out)
     (out / "repository.yaml").write_text(
-        "name: ha-mcp branch build\nurl: https://github.com/homeassistant-ai/ha-mcp\n"
-        "maintainer: dev env\n"
+        MARKER
+        + "url: https://github.com/homeassistant-ai/ha-mcp\nmaintainer: dev env\n"
     )
     app = out / SLUG
     stage_dev_addon_tree(REPO_ROOT, app)
