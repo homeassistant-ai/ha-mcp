@@ -888,7 +888,7 @@
     },
     "ha_set_todo_item": {
       "title": "設定待辦事項",
-      "description": "在 Home Assistant 中建立或更新待辦事項。"
+      "description": "在 Home Assistant 中建立、更新或重新排序待辦事項項目。"
     },
     "ha_set_zone": {
       "title": "設定區域",

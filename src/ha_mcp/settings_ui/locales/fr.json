@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Supprimer un élément de tâche",
-      "description": "Supprime une tâche d'une liste de tâches Home Assistant."
+      "description": "Supprimer des éléments d'une liste de tâches Home Assistant."
     },
     "ha_remove_zone": {
       "title": "Supprimer la zone",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "Créer/mettre à jour un élément de tâche",
-      "description": "Crée ou met à jour une tâche dans une liste de tâches."
+      "description": "Créer, mettre à jour ou réordonner un élément de liste de tâches dans Home Assistant."
     },
     "ha_set_zone": {
       "title": "Créer/mettre à jour la zone",

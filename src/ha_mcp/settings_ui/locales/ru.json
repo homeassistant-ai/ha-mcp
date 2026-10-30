@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Удалить задачу",
-      "description": "Удалить задачу из списка дел Home Assistant."
+      "description": "Удаление элементов из списка задач Home Assistant."
     },
     "ha_remove_zone": {
       "title": "Удалить зону",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "Создать или изменить задачу",
-      "description": "Создать новую или обновить задачу в списке дел."
+      "description": "Создание, обновление или изменение порядка элементов списка задач в Home Assistant."
     },
     "ha_set_zone": {
       "title": "Создать или изменить зону",

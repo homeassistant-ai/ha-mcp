@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "To-do-Element entfernen",
-      "description": "Entfernt eine Aufgabe aus einer Home-Assistant-To-do-Liste."
+      "description": "Entferne Einträge aus einer Home Assistant-Todo-Liste."
     },
     "ha_remove_zone": {
       "title": "Zone entfernen",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "To-do-Element erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Aufgabe in einer To-do-Liste."
+      "description": "Erstelle, aktualisiere oder sortiere einen Todo-Eintrag in Home Assistant neu."
     },
     "ha_set_zone": {
       "title": "Zone erstellen/aktualisieren",

@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Tapşırığı çıxar",
-      "description": "Home Assistant tapşırıq siyahısından tapşırığı çıxarın."
+      "description": "Home Assistant-ın etməkli siyahısından elementləri silin."
     },
     "ha_remove_zone": {
       "title": "Zonanı çıxar",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "Tapşırığı təyin et",
-      "description": "Home Assistant-da tapşırıq yaradın və ya yeniləyin."
+      "description": "Home Assistant-da etməkli siyahısı elementini yaradın, yeniləyin və ya yenidən sıralayın."
     },
     "ha_set_zone": {
       "title": "Zonanı təyin et",

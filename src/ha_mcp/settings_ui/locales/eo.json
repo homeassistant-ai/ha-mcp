@@ -852,7 +852,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Forigi Farendaĵon",
-      "description": "Forigi eron el farendaĵa listo de Home Assistant."
+      "description": "Forigi erojn el taskolisto de Home Assistant."
     },
     "ha_remove_zone": {
       "title": "Forigi Zonon",
@@ -888,7 +888,7 @@
     },
     "ha_set_todo_item": {
       "title": "Agordi Farendaĵon",
-      "description": "Krei aŭ ĝisdatigi farendaĵon en Home Assistant."
+      "description": "Krei, ĝisdatigi aŭ reordigi taskeron en Home Assistant."
     },
     "ha_set_zone": {
       "title": "Agordi Zonon",

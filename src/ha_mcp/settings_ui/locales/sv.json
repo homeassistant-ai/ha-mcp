@@ -852,7 +852,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Ta bort att-göra-objekt",
-      "description": "Ta bort ett objekt från en Home Assistant-att-göra-lista."
+      "description": "Ta bort objekt från en att göra-lista i Home Assistant."
     },
     "ha_remove_zone": {
       "title": "Ta bort zon",
@@ -888,7 +888,7 @@
     },
     "ha_set_todo_item": {
       "title": "Ställ in att-göra-objekt",
-      "description": "Skapa eller uppdatera ett att-göra-objekt i Home Assistant."
+      "description": "Skapa, uppdatera eller ändra ordning på ett att göra-objekt i Home Assistant."
     },
     "ha_set_zone": {
       "title": "Ställ in zon",

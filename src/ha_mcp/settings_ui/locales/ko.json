@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "할 일 항목 설정",
-      "description": "Home Assistant에서 할 일 항목을 만들거나 수정합니다."
+      "description": "Home Assistant의 할 일 항목을 생성, 업데이트 또는 재정렬합니다."
     },
     "ha_set_zone": {
       "title": "구역 생성·수정",

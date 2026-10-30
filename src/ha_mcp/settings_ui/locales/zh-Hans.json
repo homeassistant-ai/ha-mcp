@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "删除待办条目",
-      "description": "从 Home Assistant 待办清单中删除条目。"
+      "description": "从 Home Assistant 待办事项列表中删除项目。"
     },
     "ha_remove_zone": {
       "title": "删除区域",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "设置待办条目",
-      "description": "在 Home Assistant 中创建或更新待办条目。"
+      "description": "在 Home Assistant 中创建、更新或重新排序待办事项。"
     },
     "ha_set_zone": {
       "title": "设置区域",

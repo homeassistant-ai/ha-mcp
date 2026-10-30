@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Rimuovi una voce dalle cose da fare",
-      "description": "Rimuove una voce da una lista delle cose da fare di Home Assistant."
+      "description": "Rimuovi elementi da un elenco di cose da fare di Home Assistant."
     },
     "ha_remove_zone": {
       "title": "Rimuovi una zona",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "Imposta una voce delle cose da fare",
-      "description": "Crea o aggiorna una voce delle cose da fare in Home Assistant."
+      "description": "Crea, aggiorna o riordina un elemento di un elenco di cose da fare in Home Assistant."
     },
     "ha_set_zone": {
       "title": "Imposta una zona",

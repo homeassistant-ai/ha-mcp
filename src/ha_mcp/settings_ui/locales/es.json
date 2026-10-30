@@ -883,7 +883,7 @@
     },
     "ha_remove_todo_item": {
       "title": "Eliminar tarea",
-      "description": "Elimina un elemento de una lista de tareas de Home Assistant."
+      "description": "Eliminar elementos de una lista de tareas pendientes de Home Assistant."
     },
     "ha_remove_zone": {
       "title": "Eliminar zona",
@@ -919,7 +919,7 @@
     },
     "ha_set_todo_item": {
       "title": "Definir tarea",
-      "description": "Crea o actualiza un elemento de una lista de tareas de Home Assistant."
+      "description": "Crear, actualizar o reordenar un elemento de una lista de tareas pendientes en Home Assistant."
     },
     "ha_set_zone": {
       "title": "Crear o actualizar zona",
