@@ -114,8 +114,8 @@ def raise_dashboard_edit_error(
 def raise_dashboard_write_not_sent(
     exc: Exception, url_path: str | None, action: str
 ) -> NoReturn:
-    """A save that never left the process; a token rejected on connect keeps its
-    auth code instead of reading as a connection failure."""
+    """Raise for a save that never left the process; a token rejected on connect
+    (an auth ``__cause__``) reports its AUTH_* code instead of CONNECTION_FAILED."""
     if isinstance(exc.__cause__, HomeAssistantAuthError):
         exception_to_structured_error(
             exc,

@@ -300,9 +300,9 @@ class LogbookLogSourceMixin:
 
         ``None`` means the component is absent, downgraded (``unknown_command``
         drops the cached capability) or the transport failed before Home
-        Assistant saw the request. Core's own rejections surface unchanged, and
-        a timeout surfaces instead of falling back — the recorder query is
-        still running inside Home Assistant.
+        Assistant saw the request. Core's own rejections surface unchanged; a
+        timeout (the recorder query still runs inside Home Assistant) and a
+        rejected token surface instead of falling back.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
@@ -315,6 +315,9 @@ class LogbookLogSourceMixin:
         except HomeAssistantConnectionError as exc:
             if _wrapped_timeout(exc):
                 self._raise_logbook_timeout(command["start_time"], command["end_time"])
+            if isinstance(exc.__cause__, HomeAssistantAuthError):
+                # The fallbacks would resend the rejected token.
+                exception_to_structured_error(exc)
             return None
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):

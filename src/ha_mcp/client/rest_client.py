@@ -90,17 +90,17 @@ class HomeAssistantConnectionError(HomeAssistantError):
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
     """A WS command that provably never left the process.
 
-    Raised where nothing is transmitted: the entry-guard reject in
-    ``HomeAssistantWebSocketClient.send_command`` (socket not authenticated), and
-    ``send_websocket_message`` when no attempt obtained a client. Subclass of
-    ``HomeAssistantConnectionError`` so every existing broad handler is unaffected,
-    yet a write consumer can catch this type FIRST to fall back to the legacy path
-    safely — the write provably never happened,
-    so a legacy first fire cannot double-apply. A ``send_json_message`` failure is NOT
-    this type: ``websocket.send()`` raising does not prove the frame was untransmitted
-    (bytes may already be on the socket when the close surfaces), so send_command
-    re-raises the original exception and the consumer treats it as ambiguous. A
-    post-send socket close (mid-await) likewise raises a plain
+    Raised by ``HomeAssistantWebSocketClient.send_command``'s entry guard (socket not
+    authenticated) and by ``send_websocket_message`` when no attempt obtained a client
+    (raised from the acquisition error, so a rejected token survives as ``__cause__``).
+    A subclass of ``HomeAssistantConnectionError``, so broad handlers are unaffected,
+    yet a write consumer can catch it FIRST: the write provably never happened, so a
+    legacy first fire cannot double-apply. Check ``__cause__`` before such a fallback:
+    resending a rejected token over REST adds a 401 toward Home Assistant's IP ban. A
+    ``send_json_message`` failure is NOT this type: ``websocket.send()`` raising does
+    not prove the frame was untransmitted (bytes may already be on the socket when the
+    close surfaces), so send_command re-raises the original exception and the consumer
+    treats it as ambiguous. A post-send socket close (mid-await) likewise raises a plain
     ``HomeAssistantConnectionError`` (the close handler sets it on the pending future),
     so type alone distinguishes never-sent from sent-then-dropped/ambiguous.
     """
@@ -2000,30 +2000,29 @@ class HomeAssistantClient:
                     continue
 
                 # Phase first, type second. Failing before a client exists is
-                # evidence about the transport whatever class was raised (an
-                # auth failure, the pool-lock guard's bare ``Exception``). Past
-                # acquisition only the no-answer classes count: ``send_command``
+                # transport evidence whatever was raised: an auth failure or the
+                # pool-lock guard's bare ``Exception`` is no no-answer class.
+                # Past acquisition only those classes count (``send_command``
                 # re-raises the original ``ConnectionClosed`` /
-                # ``ConnectionResetError`` from the send to keep at-most-once
-                # semantics for writes; anything else is a bug, not evidence.
+                # ``ConnectionResetError`` to keep writes at-most-once); anything
+                # else is Home Assistant's own answer or a local bug.
                 if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
                     # One error channel for "no answer came back" (#1947): the
-                    # caller decides the policy, rather than every consumer
-                    # having to notice a marker on an otherwise ordinary
-                    # failure envelope. Callers that legitimately continue on a
-                    # missing answer catch this and say in ``warnings`` what
-                    # they skipped; callers whose output would read as a
-                    # negative finding let it propagate.
+                    # caller decides the policy. Callers that legitimately continue
+                    # on a missing answer catch this and say in ``warnings`` what
+                    # they skipped; callers whose output would read as a negative
+                    # finding let it propagate.
                     logger.error(
                         f"WebSocket transport failed ({message.get('type')}): {e}"
                     )
                     if acquiring and not sent_before:
-                        # No attempt reached the send, so nothing was applied.
+                        # No attempt obtained a client, so nothing was sent.
                         raise HomeAssistantCommandNotSent(error_str) from e
-                    if isinstance(e, HomeAssistantConnectionError):
-                        # Already the right class — re-raise unchanged so
-                        # subtypes (``HomeAssistantCommandNotSent``) and the
-                        # original traceback survive.
+                    if isinstance(e, HomeAssistantConnectionError) and not (
+                        sent_before and isinstance(e, HomeAssistantCommandNotSent)
+                    ):
+                        # Re-raised unchanged so subtypes and the traceback
+                        # survive; not "never sent" once an attempt may have sent.
                         raise
                     raise HomeAssistantConnectionError(error_str) from e
 

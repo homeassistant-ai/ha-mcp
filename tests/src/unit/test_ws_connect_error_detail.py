@@ -315,15 +315,12 @@ class TestBackupCaptureConnect:
             HomeAssistantAuthError("Invalid token") if auth else None
         )
         client = MagicMock(base_url="http://supervisor/core", token="t")
+        expected = HomeAssistantAuthError if auth else HomeAssistantConnectionError
 
         with (
             patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake),
-            pytest.raises(
-                (HomeAssistantConnectionError, HomeAssistantAuthError)
-            ) as caught,
+            pytest.raises(expected),
         ):
             await backup_manager._ws_send(
                 client, {"type": "config/entity_registry/list"}
             )
-
-        assert isinstance(caught.value, HomeAssistantAuthError) is auth

@@ -1,4 +1,5 @@
-"""A dashboard save that never left the process keeps the cause's error code."""
+"""A dashboard save that never left the process reports an auth cause as AUTH_*,
+anything else as a connection failure."""
 
 import json
 from unittest.mock import AsyncMock

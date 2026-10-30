@@ -23,6 +23,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantClient,
+    HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.config_helpers.registry import validate_registry_ids
@@ -464,11 +465,11 @@ class TestLookupFailurePreservesClassification:
     """
 
     async def test_auth_cause_chain_not_masked_as_connection_failed(self):
-        """The transport wrap re-raises acquisition failures as
-        HomeAssistantConnectionError ``from`` the original — the auth type
-        survives only as ``__cause__``, and that is the shape the client
-        actually produces."""
-        wrapped = HomeAssistantConnectionError("WebSocket transport failed")
+        """The transport wrap re-raises a first-attempt acquisition failure as
+        HomeAssistantCommandNotSent (a HomeAssistantConnectionError) ``from``
+        the original — the auth type survives only as ``__cause__``, and that
+        is the shape the client actually produces."""
+        wrapped = HomeAssistantCommandNotSent("WebSocket transport failed")
         wrapped.__cause__ = HomeAssistantAuthError("Invalid token")
         client = MagicMock()
         client.send_websocket_message = AsyncMock(side_effect=wrapped)
@@ -482,7 +483,7 @@ class TestLookupFailurePreservesClassification:
 
     async def test_auth_during_acquisition_classifies_through_real_transport(self):
         """Pin the full chain the review traced: the manager's auth raise ->
-        the acquisition wrap (HomeAssistantConnectionError ``from e``) ->
+        the acquisition wrap (HomeAssistantCommandNotSent ``from e``) ->
         fail-closed cause-chain discrimination. Drives the REAL
         ``send_websocket_message``, not a mocked shape."""
         # verify_ssl passed explicitly so __init__ never reads the real

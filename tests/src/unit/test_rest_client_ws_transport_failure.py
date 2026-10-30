@@ -175,7 +175,7 @@ class TestNoAnswerRaises:
         has untyped exits — ``WebSocketManager`` guards its pool lock with a
         bare ``Exception("Lock not initialized")`` — and a caller cannot read a
         result it never got regardless of how the manager chose to signal that.
-        The untyped case is what fails if the phase check is ever dropped in
+        The untyped and auth cases are what fail if the phase check is ever dropped in
         favour of the type check alone. No client means nothing was sent, so it
         is ``HomeAssistantCommandNotSent``, raised from the original so a
         rejected token keeps its auth cause."""
@@ -198,7 +198,7 @@ class TestNoAnswerRaises:
         expect_not_sent: bool,
     ) -> None:
         """A 403 retry whose second attempt cannot obtain a client is only
-        "never sent" when the first attempt failed before sending too."""
+        "never sent" when the first attempt also failed to obtain one."""
         forbidden = HomeAssistantCommandError("403 Forbidden")
         ws_client = MagicMock()
         ws_client.send_command = AsyncMock(side_effect=forbidden)
@@ -215,6 +215,29 @@ class TestNoAnswerRaises:
 
         assert isinstance(excinfo.value, HomeAssistantCommandNotSent) is expect_not_sent
         assert excinfo.value.__cause__ is rejected
+
+    @pytest.mark.asyncio
+    async def test_entry_guard_after_a_sent_attempt_is_not_never_sent(
+        self, client: HomeAssistantClient, no_retry_sleep: Any
+    ) -> None:
+        """The send_command entry guard on the retry proves nothing about the
+        first attempt, which got a client and may have sent."""
+        guard = HomeAssistantCommandNotSent("WebSocket not authenticated")
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            side_effect=[HomeAssistantCommandError("403 Forbidden"), guard]
+        )
+        with (
+            patch(
+                "ha_mcp.client.websocket_client.get_websocket_client",
+                new=AsyncMock(return_value=ws_client),
+            ),
+            pytest.raises(HomeAssistantConnectionError) as excinfo,
+        ):
+            await client.send_websocket_message({"type": "config_entries/get"})
+
+        assert not isinstance(excinfo.value, HomeAssistantCommandNotSent)
+        assert excinfo.value.__cause__ is guard
 
     @pytest.mark.asyncio
     async def test_403_transport_death_raises_after_retries(

@@ -55,6 +55,19 @@ async def test_offhost_write_with_rejected_token_is_auth_not_unknown_outcome(
     assert "outcome" not in payload
 
 
+async def test_offhost_write_rejected_after_a_sent_attempt_is_unknown_outcome(
+    monkeypatch,
+) -> None:
+    # A 403 retry after an attempt that got a client keeps a plain connection
+    # error even when the retry's connect is rejected: the first may have sent.
+    rejected = _wrapped(HomeAssistantAuthError("WebSocket authentication failed"))
+    payload = await _call(
+        monkeypatch, rejected, "POST", "/addons/core_mosquitto/restart"
+    )
+    assert payload["outcome"] == "unknown"
+    assert "WebSocket authentication failed" in payload["error"]["message"]
+
+
 async def test_offhost_write_timed_out_through_the_wrap_is_a_timeout(
     monkeypatch,
 ) -> None:

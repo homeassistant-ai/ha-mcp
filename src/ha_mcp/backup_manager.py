@@ -2022,8 +2022,8 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         client.base_url, client.token, verify_ssl=client.verify_ssl
     )
     if error or ws_client is None:
-        # ``error`` is a structured-error envelope (message under error.error
-        # or, flat, under error.message).
+        # ``error`` is get_connected_ws_client's nested envelope; the flat
+        # ``error["message"]`` read is a defensive fallback.
         if isinstance(error, dict):
             err_obj = error.get("error", error)
             msg = (
@@ -2032,7 +2032,7 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         else:
             msg = "WS connect failed"
         # Typed so ``_CAPTURE_TRANSIENT_ERRORS`` catches it (a bare ``RuntimeError``
-        # would break the best-effort wrapped write); a rejected token stays auth.
+        # would break the best-effort write); a rejected token reports AUTH_*.
         auth = str(get_error_code(error or {})).startswith("AUTH_")
         raise (HomeAssistantAuthError if auth else HomeAssistantConnectionError)(msg)
     try:
