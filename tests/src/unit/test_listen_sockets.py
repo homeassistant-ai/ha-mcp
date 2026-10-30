@@ -169,6 +169,8 @@ def test_app_with_a_specific_host_keeps_uvicorns_own_bind(
 def test_a_failed_family_releases_the_one_already_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _require_ipv6_loopback()
+
     class _IPv6Refused(listen_sockets._ListenSocket):
         def bind(self, address: Any) -> None:
             if self.family == socket.AF_INET6:

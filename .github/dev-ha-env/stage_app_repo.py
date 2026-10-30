@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,21 +44,13 @@ def _clear(out: Path) -> None:
             child.unlink()
 
 
-def main() -> None:
-    if len(sys.argv) != 3:
-        sys.exit(__doc__)
-    out, version = Path(sys.argv[1]).resolve(), sys.argv[2]
-    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]*", version):
-        sys.exit(f"{version!r} is not a version (use e.g. 9.1.0-test.1)")
-    if out.is_relative_to(REPO_ROOT):
-        sys.exit(f"{out} is inside the checkout it copies; stage outside it")
-    out.mkdir(parents=True, exist_ok=True)
-    _clear(out)
-    (out / "repository.yaml").write_text(
+def _stage(staging: Path, version: str) -> None:
+    """Write the app repository for ``version`` into the empty ``staging``."""
+    (staging / "repository.yaml").write_text(
         MARKER
         + "url: https://github.com/homeassistant-ai/ha-mcp\nmaintainer: dev env\n"
     )
-    app = out / SLUG
+    app = staging / SLUG
     stage_dev_addon_tree(REPO_ROOT, app)
     config = app / "config.yaml"
     replacements = {
@@ -72,7 +65,25 @@ def main() -> None:
     if replacements:
         sys.exit(f"{config} has no top-level {', '.join(replacements)} line to set")
     config.write_text("".join(lines))
-    print(f"Staged {app} at version {version}")
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        sys.exit(__doc__)
+    out, version = Path(sys.argv[1]).resolve(), sys.argv[2]
+    # Also a Docker image tag: Supervisor builds the app under its version.
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._-]*", version):
+        sys.exit(f"{version!r} is not a version (use e.g. 9.1.0-test.1)")
+    if out.is_relative_to(REPO_ROOT):
+        sys.exit(f"{out} is inside the checkout it copies; stage outside it")
+    out.mkdir(parents=True, exist_ok=True)
+    # Build first, so a failed staging leaves the previous one in place.
+    with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
+        _stage(Path(tmp), version)
+        _clear(out)
+        for child in Path(tmp).iterdir():
+            shutil.move(child, out / child.name)
+    print(f"Staged {out / SLUG} at version {version}")
 
 
 if __name__ == "__main__":
