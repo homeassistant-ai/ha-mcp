@@ -273,7 +273,7 @@ class TestHelperSurfacesReason:
         assert "MagicMock" not in blob
 
     @pytest.mark.asyncio
-    async def test_helper_reports_a_rejected_token_as_auth(self):
+    async def test_helper_reports_a_rejected_token_as_auth(self) -> None:
         """A connect that failed on a rejected token is an auth error, not
         a connection error, and still carries the reason."""
         from ha_mcp.client.rest_client import HomeAssistantAuthError
