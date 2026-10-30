@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import socket
 import sys
@@ -68,6 +69,40 @@ def test_port_in_use_is_reported_not_skipped() -> None:
         taken.listen()
         with pytest.raises(OSError):
             listen_sockets.wildcard_listen_sockets("0.0.0.0", taken.getsockname()[1])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["socket", "bind"],
+    ids=["ipv6-unsupported", "ipv6-address-unavailable"],
+)
+def test_machine_without_ipv6_still_serves_ipv4(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    real_socket = socket.socket
+
+    class _NoIPv6Socket(real_socket):
+        def __init__(self, family: int = -1, *args: Any, **kwargs: Any) -> None:
+            if failure == "socket" and family == socket.AF_INET6:
+                raise OSError(errno.EAFNOSUPPORT, "Address family not supported")
+            super().__init__(family, *args, **kwargs)
+
+        def bind(self, address: Any) -> None:
+            if failure == "bind" and self.family == socket.AF_INET6:
+                raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
+            super().bind(address)
+
+    monkeypatch.setattr(listen_sockets.socket, "socket", _NoIPv6Socket)
+    port = _free_port()
+    sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
+    assert sockets is not None
+    try:
+        assert [sock.family for sock in sockets] == [socket.AF_INET]
+        sockets[0].listen()
+        assert _connects("127.0.0.1", port)
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 def test_specific_host_is_left_to_uvicorn() -> None:
