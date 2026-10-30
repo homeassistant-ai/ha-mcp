@@ -60,8 +60,8 @@ def on_link_ipv6_networks(
     """Return the IPv6 networks the host reaches directly, from the kernel routes.
 
     These are the local networks: the LAN prefix even when the host's own
-    address is a DHCPv6 /128, any docker bridge, never the default route or a
-    reject route. An unreadable table yields none, so the guard fails closed.
+    address is a DHCPv6 /128, any docker bridge; never the default route, a
+    reject route, or the loopback device's own-address routes. An unreadable table yields none, so the guard fails closed.
     """
     try:
         with open(routes_file, encoding="ascii") as fh:
@@ -73,10 +73,17 @@ def on_link_ipv6_networks(
         fields = line.split()
         if len(fields) < 10:
             continue
-        dest, plen, next_hop, flags = fields[0], fields[1], fields[4], fields[8]
+        dest, plen, next_hop, flags, dev = (
+            fields[0],
+            fields[1],
+            fields[4],
+            fields[8],
+            fields[9],
+        )
         prefix_len, route_flags = int(plen, 16), int(flags, 16)
         if (
-            prefix_len == 0
+            dev == "lo"  # the host's own addresses, not a network it reaches
+            or prefix_len == 0
             or int(next_hop, 16) != 0
             or not route_flags & _RTF_UP
             or route_flags & (_RTF_GATEWAY | _RTF_REJECT)
