@@ -54,7 +54,6 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
-    BIND_HOST_ALL,
     DATA_LAST_PIP_SPEC,
     DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
@@ -1601,7 +1600,7 @@ class EmbeddedServerManager:
         app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
         config = uvicorn.Config(
             app,
-            host=_listen_host(self._bind_host),
+            host=self._bind_host,
             port=self._port,
             timeout_graceful_shutdown=2,
             lifespan="on",
@@ -1635,7 +1634,9 @@ class EmbeddedServerManager:
                     )
                     return
                 stop_task = asyncio.create_task(stop_event.wait())
-                serve_task = asyncio.create_task(uv_server.serve())
+                serve_task = asyncio.create_task(
+                    uv_server.serve(**self._listen_kwargs())
+                )
                 done, _pending = await asyncio.wait(
                     {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
                 )
@@ -1732,6 +1733,20 @@ class EmbeddedServerManager:
         await self.async_stop()
         raise EmbeddedServerError(failure)
 
+    def _listen_kwargs(self) -> dict[str, Any]:
+        """Return uvicorn ``serve()`` kwargs that widen "Local network" to IPv6.
+
+        "Local network" binds ``0.0.0.0``, which accepts IPv4 clients only
+        (#2915); ha_mcp's helper binds every address family instead. A bundled
+        ha-mcp too old to ship the helper keeps the IPv4-only bind.
+        """
+        try:
+            from ha_mcp.listen_sockets import wildcard_listen_sockets
+        except ImportError:
+            return {}
+        sockets = wildcard_listen_sockets(self._bind_host, self._port)
+        return {} if sockets is None else {"sockets": sockets}
+
     async def _async_probe_port(self) -> bool:
         """Return True if a loopback TCP connection to the server port succeeds.
 
@@ -1749,16 +1764,6 @@ class EmbeddedServerManager:
         with suppress(OSError, TimeoutError):
             await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
         return True
-
-
-def _listen_host(bind_host: str) -> str:
-    """Map the stored bind-host option to the host uvicorn listens on.
-
-    "Local network" is stored as ``0.0.0.0``, which accepts IPv4 only (#2915).
-    An empty host makes asyncio open one listener per address family, as Home
-    Assistant's own HTTP server does, so IPv6 clients connect too.
-    """
-    return "" if bind_host == BIND_HOST_ALL else bind_host
 
 
 # Worker threads that may still be executing their ha_mcp imports. Purging

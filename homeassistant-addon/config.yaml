@@ -12,8 +12,7 @@ init: false
 startup: application
 boot: manual
 # Expose the web Settings UI via Supervisor ingress (the "Open Web UI" button).
-# start.py mounts the settings routes for the ingress proxy and listens on all
-# IPv4 and IPv6 addresses;
+# start.py mounts the settings routes for the ingress proxy and binds 0.0.0.0;
 # this declaration is what makes Supervisor render the button and proxy to it.
 # ingress_stream keeps the proxy streaming responses (required for the
 # streamable-HTTP MCP transport / settings UI flush behaviour).

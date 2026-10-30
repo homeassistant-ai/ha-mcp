@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlparse
@@ -25,7 +26,6 @@ from urllib.parse import urlparse
 import pytest
 
 from ._embedded_stubs import install
-from ._listener_families import reachable_loopbacks, require_ipv6_loopback
 
 # Install stubs + put the component package on sys.path before importing the
 # integration modules below. Also an isort barrier so the imports below are never
@@ -220,16 +220,59 @@ class TestConstruction:
 
 
 class TestListenFamilies:
-    """Issue #2915: "Local network" listened on IPv4 only."""
+    """Issue #2915: "Local network" accepted IPv4 clients only."""
 
-    async def test_local_network_accepts_ipv6_clients(self):
-        require_ipv6_loopback()
-        host = es._listen_host(BIND_HOST_ALL)
-        assert await reachable_loopbacks(host) == {"127.0.0.1", "::1"}
+    @pytest.fixture
+    def helper(self, monkeypatch):
+        import importlib.util
+        import socket
 
-    async def test_loopback_choice_stays_off_other_families(self):
-        host = es._listen_host(BIND_HOST_LOOPBACK)
-        assert await reachable_loopbacks(host) == {"127.0.0.1"}
+        path = Path(__file__).parents[3] / "src/ha_mcp/listen_sockets.py"
+        spec = importlib.util.spec_from_file_location("listen_sockets_es", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", module)
+        try:
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+                probe.bind(("::1", 0))
+        except OSError:
+            pytest.skip("IPv6 loopback unavailable on this machine")
+        return module
+
+    @staticmethod
+    def _free_port():
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    def test_local_network_serves_ipv4_and_ipv6(self, tmp_path, helper):
+        import socket
+
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: self._free_port()},
+        )
+        sockets = mgr._listen_kwargs()["sockets"]
+        try:
+            assert {s.family for s in sockets} == {socket.AF_INET, socket.AF_INET6}
+        finally:
+            for s in sockets:
+                s.close()
+
+    def test_loopback_choice_is_unchanged(self, tmp_path, helper):
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_BIND_HOST: BIND_HOST_LOOPBACK}
+        )
+        assert mgr._listen_kwargs() == {}
+
+    def test_older_bundled_server_keeps_ipv4_bind(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules, "ha_mcp.listen_sockets", ModuleType("ha_mcp.listen_sockets")
+        )
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_BIND_HOST: BIND_HOST_ALL})
+        assert mgr._listen_kwargs() == {}
 
 
 class TestLoopbackDerivation:
