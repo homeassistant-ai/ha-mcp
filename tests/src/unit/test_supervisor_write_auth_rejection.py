@@ -32,7 +32,9 @@ def _wrapped(
     return error
 
 
-async def _call(monkeypatch, error: Exception, method: str, endpoint: str) -> dict:
+async def _call(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, method: str, endpoint: str
+) -> dict:
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     client = MagicMock()
     client.send_websocket_message = AsyncMock(side_effect=error)
@@ -42,7 +44,7 @@ async def _call(monkeypatch, error: Exception, method: str, endpoint: str) -> di
 
 
 async def test_offhost_write_with_rejected_token_is_auth_not_unknown_outcome(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rejected = _wrapped(
         HomeAssistantAuthError("WebSocket authentication failed"),
@@ -56,7 +58,7 @@ async def test_offhost_write_with_rejected_token_is_auth_not_unknown_outcome(
 
 
 async def test_offhost_write_rejected_after_a_sent_attempt_is_unknown_outcome(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A 403 retry after an attempt that got a client keeps a plain connection
     # error even when the retry's connect is rejected: the first may have sent.
@@ -69,7 +71,7 @@ async def test_offhost_write_rejected_after_a_sent_attempt_is_unknown_outcome(
 
 
 async def test_offhost_write_timed_out_through_the_wrap_is_a_timeout(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     timed_out = _wrapped(HomeAssistantCommandTimeout("Command timeout"))
     payload = await _call(
@@ -80,7 +82,7 @@ async def test_offhost_write_timed_out_through_the_wrap_is_a_timeout(
 
 
 async def test_offhost_read_with_no_answer_keeps_its_connection_error(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dropped = HomeAssistantConnectionError("connection dropped")
     payload = await _call(monkeypatch, dropped, "GET", "/addons/core_mosquitto/info")
