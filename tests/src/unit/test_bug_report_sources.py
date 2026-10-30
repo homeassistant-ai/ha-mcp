@@ -1,6 +1,7 @@
 """Unit tests for ha_report_issue's identifier and install collectors
 (bug_report_sources) and the report they feed."""
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -142,6 +143,36 @@ class TestCollectKnownIdentifiers:
         assert warning is not None
         assert "network/url: timeout" in warning
         assert "network:" not in warning.replace("network/url:", "")
+
+    @pytest.mark.asyncio
+    async def test_malformed_configured_url_is_skipped(self) -> None:
+        replies = {"network/url": _ok({}), "network": _ok({"adapters": []})}
+        client = _ws_client(replies, "http://[bad:8123")
+        identifiers, warning = await collect_known_identifiers(client)
+        assert identifiers == KnownIdentifiers()
+        assert warning is None
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_never_answers_is_abandoned_at_the_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The deadline covers connecting too, not only the reply wait, so a
+        socket that hangs before the command is sent cannot stall the report."""
+        monkeypatch.setattr(bug_report_sources, "_IDENTIFIER_READ_DEADLINE_S", 0.05)
+
+        async def send(message: dict[str, Any]) -> dict[str, Any]:
+            if message["type"] == "network/url":
+                await asyncio.sleep(5)
+            return _ok(NETWORK)
+
+        client = SimpleNamespace(
+            send_websocket_message=send, base_url="http://ha.example.net:8123"
+        )
+        identifiers, warning = await collect_known_identifiers(client)
+        assert identifiers.hosts == frozenset({"ha.example.net"})
+        assert "192.168.1.150" in identifiers.addresses
+        assert warning is not None
+        assert "network/url: TimeoutError" in warning
 
     @pytest.mark.asyncio
     async def test_failed_adapter_read_keeps_what_was_read_and_warns(self) -> None:

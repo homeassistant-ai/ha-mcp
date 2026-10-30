@@ -1,6 +1,7 @@
 """Best-effort collectors for ha_report_issue: logs, this instance's own
 identifiers, and Home Assistant's install facts. None of them raises."""
 
+import asyncio
 import contextlib
 import ipaddress
 import logging
@@ -164,7 +165,11 @@ def _add_host(host: str, hosts: set[str], addresses: set[str]) -> None:
 
 
 def _add_url_host(url: Any, hosts: set[str], addresses: set[str]) -> None:
-    host = urlparse(url).hostname if isinstance(url, str) else None
+    try:
+        host = urlparse(url).hostname if isinstance(url, str) else None
+    except ValueError:
+        # A malformed URL has no usable host; the report is still built.
+        return
     if host:
         _add_host(host, hosts, addresses)
 
@@ -174,8 +179,11 @@ class _UnsuccessfulReply(Exception):
 
 
 # Each read gets its own short deadline: a silent socket must not add the
-# default 30 s command wait, twice, before the report is assembled.
+# default 30 s command wait, twice, before the report is assembled. The reply
+# wait is the command's own; the outer deadline also covers connecting, which
+# the pooled client bounds separately at about 20 s.
 _IDENTIFIER_READ_TIMEOUT_S = 10.0
+_IDENTIFIER_READ_DEADLINE_S = 15.0
 
 
 async def _ws_result(client: Any, command: str) -> Any:
@@ -193,7 +201,11 @@ async def _read_identifiers(
     """Run one read and hand its result to ``consume``; a failure becomes the
     reason text for the caller's warning instead of an exception."""
     try:
-        consume(await _ws_result(client, command))
+        consume(
+            await asyncio.wait_for(
+                _ws_result(client, command), timeout=_IDENTIFIER_READ_DEADLINE_S
+            )
+        )
     except Exception as e:  # noqa: BLE001
         # The error text could carry the very hostnames being collected, so
         # only Home Assistant's error code or the exception type is reported.
