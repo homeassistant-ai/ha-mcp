@@ -31,7 +31,6 @@ from ha_mcp.backup_manager import (
     BackupManager,
     DomainHandler,
     _entity_id_aliases,
-    _fetch_todo_item,
     _require_dict,
     _require_list,
     _safe_entity_id,
@@ -217,50 +216,6 @@ class TestAutomationBackupTarget:
 
 
 class TestFetcherIdResolution:
-    async def test_fetch_todo_item_matches_by_summary(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # The decorator passes "<entity_id>::<item>" where <item> is the
-        # human-readable summary (the documented form). Matching only uid
-        # silently skipped the snapshot; the fix matches uid OR summary.
-        async def fake_ws(_client: Any, _msg: dict[str, Any]) -> Any:
-            return {
-                "response": {
-                    "items": {
-                        "todo.shopping": {
-                            "items": [
-                                {
-                                    "uid": "abc-123",
-                                    "summary": "Buy milk",
-                                    "status": "needs_action",
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws)
-        got = await bm._fetch_todo_item(_StubClient(), "todo.shopping::Buy milk")
-        assert got is not None
-        assert got["uid"] == "abc-123"
-        assert got["todo_entity_id"] == "todo.shopping"
-
-    async def test_fetch_todo_item_still_matches_by_uid(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        async def fake_ws(_client: Any, _msg: dict[str, Any]) -> Any:
-            return {
-                "response": {
-                    "items": {"todo.x": {"items": [{"uid": "u-9", "summary": "Pay"}]}}
-                }
-            }
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws)
-        got = await bm._fetch_todo_item(_StubClient(), "todo.x::u-9")
-        assert got is not None
-        assert got["uid"] == "u-9"
-
     async def test_fetch_helper_resolves_renamed_via_registry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1977,63 +1932,15 @@ class TestRequireDict:
     """``_require_dict`` distinguishes a degraded fetch from a real miss."""
 
     def test_returns_dict_unchanged(self) -> None:
-        envelope = {"response": {}}
-        assert _require_dict(envelope, "execute_script") is envelope
+        envelope = {"items": []}
+        assert _require_dict(envelope, "todo/item/list") is envelope
 
     @pytest.mark.parametrize("bad", [None, [1, 2], "oops", 42])
     def test_non_dict_envelope_raises(self, bad: Any) -> None:
-        # Mirror of ``_require_list`` for the execute_script fetchers: a
-        # non-dict envelope is a degraded/malformed 200, not a miss.
+        # Mirror of ``_require_list`` for dict replies: a non-dict envelope
+        # is a degraded/malformed reply, not a miss.
         with pytest.raises(HomeAssistantError):
-            _require_dict(bad, "execute_script")
-
-
-class TestExecuteScriptFetchers:
-    """The todo fetcher routes the ``execute_script`` envelope through
-    ``_require_dict`` (Boy-Scout parity with the registry fetchers): a
-    malformed 200 raises instead of masquerading as ``entity_missing``,
-    while a genuine uid miss still returns ``None``. The calendar fetcher
-    reads the REST calendar view instead (the only response carrying
-    ``uid``) and gets the same treatment from ``_require_list`` —
-    see ``TestFetchers``."""
-
-    async def test_non_dict_envelope_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
-            return ["unexpected", "list", "body"]
-
-        monkeypatch.setattr(bm, "_ws_send", _ws_send)
-        with pytest.raises(HomeAssistantError, match="Expected a dict"):
-            await _fetch_todo_item(object(), "todo.x::uid-1")
-
-    async def test_missing_uid_still_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A well-formed dict whose nested lookup finds no matching uid is a
-        # real miss — it must stay ``None`` (entity_missing), not raise.
-        async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
-            return {"response": {}}
-
-        monkeypatch.setattr(bm, "_ws_send", _ws_send)
-        assert await _fetch_todo_item(object(), "todo.x::absent-uid") is None
-
-    async def test_matching_uid_returns_entry(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A well-formed envelope whose nested lookup finds the uid returns the
-        # matching entry, merged with the ``<domain>_entity_id`` key the
-        # restore path keys off of. Locks the success branch (and the
-        # entity-keyed nesting) that the raise/miss tests don't exercise.
-        uid = "uid-1"
-        entry = {"uid": uid, "summary": "thing"}
-
-        async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
-            return {"response": {"items": {"todo.x": {"items": [entry]}}}}
-
-        monkeypatch.setattr(bm, "_ws_send", _ws_send)
-        result = await _fetch_todo_item(object(), f"todo.x::{uid}")
-        assert result == {"todo_entity_id": "todo.x", **entry}
+            _require_dict(bad, "todo/item/list")
 
 
 class TestDiffSnapshot:

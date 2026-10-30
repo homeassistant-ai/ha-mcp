@@ -6,7 +6,13 @@ import re
 
 from homeassistant.generated.config_flows import FLOWS
 
-from .. import card_definitions, core_contract, entity_restore, helper_collections
+from .. import (
+    card_definitions,
+    core_contract,
+    entity_restore,
+    helper_collections,
+    todo_items,
+)
 from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 from . import logbook as _logbook
 
@@ -193,6 +199,7 @@ CAPABILITIES: list[str] = [
     *helper_collections.CAPABILITIES,
     *entity_restore.CAPABILITIES,
     core_contract.CAPABILITY,
+    todo_items.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]
 

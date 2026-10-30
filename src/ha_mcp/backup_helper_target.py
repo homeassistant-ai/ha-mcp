@@ -18,6 +18,7 @@ from typing import Any, NoReturn
 from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entities import current_entity_id
 from .backup_entity_ids import _manager
+from .backup_todo import safety_target as todo_safety_target
 
 
 async def _stored_items(client: Any, helper_type: str) -> list[Any]:
@@ -83,8 +84,11 @@ async def safety_target(
     another item. For a storage item the registry entry whose unique_id is the
     stored id follows it. An item can outlive its registry entry, so only its
     absence from the stored items means it is gone: the restore recreates it or
-    fails, and overwrites nothing that needs a backup.
+    fails, and overwrites nothing that needs a backup. A todo item is followed
+    by its uid (``backup_todo.safety_target``).
     """
+    if domain == "todo_item":
+        return await todo_safety_target(client, entity_id, config)
     bm = _manager()
     if domain == "entity":
         return await current_entity_id(client, entity_id, config)
@@ -172,8 +176,9 @@ def note_no_safety_backup(
 ) -> None:
     """Say why a restore goes ahead without a safety backup."""
     if target is None:  # safety_target: the stored item no longer exists
-        # An entity snapshot's "id" is its registry entry id, not a name to show.
-        key = "entity_id" if domain == "entity" else "id"
+        # An entity snapshot's "id" is its registry entry id, not a name to show;
+        # a todo snapshot has none.
+        key = {"entity": "entity_id", "todo_item": "summary"}.get(domain, "id")
         stored = config.get(key) if isinstance(config, dict) else None
         outcome["warnings"] = [
             f"No safety backup was taken: {domain.removeprefix('helper_')} "

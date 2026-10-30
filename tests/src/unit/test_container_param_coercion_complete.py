@@ -46,6 +46,10 @@ COERCION_EXEMPT: dict[tuple[str, str], str] = {
         "Proxy request body: 'Pass a JSON object or JSON string' — str is an "
         "accepted raw-body form, not a serialization artifact."
     ),
+    ("ha_remove_todo_item", "item"): (
+        "A str is an item name, which may start with '[' or '{'; the tool reads "
+        "a JSON array of strings as the list only when no item has that name."
+    ),
     ("ha_manage_energy_prefs", "config_hash"): (
         "str = full-blob optimistic-lock token, dict = per-key lock; the two "
         "forms are semantically distinct and this is a fail-closed param."

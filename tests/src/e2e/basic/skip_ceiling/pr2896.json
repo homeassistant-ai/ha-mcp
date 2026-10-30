@@ -1,0 +1,14 @@
+{
+  "reason": "#2896 replaces the one todo lane in tests/src/e2e/workflows/auto_backup/test_capture_and_restore.py with two tests in test_todo_capture_restore.py, all three haos_only + external_only. They run only on the haos lane, so every other lane gains one collection-time skip. It also adds a requires_component_surface test (tests/src/e2e/workflows/todo/test_native_contract.py::test_component_resolves_with_cores_own_lookup), which skips at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon), so those two gain one more.",
+  "deltas": {
+    "container": 1,
+    "haos_stdio": 1,
+    "haos_inaddon": 1,
+    "embedded": 1,
+    "haos_embedded": 1,
+    "container_no_tools": 2,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 2
+  }
+}

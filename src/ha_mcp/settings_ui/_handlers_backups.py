@@ -33,7 +33,9 @@ from ..backup_manager import (
     _FlowHelperReadError,
     _snapshot_validation_message,
     get_backup_manager,
+    restore_error_code,
 )
+from ..backup_todo import TodoListNotLoaded
 from ..config import (
     BACKUP_OVERRIDE_FIELDS,
     _reset_global_settings,
@@ -142,6 +144,8 @@ async def _diff_backup(
         return _bad_request(_snapshot_validation_message(err))
     except LookupError as err:
         return _bad_request(str(err), code=ErrorCode.RESOURCE_NOT_FOUND, status=404)
+    except TodoListNotLoaded as err:
+        return _bad_request(str(err), code=ErrorCode.ENTITY_UNAVAILABLE, status=409)
     except _FlowHelperReadError as err:
         return JSONResponse(
             create_error_response(
@@ -204,13 +208,7 @@ async def _restore_backup(
     except (ValueError, LookupError) as err:
         return _bad_request(str(err))
     except BackupRestoreError as err:
-        code = {
-            "snapshot_not_found": ErrorCode.RESOURCE_NOT_FOUND,
-            "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
-            "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
-            "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
-            "entry_deleted": ErrorCode.RESOURCE_NOT_FOUND,
-        }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
+        code = restore_error_code(err)
         return JSONResponse(
             create_error_response(
                 code,
@@ -229,6 +227,7 @@ async def _restore_backup(
             ),
             status_code={
                 ErrorCode.RESOURCE_NOT_FOUND: 404,
+                ErrorCode.ENTITY_NOT_FOUND: 404,
                 ErrorCode.VALIDATION_INVALID_PARAMETER: 400,
             }.get(code, 409),
         )
