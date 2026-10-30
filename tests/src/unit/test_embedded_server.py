@@ -18,14 +18,13 @@ import os
 import sys
 import threading
 import time
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlparse
 
 import pytest
 
-from ._embedded_stubs import install
+from ._embedded_stubs import install, no_direct_listener_helpers  # noqa: F401
 
 # Install stubs + put the component package on sys.path before importing the
 # integration modules below. Also an isort barrier so the imports below are never
@@ -38,8 +37,6 @@ import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
 # failing index by parsed hostname, and the fakes below match it the same way.
 _WHEELS_HOST = "wheels.home-assistant.io"
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
-    BIND_HOST_ALL,
-    BIND_HOST_LOOPBACK,
     CHANNEL_DEV,
     DATA_LAST_PIP_SPEC,
     DATA_REINSTALL_REQUESTED,
@@ -217,83 +214,6 @@ class TestConstruction:
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://ha.local:8123"
         assert mgr._pip_spec == "ha-mcp @ https://example/tarball.tgz"
-
-
-class TestListenFamilies:
-    """Issue #2915: "Local network" accepted IPv4 clients only."""
-
-    @pytest.fixture
-    def helper(self, monkeypatch):
-        import importlib.util
-        import socket
-
-        path = Path(__file__).parents[3] / "src/ha_mcp/listen_sockets.py"
-        spec = importlib.util.spec_from_file_location("listen_sockets_es", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", module)
-        guard_path = Path(__file__).parents[3] / "src/ha_mcp/ipv6_lan_guard.py"
-        guard_spec = importlib.util.spec_from_file_location("ipv6_guard_es", guard_path)
-        guard = importlib.util.module_from_spec(guard_spec)
-        guard_spec.loader.exec_module(guard)
-        monkeypatch.setitem(sys.modules, "ha_mcp.ipv6_lan_guard", guard)
-        settings = SimpleNamespace(ipv6_allowed_networks="")
-        cfg = ModuleType("ha_mcp.config")
-        cfg.get_global_settings = lambda: settings
-        monkeypatch.setitem(sys.modules, "ha_mcp.config", cfg)
-        try:
-            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
-                probe.bind(("::1", 0))
-        except OSError:
-            pytest.skip("IPv6 loopback unavailable on this machine")
-        return module
-
-    @staticmethod
-    def _free_port():
-        import socket
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return sock.getsockname()[1]
-
-    def test_local_network_serves_ipv4_and_ipv6(self, tmp_path, helper):
-        import socket
-
-        mgr, _hass, _entry = _manager(
-            tmp_path,
-            options={OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: self._free_port()},
-        )
-        sockets = mgr._listen_kwargs()["sockets"]
-        try:
-            assert {s.family for s in sockets} == {socket.AF_INET, socket.AF_INET6}
-        finally:
-            for s in sockets:
-                s.close()
-
-    def test_local_network_guards_ipv6_peers(self, tmp_path, helper):
-        mgr, _hass, _entry = _manager(tmp_path, options={OPT_BIND_HOST: BIND_HOST_ALL})
-        app = object()
-        guarded, proxy_headers = mgr._guarded_app(app)
-        assert type(guarded).__name__ == "IPv6LanGuard"
-        # The guard re-applies proxy headers after its check.
-        assert proxy_headers is False
-
-    def test_loopback_choice_is_unchanged(self, tmp_path, helper):
-        mgr, _hass, _entry = _manager(
-            tmp_path, options={OPT_BIND_HOST: BIND_HOST_LOOPBACK}
-        )
-        app = object()
-        assert mgr._listen_kwargs() == {}
-        assert mgr._guarded_app(app) == (app, True)
-
-    def test_older_bundled_server_keeps_ipv4_bind(self, tmp_path, monkeypatch):
-        monkeypatch.setitem(
-            sys.modules, "ha_mcp.listen_sockets", ModuleType("ha_mcp.listen_sockets")
-        )
-        # An older server has neither the helper nor the guard.
-        monkeypatch.setitem(sys.modules, "ha_mcp.ipv6_lan_guard", None)
-        mgr, _hass, _entry = _manager(tmp_path, options={OPT_BIND_HOST: BIND_HOST_ALL})
-        assert mgr._listen_kwargs() == {}
 
 
 class TestLoopbackDerivation:

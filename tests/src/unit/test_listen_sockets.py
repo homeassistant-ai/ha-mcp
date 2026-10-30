@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from .test_sidecar_pin_port import _a_free_port
+
 _REPO = Path(__file__).parents[3]
 
 
@@ -35,12 +37,6 @@ def _require_ipv6_loopback() -> None:
         pytest.skip("IPv6 loopback unavailable on this machine")
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
 def _connects(address: str, port: int) -> bool:
     try:
         socket.create_connection((address, port), timeout=2).close()
@@ -51,7 +47,7 @@ def _connects(address: str, port: int) -> bool:
 
 def test_wildcard_host_accepts_ipv4_and_ipv6_clients() -> None:
     _require_ipv6_loopback()
-    port = _free_port()
+    port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
     try:
@@ -92,7 +88,7 @@ def test_machine_without_ipv6_still_serves_ipv4(
             super().bind(address)
 
     monkeypatch.setattr(listen_sockets, "_ListenSocket", _NoIPv6Socket)
-    port = _free_port()
+    port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
     try:
@@ -108,7 +104,7 @@ def test_startup_line_logged_when_every_socket_serves(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _require_ipv6_loopback()
-    port = _free_port()
+    port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None and len(sockets) == 2
     caplog.set_level(logging.INFO, logger="uvicorn.error")
@@ -125,7 +121,7 @@ def test_startup_line_logged_when_every_socket_serves(
 
 
 def test_specific_host_is_left_to_uvicorn() -> None:
-    assert listen_sockets.wildcard_listen_sockets("127.0.0.1", _free_port()) is None
+    assert listen_sockets.wildcard_listen_sockets("127.0.0.1", _a_free_port()) is None
 
 
 def test_app_hands_dual_stack_sockets_to_the_server(
@@ -142,7 +138,7 @@ def test_app_hands_dual_stack_sockets_to_the_server(
             for sock in kwargs["sockets"]:
                 sock.close()
 
-    assert start._run_mcp_server(_Mcp(), "0.0.0.0", _free_port(), "/p", {}) == 0
+    assert start._run_mcp_server(_Mcp(), "0.0.0.0", _a_free_port(), "/p", {}) == 0
     assert seen["host"] == "0.0.0.0"
     # IPv6 is only ever bound behind the local-network guard (#2915).
     assert [m.cls.__name__ for m in seen["middleware"]] == ["IPv6LanGuard"]

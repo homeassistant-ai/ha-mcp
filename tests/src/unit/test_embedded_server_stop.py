@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
+from ._embedded_stubs import install, no_direct_listener_helpers  # noqa: F401
 
 install()
 

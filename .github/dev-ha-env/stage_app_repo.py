@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "haos_image_build"))
-from build_image import stage_dev_addon_tree  # noqa: E402
+from dev_addon_tree import stage_dev_addon_tree  # noqa: E402
 
 # Distinct from the image's local app (local_ha_mcp_dev), so both can be
 # installed; only one may run at a time, since both bind port 9583.

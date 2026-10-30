@@ -54,7 +54,6 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
-    BIND_HOST_ALL,
     DATA_LAST_PIP_SPEC,
     DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
@@ -84,6 +83,7 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .embedded_listen import DirectListener
 from .embedded_worker_teardown import (
     shutdown_server_resources_bounded,
     teardown_worker_loop,
@@ -1572,21 +1572,8 @@ class EmbeddedServerManager:
         # uvicorn.Config defaults + _lifespan_manager), pinned by ha-mcp.
         import uvicorn
 
-        # fastmcp >= 3.4.3 ships an on-by-default Host/Origin (DNS-rebinding)
-        # guard that would 421 this in-process server's direct LAN listener
-        # (bind 0.0.0.0:9584 by default), reached on arbitrary hosts. Default it
-        # off to match the CLI / add-on entry points. Guard only the import: a
-        # bundled ha-mcp old enough to lack the helper also predates the guard,
-        # so there is nothing to disable.
-        try:
-            from ha_mcp.transport_security import (
-                ensure_host_origin_guard_default_off,
-            )
-        except ImportError:
-            # Older bundled ha-mcp: no helper, and no guard to disable either.
-            pass
-        else:
-            ensure_host_origin_guard_default_off()
+        # Loads the listener's ha_mcp helpers inside the import window below.
+        listener = DirectListener(self._bind_host, self._port)
 
         # The cold import — the multi-minute window that crashed in #1904 —
         # is complete: every explicit ha_mcp import in _serve precedes this
@@ -1598,8 +1585,9 @@ class EmbeddedServerManager:
         with _IMPORTING_WORKERS_LOCK:
             _IMPORTING_WORKERS.discard(threading.current_thread())
 
-        app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
-        app, proxy_headers = self._guarded_app(app)
+        app, proxy_headers = listener.wrap(
+            server.mcp.http_app(path=self._secret_path, stateless_http=True)
+        )
         config = uvicorn.Config(
             app,
             host=self._bind_host,
@@ -1623,7 +1611,6 @@ class EmbeddedServerManager:
         uv_server = uvicorn.Server(config)
 
         self._note_startup_phase("starting the HTTP listener")
-        listen_kwargs: dict[str, Any] = {}
         try:
             async with server.mcp._lifespan_manager():
                 # A stop that came during the cold import, the server build or
@@ -1638,8 +1625,7 @@ class EmbeddedServerManager:
                     )
                     return
                 stop_task = asyncio.create_task(stop_event.wait())
-                listen_kwargs = self._listen_kwargs()
-                serve_task = asyncio.create_task(uv_server.serve(**listen_kwargs))
+                serve_task = asyncio.create_task(uv_server.serve(**listener.bind()))
                 done, _pending = await asyncio.wait(
                     {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
                 )
@@ -1658,11 +1644,7 @@ class EmbeddedServerManager:
                     # etc.).
                     serve_task.result()
         finally:
-            # uvicorn closes pre-bound sockets only on a clean shutdown; a serve
-            # that exits early would otherwise hold the port into the next
-            # bring-up inside HA's long-lived process.
-            for sock in listen_kwargs.get("sockets", []):
-                sock.close()
+            listener.close()
             # CLI parity: the HTTP runner's shutdown path releases the served
             # stack's HA connections; this in-process runner must too, on this
             # loop, while it still runs — otherwise the reader tasks are only
@@ -1740,46 +1722,6 @@ class EmbeddedServerManager:
         # server behind an unregistered webhook.
         await self.async_stop()
         raise EmbeddedServerError(failure)
-
-    def _guarded_app(self, app: Any) -> tuple[Any, bool]:
-        """Wrap ``app`` so "Local network" stays local over IPv6 too (#2915).
-
-        Returns the app and uvicorn's ``proxy_headers`` flag: the guard
-        re-applies proxy-header handling after its own check, so uvicorn's is
-        turned off. Loopback, or a bundled ha-mcp without the guard (which
-        ``_listen_kwargs`` then binds IPv4-only), keeps the app unchanged.
-        """
-        if self._bind_host != BIND_HOST_ALL:
-            return app, True
-        try:
-            from ha_mcp.config import get_global_settings
-            from ha_mcp.ipv6_lan_guard import IPv6LanGuard, parse_allowed_networks
-        except ImportError:
-            return app, True
-        allowed = parse_allowed_networks(get_global_settings().ipv6_allowed_networks)
-        return IPv6LanGuard(app, allowed_networks=allowed), False
-
-    def _listen_kwargs(self) -> dict[str, Any]:
-        """Return uvicorn ``serve()`` kwargs that widen "Local network" to IPv6.
-
-        "Local network" binds ``0.0.0.0``, which accepts IPv4 clients only
-        (#2915); ha_mcp's helper binds every address family instead. A bundled
-        ha-mcp too old to ship the helper keeps the IPv4-only bind.
-        """
-        try:
-            # The guard ships with the helper; never bind IPv6 without it.
-            import ha_mcp.ipv6_lan_guard  # noqa: F401
-            from ha_mcp.listen_sockets import (
-                announce_when_listening,
-                wildcard_listen_sockets,
-            )
-        except ImportError:
-            return {}
-        sockets = wildcard_listen_sockets(self._bind_host, self._port)
-        if sockets is None:
-            return {}
-        announce_when_listening(sockets, self._bind_host, self._port)
-        return {"sockets": sockets}
 
     async def _async_probe_port(self) -> bool:
         """Return True if a loopback TCP connection to the server port succeeds.

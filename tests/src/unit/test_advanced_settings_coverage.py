@@ -165,6 +165,7 @@ ENV_ONLY: dict[str, str] = {
     "MCP_SETTINGS_SECRET_PATH": "Dedicated secret URL path for the settings UI in OAuth/OIDC modes; read at startup before the server is up (secret/bind config)",
     "MCP_HEALTHZ": "Opt-in /healthz liveness route — bind/deployment config",
     "FASTMCP_PORT": "FastMCP transport bind port",
+    "FORWARDED_ALLOW_IPS": "uvicorn's own trusted-proxy list, re-read by the IPv6 guard that replaces uvicorn's proxy-header step (bind config)",
     "FASTMCP_TRANSPORT": "FastMCP transport selection — bootstrap",
     "OIDC_CONFIG_URL": "OIDC provider discovery URL — OIDC auth mode bootstrap (pre-Settings)",
     "OIDC_CLIENT_ID": "OIDC OAuth client ID — OIDC auth mode bootstrap (pre-Settings)",
