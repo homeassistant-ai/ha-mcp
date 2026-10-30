@@ -14,6 +14,7 @@ can assert they never ran on the component path.
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -181,6 +182,26 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
     ]
     assert len(search_calls) == 1
     assert "result_fields" not in search_calls[0].kwargs
+
+
+@pytest.mark.asyncio
+async def test_component_search_without_warnings_has_no_warnings_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty list is omitted, not returned as ``"warnings": []``."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH,
+        cmd_result=_entity_search_result(),
+    )
+    ha_search = _build_ha_search(RoutingClient())
+
+    with patch_ws(ws, search_component):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["entities"][0]["entity_id"] == "light.kitchen"
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio

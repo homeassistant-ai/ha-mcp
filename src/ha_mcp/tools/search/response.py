@@ -189,6 +189,17 @@ def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
         warnings.append(warning_text)
 
 
+def _omit_empty_warnings(response: dict[str, Any]) -> dict[str, Any]:
+    """Drop an empty ``warnings`` list: the response contract omits it.
+
+    The builders seed ``warnings`` as ``[]`` so they can extend it; this runs
+    once on the finished response of every ``ha_search`` path.
+    """
+    if response.get("warnings") == []:
+        del response["warnings"]
+    return response
+
+
 def _project_response_fields(
     response: dict[str, Any], parsed_fields: list[str] | None
 ) -> dict[str, Any]:

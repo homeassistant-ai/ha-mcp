@@ -327,3 +327,13 @@ def test_area_search_forwards_visibility_warnings_to_response():
     )
     res = asyncio.run(tools.ha_search(area_filter="kitchen"))
     assert warning in res.get("warnings", [])
+
+
+def test_area_search_without_warnings_has_no_warnings_key() -> None:
+    """An empty list is omitted, not returned as ``"warnings": []``."""
+    area_result = {"success": True, "areas": {}}
+    tools = tools_search.SearchTools(
+        _AreaTzClient(), smart_tools=_FakeSmartTools(area_result)
+    )
+    res = asyncio.run(tools.ha_search(area_filter="kitchen"))
+    assert "warnings" not in res
