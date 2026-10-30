@@ -253,7 +253,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `addon-publish.yml` | Called by `semver-release.yml`, or manual | Home Assistant app publishing. |
 | `deploy.yml` | `workflow_run` after SemVer Release; push to `master` touching the workflow; weekly; or manual with a `ref` | Build the docs site from the `stable` tag (or the dispatched `ref`) and deploy it to GitHub Pages. |
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py`; this repository only | Regenerate `tools.json`, README, and app `DOCS.md`. |
-| `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual; this repository only | Lower the module-size and duplicate-code baselines, which pull requests only check. |
+| `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual; this repository only | Lower the module-size and type-hint baselines and rewrite the duplicate-code baseline, which pull requests only check. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `dev-ha-env.yml` | Manual, forks only | Live throwaway HA (Docker or HAOS) running a branch's server standalone, embedded or as the app, behind encrypted-URL tunnels; see [`docs/dev-ha-env.md`](../dev-ha-env.md). |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |

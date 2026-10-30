@@ -292,7 +292,7 @@ def find_growth_since(repo_root: Path, ref: str) -> list[str]:
 
 
 def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
-    """Parse the options both ratchet scripts take."""
+    """Parse the options every ratchet script takes."""
     parser = argparse.ArgumentParser(description=description)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(

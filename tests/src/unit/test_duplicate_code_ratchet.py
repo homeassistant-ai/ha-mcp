@@ -10,32 +10,19 @@ added. The tests above it drive the rules with made-up sources.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
-import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
-from ._ratchet_repo import commit, make_ratchet_repo
+from ._ratchet_repo import commit, load_script, make_ratchet_repo
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "duplicate_code_ratchet.py"
 BASELINE_PATH = Path(__file__).with_name("duplicate_code_baseline.json")
 
 
-def _load_ratchet() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("duplicate_code_ratchet", SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-ratchet = _load_ratchet()
+ratchet = load_script("duplicate_code_ratchet")
 
 HELPER = b'''
 def load(path: str) -> dict:

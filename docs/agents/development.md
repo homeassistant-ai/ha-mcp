@@ -117,17 +117,18 @@ are listed with their line count in
 grow, so a file that grew has to be split. Vendored trees, test fixtures and
 the stable webhook-proxy copy are not counted.
 
-Do not edit either ratchet baseline in a pull request: nearly every change to
+Do not edit a ratchet baseline in a pull request: nearly every change to
 a listed file would rewrite the same shared file, and those edits conflict
 with each other. A shrunk or deleted file, or an edited copy, passes the
 checks as it is; after the merge, `sync-ratchet-baselines.yml` updates the
 baselines on `master` with `python scripts/module_size_ratchet.py`, which only
-lowers or drops entries, and `python scripts/duplicate_code_ratchet.py`, which
-rewrites its baseline only when no group gained a copy. Neither accepts
-growth. Lowering an entry by hand remains possible as a maintainer escape
-hatch; the checks below reject only a raised entry or a new copy. The lefthook
-pre-commit hook runs both commands with `--staged --check`, which reports
-violations in the staged content without writing a baseline.
+lowers or drops entries, `python scripts/duplicate_code_ratchet.py`, which
+rewrites its baseline only when no group gained a copy, and
+`python scripts/type_hint_ratchet.py`, which only lowers or drops entries.
+None accepts growth. Lowering an entry by hand remains possible as a
+maintainer escape hatch; the checks below reject only a raised entry or a new
+copy. The lefthook pre-commit hook runs each command with `--staged --check`,
+which reports violations in the staged content without writing a baseline.
 
 Never raise or add a baseline entry by hand. The `Fast Checks` job compares
 each baseline with the one in the base commit the pull request was merged
@@ -149,6 +150,14 @@ Copies that already existed are listed in
 listed copy passes without a baseline edit; the post-merge sync rewrites it.
 `python scripts/duplicate_code_ratchet.py` refuses to write the baseline while
 a group has a new copy, so it cannot accept one.
+
+`tests/src/unit/test_type_hint_ratchet.py` fails when a file not listed in
+`tests/src/unit/type_hint_baseline.json` has a function missing a parameter
+or return hint, or a listed file gains one. It counts the same files as the
+module-size ratchet, so it also covers what mypy does not check, mostly the
+tests. As in mypy, the `self` or `cls` parameter of a non-static method needs
+no hint, and neither does the return type of an `__init__` or
+`__init_subclass__` with any hint.
 
 `BLE001` (a handler that catches `Exception` without re-raising it or logging
 its traceback) is enabled. Each handler that existed before carries

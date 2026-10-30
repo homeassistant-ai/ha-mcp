@@ -1,10 +1,11 @@
 name: Sync Ratchet Baselines
 
-# Pull requests only check the module-size and duplicate-code ratchets against
-# their baselines and never edit them: every pull request touching a listed
-# file would otherwise rewrite the same two files and conflict with the next.
-# After a merge this lowers the size baseline and rewrites the duplicate-code
-# baseline to master's files, and commits them.
+# Pull requests only check the module-size, duplicate-code and type-hint
+# ratchets against their baselines and never edit them: every pull request
+# touching a listed file would otherwise rewrite the same shared files and
+# conflict with the next. After a merge this lowers the size and type-hint
+# baselines, rewrites the duplicate-code baseline to master's files, and
+# commits them.
 on:
   push:
     branches: [master]
@@ -73,11 +74,11 @@ jobs:
       with:
         python-version: '3.13'
 
-    # Both scripts use only the standard library. A push rejected as a
+    # The scripts use only the standard library. A push rejected as a
     # non-fast-forward means another merge landed after this checkout: its
-    # files can be larger than the entries computed here while staying under
+    # files can exceed the entries computed here while staying under
     # the entries it merged against, and the sync never raises an entry. So
-    # each retry resets to the latest master and recomputes both baselines
+    # each retry resets to the latest master and recomputes the baselines
     # from its files, rather than rebasing values computed from an older tree.
     - name: Lower the baselines, commit and push
       run: |
@@ -87,11 +88,12 @@ jobs:
           status=0
           python scripts/module_size_ratchet.py || status=1
           python scripts/duplicate_code_ratchet.py || status=1
+          python scripts/type_hint_ratchet.py || status=1
           if [ "$status" -ne 0 ]; then
             echo "::error::A ratchet script failed: master breaks a ratchet, or the script crashed (see the output above). Nothing synced."
             exit 1
           fi
-          git add tests/src/unit/module_size_baseline.json tests/src/unit/duplicate_code_baseline.json
+          git add tests/src/unit/module_size_baseline.json tests/src/unit/duplicate_code_baseline.json tests/src/unit/type_hint_baseline.json
           if git diff --staged --quiet; then
             echo "No baseline changes to sync."
             exit 0

@@ -433,6 +433,7 @@ jobs:
         status=0
         uv run python scripts/module_size_ratchet.py --base "$base_sha" || status=1
         uv run python scripts/duplicate_code_ratchet.py --base "$base_sha" || status=1
+        uv run python scripts/type_hint_ratchet.py --base "$base_sha" || status=1
         exit "$status"
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types

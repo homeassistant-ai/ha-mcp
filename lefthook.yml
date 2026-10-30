@@ -42,6 +42,12 @@ pre-commit:
       glob: "**/*.py"
       run: uv run python scripts/duplicate_code_ratchet.py --staged --check
 
+    # Fails on a new function without full type hints; same --staged
+    # --check mode as the jobs above.
+    - name: type-hint-baseline
+      glob: "**/*.py"
+      run: uv run python scripts/type_hint_ratchet.py --staged --check
+
     - group:
         parallel: true
         jobs:

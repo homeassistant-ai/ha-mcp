@@ -1,15 +1,21 @@
 """Temporary git repository for the baseline ratchet tests.
 
-The module-size and duplicate-code ratchets read tracked and staged files
-through git, so their tests run them against a repository of their own.
+The module-size, duplicate-code and type-hint ratchets read tracked and
+staged files through git, so their tests run them against a repository of
+their own.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
+
+_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
 
 # Inside a git hook these point every git call at the real repository.
 _GIT_HOOK_VARIABLES = (
@@ -21,6 +27,16 @@ _GIT_HOOK_VARIABLES = (
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 )
+
+
+def load_script(name: str) -> ModuleType:
+    """Import ``scripts/<name>.py``, which is not on the import path."""
+    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def make_ratchet_repo(

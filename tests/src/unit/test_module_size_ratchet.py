@@ -13,32 +13,19 @@ grows. The tests above it drive the rules with made-up sizes.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
-import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
-from ._ratchet_repo import commit, make_ratchet_repo
+from ._ratchet_repo import commit, load_script, make_ratchet_repo
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "module_size_ratchet.py"
 BASELINE_PATH = Path(__file__).with_name("module_size_baseline.json")
 
 
-def _load_ratchet() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("module_size_ratchet", SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-ratchet = _load_ratchet()
+ratchet = load_script("module_size_ratchet")
 LIMIT = 1000
 
 
