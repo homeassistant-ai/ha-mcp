@@ -113,7 +113,27 @@ Run it **from your fork only**. The job refuses to run in
      with `ha_read_file` before restarting. The component keeps its pending
      version number across dev builds, so HACS's `installed_version` (the
      branch) is what names the build.
-   - Standalone server or app: start a new run on the new commit.
+   - App: install your branch's build as a second app and update it like
+     any app. Stage the checkout as an app repository and push it to a
+     branch of your fork:
+     ```bash
+     python3 .github/dev-ha-env/stage_app_repo.py /tmp/app-repo 9.1.0-test.1
+     cd /tmp/app-repo && git init -q -b devenv/app && git add -A \
+       && git commit -qm app && git push -f git@github.com:<you>/ha-mcp devenv/app
+     ```
+     Then, in the running instance:
+     `ha_manage_app(action="add_repository", repository="https://github.com/<you>/ha-mcp#devenv/app")`,
+     `ha_manage_app(slug="<hash>_ha_mcp_branch", action="install")` (the slug
+     is in `ha_get_app(source="available")`), and copy the image's app
+     options to it, `secret_path` included so the `MCP:` URL keeps working.
+     Stop `local_ha_mcp_dev` and start the new app (both use port 9583); do
+     both from Settings → Apps, since the `MCP:` URL drops while the apps
+     swap. Supervisor builds the app on the instance from your checkout.
+     For each later commit, stage again with a higher version (commit in
+     the same `/tmp/app-repo`), push, run
+     `ha_manage_app(action="check_updates")`, and update the app from
+     Settings → Apps: an app cannot update itself through its own MCP.
+   - Standalone server: start a new run on the new commit.
 
    The job log's `STATUS` lines show the commit the run started from and any
    boot error. If the embedded server fails at boot, Home Assistant stays up
@@ -125,7 +145,9 @@ Run it **from your fork only**. The job refuses to run in
    The instance is a normal HA you can change. On HAOS, change the Core
    version from Settings → System → Updates, or run
    `ha core update --version 2026.10.0` in the Advanced SSH app's terminal;
-   apps, integrations and the component install and uninstall as usual. Docker
+   apps, integrations and the component install and uninstall as usual. IPv6
+   is under Settings → System → Network; the HAOS VM's LAN address is in
+   `fec0::/64`. Docker
    HA has no update mechanism, so start the same run again with another
    `ha_image`; the new run replaces the old one.
 6. **Cancel the run when you're done.** It does not stop on its own until
