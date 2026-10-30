@@ -86,4 +86,7 @@ def announce_when_listening(sockets: list[socket.socket], host: str, port: int) 
             "Uvicorn running on %s://%s:%d (Press CTRL+C to quit)", "http", host, port
         )
 
-    threading.Thread(target=_wait, name="ha-mcp-listen-announce", daemon=True).start()
+    # Named after the caller (uvicorn's own thread) so log formats that show
+    # the thread name read the same too.
+    name = threading.current_thread().name
+    threading.Thread(target=_wait, name=name, daemon=True).start()
