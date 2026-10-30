@@ -101,9 +101,9 @@ class TestCollectKnownIdentifiers:
         assert identifiers == KnownIdentifiers()
 
     @pytest.mark.asyncio
-    async def test_unsuccessful_reply_yields_no_identifiers_and_one_warning(
-        self,
-    ) -> None:
+    async def test_failed_adapter_read_keeps_what_was_read_and_warns(self) -> None:
+        """``network`` is admin-only in Core while ``network/url`` is not, so a
+        non-admin token must still get the URL hosts redacted."""
         replies = {
             "network/url": _ok(NETWORK_URL),
             # The client's failure envelope: a string error plus error_code.
@@ -115,13 +115,17 @@ class TestCollectKnownIdentifiers:
         }
         client = _ws_client(replies, "http://ha.example.net:8123")
         identifiers, warning = await collect_known_identifiers(client)
-        assert identifiers == KnownIdentifiers()
+        assert identifiers == KnownIdentifiers(
+            hosts=frozenset({"ha.example.net"}), addresses=frozenset({"172.17.0.3"})
+        )
         assert warning is not None
         assert "network: unauthorized" in warning
 
     @pytest.mark.asyncio
-    async def test_transport_failure_warning_does_not_echo_the_error_text(self) -> None:
-        """The exception text may name the host the report is hiding."""
+    async def test_transport_failure_keeps_the_configured_host(self) -> None:
+        """The server's own Home Assistant host needs no read, so it is redacted
+        even when the WebSocket is down; the exception text may name that host,
+        so the warning never echoes it."""
         client = SimpleNamespace(
             send_websocket_message=AsyncMock(
                 side_effect=ConnectionError("cannot reach ha.example.net")
@@ -129,8 +133,9 @@ class TestCollectKnownIdentifiers:
             base_url="http://ha.example.net:8123",
         )
         identifiers, warning = await collect_known_identifiers(client)
-        assert identifiers == KnownIdentifiers()
+        assert identifiers == KnownIdentifiers(hosts=frozenset({"ha.example.net"}))
         assert warning is not None
+        assert "network/url: ConnectionError" in warning
         assert "ha.example.net" not in warning
 
 

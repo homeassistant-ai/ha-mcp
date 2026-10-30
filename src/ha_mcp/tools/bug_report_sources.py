@@ -188,11 +188,16 @@ async def collect_known_identifiers(
 ) -> tuple[KnownIdentifiers, str | None]:
     """Read this instance's URLs and interface addresses for redaction.
 
-    Returns the identifiers and, when they could not be read, one warning for
-    the caller. Loopback addresses are left out: they identify nobody.
+    Returns the identifiers and, when a read failed, one warning for the
+    caller. What was collected before the failure is kept: the server's own
+    Home Assistant host needs no read at all, and ``network/url`` answers a
+    non-admin token while ``network`` (``require_admin`` in Core) does not.
+    Loopback addresses are left out: they identify nobody.
     """
     hosts: set[str] = set()
     addresses: set[str] = set()
+    _add_url_host(client.base_url, hosts, addresses)
+    warning = None
     command = "network/url"
     try:
         urls = await _ws_result(client, command)
@@ -204,17 +209,16 @@ async def collect_known_identifiers(
             for entry in (adapter.get("ipv4") or []) + (adapter.get("ipv6") or []):
                 if entry.get("address"):
                     _add_host(str(entry["address"]), hosts, addresses)
-        _add_url_host(client.base_url, hosts, addresses)
     except Exception as e:  # noqa: BLE001
         # The error text could carry the very hostnames being collected, so
         # only Home Assistant's error code or the exception type is reported.
         reason = str(e) if isinstance(e, _UnsuccessfulReply) else type(e).__name__
         logger.info("Known-identifier read failed at %s: %s", command, reason)
-        return KnownIdentifiers(), (
-            f"Known-identifier redaction was unavailable ({command}: {reason}); "
+        warning = (
+            f"Known-identifier redaction is partial ({command}: {reason}); "
             "review hostnames and addresses by hand."
         )
-    return KnownIdentifiers(frozenset(hosts), frozenset(addresses)), None
+    return KnownIdentifiers(frozenset(hosts), frozenset(addresses)), warning
 
 
 async def fetch_ha_install(client: Any) -> dict[str, Any] | None:
