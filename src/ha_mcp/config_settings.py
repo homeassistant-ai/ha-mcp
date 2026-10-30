@@ -570,6 +570,19 @@ class Settings(BaseSettings):
         ),
     ] = Field("", alias="REDACT_APP_OPTION_KEYS")
 
+    # IPv6 networks, beyond the local ones, that may reach the app's port and
+    # the in-process server's "Local network" port (#2915); see
+    # ``ha_mcp.ipv6_lan_guard``. Read when the listener starts.
+    ipv6_allowed_networks: Annotated[
+        str,
+        Setting(
+            surface="advanced",
+            section="operations",
+            app=_ALL_FLAVORS,
+            restart_required=True,
+        ),
+    ] = Field("", alias="IPV6_ALLOWED_NETWORKS")
+
     # Mandatory best-practice skills — server-side master switch for the
     # write-tool skill_content delivery feature (issue #1182). When True
     # (default), the six write tools (automations / scripts / scenes /

@@ -112,6 +112,14 @@ configuration:
       a ogni app; scrivi app_slug:name per limitarlo a una singola app. Denominare
       un gruppo di opzioni copre ogni opzione al suo interno. Utilizzato solo quando
       l'opzione Rimuovi dati sensibili è attiva. Vuoto per impostazione predefinita.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: Allega le skill di buone pratiche alle scritture
     description: 'Interruttore principale della funzione che consegna il contenuto

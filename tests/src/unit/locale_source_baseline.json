@@ -429,6 +429,8 @@
     "messages.advanced.individual_config_timeout.label": "46ebf35b5d45704a",
     "messages.advanced.individual_fetch_batch_size.help": "853e90e9f43097c1",
     "messages.advanced.individual_fetch_batch_size.label": "d4e9672d2c104d01",
+    "messages.advanced.ipv6_allowed_networks.help": "ba4dd38a0353240b",
+    "messages.advanced.ipv6_allowed_networks.label": "dd981dda48f0177f",
     "messages.advanced.log_level.help": "3fc3734ef6a27e2b",
     "messages.advanced.log_level.label": "886e60232b66c841",
     "messages.advanced.max_retries.help": "d7f85f557eb55f66",

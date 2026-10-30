@@ -92,6 +92,14 @@ configuration:
       skriv app_slug:name för att begränsa det till en app. Att namnge en alternativgrupp
       täcker varje alternativ i den. Används endast när Dölj hemligheter är aktiverat.
       Tom som standard.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll

@@ -149,5 +149,8 @@ def test_app_hands_dual_stack_sockets_to_the_server(
 
     assert start._run_mcp_server(_Mcp(), "0.0.0.0", _free_port(), "/p", {}) == 0
     assert seen["host"] == "0.0.0.0"
+    # IPv6 is only ever bound behind the local-network guard (#2915).
+    assert [m.cls.__name__ for m in seen["middleware"]] == ["IPv6LanGuard"]
+    assert seen["uvicorn_config"]["proxy_headers"] is False
     families = {sock.family for sock in seen["sockets"]}
     assert families == {socket.AF_INET, socket.AF_INET6}

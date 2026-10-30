@@ -54,6 +54,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
+    BIND_HOST_ALL,
     DATA_LAST_PIP_SPEC,
     DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
@@ -1598,9 +1599,11 @@ class EmbeddedServerManager:
             _IMPORTING_WORKERS.discard(threading.current_thread())
 
         app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
+        app, proxy_headers = self._guarded_app(app)
         config = uvicorn.Config(
             app,
             host=self._bind_host,
+            proxy_headers=proxy_headers,
             port=self._port,
             timeout_graceful_shutdown=2,
             lifespan="on",
@@ -1738,6 +1741,24 @@ class EmbeddedServerManager:
         await self.async_stop()
         raise EmbeddedServerError(failure)
 
+    def _guarded_app(self, app: Any) -> tuple[Any, bool]:
+        """Wrap ``app`` so "Local network" stays local over IPv6 too (#2915).
+
+        Returns the app and uvicorn's ``proxy_headers`` flag: the guard
+        re-applies proxy-header handling after its own check, so uvicorn's is
+        turned off. Loopback, or a bundled ha-mcp without the guard (which
+        ``_listen_kwargs`` then binds IPv4-only), keeps the app unchanged.
+        """
+        if self._bind_host != BIND_HOST_ALL:
+            return app, True
+        try:
+            from ha_mcp.config import get_global_settings
+            from ha_mcp.ipv6_lan_guard import IPv6LanGuard, parse_allowed_networks
+        except ImportError:
+            return app, True
+        allowed = parse_allowed_networks(get_global_settings().ipv6_allowed_networks)
+        return IPv6LanGuard(app, allowed_networks=allowed), False
+
     def _listen_kwargs(self) -> dict[str, Any]:
         """Return uvicorn ``serve()`` kwargs that widen "Local network" to IPv6.
 
@@ -1746,6 +1767,8 @@ class EmbeddedServerManager:
         ha-mcp too old to ship the helper keeps the IPv4-only bind.
         """
         try:
+            # The guard ships with the helper; never bind IPv6 without it.
+            import ha_mcp.ipv6_lan_guard  # noqa: F401
             from ha_mcp.listen_sockets import (
                 announce_when_listening,
                 wildcard_listen_sockets,

@@ -437,6 +437,21 @@ def _arm_kill_signal_diagnostics_if_debug(effective_log_level: int) -> None:
         log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
 
 
+def _ipv6_lan_guard() -> dict[str, Any]:
+    """Return ``mcp.run`` kwargs keeping the IPv6 listener local-network-only.
+
+    The guard re-applies uvicorn's proxy-header handling after its own check,
+    so the caller turns uvicorn's off (#2915).
+    """
+    from starlette.middleware import Middleware
+
+    from ha_mcp.config import get_global_settings
+    from ha_mcp.ipv6_lan_guard import IPv6LanGuard, parse_allowed_networks
+
+    allowed = parse_allowed_networks(get_global_settings().ipv6_allowed_networks)
+    return {"middleware": [Middleware(IPv6LanGuard, allowed_networks=allowed)]}
+
+
 def _run_mcp_server(
     mcp: Any,
     bind_host: str,
@@ -455,8 +470,11 @@ def _run_mcp_server(
         )
 
         sockets = wildcard_listen_sockets(bind_host, port)
+        guard: dict[str, Any] = {}
         if sockets is not None:
             announce_when_listening(sockets, bind_host, port)
+            guard = _ipv6_lan_guard()
+            uvicorn_config = {**uvicorn_config, "proxy_headers": False}
         # Do not pass log_level here: fastmcp's temporary_log_level would
         # rebuild its rich log handlers at the default 80-column width,
         # undoing widen_fastmcp_log_console (#1918).
@@ -468,6 +486,7 @@ def _run_mcp_server(
             path=secret_path,
             stateless_http=True,
             uvicorn_config=uvicorn_config,
+            **guard,
         )
     except KeyboardInterrupt:
         log_info("Interrupted, exiting")

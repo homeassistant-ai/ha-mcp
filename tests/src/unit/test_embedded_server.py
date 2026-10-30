@@ -232,6 +232,15 @@ class TestListenFamilies:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", module)
+        guard_path = Path(__file__).parents[3] / "src/ha_mcp/ipv6_lan_guard.py"
+        guard_spec = importlib.util.spec_from_file_location("ipv6_guard_es", guard_path)
+        guard = importlib.util.module_from_spec(guard_spec)
+        guard_spec.loader.exec_module(guard)
+        monkeypatch.setitem(sys.modules, "ha_mcp.ipv6_lan_guard", guard)
+        settings = SimpleNamespace(ipv6_allowed_networks="")
+        cfg = ModuleType("ha_mcp.config")
+        cfg.get_global_settings = lambda: settings
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", cfg)
         try:
             with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
                 probe.bind(("::1", 0))
@@ -261,16 +270,28 @@ class TestListenFamilies:
             for s in sockets:
                 s.close()
 
+    def test_local_network_guards_ipv6_peers(self, tmp_path, helper):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_BIND_HOST: BIND_HOST_ALL})
+        app = object()
+        guarded, proxy_headers = mgr._guarded_app(app)
+        assert type(guarded).__name__ == "IPv6LanGuard"
+        # The guard re-applies proxy headers after its check.
+        assert proxy_headers is False
+
     def test_loopback_choice_is_unchanged(self, tmp_path, helper):
         mgr, _hass, _entry = _manager(
             tmp_path, options={OPT_BIND_HOST: BIND_HOST_LOOPBACK}
         )
+        app = object()
         assert mgr._listen_kwargs() == {}
+        assert mgr._guarded_app(app) == (app, True)
 
     def test_older_bundled_server_keeps_ipv4_bind(self, tmp_path, monkeypatch):
         monkeypatch.setitem(
             sys.modules, "ha_mcp.listen_sockets", ModuleType("ha_mcp.listen_sockets")
         )
+        # An older server has neither the helper nor the guard.
+        monkeypatch.setitem(sys.modules, "ha_mcp.ipv6_lan_guard", None)
         mgr, _hass, _entry = _manager(tmp_path, options={OPT_BIND_HOST: BIND_HOST_ALL})
         assert mgr._listen_kwargs() == {}
 
