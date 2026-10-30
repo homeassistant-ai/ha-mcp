@@ -23,6 +23,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_logs import LogTools
 
 from ._logbook_fallback import call_kwargs as _call_kwargs
@@ -215,7 +216,7 @@ class TestLogbookTransports:
 
     @pytest.mark.asyncio
     async def test_component_rejected_token_surfaces_without_a_rest_fallback(
-        self, logbook_component_caps
+        self, logbook_component_caps: ComponentCaps
     ) -> None:
         unsent = HomeAssistantCommandNotSent("WebSocket authentication failed")
         unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")

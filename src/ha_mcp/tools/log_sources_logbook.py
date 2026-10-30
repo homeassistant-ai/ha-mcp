@@ -301,8 +301,9 @@ class LogbookLogSourceMixin:
         ``None`` means the component is absent, downgraded (``unknown_command``
         drops the cached capability) or the transport failed before Home
         Assistant saw the request. Core's own rejections surface unchanged; a
-        timeout (the recorder query still runs inside Home Assistant) and a
-        rejected token surface instead of falling back.
+        timeout (the recorder query still runs inside Home Assistant) surfaces
+        instead of falling back, and so does a token rejected on the command
+        itself. A token already rejected on the capability probe falls back.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):

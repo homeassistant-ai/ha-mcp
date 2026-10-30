@@ -300,7 +300,7 @@ class TestBackupCaptureConnect:
 
     @pytest.mark.parametrize("auth", [True, False], ids=["rejected_token", "refused"])
     @pytest.mark.asyncio
-    async def test_failed_connect_raises_by_its_code(self, auth):
+    async def test_failed_connect_raises_by_its_code(self, auth: bool) -> None:
         from ha_mcp import backup_manager
         from ha_mcp.client.rest_client import (
             HomeAssistantAuthError,

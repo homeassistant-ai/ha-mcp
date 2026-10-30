@@ -2,7 +2,8 @@
 anything else as a connection failure."""
 
 import json
-from unittest.mock import AsyncMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -27,7 +28,9 @@ from .test_dashboard_edit_routing import legacy_dashboard  # noqa: F401
     ],
     ids=["not_authenticated", "token_rejected_on_connect"],
 )
-def test_unsent_save_is_reported_by_its_cause(cause, code) -> None:
+def test_unsent_save_is_reported_by_its_cause(
+    cause: BaseException | None, code: str
+) -> None:
     unsent = HomeAssistantCommandNotSent("WebSocket not authenticated")
     unsent.__cause__ = cause
 
@@ -42,8 +45,8 @@ def test_unsent_save_is_reported_by_its_cause(cause, code) -> None:
 
 
 async def test_legacy_save_with_a_rejected_token_is_an_auth_error(
-    legacy_dashboard,  # noqa: F811
-    monkeypatch,
+    legacy_dashboard: tuple[MagicMock, dict[str, Any], list[dict[str, Any]]],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, document, _messages = legacy_dashboard
     tools = DashboardConfigTools(client)
@@ -59,7 +62,7 @@ async def test_legacy_save_with_a_rejected_token_is_an_auth_error(
     rejected = HomeAssistantCommandNotSent("WebSocket authentication failed")
     rejected.__cause__ = HomeAssistantAuthError("Invalid token")
 
-    async def send(message):
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"] == "lovelace/config/save":
             raise rejected
         return await original_send(message)

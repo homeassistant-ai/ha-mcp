@@ -100,7 +100,7 @@ async def test_token_rejected_on_reconnect_is_reported_as_auth() -> None:
     ids=["rejected_token", "refused"],
 )
 async def test_unsent_removal_mid_run_lists_only_the_ids_not_removed(
-    cause, code
+    cause: BaseException, code: str
 ) -> None:
     client = _make_client()
     unsent = HomeAssistantCommandNotSent(str(cause))
