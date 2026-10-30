@@ -12,7 +12,7 @@ and never probes/aborts a wrong candidate; a capability miss falls back to
 the legacy per-candidate probe loop unchanged; and the full component error
 taxonomy (unknown_command / command error / a transport failure — both a
 connection error off the frame and a failed establish — falling back
-to the legacy probe, which rides the swallowing bridge and so does not die
+to the legacy probe, which rides the WS bridge and so does not die
 identically) behaves like every other component consumer.
 """
 
@@ -230,7 +230,7 @@ async def test_command_error_falls_back_without_invalidating_caps() -> None:
 async def test_connection_error_falls_back_to_legacy() -> None:
     """A WS connection error on the server_entry frame falls back to the legacy
     per-candidate probe rather than propagating — the legacy probe rides the
-    swallowing bridge, so it does not die identically."""
+    ``send_websocket_message`` bridge, so it does not die identically."""
     ws = make_ws(
         "ha_mcp_tools/server_entry",
         info_result=_CAPS_SERVER_ENTRY,

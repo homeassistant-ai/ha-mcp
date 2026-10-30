@@ -12,7 +12,7 @@ caps, ``unknown_command`` → invalidate + fall back, a non-unknown command
 error, AND a transport failure (both a ``HomeAssistantConnectionError`` off the
 frame and the same error from ``get_websocket_client()`` failing to
 establish the socket). The registries legacy path does NOT die identically on a
-pooled-WS drop (``ha_list_floors_areas`` rides the swallowing
+pooled-WS drop (``ha_list_floors_areas`` rides the
 ``send_websocket_message`` bridge; the auto-backup capture fetchers use a
 dedicated one-shot socket under a best-effort warn-and-skip contract), so a
 transport failure falls back rather than propagating.
@@ -259,7 +259,7 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
 async def test_connection_error_falls_back_to_legacy() -> None:
     """A WS connection error on the component read falls back to the legacy 2-call
     gather rather than propagating — ``ha_list_floors_areas``' legacy path rides the
-    swallowing bridge, so it does not die identically on a pooled-WS drop."""
+    WS bridge, so it does not die identically on a pooled-WS drop."""
     ws = make_ws(
         "ha_mcp_tools/registries",
         info_result=_CAPS_REGISTRIES,

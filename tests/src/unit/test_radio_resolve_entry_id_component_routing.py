@@ -132,8 +132,9 @@ async def test_resolve_entry_id_unknown_command_invalidates_and_falls_back() -> 
 async def test_resolve_entry_id_establish_failure_falls_back_to_legacy() -> None:
     """A WS establish failure after caps cached → legacy dump.
 
-    The config_entries legacy path is the REST-client WS bridge (never raises),
-    NOT the shared pooled WS, so the establish failure must route to legacy.
+    The config_entries legacy path is the ``send_websocket_message`` bridge, which
+    acquires the pooled socket again itself, so the establish failure must route
+    to legacy.
     """
     caps_ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES)
     client = RoutingClient(entries=[_entry()])

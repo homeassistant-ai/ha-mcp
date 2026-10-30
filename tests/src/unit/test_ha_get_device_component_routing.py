@@ -556,8 +556,8 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
 async def test_ws_establish_failure_falls_back_without_invalidating_caps() -> None:
     """A failed establish in ``get_websocket_client()`` (after caps
     are cached) falls back to the legacy registries for the byte-identical result
-    WITHOUT invalidating caps. The legacy device/entity reads ride the swallowing
-    bridge, so they do not die identically on a pooled-WS drop."""
+    WITHOUT invalidating caps. The legacy device/entity reads ride the
+    WS bridge, so they do not die identically on a pooled-WS drop."""
     caps_ws = make_ws("ha_mcp_tools/device_get", info_result=_CAPS_DEVICES)
     client = RoutingClient(
         devices=[_raw_device("dev-1")],

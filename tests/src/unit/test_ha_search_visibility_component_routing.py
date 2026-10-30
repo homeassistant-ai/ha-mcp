@@ -24,7 +24,7 @@ still take the fast path. These tests pin the four-way gate:
   ``HomeAssistantConnectionError`` off the frame and the same error from
   ``get_websocket_client()`` failing to establish the socket) → legacy fallback
   with a ``served via legacy path`` warning (the legacy path reads ``/api/states``
-  over REST + the swallowing registry bridge, so it does not die identically)
+  over REST + the registry bridge, so it does not die identically)
 
 The parity of what the component then DOES with that param lives in
 ``test_component_search_visibility_contract.py``; here the component WS is a
@@ -371,7 +371,7 @@ async def test_connection_error_on_visibility_path_falls_back_to_legacy(
 ) -> None:
     """A WS-down error on the visibility search frame falls back to legacy (with a
     warning), still honouring the filter — the legacy path reads REST states + the
-    swallowing registry bridge, so it does not die identically."""
+    registry bridge, so it does not die identically."""
     _write_active_deny(tmp_path, monkeypatch)
     ws = make_ws(
         "ha_mcp_tools/search",

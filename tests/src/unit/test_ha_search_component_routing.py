@@ -370,7 +370,7 @@ async def test_ws_establish_failure_falls_back_with_warning(
     """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → legacy path AND a ``warnings[]`` entry, not a propagated error.
 
-    The legacy search reads ``/api/states`` over REST + the swallowing registry
+    The legacy search reads ``/api/states`` over REST + the registry
     bridge, so it does not die identically on a pooled-WS drop."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     caps_ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)

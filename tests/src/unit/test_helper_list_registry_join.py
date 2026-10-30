@@ -227,8 +227,8 @@ class TestListHelpersRegistryJoin:
     async def test_registry_unsuccessful_response_degrades_open_with_warning(
         self, register_tools, mock_client
     ):
-        """The registry read never raises in production — the client returns
-        ``{"success": False, ...}`` on failure rather than throwing. That
+        """When HA answers the registry read with an error, the client returns
+        ``{"success": False, ...}`` rather than throwing. That
         unsuccessful response is a malformed read: the tool must flag it and
         return the un-enriched list (the branch production actually takes)."""
 
