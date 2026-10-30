@@ -664,8 +664,7 @@ class TestLogPathControlledByOthers:
         try:
             log_dir.rmdir()
             _log_one(logger, tool_name="ha_while_gone")
-            _wait_for(logger._log_queue.empty)
-            time.sleep(0.2)
+            _wait_for(lambda: logger._log_queue.unfinished_tasks == 0)
             assert logger._disk_enabled is True
             log_dir.mkdir(mode=0o700)
             _log_one(logger, tool_name="ha_after_recreate")
@@ -689,8 +688,7 @@ class TestLogPathControlledByOthers:
 
             monkeypatch.setattr("ha_mcp.utils.usage_logger._private_opener", exhausted)
             _log_one(logger)
-            _wait_for(logger._log_queue.empty)
-            time.sleep(0.2)
+            _wait_for(lambda: logger._log_queue.unfinished_tasks == 0)
             assert logger._disk_enabled is True
         finally:
             logger.shutdown()

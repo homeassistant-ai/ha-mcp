@@ -477,7 +477,12 @@ class UsageLogger:
                 # Wait for log entry with timeout to check stop event
                 if not self._log_queue.empty():
                     log_entry = self._log_queue.get(timeout=1.0)
-                    self._write_log_entry(log_entry)
+                    try:
+                        self._write_log_entry(log_entry)
+                    finally:
+                        # Lets a caller wait until the entry is written, not
+                        # only taken off the queue.
+                        self._log_queue.task_done()
                 else:
                     # Sleep briefly to avoid busy waiting
                     threading.Event().wait(0.1)
