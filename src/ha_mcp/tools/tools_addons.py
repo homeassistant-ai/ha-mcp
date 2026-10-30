@@ -27,7 +27,6 @@ from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 from .._version import is_running_in_addon
 from ..client.rest_client import (
     HomeAssistantAPIError,
-    HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
@@ -456,19 +455,20 @@ async def _supervisor_api_call_via_core(
     except HomeAssistantCommandNotSent:
         raise
     except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as exc:
-        # Reads, and a token rejected before anything was sent, keep their error.
-        if verb in {"GET", "HEAD"} or isinstance(exc.__cause__, HomeAssistantAuthError):
-            raise
-        # send_websocket_message re-raises a command timeout as the cause.
-        timed_out = HomeAssistantCommandTimeout in {type(exc), type(exc.__cause__)}
-        code = ErrorCode.TIMEOUT_OPERATION if timed_out else ErrorCode.CONNECTION_FAILED
-        _raise_supervisor_write_outcome_unknown(
-            code,
-            f"Home Assistant WebSocket returned no answer for Supervisor "
-            f"{verb} {endpoint}; the request outcome is unknown: {exc}",
-            endpoint,
-            verb,
-        )
+        if verb not in {"GET", "HEAD"}:
+            code = (
+                ErrorCode.TIMEOUT_OPERATION
+                if isinstance(exc, HomeAssistantCommandTimeout)
+                else ErrorCode.CONNECTION_FAILED
+            )
+            _raise_supervisor_write_outcome_unknown(
+                code,
+                f"Home Assistant WebSocket returned no answer for Supervisor "
+                f"{verb} {endpoint}; the request outcome is unknown: {exc}",
+                endpoint,
+                verb,
+            )
+        raise
 
     if (
         verb not in {"GET", "HEAD"}

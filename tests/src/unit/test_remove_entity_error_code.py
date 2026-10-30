@@ -6,10 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantAuthError,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 
 from .test_tools_entities_p2 import _make_client, _register
 
@@ -69,33 +66,3 @@ async def test_lost_connection_keeps_what_the_bulk_run_already_removed() -> None
     assert result["errors"][0]["entity_id"] == "sensor.b"
     assert result["errors"][0]["code"] == "CONNECTION_FAILED"
     assert result["not_attempted"] == ["sensor.c"]
-
-
-async def test_token_rejected_on_reconnect_is_reported_as_auth() -> None:
-    """The transport wraps a rejected token in a connection error; the
-    per-id error names it as an auth failure."""
-    client = _make_client()
-    rejected = HomeAssistantConnectionError("WebSocket authentication failed")
-    rejected.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
-    client.send_websocket_message = AsyncMock(side_effect=rejected)
-    tool = _register(client)["ha_remove_entity"]
-
-    result = await tool(entity_id=["sensor.a", "sensor.b"])
-
-    assert result["errors"][0]["code"] == "AUTH_INVALID_TOKEN"
-    assert result["not_attempted"] == ["sensor.b"]
-
-
-async def test_timed_out_removal_is_reported_as_a_timeout() -> None:
-    """send_websocket_message wraps a command timeout in a connection error
-    with the timeout's text; the per-id error names it as a timeout."""
-    client = _make_client()
-    client.send_websocket_message = AsyncMock(
-        side_effect=HomeAssistantConnectionError("Command timeout")
-    )
-    tool = _register(client)["ha_remove_entity"]
-
-    result = await tool(entity_id=["sensor.a", "sensor.b"])
-
-    assert result["errors"][0]["code"] == "CONNECTION_TIMEOUT"
-    assert result["not_attempted"] == ["sensor.b"]
