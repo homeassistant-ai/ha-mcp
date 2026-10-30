@@ -359,9 +359,9 @@ class HelperConfigTools:
             return legacy
         result = raw.get("result") or {}
         if not _component_covers(result, helper_type):
-            # The component did not authoritatively enumerate this type (tag has
-            # no state entity for the from-states scan; or an older component
-            # sent no covered_types). Don't trust a partial/empty list: storage
+            # The component did not authoritatively enumerate this type (person
+            # and tag, whose <type>/list adds more than the stored items; or an
+            # older component sent no covered_types). Don't trust a partial/empty list: storage
             # types fall back to the legacy path silently; a flow type raises,
             # naming the failed loader read when the component reports one, else
             # the component-required error, rather than emptying out.
@@ -594,7 +594,7 @@ class HelperConfigTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Automatic backups hold the registry icon of a person, tag or zone only, so restoring another helper's backup does not bring back an icon kept in the registry; without the component, every storage helper other than a zone keeps its icon there",
+                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
                 default=None,
             ),
         ] = None,

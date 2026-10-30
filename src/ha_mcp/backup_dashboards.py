@@ -70,6 +70,7 @@ async def fetch_dashboard(client: Any, entity_id: str) -> Any:
     """
     from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+    from .tools.dashboard_read_errors import UNKNOWN_CONFIG_PREFIX
     from .tools.tools_config_dashboards import (
         _component_dashboard_config,
         _get_dashboard_config_internal,
@@ -108,7 +109,7 @@ async def fetch_dashboard(client: Any, entity_id: str) -> Any:
             # url_path ("Unknown config specified", also the create path), or
             # a dashboard whose config was never saved, which keeps its row.
             msg = str(err).lower()
-            if "not_found" not in msg and "unknown config" not in msg:
+            if "not_found" not in msg and UNKNOWN_CONFIG_PREFIX.lower() not in msg:
                 raise
             config = None
             if row is None:
@@ -134,10 +135,12 @@ async def _save(client: Any, url_path: str, config: Any) -> Any:
 
 async def _saved(client: Any, url_path: str, config: Any) -> bool:
     """Write; ``False`` when Core has no dashboard at ``url_path``."""
+    from .tools.dashboard_read_errors import CONFIG_NOT_FOUND_CODE
+
     try:
         await _save(client, url_path, config)
     except HomeAssistantCommandError as err:
-        if err.code != "config_not_found":
+        if err.code != CONFIG_NOT_FOUND_CODE:
             raise
         return False
     return True

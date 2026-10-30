@@ -18,7 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.device_control import DeviceControlTools
+from ha_mcp.tools.hacs_backend import HACS_API
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_hacs import HacsTools
 from ha_mcp.tools.tools_history import HistoryTools
@@ -49,8 +51,10 @@ def _assert_no_protocol_logging(ctx: MagicMock) -> None:
 def _mock_ha_client() -> MagicMock:
     """Minimal mock HomeAssistantClient sufficient for these unit paths."""
     client = MagicMock()
-    client.base_url = "http://homeassistant.local"
-    client.token = "test_token"
+    # Credential-less, so get_component_caps skips its WebSocket probe. Set
+    # both explicitly: an unset MagicMock attribute is truthy.
+    client.base_url = None
+    client.token = None
     client.verify_ssl = True
     # add_timezone_metadata awaits get_config() — must be async.
     client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
@@ -73,6 +77,21 @@ def _assert_progress_call(
     assert call.kwargs["progress"] == progress, call.kwargs
     assert call.kwargs["total"] == total, call.kwargs
     assert message_contains in call.kwargs["message"], call.kwargs
+
+
+# ---------------------------------------------------------------------------
+# _mock_ha_client self-check: no live component WebSocket probe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mock_ha_client_never_sends_its_token_to_a_real_host() -> None:
+    """The shared mock has no credentials, so the component probe never dials out."""
+    with patch(
+        "ha_mcp.tools.component_api.get_websocket_client", new=AsyncMock()
+    ) as connect:
+        assert await get_component_caps(_mock_ha_client()) is None
+    connect.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +304,8 @@ async def test_ha_get_hacs_info_search_works_without_ctx() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.tools_hacs._assert_hacs_available",
-            new=AsyncMock(return_value=None),
+            "ha_mcp.tools.tools_hacs.detect_store_api",
+            new=AsyncMock(return_value=HACS_API),
         ),
         patch(
             "ha_mcp.client.websocket_client.get_websocket_client",
@@ -314,8 +333,8 @@ async def test_ha_get_hacs_info_search_emits_progress_with_ctx() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.tools_hacs._assert_hacs_available",
-            new=AsyncMock(return_value=None),
+            "ha_mcp.tools.tools_hacs.detect_store_api",
+            new=AsyncMock(return_value=HACS_API),
         ),
         patch(
             "ha_mcp.client.websocket_client.get_websocket_client",
@@ -449,6 +468,45 @@ async def test_bulk_device_control_parallel_emits_dispatch_only() -> None:
     _assert_progress_call(
         calls[1], progress=2, total=2, message_contains="dispatched 2 op(s)"
     )
+
+
+@pytest.mark.asyncio
+async def test_bulk_component_batch_progress_does_not_claim_confirmation() -> None:
+    """A batch with an op HA did not confirm is not announced as confirmed."""
+    client = _mock_ha_client()
+    tools = DeviceControlTools(client=client)
+    ctx = _make_ctx()
+    component_response = {
+        "results": [
+            {"command_sent": True, "confirmed": True},
+            {"command_sent": True, "confirmed": False},
+        ]
+    }
+    tools._bulk_via_component = AsyncMock(return_value=component_response)  # type: ignore[method-assign]
+    tools.control_device_smart = AsyncMock()  # type: ignore[method-assign]
+
+    result = await tools.bulk_device_control(
+        operations=[
+            {"entity_id": "light.a", "action": "on"},
+            {"entity_id": "light.b", "action": "off"},
+            # Skipped as invalid: progress/total must count only the two dispatched ops.
+            {"action": "on"},
+        ],
+        ctx=ctx,
+    )
+
+    assert result is component_response
+    tools.control_device_smart.assert_not_awaited()
+    _assert_no_protocol_logging(ctx)
+    # One completion event; the legacy "dispatching operations" framing is skipped.
+    (call,) = ctx.report_progress.await_args_list
+    _assert_progress_call(
+        call,
+        progress=2,
+        total=2,
+        message_contains="dispatched via component; each op's result shows its outcome",
+    )
+    assert "confirmed" not in call.kwargs["message"], call.kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +658,7 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
 # tools_backup.ha_manage_backup (#1861) — the tool is a nested-function
 # @mcp.tool closure inside register_backup_tools, not a class method like
 # every other tool above. Its unit tests (test_backup_delete.py,
-# test_backup_poll_timeout.py) call the module-level create_backup /
+# test_backup_snapshot*.py) call the module-level create_backup /
 # restore_backup / delete_backup functions directly with an explicit
 # ctx= kwarg, which proves the plumbing but NOT that FastMCP actually
 # injects a live Context into ha_manage_backup's own signature when a

@@ -17,8 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirror the local-fixture pattern from
 # test_helper_field_persistence.py and test_helper_param_rejection.py — kept
@@ -236,16 +234,21 @@ class TestTagAutoGeneratesTagId:
 
 
 # ---------------------------------------------------------------------------
-# Bug 13 — input_number range/step validation
+# Bug 13 — input_number step: Core judges it (#2632)
 # ---------------------------------------------------------------------------
 
 
-class TestInputNumberStepGuard:
-    async def test_rejects_step_larger_than_range(self, register_tools, mock_client):
-        # HA itself does NOT reject this, but the slider becomes broken — the
-        # tool must catch it before the WS round-trip.
+class TestInputNumberStepReachesCore:
+    async def test_step_wider_than_range_reaches_core(
+        self, register_tools: dict[str, Any], mock_client: MagicMock
+    ) -> None:
+        # Core and the frontend accept this, so the tool sends it on (#2632).
         _wire_default_ws(mock_client, "input_number")
-        with pytest.raises(ToolError) as excinfo:
+        with patch(
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 name="Volume",
@@ -253,50 +256,9 @@ class TestInputNumberStepGuard:
                 max_value=10,
                 step=15,
             )
-        _assert_invalid_param(excinfo)
-
-    async def test_valid_range_with_equal_step(self, register_tools, mock_client):
-        # Control: step exactly equal to range is allowed (slider has 2 stops).
-        _wire_default_ws(mock_client, "input_number")
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_number",
-                name="Volume",
-                min_value=0,
-                max_value=10,
-                step=10,
-            )
         msg = _find_msg(mock_client, "input_number/create")
         assert msg is not None
-        assert msg["step"] == 10
-
-    async def test_valid_range_passes(self, register_tools, mock_client):
-        # Control: a normal range goes through unchanged.
-        _wire_default_ws(mock_client, "input_number")
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_number",
-                name="Volume",
-                min_value=0,
-                max_value=100,
-                step=1,
-            )
-        msg = _find_msg(mock_client, "input_number/create")
-        assert msg is not None
-        assert msg["min"] == 0 and msg["max"] == 100 and msg["step"] == 1
-
-
-# ---------------------------------------------------------------------------
-# Bug 13 — counter range validation
-# ---------------------------------------------------------------------------
+        assert msg["step"] == 15
 
 
 # ---------------------------------------------------------------------------

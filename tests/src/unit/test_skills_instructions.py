@@ -153,7 +153,7 @@ class TestParseSkillFrontmatter:
 
 
 class TestLogSkillRegistrationSummary:
-    """Tests for _log_skill_registration_summary's branch logic.
+    """Tests for log_skill_registration_summary's branch logic.
 
     The summary line is the operator-facing signal for skill-system health,
     so the warning-vs-info gating (which feeds log-grep alerts) needs to
@@ -162,14 +162,14 @@ class TestLogSkillRegistrationSummary:
 
     @pytest.fixture
     def emit(self):
-        from ha_mcp.server import HomeAssistantSmartMCPServer
+        from ha_mcp.utils.skill_loader import log_skill_registration_summary
 
-        return HomeAssistantSmartMCPServer._log_skill_registration_summary
+        return log_skill_registration_summary
 
     def test_logs_info_when_all_phases_ok_and_guidance_present(self, emit, caplog):
         import logging
 
-        with caplog.at_level(logging.INFO, logger="ha_mcp.server"):
+        with caplog.at_level(logging.INFO, logger="ha_mcp.utils.skill_loader"):
             emit({"provider": "ok", "tool": "ok", "guidance_count": 3})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
@@ -178,7 +178,7 @@ class TestLogSkillRegistrationSummary:
     def test_logs_warning_when_provider_failed(self, emit, caplog):
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.skill_loader"):
             emit({"provider": "failed", "tool": "skipped", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
@@ -187,7 +187,7 @@ class TestLogSkillRegistrationSummary:
     def test_logs_warning_when_tool_failed(self, emit, caplog):
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.skill_loader"):
             emit({"provider": "ok", "tool": "failed", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
@@ -197,7 +197,7 @@ class TestLogSkillRegistrationSummary:
         """`skipped` is not the same as `ok` — the summary must still warn."""
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.skill_loader"):
             emit({"provider": "skipped", "tool": "skipped", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
@@ -212,7 +212,7 @@ class TestLogSkillRegistrationSummary:
         """
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.skill_loader"):
             emit({"provider": "ok", "tool": "ok", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
@@ -221,7 +221,7 @@ class TestLogSkillRegistrationSummary:
     def test_missing_guidance_key_treated_as_zero(self, emit, caplog):
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.skill_loader"):
             emit({"provider": "ok", "tool": "ok"})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
@@ -574,7 +574,7 @@ class TestSkillToolRegistration:
         return captured, fake_tool
 
     def test_register_returns_skill_count(self, server, populated_dir, captor):
-        """The return value feeds _log_skill_registration_summary's
+        """The return value feeds log_skill_registration_summary's
         guidance_count key — a regression to ``return 0`` (or returning
         the description length) would silently flip the operator log
         line from info to warning."""

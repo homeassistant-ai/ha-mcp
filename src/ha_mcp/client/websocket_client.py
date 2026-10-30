@@ -282,12 +282,12 @@ class WebSocketConnectionState:
                 future.set_exception(HomeAssistantConnectionError(message))
         self._event_responses.clear()
 
-        # Drop any subscription queues — readers wake on the close signal
-        # we push, then a ``QueueShutDown`` (3.13) tells them the source
-        # is gone. Using ``shutdown`` rather than just clearing the dict
-        # so blocked ``queue.get()`` awaiters unblock instead of hanging.
+        # Drop any subscription queues. ``shutdown`` rather than just clearing
+        # the dict, so blocked ``queue.get()`` awaiters unblock instead of
+        # hanging; not ``immediate``, so a reader still gets the events that
+        # arrived before the close, then ``QueueShutDown`` (3.13).
         for queue in self._subscription_queues.values():
-            queue.shutdown(immediate=True)
+            queue.shutdown()
         self._subscription_queues.clear()
         # Subscriptions die with the socket, and ids restart on the next one.
         self._abandoned_subscriptions.clear()

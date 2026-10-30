@@ -168,7 +168,9 @@ _NODE_SUGGESTIONS: dict[str, str] = {
 
 _INTERPRETER_INTERNAL_NAMES = frozenset({"__builtins__", "__name__", "__doc__"})
 
-# Whitelist of safe methods that can be called
+# Whitelist of safe methods that can be called. Calls are matched by
+# attribute name only, whatever the receiver's type, so each entry must be
+# safe on every built-in type that has a method of that name.
 SAFE_METHODS = {
     # List methods
     "append",
@@ -188,12 +190,16 @@ SAFE_METHODS = {
     "keys",
     "values",
     "items",
-    # String methods (for entity filtering)
+    # String methods
     "startswith",
     "endswith",
     "lower",
     "upper",
     "strip",
+    "lstrip",
+    "rstrip",
+    "removeprefix",
+    "removesuffix",
     "split",
     "join",
     "replace",
@@ -513,8 +519,9 @@ PYTHON TRANSFORM SECURITY:
 - Slicing: config['views'][0]['cards'][1:3]
 - Assignment: config['key'] = 'value'
 - Deletion: del config['key'] or config.pop('key')
-- List methods: append, insert, pop, remove, clear, extend
-- Dict methods: update, get, setdefault, keys, values, items
+- List methods: append, insert, pop, remove, clear, extend, index, count, sort,
+  reverse
+- Dict methods: update, get, setdefault, keys, values, items, pop, clear
 - Loops: for, if/else, pass, break, continue
 - Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)
 - Ternary: x if condition else y
@@ -522,7 +529,8 @@ PYTHON TRANSFORM SECURITY:
 - Dict unpacking (**) in calls and dict literals: {**d, 'k': v}
 - Keyword arguments: func(key=value)
 - Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])
-- String methods: startswith, endswith, lower, upper, strip, split, join, replace
+- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,
+  removeprefix, removesuffix, split, join, replace, count, index
 - Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
   min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,
   tuple, set

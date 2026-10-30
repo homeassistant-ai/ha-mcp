@@ -429,8 +429,8 @@ class TestCalendarEventLifecycle:
         list_args = {
             "entity_id": calendar_entity,
             "start": start.isoformat(),
-            # Window covers all 3 daily occurrences with an hour of slack.
-            "end": (start + timedelta(days=2, hours=1)).isoformat(),
+            # A day of slack: across a DST change a local series shifts in UTC.
+            "end": (start + timedelta(days=3)).isoformat(),
         }
 
         def _occurrences(data: dict) -> list[dict]:

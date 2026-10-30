@@ -9,6 +9,7 @@ The actual integrations available will vary based on the test setup.
 """
 
 import logging
+import uuid
 from typing import ClassVar
 
 import pytest
@@ -338,7 +339,7 @@ class TestIntegrationFiltering:
         assert data["total_count"] == 0, "Should have 0 results for nonexistent domain"
         assert len(data["entries"]) == 0
 
-    async def test_include_options_flag(self, mcp_client):
+    async def test_include_options_flag(self, mcp_client, ha_client):
         """
         Test: include_options=True returns ACTUAL option values (not {}).
 
@@ -346,59 +347,42 @@ class TestIntegrationFiltering:
         ``options`` from HA's list endpoint, which deliberately omits the
         field, so every entry came back with ``options={}``. The fix
         probes each entry's OptionsFlow to recover the real values.
+
+        The test creates its own entry with known options: a Times of the
+        Day helper keeps its times in options. The seeded HACS entry used to
+        serve, but Home Assistant 2026.11 hands it to the Marketplace, which
+        has no options at all.
         """
         logger.info("Testing ha_get_integration with include_options=True...")
 
-        result = await mcp_client.call_tool(
-            "ha_get_integration", {"include_options": True}
+        flow = await ha_client.start_config_flow("tod")
+        done = await ha_client.submit_config_flow_step(
+            flow["flow_id"],
+            {
+                "name": f"options probe {uuid.uuid4().hex[:8]}",
+                "after_time": "08:00:00",
+                "before_time": "17:00:00",
+            },
         )
-        data = assert_mcp_success(result, "list with include_options")
-
-        if data["total_count"] == 0:
-            pytest.skip("No integrations available")
-
-        # All entries should have options field present.
-        for entry in data["entries"]:
-            assert "options" in entry, "include_options should add options field"
-
-        # At least one entry with supports_options=True should have non-empty
-        # options. The conftest seeds a HACS entry with real options. If every
-        # supports_options=True entry returns {}, the regression has resurfaced.
-        #
-        # Only LOADED entries can answer an OptionsFlow probe. In a few CI
-        # containers the seeded HACS entry never loads; its empty options are
-        # then container weather, not the #1245 regression, so an unverifiable
-        # run skips loudly instead of failing.
-        entries_with_support = [
-            e
-            for e in data["entries"]
-            if e.get("supports_options") and e.get("state") == "loaded"
-        ]
-        # Verifiability keys on the SEEDED HACS entry, not on "any loaded
-        # entry that supports options": other integrations advertise an
-        # OptionsFlow while having nothing stored, so a container where HACS
-        # failed to set up still offers such entries and their legitimately
-        # empty options read as the #1245 regression. (Seen in CI: every
-        # HACS test skipped with "Unknown command" — HACS never loaded —
-        # while this test failed on some other integration's empty options.)
-        hacs_ready = any(
-            e.get("domain") == "hacs"
-            and e.get("state") == "loaded"
-            and e.get("supports_options")
-            for e in data["entries"]
-        )
-        if not hacs_ready:
-            pytest.skip(
-                "the seeded HACS entry is not loaded in this container, and "
-                "it is the only entry with known-non-empty options, so the "
-                "OptionsFlow probe is unverifiable here"
+        assert done.get("type") == "create_entry", done
+        entry_id = done["result"]["entry_id"]
+        try:
+            result = await mcp_client.call_tool(
+                "ha_get_integration", {"include_options": True}
             )
-        non_empty = [e for e in entries_with_support if e["options"]]
-        assert non_empty, (
-            "Expected at least one loaded supports_options=True entry to "
-            "expose non-empty options via the OptionsFlow probe; all came "
-            "back empty (regression of #1245)."
-        )
+            data = assert_mcp_success(result, "list with include_options")
+
+            # All entries should have options field present.
+            for entry in data["entries"]:
+                assert "options" in entry, "include_options should add options field"
+
+            [probe] = [e for e in data["entries"] if e["entry_id"] == entry_id]
+            assert probe["options"].get("after_time") == "08:00:00", (
+                "The OptionsFlow probe returned no options for an entry that "
+                f"has them (regression of #1245): {probe}"
+            )
+        finally:
+            await ha_client.delete_config_entry(entry_id)
 
         logger.info(
             f"include_options test passed: {data['total_count']} entries with options"

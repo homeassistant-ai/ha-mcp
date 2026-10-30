@@ -1,8 +1,7 @@
 """Dashboard screenshot support (opt-in, beta).
 
-Renders Home Assistant Lovelace dashboard views via a separate,
-single-purpose headless-Chromium screenshot engine (balloob's Puppet add-on,
-or a docker-compose sidecar).
+Renders Home Assistant Lovelace dashboard views via a separate screenshot
+engine (balloob's Puppet app, WPE Screenshot Engine, or a sidecar).
 
 The heavy browser runtime lives entirely in that separate engine — this
 package is a thin async HTTP client plus deployment-mode discovery, so the

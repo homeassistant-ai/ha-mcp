@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 from ha_mcp.tools.tools_updates import (
-    _categorize_update,
     _extract_blog_content,
     _get_monthly_versions_between,
     _parse_breaking_changes_html,
@@ -16,6 +15,7 @@ from ha_mcp.tools.tools_updates import (
     _supports_release_notes,
     _try_raw_cdn,
 )
+from ha_mcp.tools.update_categories import categorize_update as _categorize_update
 
 
 class TestListUpdatesHaMcpUpdate:
@@ -38,6 +38,9 @@ class TestListUpdatesHaMcpUpdate:
             ),
         )
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"entities": []}}
+        )
         client.get_states = AsyncMock(return_value=[])
         result = await UpdateTools(client).ha_manage_updates()
         assert result["ha_mcp_update"] == {
@@ -55,6 +58,9 @@ class TestListUpdatesHaMcpUpdate:
             update_check, "get_update_field", AsyncMock(return_value=None)
         )
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"entities": []}}
+        )
         client.get_states = AsyncMock(return_value=[])
         result = await UpdateTools(client).ha_manage_updates()
         assert "ha_mcp_update" not in result
@@ -88,9 +94,14 @@ class TestCategorizeUpdate:
         result = _categorize_update("update.home_assistant_supervisor_update", {})
         assert result == "supervisor"
 
-    def test_hacs_update(self):
-        """HACS updates are identified correctly."""
-        result = _categorize_update("update.hacs_some_integration", {})
+    @pytest.mark.parametrize("platform", ["hacs", "marketplace"])
+    def test_store_update_by_owning_integration(self, platform):
+        """A store repository's update is "hacs" whatever its entity_id says.
+
+        The Marketplace (Core 2026.11) names its entities after the repository
+        alone, so update.ha_mcp_custom_component carries no "hacs".
+        """
+        result = _categorize_update("update.ha_mcp_custom_component", {}, platform)
         assert result == "hacs"
 
     def test_addon_update_by_title(self):
@@ -411,6 +422,9 @@ class TestManageUpdatesDispatch:
             },
         ]
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"entities": []}}
+        )
         client.get_states = AsyncMock(return_value=states)
         client.call_service = AsyncMock(return_value={"success": True})
 
@@ -437,6 +451,9 @@ class TestManageUpdatesDispatch:
             update_check, "get_update_field", AsyncMock(return_value=None)
         )
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"entities": []}}
+        )
         client.get_states = AsyncMock(
             return_value=[
                 {"entity_id": "update.exists", "state": "on", "attributes": {}}
@@ -473,6 +490,9 @@ class TestManageUpdatesDispatch:
             update_check, "get_update_field", AsyncMock(return_value=None)
         )
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"entities": []}}
+        )
         client.get_states = AsyncMock(
             return_value=[
                 {"entity_id": "update.exists", "state": "on", "attributes": {}}

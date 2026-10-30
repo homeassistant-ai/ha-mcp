@@ -21,7 +21,7 @@ from ..component_helper_collections import (
 from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
-from .core_payload import check_core_gaps, merged_update
+from .core_payload import merged_update
 from .icon_route import collection_icon
 from .listing import listed_items
 from .registry import _ws_error_msg
@@ -74,7 +74,6 @@ async def _execute_legacy_update(
     stored = await _stored_item(client, helper_type, entity_id, unique_id)
     item_icon = await collection_icon(client, helper_type, "update", icon)
     body = merged_update(helper_type, stored, name, item_icon, fields, entity_id)
-    check_core_gaps(helper_type, body, changed=fields)
     result = await client.send_websocket_message(
         {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
     )
@@ -235,6 +234,16 @@ async def _execute_update_simple_helper(
                 context=_simple_helper_error_context(helper_type),
             )
         )
+    # As create does: Core's zone schema stores a blank name, which the zone
+    # and person dialogs refuse.
+    if name is not None and not name.strip():
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "name cannot be blank. Omit it to keep the current name.",
+                context=_simple_helper_error_context(helper_type),
+            )
+        )
 
     warnings: list[str] = []
     native = await _update_via_component(
@@ -346,7 +355,6 @@ async def _update_via_component(
     entity_id = item.get("entity_id") or helper_id
     item_icon = await collection_icon(client, helper_type, "update", icon)
     body = merged_update(helper_type, item["item"], name, item_icon, fields, entity_id)
-    check_core_gaps(helper_type, body, changed=fields)
     registry = {
         key: value
         for key, value in (

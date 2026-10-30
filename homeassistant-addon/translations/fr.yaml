@@ -14,12 +14,6 @@ configuration:
       pour toutes les sessions. La concurrence interne pour REST, WebSocket et la
       répartition par outil reste inchangée. 0 conserve un comportement illimité.
       Un appel en attente de capacité échoue après 60 secondes. Plage 0–32.
-  backup_hint:
-    name: Niveau d'indication de sauvegarde
-    description: Avec quelle insistance il est demandé aux assistants IA de suggérer
-      une sauvegarde complète de Home Assistant avant des modifications risquées.
-      Cela ne modifie que cette indication ; les sauvegardes automatiques de modification
-      ont leur propre paramètre.
   custom_instructions:
     name: Instructions personnalisées du serveur
     description: Texte envoyé à chaque assistant IA qui se connecte, dans le cadre
@@ -89,15 +83,24 @@ configuration:
       Désactivé par défaut. Nécessite un redémarrage pour prendre effet.
   redact_secrets:
     name: Masquer les secrets
-    description: Masque les secrets des réponses des outils avant qu'ils n'atteignent
+    description: Masque les secrets dans les réponses des outils avant qu'ils n'atteignent
       l'assistant IA. Les options de l'application (add-on) et les champs d'intégration
-      marqués comme des mots de passe sont remplacés par un marqueur défini/vide (afin
-      que la question "ce secret est-il configuré ?" puisse toujours recevoir une
-      réponse), et les autres réponses des outils sont nettoyées des valeurs secrètes
-      déjà vues par le serveur (les valeurs de moins de 6 caractères sont ignorées,
-      car le remplacement de minuscules fragments corromprait des sorties sans rapport).
-      Les champs non marqués comme mots de passe par leur schéma ne peuvent pas être
-      détectés. Désactivé par défaut.
+      marqués comme mots de passe sont remplacés par un marqueur défini/vide (afin
+      que la question « ce identifiant est-il configuré ? » reste traitable), et les
+      autres réponses d'outils sont nettoyées des valeurs secrètes déjà vues par le
+      serveur (les valeurs de moins de 6 caractères sont ignorées, car le remplacement
+      de minuscules fragments corromprait des sorties sans rapport). Les autres champs
+      ne sont pas détectés, à l'exception des clés privées dans les options de l'application
+      et des noms d'options d'application listés ci-dessous. Désactivé par défaut.
+  redact_app_option_keys:
+    name: Clés d'options d'application supplémentaires à masquer
+    description: Noms d'options de l'application (add-on) à masquer comme les champs
+      de mot de passe, pour les applications dont le schéma stocke un secret en texte
+      brut (par exemple backup_password). Séparez les noms par des virgules ou des
+      retours à la ligne. Un nom s'applique à toutes les applications ; écrivez app_slug:name
+      pour le limiter à une seule application. Nommer un groupe d'options couvre toutes
+      les options qu'il contient. Utilisé uniquement lorsque l'option Masquer les
+      secrets est active. Vide par défaut.
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu

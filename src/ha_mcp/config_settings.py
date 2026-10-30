@@ -231,6 +231,13 @@ class Settings(BaseSettings):
         bool, Setting(surface="advanced", section="operations")
     ] = Field(False, alias="HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS")
 
+    # Opt-in: ask HACS / the Marketplace to refresh the component's repository
+    # at startup after a server update (hacs_auto_refresh). An install that ran
+    # the refresh before it became opt-in has it turned on once, on its behalf.
+    hacs_refresh_after_update: Annotated[
+        bool, Setting(surface="advanced", section="operations")
+    ] = Field(False, alias="HAMCP_HACS_REFRESH_AFTER_UPDATE")
+
     # Optional process-wide outer tool-call concurrency. Zero preserves the
     # existing unlimited behavior; constrained installs can opt into queuing.
     ha_tool_concurrency: Annotated[
@@ -244,28 +251,17 @@ class Settings(BaseSettings):
         ),
     ] = Field(0, alias="HA_TOOL_CONCURRENCY")
 
-    # Backup tool configuration. The app requires this option.
-    backup_hint: Annotated[
-        str,
-        Setting(
-            surface="advanced",
-            section="operations",
-            app=AppOption(required=True),
-            choices=("strong", "normal", "weak", "auto"),
-        ),
-    ] = Field("normal", alias="BACKUP_HINT")
-
     # WebSocket configuration (essential for async operations)
     enable_websocket: Annotated[
         bool,
         Setting(surface="advanced", section="operations", restart_required=True),
     ] = Field(True, alias="ENABLE_WEBSOCKET")
 
-    # Base URL of the screenshot engine (e.g. ``http://puppet:10000`` or a
-    # docker-compose sidecar). A connection string, NOT a beta toggle, so
-    # it is not a feature flag. Left blank, the
-    # provisioner auto-discovers the Puppet add-on via the Supervisor in
-    # HA OS / Supervised mode; Container / Core users set it explicitly.
+    # Base URL of the screenshot engine (e.g. ``http://puppet:10000``,
+    # ``http://wpe-screenshot-engine:8080`` or a docker-compose sidecar). A
+    # connection string, NOT a beta toggle, so it is not a feature flag. Left
+    # blank, the provisioner auto-discovers supported apps via the Supervisor
+    # in HA OS / Supervised mode; Container / Core users set it explicitly.
     # Resolved live per capture (resolve_engine), so unlike the time
     # budgets it takes effect without a restart (#1538).
     dashboard_screenshot_engine_url: Annotated[
@@ -530,7 +526,7 @@ class Settings(BaseSettings):
     # generic Server Settings feature list, while /api/settings/features
     # still serves and persists it for the Policies-tab toggle. It is an app
     # option because that toggle routes its save through Supervisor in
-    # add-on mode, which rejects any option the schema does not declare.
+    # add-on mode, which drops any option the schema does not declare.
     enable_security_policy_tool: Annotated[
         bool, Setting(surface="feature", app=_ALL_FLAVORS)
     ] = Field(False, alias="ENABLE_SECURITY_POLICY_TOOL")
@@ -558,6 +554,21 @@ class Settings(BaseSettings):
     redact_secrets: Annotated[bool, Setting(surface="feature", app=_ALL_FLAVORS)] = (
         Field(False, alias="REDACT_SECRETS")
     )
+
+    # App option names to redact like ``format: password`` fields, for apps
+    # whose schema ships a secret as a plain string (#2843). Format: see
+    # ``redaction._listed_entries``. Consulted only while ``redact_secrets``
+    # is on; the UI nests it under that toggle. Restart-required because the
+    # app reads its options only at start, though other installs apply it live.
+    redact_app_option_keys: Annotated[
+        str,
+        Setting(
+            surface="advanced",
+            section="redact_keys",
+            app=_ALL_FLAVORS,
+            restart_required=True,
+        ),
+    ] = Field("", alias="REDACT_APP_OPTION_KEYS")
 
     # Mandatory best-practice skills — server-side master switch for the
     # write-tool skill_content delivery feature (issue #1182). When True
@@ -666,9 +677,9 @@ class Settings(BaseSettings):
     # Dashboard screenshot mode — the ``ha_get_dashboard_screenshot`` tool
     # plus the ``include_screenshot`` / ``return_screenshot`` params on the
     # dashboard get/set tools. Renders responsive Lovelace images via a
-    # separate, opt-in headless-Chromium screenshot add-on (balloob's Puppet
-    # add-on, or a docker-compose sidecar). Off by default; nothing heavy is
-    # pulled unless the user enables it AND installs the engine.
+    # separate, opt-in screenshot engine app (Puppet, WPE Screenshot Engine,
+    # or a docker-compose sidecar). Off by default; nothing heavy is pulled
+    # unless the user enables it AND installs the engine.
     enable_dashboard_screenshot: Annotated[
         bool, Setting(surface="feature", beta=True, app=_DEV_FLAVOR)
     ] = Field(False, alias="HAMCP_ENABLE_DASHBOARD_SCREENSHOT")
@@ -739,7 +750,7 @@ class Settings(BaseSettings):
     # snapshots before deleting old ones, but it cannot forge a backup's
     # HA-stamped creation date. 0 disables the age floor (still gated by
     # enable_snapshot_delete + the newest-snapshot / automatic-backup
-    # guards enforced in tools/backup.py).
+    # guards enforced in tools/backup_snapshot.py).
     snapshot_delete_min_age_days: Annotated[
         int, Setting(surface="backup", app=_ALL_FLAVORS, range=(0, 365))
     ] = Field(7, alias="SNAPSHOT_DELETE_MIN_AGE_DAYS")
@@ -870,12 +881,6 @@ class Settings(BaseSettings):
     def validate_log_level(cls, v: str) -> str:
         """Accept a log level in any case."""
         return _one_of(cls, "log_level", v.upper())
-
-    @field_validator("backup_hint")
-    @classmethod
-    def validate_backup_hint(cls, v: str) -> str:
-        """Accept a backup hint in any case."""
-        return _one_of(cls, "backup_hint", v.lower())
 
     model_config = SettingsConfigDict(
         # Absolute, and the same file load_dotenv already resolved above. A

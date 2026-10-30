@@ -76,10 +76,10 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
 def _registries_missing_category_scopes() -> Exception:
     """Build a ``HomeAssistantError`` for a scope-less ``category`` request.
 
-    Mirrors :func:`_backup_unavailable`: imported function-locally (test-stubbable)
-    so a ``registries`` request naming ``category`` without a non-empty
-    ``category_scopes`` raises instead of silently returning ``{}`` (a caller
+    Raised so a ``registries`` request naming ``category`` without a non-empty
+    ``category_scopes`` fails instead of silently returning ``{}`` (a caller
     could otherwise mistake that for "no categories in any scope").
+    ``HomeAssistantError`` is imported function-locally so tests can stub it.
     """
     from homeassistant.exceptions import HomeAssistantError
 

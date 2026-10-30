@@ -13,6 +13,9 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from .._vendor.fastmcp.exceptions import ToolError
+from ..client.error_log_journald import is_cursor_token, parse_cursor_token
+from ..errors import TOOL_ERROR_LOG_LEVEL
 from .error_log_parsing import _DEFAULT_TOP_N
 from .helpers import log_tool_usage
 from .log_common import (
@@ -26,6 +29,54 @@ from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_logbook import LogbookLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 from .tool_hints import read_only_hints
+
+
+def _validate_log_offset(source: str, offset: int | str) -> int | str:
+    """Validate a paging anchor: an integer, or an error-log cursor token."""
+    if isinstance(offset, str):
+        text = offset.strip()
+        if not text:
+            # An empty string means "no anchor"; MCP clients stringify 0.
+            return 0
+        if text.lstrip("-").isdigit():
+            # Clients that stringify integers used to reach the integer schema;
+            # keep that working now that the union admits strings.
+            numeric = int(text)
+            if numeric < 0:
+                raise ToolError(
+                    f"'offset' must not be negative, got {numeric}",
+                    log_level=TOOL_ERROR_LOG_LEVEL,
+                )
+            return numeric
+        offset = text
+    if isinstance(offset, str):
+        if source != "error_log":
+            raise ToolError(
+                "Cursor tokens only apply to source='error_log'; "
+                f"source='{source}' takes a non-negative integer offset",
+                log_level=TOOL_ERROR_LOG_LEVEL,
+            )
+        if not is_cursor_token(offset):
+            raise ToolError(
+                "Invalid 'offset' token for source='error_log'; pass the "
+                "'next_offset' value a previous response returned",
+                log_level=TOOL_ERROR_LOG_LEVEL,
+            )
+        try:
+            parse_cursor_token(offset)
+        except ValueError as e:
+            raise ToolError(
+                f"Invalid 'offset' token for source='error_log' ({e}); pass the "
+                "'next_offset' value a previous response returned",
+                log_level=TOOL_ERROR_LOG_LEVEL,
+            ) from e
+        return offset
+    if offset < 0:
+        raise ToolError(
+            f"'offset' must not be negative, got {offset}",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
+    return offset
 
 
 class LogTools(
@@ -49,7 +100,7 @@ class LogTools(
         device_id: str | None,
         context_id: str | None,
         end_time: str | None,
-        offset: int,
+        offset: int | str,
         compact: bool,
         level: str | None,
         slug: str | None,
@@ -57,6 +108,7 @@ class LogTools(
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
+        numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
                 hours_back=hours_back,
@@ -65,7 +117,7 @@ class LogTools(
                 context_id=context_id,
                 end_time=end_time,
                 limit=limit,
-                offset=offset,
+                offset=numeric_offset,
                 search=search,
                 compact=compact,
                 order=order,
@@ -90,7 +142,7 @@ class LogTools(
             return await self._get_logger_info(limit=limit, search=search)
         if source == "fault_log":
             return await self._get_fault_log(
-                limit=limit, search=search, offset=offset, order=order
+                limit=limit, search=search, offset=numeric_offset, order=order
             )
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
@@ -112,7 +164,7 @@ class LogTools(
         device_id: str | None,
         context_id: str | None,
         end_time: str | None,
-        offset: int,
+        offset: int | str,
         compact: bool,
         level: str | None,
         slug: str | None,
@@ -121,6 +173,7 @@ class LogTools(
         top_n: int | None = None,
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
+        offset = _validate_log_offset(source, offset)
         warnings = _collect_log_warnings(
             source,
             level,
@@ -200,11 +253,16 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "'logbook': entity state-change history. 'system': HA's "
-                    "structured system_log entries (errors, warnings). "
+                    "structured system_log entries (errors, warnings) with full "
+                    "exception tracebacks; search also matches those exceptions. "
                     "'error_log': raw log text (home-assistant.log on "
                     "container/pip installs; HA Core's journald stream on "
-                    "Supervisor-backed installs). 'supervisor': app (add-on) "
-                    "container logs (needs slug). 'system_service': "
+                    "Supervisor-backed installs), grouped into records: a header "
+                    "line starts one and every following line that is not itself "
+                    "a header joins it — traceback frames, the blank lines around "
+                    "chained exceptions, and non-HA banners such as s6-overlay "
+                    "restart lines. 'supervisor': app "
+                    "(add-on) container logs (needs slug). 'system_service': "
                     "Supervisor-managed system service logs (needs slug). "
                     "'logger': effective log level per integration (confirms "
                     "ha_set_integration(log_level=...) changes took effect). 'fault_log': HA "
@@ -222,8 +280,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | None,
             Field(
                 description=(
-                    "Max entries/lines to return. Does not apply to "
-                    "source='error_log' with structured=True."
+                    "Max entries/lines to return. For source='error_log' with "
+                    "structured=False it bounds returned lines: whole records "
+                    "are selected within it, and a record longer than it is cut "
+                    "(header and last lines kept) with a warning naming how many "
+                    "lines were cut. Does not apply to source='error_log' with "
+                    "structured=True."
                 )
             ),
         ] = None,
@@ -231,10 +293,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "Keyword filter on entries/lines; matches the integration "
-                    "domain for source='logger'. In structured error_log mode it "
-                    "matches the message and logger name only; on the raw path "
-                    "the whole line."
+                    "Keyword filter on entries/lines. For source='system' it "
+                    "matches message, name and exception text; for the raw "
+                    "error_log path it matches any line of a record, so a "
+                    "traceback frame brings back its header and siblings. "
+                    "Structured error_log mode matches message and logger name "
+                    "only; source='logger' matches the integration domain."
                 )
             ),
         ] = None,
@@ -246,8 +310,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "supervisor, system_service, fault_log): 'newest' returns "
                     "most-recent first; 'oldest' returns chronological-first. For "
                     "raw-text sources it sets the read direction of the most-recent "
-                    "window; fault_log orders whole crash blocks. Ignored for "
-                    "source='logger', and for source='error_log' with structured=True."
+                    "window; fault_log orders whole crash blocks; error_log orders "
+                    "whole records and keeps each record's lines in place. Ignored "
+                    "for source='logger', and for source='error_log' with "
+                    "structured=True."
                 )
             ),
         ] = "newest",
@@ -290,16 +356,19 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(description="Logbook only: end of the window (ISO datetime)."),
         ] = None,
         offset: Annotated[
-            int,
+            int | str,
             Field(
-                ge=0,
                 description=(
                     "Page deeper into source='logbook', 'error_log' and "
                     "'fault_log' (ignored for other sources). On error_log it "
-                    "counts raw log lines back from the newest entry; on "
-                    "fault_log it counts lines from the start of the assembled "
-                    "crash text. Pass the response's 'next_offset' to continue "
-                    "while 'has_more' is true."
+                    "counts raw log lines back from the newest entry, or is the "
+                    "opaque token a previous page returned in 'next_offset' on "
+                    "Supervisor/journald installs, which keeps paging exact "
+                    "while new log lines arrive (`structured=True` accepts and "
+                    "returns that token too); on fault_log it counts lines "
+                    "from the start of the assembled crash text. Pass the "
+                    "response's 'next_offset' to continue while 'has_more' is "
+                    "true."
                 ),
             ),
         ] = 0,
@@ -322,7 +391,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "system / error_log only: keep only entries at exactly this level "
-                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold."
+                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold. "
+                    "For source='error_log' it matches the record's header only, so "
+                    "matching text in a traceback frame does not satisfy it."
                 )
             ),
         ] = None,
@@ -369,16 +440,17 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         traceback, and its counts run since each error first occurred. error_log with
         structured=True counts only what is inside the fetched window (reported
         as window_start/window_end; every install reads a capped window) and
-        drops tracebacks, which structured=False gets back; use it for entries
-        below system_log's WARNING+ ~50-entry cap, or for the per-component
-        rollup. In structured mode limit/order do not apply: issues are ranked
-        by count, then severity, then recency, over a fixed deep window.
+        drops tracebacks; structured=False returns the raw records instead, so
+        it covers what falls outside system_log's WARNING+ in-memory buffer. Use
+        structured=True for the per-component rollup; in structured mode
+        limit/order do not apply: issues are ranked by count, then severity,
+        then recency, over a fixed deep window.
 
         Raw-text sources (error_log, supervisor, system_service) read a bounded
         window per call, so level/search filter and limit slice within that
-        window only; window_lines reports the size requested. Logbook responses
-        carry has_more plus a pagination_hint; error_log and fault_log carry
-        has_more with a next_offset to pass back while it stays true.
+        window only; window_lines reports the size requested. Logbook
+        responses carry has_more plus a pagination_hint; error_log and fault_log
+        carry has_more with a next_offset to pass back while it stays true.
         """
         return await tools.get_logs(
             source=source,

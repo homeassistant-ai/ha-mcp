@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Actualiza el componente personalizado HA-MCP mediante HACS",
-      "description": "El servidor ha-mcp instalado requiere el componente personalizado HA-MCP {required} o posterior, pero tienes {installed}. Actualiza el componente mediante HACS (abre la entrada del componente personalizado HA-MCP y usa 'Actualizar información' si todavía no aparece ninguna actualización) y reinicia Home Assistant. Mientras tanto el servidor sigue funcionando, pero puede que algunas funciones nuevas no funcionen hasta que se actualice el componente."
+      "title": "Actualizar el componente personalizado HA-MCP",
+      "description": "El servidor de ha-mcp instalado requiere el componente personalizado HA-MCP {required} o posterior, pero tienes {installed}. Actualiza el componente desde Ajustes > Sistema > Actualizaciones (en HACS, o en el Marketplace en Home Assistant 2026.11+, abre el componente personalizado HA-MCP y usa 'Actualizar información' (HACS) o 'Actualizar información' (Marketplace) si aún no se muestra ninguna actualización) y reinicia Home Assistant. El servidor seguirá funcionando mientras tanto, pero es posible que algunas funciones nuevas no funcionen hasta que se actualice el componente."
     },
     "legacy_oauth_restart": {
       "title": "Reinicia Home Assistant para aplicar los ajustes de OAuth heredado",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "El acceso remoto mediante webhook está desactivado (modo solo local).",
     "oauth_creds_pending": "El Client ID y el Client Secret aparecen aquí una vez que el servidor se ha iniciado.",
     "oauth_not_serving": "OAuth heredado aún no los está sirviendo — reinicia Home Assistant cuando te lo pida para activarlos.",
-    "oauth_select_legacy_mode": "Pon el modo de autenticación de arriba en OAuth heredado y guarda para generar un Client ID y un Client Secret.",
+    "oauth_select_legacy_mode": "Para los clientes que no admiten OAuth moderno, cambia el modo a OAuth heredado para generar un ID y un secreto. Si tienes problemas para conectarte cuando está configurado en \"Iniciar sesión con Home Assistant\", te recomendamos cambiar a \"URL de webhook secreta\" para probar tu conexión primero antes de probar OAuth heredado.",
     "panel_hint": "Abre el [panel de ajustes de HA-MCP](/ha-mcp) para la gestión de herramientas y los ajustes del servidor.",
     "tools_module_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado",
     "tools_module_not_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): No instalado — pulsa «Añadir entrada» en la página de esta integración y elige «HA-MCP File & YAML Tools»",

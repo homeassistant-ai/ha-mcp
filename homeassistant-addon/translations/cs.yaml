@@ -14,11 +14,6 @@ configuration:
       všemi relacemi. Vnitřní souběh pro REST, WebSocket a rozbočení pro jednotlivé
       nástroje zůstává nezměněn. 0 zachovává neomezené chování. Volání čekající na
       kapacitu selže po 60 sekundách. Rozsah 0–32.
-  backup_hint:
-    name: Úroveň nápovědy zálohování
-    description: Jak důrazně jsou asistenti AI vyzýváni k doporučení úplné zálohy
-      Home Assistant před rizikovými změnami. Mění pouze tuto nápovědu; automatické
-      zálohy úprav mají své vlastní nastavení.
   custom_instructions:
     name: Vlastní instrukce serveru
     description: Text odeslaný každému připojujícímu se AI asistentu jako součást
@@ -83,14 +78,22 @@ configuration:
       vypnuto. K projevům změn je vyžadován restart.
   redact_secrets:
     name: Redigovat tajemství
-    description: Skrývá tajné údaje z odpovědí nástrojů, než se dostanou k AI asistenci.
-      Možnosti aplikace (doplňku) a pole integrací označená jako hesla jsou nahrazena
-      značkou nastaveno/prázdno (takže zůstává možné odpovědět na otázku „je tento
-      pověření nastaveno?“), a z odpovědí ostatních nástrojů jsou odstraněny tajné
-      hodnoty, které server již viděl (hodnoty kratší než 6 znaků se přeskakují, protože
-      nahrazování drobných fragmentů by poškodilo nesouvisející výstup). Pole, která
-      nejsou svým schématem označena jako hesla, nelze detekovat. Ve výchozím nastavení
-      vypnuto.
+    description: Odstraní citlivé údaje z odpovědí nástrojů před jejich odesláním
+      AI asistentovi. Možnosti aplikace (doplňku) a pole integrací označená jako hesla
+      jsou nahrazena značkou pro nastaveno/prázdno (aby bylo možné odpovědět na otázku
+      „je toto pověření nakonfigurováno?“), a z ostatních odpovědí nástrojů jsou odstraněny
+      tajné hodnoty, které server již zaznamenal (hodnoty kratší než 6 znaků se přeskočí,
+      protože nahrazování drobných fragmentů by poškodilo nesouvisející výstup). Ostatní
+      pole se nerozpoznávají, s výjimkou privátních klíčů v možnostech aplikací a
+      níže uvedených názvů možností aplikací. Ve výchozím nastavení vypnuto.
+  redact_app_option_keys:
+    name: Další klíče možností aplikace k utajení
+    description: Názvy možností aplikace (doplňku), které se mají utajit podobně jako
+      pole pro hesla, pro aplikace, jejichž schéma ukládá tajný údaj jako prostý text
+      (například backup_password). Názvy oddělte čárkami nebo novými řádky. Název
+      platí pro každou aplikaci; zápisem app_slug:name jej omezíte na jednu aplikaci.
+      Pojmenování skupiny možností zahrnuje každou možnost v ní. Používá se pouze
+      tehdy, když je zapnuto Skrýt tajné údaje. Ve výchozím nastavení prázdné.
   enable_mandatory_bps:
     name: Připojit dovednosti osvědčených postupů při zápisu
     description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů

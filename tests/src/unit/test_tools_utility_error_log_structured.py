@@ -11,17 +11,17 @@ import asyncio
 import inspect
 import json
 import textwrap
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import TypeAdapter
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantAuthError
+from ha_mcp.client.rest_client import HomeAssistantAuthError
 from ha_mcp.tools.error_log_parsing import (
     _DEFAULT_TOP_N,
+    _ERROR_LOG_HEADER_LOOKBACK_LINES,
     _MAX_COMPONENTS,
     _MAX_MESSAGE_LEN,
     _TRUNCATION_MARK,
@@ -46,6 +46,15 @@ from ._error_log_structured_fixtures import (
     _UNPARSEABLE_LOG,
     _UNSORTED_LOG,
 )
+from ._error_log_test_helpers import (
+    make_client as _make_client,
+)
+from ._error_log_test_helpers import (
+    numbered_log as _numbered_log,
+)
+from ._error_log_test_helpers import (
+    register_and_collect as _register_and_collect,
+)
 from ._logbook_fallback import disable_logbook_websocket
 
 # ---------------------------------------------------------------------------
@@ -55,20 +64,6 @@ from ._logbook_fallback import disable_logbook_websocket
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_client(log_text: str = _SAMPLE_LOG, has_more: bool = False) -> MagicMock:
-    """Client stub whose ``get_error_log`` answers with one page.
-
-    ``has_more`` is the client's verdict, not a property of ``log_text``: on
-    journald only the client can establish it (see ``_journald_error_log_page``),
-    so the tool layer takes it as given.
-    """
-    client = MagicMock()
-    client.get_error_log = AsyncMock(
-        return_value=ErrorLogPage(text=log_text, has_more=has_more)
-    )
-    return client
 
 
 def _get_tool_param_annotation(tool_name: str, param_name: str) -> Any:
@@ -87,21 +82,6 @@ def _get_tool_param_annotation(tool_name: str, param_name: str) -> Any:
         return inspect.signature(tool.fn).parameters[param_name].annotation
 
     return asyncio.run(_inner())
-
-
-def _register_and_collect(client: Any) -> dict[str, Any]:
-    collected: dict[str, Any] = {}
-
-    def _tool(**_kwargs: Any) -> Any:
-        def _wrap(fn: Any) -> Any:
-            collected[fn.__name__] = fn
-            return fn
-
-        return _wrap
-
-    mcp = SimpleNamespace(tool=_tool)
-    register_logs_tools(mcp, client)
-    return collected
 
 
 # ---------------------------------------------------------------------------
@@ -927,14 +907,6 @@ class TestWarningsAreMergedNotClobbered:
         assert "NOT evidence" in joined
 
 
-def _numbered_log(count: int) -> str:
-    """`count` parseable log lines — enough to fill an exact fetch window."""
-    return "".join(
-        f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
-        for i in range(count)
-    )
-
-
 class TestFetchWindowIsBounded:
     """Every error_log fetch asks for a bounded window (#2279).
 
@@ -954,18 +926,22 @@ class TestFetchWindowIsBounded:
         assert STRUCTURED_ERROR_LOG_WINDOW_LINES < 20000
 
     @pytest.mark.asyncio
-    async def test_raw_unfiltered_reads_exactly_the_limit(self):
+    async def test_raw_unfiltered_window_reaches_past_the_limit(self):
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         await tools["ha_get_logs"](source="error_log", limit=25)
-        assert client.get_error_log.await_args.kwargs["lines"] == 25
+        window = client.get_error_log.await_args.kwargs["lines"]
+        assert window > 25
+        assert window <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
 
     @pytest.mark.asyncio
-    async def test_raw_default_limit_reads_the_default_window(self):
+    async def test_raw_default_limit_reaches_past_the_default(self):
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         await tools["ha_get_logs"](source="error_log")
-        assert client.get_error_log.await_args.kwargs["lines"] == DEFAULT_LOG_LIMIT
+        window = client.get_error_log.await_args.kwargs["lines"]
+        assert window > DEFAULT_LOG_LIMIT
+        assert window <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -989,7 +965,9 @@ class TestFetchWindowIsBounded:
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         await tools["ha_get_logs"](source="error_log", limit=MAX_LIMIT + 5000)
-        assert client.get_error_log.await_args.kwargs["lines"] == MAX_LIMIT
+        window = client.get_error_log.await_args.kwargs["lines"]
+        assert window > MAX_LIMIT
+        assert window <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("structured", [False, True])
@@ -1051,17 +1029,23 @@ class TestErrorLogPagination:
         assert "limit=50" in result["pagination_hint"]
 
     @pytest.mark.asyncio
-    async def test_terminal_window_at_max_limit_hints_narrowing_instead(self):
-        """At limit=MAX_LIMIT the raise-the-limit hint would repeat the same
-        request verbatim; the hint switches to narrowing the match set."""
+    async def test_terminal_window_past_the_cap_names_the_shortfall(self):
+        """One response cannot return this window, so the hint must say so.
+
+        The old wording promised a single call would retrieve every remaining
+        line while capping the suggested limit at ``MAX_LIMIT``, so the caller
+        came back with the same unsatisfiable request.
+        """
         client = _make_client(_numbered_log(MAX_LIMIT + 100), has_more=False)
         tools = _register_and_collect(client)
         result = await tools["ha_get_logs"](
             source="error_log", limit=MAX_LIMIT, search="issue"
         )
         assert result["has_more"] is False
-        assert "already at its maximum" in result["pagination_hint"]
-        assert f"limit={MAX_LIMIT} to retrieve" not in result["pagination_hint"]
+        hint = result["pagination_hint"]
+        assert f"returns {MAX_LIMIT} of them" in hint
+        assert "narrow" in hint
+        assert "in one response" not in hint
 
     @pytest.mark.asyncio
     async def test_next_offset_advances_from_the_current_offset(self):
@@ -1081,7 +1065,8 @@ class TestErrorLogPagination:
         client = _make_client(_numbered_log(20), has_more=True)
         tools = _register_and_collect(client)
         result = await tools["ha_get_logs"](source="error_log", limit=200)
-        assert result["window_lines"] == 200
+        assert result["window_lines"] > 200
+        assert result["window_lines"] <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
         assert result["total_lines"] == 20
 
     @pytest.mark.asyncio
@@ -1115,13 +1100,18 @@ class TestErrorLogPagination:
         On journald the step is spent in ENTRY units while it is derived from
         LINES, and a multi-line entry makes a window come back longer than the
         entry count asked for — an uncapped step would then page over entries
-        that were never shown. Here 20 lines answer a 5-line ask.
+        that were never shown. Here a 2050-line log answers a 2000-line search
+        window, and the only match sits at its oldest line, so the uncapped
+        step (2050) would overshoot the window that produced it.
         """
-        client = _make_client(_numbered_log(20), has_more=True)
+        window = SUPERVISOR_SEARCH_WINDOW_LINES
+        client = _make_client(_numbered_log(window + 50), has_more=True)
         tools = _register_and_collect(client)
-        result = await tools["ha_get_logs"](source="error_log", limit=5)
-        assert result["window_lines"] == 5
-        assert result["next_offset"] == 5
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=5, search="issue 0"
+        )
+        assert result["window_lines"] == window
+        assert result["next_offset"] == window
 
     @pytest.mark.asyncio
     async def test_a_fully_filtered_window_steps_the_whole_window(self):

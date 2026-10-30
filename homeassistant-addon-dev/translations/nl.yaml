@@ -14,11 +14,6 @@ configuration:
       alle sessies heen. Interne REST-, WebSocket- en per-tool fan-out-gelijktijdigheid
       blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
       mislukt na 60 seconden. Bereik 0–32.
-  backup_hint:
-    name: Niveau van back-uptip
-    description: Hoe sterk AI-assistenten worden aangespoord om een volledige Home
-      Assistant-back-up voor te stellen vóór risicovolle wijzigingen. Dit wijzigt
-      alleen deze tip; automatische bewerkingsback-ups hebben hun eigen instelling.
   custom_instructions:
     name: Aangepaste serverinstructies
     description: Tekst die naar elke verbindende AI-assistent wordt verzonden als
@@ -94,14 +89,23 @@ configuration:
       Vereist herstart om van kracht te worden.
   redact_secrets:
     name: Geheimen redigeren
-    description: Verbergt geheimen uit toolresponsen voordat ze de AI-assistent bereiken.
-      App (add-on)-opties en integratievelden die zijn gemarkeerd als wachtwoorden
-      worden vervangen door een marker voor ingesteld/leeg (zodat "is deze inloggegeven
-      geconfigureerd?" beantwoordbaar blijft), en andere toolresponsen worden opgeschoond
+    description: Verbergt geheimen in toolreacties voordat ze de AI-assistent bereiken.
+      App-optie (add-on) velden en integratievelden die als wachtwoord zijn gemarkeerd,
+      worden vervangen door een marker voor ingesteld/leeg (zodat "is dit credential
+      geconfigureerd?" beantwoordbaar blijft), en andere toolreacties worden opgeschoond
       van geheime waarden die de server al heeft gezien (waarden korter dan 6 tekens
-      worden overgeslagen, aangezien het vervangen van kleine fragmenten gerelateerde
-      uitvoer zou beschadigen). Velden die niet door hun schema als wachtwoord zijn
-      gemarkeerd, kunnen niet worden gedetecteerd. Standaard uit.
+      worden overgeslagen, omdat het vervangen van kleine fragmenten ongerelateerde
+      uitvoer zou beschadigen. Andere velden worden niet gedetecteerd, met uitzondering
+      van privésleutels in app-opties en de hieronder vermelde app-optienamen. Standaard
+      uitgeschakeld.
+  redact_app_option_keys:
+    name: Extra app-optiesleutels om te verbergen
+    description: Namen van app-opties (add-on) om te verbergen zoals wachtwoordvelden,
+      voor apps waarvan het schema een geheim opslaat als platte tekst (bijvoorbeeld
+      backup_password). Scheid namen met komma's of nieuwe regels. Een naam is van
+      toepassing op elke app; schrijf app_slug:name om het te beperken tot één app.
+      Het benoemen van een optiegroep dekt elke optie daarin. Alleen gebruikt wanneer
+      Verberg geheimen aan staat. Standaard leeg.
   enable_mandatory_bps:
     name: Koppel best-practice vaardigheden aan schrijfbewerkingen
     description: 'Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud
@@ -177,23 +181,22 @@ configuration:
       ook is ingeschakeld.
   enable_lite_docstrings:
     name: Lite tool-docstrings inschakelen (bèta)
-    description: 'Bètafunctie. Vervangt de docstrings van 15 zware ha-mcp tools (ha_config_get_automation,
+    description: 'Bètafunctie. Vervangt de docstrings op 15 zware ha-mcp-tools (ha_config_get_automation,
       ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
       ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
       ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
-      ha_report_issue) door kortere varianten die schema- en voorbeeldgegevens verplaatsen
-      naar de ha_get_skill_guide tool (of de bijbehorende skill:// bron). Één uitzondering:
+      ha_report_issue) door kortere varianten die schema- en voorbeeldgegevens uitstellen
+      naar de ha_get_skill_guide-tool (of de skill://-resource). Eén uitzondering:
       ha_report_issue verwijst in plaats daarvan naar het instructieveld van zijn
-      eigen reactie. Het aanpassen van de Back-up-hintinstelling werkt nog steeds
-      in de lite-modus. WAARSCHUWING: dit vermindert het verbruik van inactieve tokens,
-      maar kan de prestaties van de LLM verminderen — de ingekorte beschrijvingen
-      vertrouwen erop dat de LLM daadwerkelijk de skill-tool aanroept of de skill-bron
-      leest voor details, wat niet gegarandeerd is (sommige modellen slaan de extra
-      tool-aanroep over en krijgen zo minder begeleiding dan voorheen). Werkt het
-      best in combinatie met een client die MCP-bronnen ondersteunt of met enable_tool_search.
-      Vereist een herstart om van kracht te worden. VEREIST dat de hoofdoptie "Bètafuncties
-      inschakelen" hierboven (en in de web-interface) is ingeschakeld — anders wordt
-      deze sub-vlag op het moment van uitvoering genegeerd, ongeacht de waarde hier.'
+      eigen reactie. WAARSCHUWING: dit vermindert het inactieve tokengebruik, maar
+      kan de LLM-prestaties verslechteren — de ingekorte beschrijvingen vertrouwen
+      erop dat de LLM daadwerkelijk de skill-tool aanroept of de skill-resource leest
+      voor details, wat niet gegarandeerd is (sommige modellen slaan de extra tool-aanroep
+      over en eindigen met minder begeleiding dan voorheen). Werkt het best in combinatie
+      met een client die MCP-resources ondersteunt of met enable_tool_search. Vereist
+      een herstart om van kracht te worden. VEREIST dat de hoofd-schakelaar "Enable
+      beta features" hierboven (en in de web-UI) is ingeschakeld — anders wordt deze
+      sub-vlag tijdens runtime genegeerd, ongeacht de waarde hiervan.'
   enable_filesystem_tools:
     name: Bestandssysteemtools inschakelen (bèta)
     description: 'Stelt HAMCP_ENABLE_FILESYSTEM_TOOLS=true in. Schakelt directe lees-/schrijftoegang
@@ -220,20 +223,19 @@ configuration:
       ongeacht de waarde hiervan.
   enable_dashboard_screenshot:
     name: Dashboard-screenshotmodus inschakelen (bèta)
-    description: Bètafunctie — standaard uitgeschakeld. Voegt de tool ha_get_dashboard_screenshot
-      toe plus include_screenshot / return_screenshot-opties op de dashboard get/set-tools,
-      zodat AI-assistenten een of meer responsieve Lovelace-afbeeldingen kunnen inspecteren
-      (bijv. om een dashboard te verifiëren dat ze zojuist hebben gemaakt). Ondersteunt
+    description: 'Bètafunctie — standaard uitgeschakeld. Voegt de ha_get_dashboard_screenshot-tool
+      toe, plus include_screenshot- / return_screenshot-opties voor de dashboard get/set-tools,
+      zodat AI-assistenten responsieve Lovelace-afbeeldingen kunnen bekijken. Ondersteunt
       stabiele benoemde weergaven, mobiele/tablet/desktop-batches en PNG/JPEG/WebP/BMP-uitvoer.
-      Rendering wordt uitgevoerd in een afzonderlijke, optionele engine — balloob's
-      "Puppet" App (add-on), headless Chromium — die je eenmalig installeert (voeg
-      balloob's repository toe aan de App Store, installeer vervolgens "Puppet") en
-      waaraan je een langlevend toegangstoken geeft; op Docker/Container-implementaties
-      voer je die engine uit als een sidecar en stel je HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL
-      in. Er wordt niets zwaars geïnstalleerd tenzij je dit inschakelt én de engine
-      installeert. Vereist herstart om van kracht te worden. VEREIST dat de hoofdschakelaar
-      "Bètafuncties inschakelen" hierboven (en in de web-ui) aan staat — anders wordt
-      deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hiervan.
+      Het weergeven wordt uitgevoerd in een aparte app: balloob''s Puppet of WPE Screenshot
+      Engine. Installeer en configureer één engine met een eigen long-lived access
+      token voor Home Assistant. HA OS / Supervised ontdekt een gestarte engine via
+      Supervisor; Docker/Container-implementaties voeren deze uit als sidecar en stellen
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL in. Er wordt niets zwaars geïnstalleerd
+      tenzij je dit inschakelt en een engine installeert. Vereist een herstart om
+      te worden toegepast. VEREIST dat de hoofd-schakelaar "Enable beta features"
+      hierboven (en in de web-ui) aan staat — anders wordt deze sub-vlag tijdens runtime
+      genegeerd, ongeacht de waarde hier.'
   enable_auto_backup:
     name: Auto-backup bewerkingen
     description: Sla een snapshot van een entiteit op voordat een toolaanroep voor

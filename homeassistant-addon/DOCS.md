@@ -278,19 +278,6 @@ The app has minimal configuration - most settings are automatic.
 > tools are still missing after re-adding, delete the connector and create
 > a new one with a **different name**.
 
-### backup_hint (Advanced)
-
-**Default:** `normal`
-
-Controls when the AI assistant suggests creating backups before operations:
-
-- `normal` (recommended): Before irreversible operations only
-- `strong`: Before first modification of each session
-- `weak`: Rarely suggests backups
-- `auto`: Intelligent detection (future enhancement)
-
-**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
-
 ### enable_snapshot_actions
 
 **Default:** `true`
@@ -442,7 +429,7 @@ Toggles all write tools off, and removes ability for tools to make any write or 
 
 Mixed read/write tools whose read functionality exists nowhere else stay available with their write operations blocked:
 
-- `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
+- `ha_config_get_dashboard` — config/list/search reads; optional screenshot rendering is a beta feature that uses a separate screenshot engine (see [beta documentation](../docs/beta.md))
 - `ha_manage_backup` — only listing and viewing per-edit backups
 - `ha_manage_app` — only HTTP GET proxy reads of app (add-on) APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
@@ -471,7 +458,7 @@ Redacts secrets from tool responses before they reach the AI assistant. When ena
 - **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
 - **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
 
-Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_app` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
+Redaction is schema-driven — fields not marked as passwords by their schema are not detected and are returned as-is until the value scrub has seen them. Two exceptions: app option values holding a private key, and app options named in [`redact_app_option_keys`](#redact_app_option_keys). The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_app` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
 
 **When to enable:**
 - App or integration configs hold credentials (API tokens, PATs, database passwords) that must not land in AI conversation transcripts
@@ -482,6 +469,26 @@ Off by default. Requires app restart to take effect.
 
 ```yaml
 redact_secrets: true
+```
+
+### redact_app_option_keys
+
+**Default:** `""` (empty)
+
+App option names, separated by commas or new lines, that `redact_secrets` treats like password fields, for apps whose schema stores a secret as a plain string. A name applies to every app; `app_slug:name` limits it to one app, and the slug may be written with or without its repository prefix (`cebe7a76_hassio_google_drive_backup` or `hassio_google_drive_backup`). Names match options at any nesting level, and naming an option group covers every option in it. A listed option that the app has since dropped from its schema stays redacted, since Supervisor keeps its saved value. Listed options get the same handling as schema password fields: the value is replaced with a set/empty marker in `ha_get_app` and scrubbed from other tool responses (a marker submitted back through `ha_manage_app` is rejected for every option). If a name scoped to an app matches none of its options, `ha_get_app` says so in its `warnings`. Ignored while `redact_secrets` is off.
+
+**When to set:**
+- An app keeps a password or token in an option its schema does not mark as a password (for example Google Drive Backup's `backup_password`)
+
+The fix that covers every client is the app declaring the option as `password` in its schema; this setting bridges the gap until it does.
+
+Requires app restart to take effect.
+
+**Example Configuration:**
+
+```yaml
+redact_secrets: true
+redact_app_option_keys: backup_password,snapshot_password
 ```
 
 ### enable_security_policy_tool
@@ -622,10 +629,10 @@ The app requests `hassio_role: manager` (declared in `config.yaml`).
 `manager` is required for the Supervisor REST endpoints used to fetch
 add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
 `/core/logs`) — `default` returns 403 (see #1116). The role also supports
-explicit app management through `ha_manage_app`. When dashboard
-screenshots are enabled, `ha_get_dashboard_screenshot` may update only the
-schema-verified Puppet app's `keep_browser_open` option and restart that
-same app; it accepts no caller-supplied slug for those operations.
+explicit app management through `ha_manage_app`. When dashboard screenshots
+are enabled, the screenshot integration uses read-only Supervisor app listing
+and app-info endpoints to discover a supported renderer; it does not change
+renderer options.
 
 ---
 

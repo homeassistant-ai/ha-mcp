@@ -79,6 +79,17 @@ from .dashboard_list_checks import (
     reject_malformed_dashboard_lists,
     reject_malformed_dashboard_patch,
 )
+from .dashboard_read_errors import (
+    DASHBOARD_FETCH_FAILED_PREFIX,
+    DASHBOARD_LIST_SUGGESTION,
+    NO_STORED_CONFIG_MESSAGES,
+    NO_STORED_CONFIG_NOTE,
+    is_no_stored_config_error,
+    is_unknown_dashboard,
+    raise_registry_read_error,
+    raise_unresolved_delete,
+    read_failure_code,
+)
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -190,7 +201,7 @@ async def _get_dashboard_config_internal(
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Dashboard fetch failed: {error_msg}",
+                f"{DASHBOARD_FETCH_FAILED_PREFIX}{error_msg}",
                 context=error_context,
             )
         )
@@ -826,53 +837,6 @@ def _card_matches(card: dict[str, Any], criteria: _SearchCriteria) -> bool:
     return True
 
 
-# Substring in WS error message that signals the dashboard identifier was not
-# accepted by lovelace/config (e.g., caller passed an internal id where url_path
-# is expected). Used to gate the lazy resolver fallback in get/set tools.
-#
-# Source: homeassistant/components/lovelace/websocket.py, _handle_errors —
-# emits f"Unknown config specified: {url_path}" paired with structured
-# error.code "config_not_found". The client envelope does surface that code
-# top-level (``error_code``), but HA reuses it for the no-stored-config case
-# ("No config found." — an auto-generated dashboard), so the code alone cannot
-# identify an unresolved identifier; the message substring remains the only
-# discriminating signal. If HA reformats this string, the lazy fallback
-# regresses silently to never firing — re-verify with major HA upgrades.
-_LAZY_RESOLVE_TRIGGER = "Unknown config specified"
-
-# Exact ``lovelace/config`` messages meaning that a storage dashboard exists
-# but has not been given a config yet. Mirrors smart_search/_deep.py and stays
-# deliberately narrower than ``_LAZY_RESOLVE_TRIGGER``: an unknown path or any
-# other pre-read failure must remain fail-closed before a full replacement.
-_NO_STORED_CONFIG_MESSAGES = frozenset(
-    {"No config found.", "Command failed: No config found."}
-)
-_DASHBOARD_FETCH_FAILED_PREFIX = "Dashboard fetch failed: "
-_HA_CONFIG_NOT_FOUND_CODE = "config_not_found"
-
-
-def _should_lazy_resolve(error_msg: str) -> bool:
-    """Return True if a WS error message indicates the identifier needs resolving."""
-    return _LAZY_RESOLVE_TRIGGER in error_msg
-
-
-def _is_no_stored_dashboard_config_error(exc: ToolError) -> bool:
-    """Return whether HA confirms that an existing dashboard has no config."""
-    try:
-        error_data = json.loads(str(exc))
-    except (json.JSONDecodeError, TypeError):
-        return False
-    if (
-        not isinstance(error_data, dict)
-        or error_data.get("ha_error_code") != _HA_CONFIG_NOT_FOUND_CODE
-    ):
-        return False
-    message = extract_tool_error_message(exc).removeprefix(
-        _DASHBOARD_FETCH_FAILED_PREFIX
-    )
-    return message in _NO_STORED_CONFIG_MESSAGES
-
-
 # The ha_mcp_tools/dashboards WS command: list / get / search over the live
 # lovelace collection in one in-process frame. Named once so the routing helpers
 # and their tests agree on the wire string (Global-Constraint-2 idiom, mirroring
@@ -1007,9 +971,24 @@ async def _component_dashboard_config(
     internal id) both return ``None`` so the caller runs its unchanged legacy
     read. ``url_path`` ``None`` targets the default dashboard.
     """
+    status, config = await _component_dashboard_read(client, url_path)
+    return config if status == "ok" else None
+
+
+async def _component_dashboard_read(
+    client: Any, url_path: str | None
+) -> tuple[str | None, dict[str, Any] | None]:
+    """The component ``get``'s status and config; ``(None, None)`` when the
+    component is unavailable or its body is malformed.
+
+    ``no_config`` is Core's ``ConfigNotFound`` (see ``dashboard_read_errors``).
+    """
     result = await _dashboards_via_component(client, "get", url_path=url_path)
-    if result is None or result.get("status") != "ok":
-        return None
+    if result is None:
+        return None, None
+    status = result.get("status")
+    if status != "ok":
+        return status, None
     config = result.get("config")
     if not isinstance(config, dict):
         logger.debug(
@@ -1018,8 +997,8 @@ async def _component_dashboard_config(
             WS_DASHBOARDS,
             url_path,
         )
-        return None
-    return config
+        return None, None
+    return status, config
 
 
 async def fetch_dashboards_list(
@@ -1059,60 +1038,6 @@ async def fetch_dashboards_list(
     return None
 
 
-def _raise_dashboard_registry_read_error(*, action: str, url_path: str) -> NoReturn:
-    """Raise the shared user-facing error for an unreadable dashboard registry."""
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "Failed to read the Home Assistant dashboard registry",
-            suggestions=[
-                "Retry the operation",
-                "Check the Home Assistant connection and logs",
-                "Use ha_config_get_dashboard(list_only=True) to verify registry access",
-            ],
-            context={"action": action, "url_path": url_path},
-        )
-    )
-
-
-_DASHBOARD_LIST_SUGGESTION = (
-    "Use ha_config_get_dashboard(list_only=True) to see available dashboards"
-)
-
-
-def _raise_unresolved_dashboard_delete(
-    url_path: str, dashboards: list[dict[str, Any]]
-) -> NoReturn:
-    """Raise the delete error for an identifier with no collection item."""
-    # YAML rows carry no collection id, so ``_resolve_dashboard`` skips them.
-    if any(
-        d.get("url_path") == url_path and d.get("mode") == "yaml" for d in dashboards
-    ):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Dashboard '{url_path}' is a YAML-mode dashboard",
-                details="It is defined in configuration.yaml; the "
-                "Home Assistant API cannot delete it.",
-                context={"action": "delete", "url_path": url_path},
-            )
-        )
-    available_ids = [d.get("url_path") for d in dashboards[:10] if d.get("url_path")]
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.RESOURCE_NOT_FOUND,
-            f"Dashboard '{url_path}' not found",
-            details=f"No dashboard found with URL path or internal ID '{url_path}'.",
-            suggestions=[_DASHBOARD_LIST_SUGGESTION],
-            context={
-                "action": "delete",
-                "url_path": url_path,
-                "available_dashboard_ids": available_ids,
-            },
-        )
-    )
-
-
 async def _resolve_dashboard(
     client: Any, identifier: str
 ) -> tuple[dict[str, str] | None, list[dict[str, Any]] | None]:
@@ -1135,7 +1060,7 @@ async def _resolve_dashboard(
     Three call sites:
     - **Lazy fallback** (``_lazy_resolve_and_retry``): only invoked after
       ``lovelace/config`` rejected the identifier with
-      ``_LAZY_RESOLVE_TRIGGER`` — the round-trip is gated by the caller.
+      ``UNKNOWN_CONFIG_PREFIX`` — the round-trip is gated by the caller.
       Discards ``dashboards``.
     - **Eager pre-resolve** (``_resolve_set_dashboard_url_path``, called
       from ``ha_config_set_dashboard``): lets callers pass either form;
@@ -1194,7 +1119,7 @@ async def _lazy_resolve_and_retry(
     """Trigger-gated lazy resolve + single retry of a lovelace/config call.
 
     If `response` indicates HA rejected the identifier with the
-    _LAZY_RESOLVE_TRIGGER substring, resolves `url_path` via
+    UNKNOWN_CONFIG_PREFIX substring, resolves `url_path` via
     lovelace/dashboards/list and retries the WS call with the canonical
     url_path. Returns the (possibly updated) url_path and the
     (possibly retried) response so the caller can chain naturally:
@@ -1206,7 +1131,7 @@ async def _lazy_resolve_and_retry(
     No-op when:
     - the response is not a failure (success=True or non-dict),
     - ``url_path`` is empty,
-    - the error message does not contain ``_LAZY_RESOLVE_TRIGGER``
+    - the error message does not contain ``UNKNOWN_CONFIG_PREFIX``
       (the substring miss),
     - the resolver finds no match,
     - or the resolver itself raises (logged at WARNING).
@@ -1226,7 +1151,7 @@ async def _lazy_resolve_and_retry(
 
     err = response.get("error", {})
     err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-    if not _should_lazy_resolve(err_msg):
+    if not is_unknown_dashboard(err_msg):
         return url_path, response
 
     try:
@@ -1755,7 +1680,8 @@ class DashboardConfigTools:
           returns the config_hash at the top level.
         - Otherwise the full config of url_path (the default dashboard when
           omitted) is returned; with view_path only that view, while config_hash
-          still covers the full config.
+          still covers the full config. stored_config is false (config null)
+          when Home Assistant holds no config for the dashboard.
 
         Caveats: config_hash stays the same across reads of an unchanged config.
         Searches stop at 200 matches (`truncated`). A search across dashboards
@@ -1930,9 +1856,21 @@ class DashboardConfigTools:
             error_msg = response.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
+            if str(error_msg) in NO_STORED_CONFIG_MESSAGES:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        f"{NO_STORED_CONFIG_NOTE} It has no cards to search.",
+                        suggestions=[
+                            "For a storage dashboard, save a config with "
+                            "ha_config_set_dashboard first",
+                        ],
+                        context={"action": "search", "url_path": url_path},
+                    )
+                )
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
+                    read_failure_code(str(error_msg)),
                     f"Failed to get dashboard: {error_msg}",
                     suggestions=[
                         "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
@@ -2183,7 +2121,7 @@ class DashboardConfigTools:
                     self._client, url_path
                 )
             except ToolError as exc:
-                if not _is_no_stored_dashboard_config_error(exc):
+                if not is_no_stored_config_error(exc):
                     logger.warning(
                         "Card search could not read dashboard %r: %s", url_path, exc
                     )
@@ -2224,7 +2162,9 @@ class DashboardConfigTools:
         (the default dashboard included — the tool's ``"default"``/omitted alias
         maps to the component's ``None`` url_path); ``None`` falls back to the
         unchanged legacy ``lovelace/config`` read, which also covers YAML bodies
-        (never served in-process) and internal-id lazy-resolve.
+        (never served in-process) and internal-id lazy-resolve. Either path
+        answers a dashboard Core holds no config for with ``stored_config``
+        false instead of an error.
 
         ``force_reload`` bypasses the component fast path entirely: the component
         ``get`` carries no force semantic, so a forced read must go straight to the
@@ -2232,12 +2172,12 @@ class DashboardConfigTools:
         actually bust HA's Lovelace cache.
         """
         lovelace_url_path = _lovelace_url_path(url_path)
-        component_config = (
-            None
+        component_status, component_config = (
+            (None, None)
             if force_reload
-            else await _component_dashboard_config(self._client, lovelace_url_path)
+            else await _component_dashboard_read(self._client, lovelace_url_path)
         )
-        if component_config is not None:
+        if component_config is not None or component_status == "no_config":
             # The component matches an exact url_path (or the default), so no
             # lazy-resolve is possible: original == final, resolved_from unset.
             resolved_url_path[0] = url_path
@@ -2248,6 +2188,7 @@ class DashboardConfigTools:
                 view_path=view_path,
                 include_screenshot=include_screenshot,
                 screenshot_options=screenshot_options,
+                stored_config=component_status != "no_config",
             )
 
         data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
@@ -2270,15 +2211,21 @@ class DashboardConfigTools:
         # except block).
         resolved_url_path[0] = url_path
 
-        # Check if request failed (after potential retry)
+        # Check if request failed (after potential retry). On this legacy read
+        # (no component, or force_reload) Core's message is the only signal
+        # that the dashboard has no config.
+        error_msg: str | None = None
         if isinstance(response, dict) and not response.get("success", True):
-            error_msg = response.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
+            error = response.get("error", {})
+            error_msg = str(
+                error.get("message", error) if isinstance(error, dict) else error
+            )
+        stored_config = error_msg not in NO_STORED_CONFIG_MESSAGES
+        if error_msg is not None and stored_config:
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    str(error_msg),
+                    read_failure_code(error_msg),
+                    error_msg,
                     suggestions=[
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                         "Check if you have permission to access this dashboard",
@@ -2293,11 +2240,12 @@ class DashboardConfigTools:
 
         return await self._finalize_get_result(
             url_path,
-            config,
+            config if stored_config else None,
             original_url_path=original_url_path,
             view_path=view_path,
             include_screenshot=include_screenshot,
             screenshot_options=screenshot_options,
+            stored_config=stored_config,
         )
 
     async def _finalize_get_result(
@@ -2309,6 +2257,7 @@ class DashboardConfigTools:
         view_path: str | None,
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
+        stored_config: bool = True,
     ) -> "dict[str, Any] | ToolResult":
         """Shape + return the get-mode response for an already-fetched config.
 
@@ -2332,6 +2281,17 @@ class DashboardConfigTools:
         # Calculate config size for progressive disclosure hint
         config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
+        if view_path is not None and not stored_config:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    NO_STORED_CONFIG_NOTE,
+                    context={"url_path": url_path, "view_path": view_path},
+                    suggestions=[
+                        "Omit view_path: there are no static views to scope to"
+                    ],
+                )
+            )
         if view_path is not None:
             get_result = self._scoped_view_get_result(
                 url_path,
@@ -2369,6 +2329,9 @@ class DashboardConfigTools:
         # input was an internal id rather than a url_path.
         if original_url_path is not None and original_url_path != url_path:
             get_result["resolved_from"] = original_url_path
+        get_result["stored_config"] = stored_config
+        if not stored_config:
+            get_result["message"] = NO_STORED_CONFIG_NOTE
 
         return await _maybe_attach_screenshot(
             get_result,
@@ -2769,7 +2732,7 @@ class DashboardConfigTools:
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if dashboards is None:
-                _raise_dashboard_registry_read_error(action=action, url_path=url_path)
+                raise_registry_read_error(action=action, url_path=url_path)
             pre_fetched_dashboards = dashboards
             if resolved is not None and resolved["url_path"] != url_path:
                 pre_resolved_from = url_path
@@ -3108,7 +3071,7 @@ class DashboardConfigTools:
         else:
             fetched_dashboards = await fetch_dashboards_list(self._client)
             if fetched_dashboards is None:
-                _raise_dashboard_registry_read_error(action="set", url_path=url_path)
+                raise_registry_read_error(action="set", url_path=url_path)
             existing_dashboards = fetched_dashboards
         dashboard_exists = any(
             d.get("url_path") == url_path for d in existing_dashboards
@@ -3301,7 +3264,7 @@ class DashboardConfigTools:
                 self._client, url_path
             )
         except ToolError as exc:
-            if _is_no_stored_dashboard_config_error(exc):
+            if is_no_stored_config_error(exc):
                 if config_hash is None:
                     return None
                 self._raise_dashboard_hash_conflict(
@@ -3725,9 +3688,9 @@ class DashboardConfigTools:
                 url_path = "lovelace"
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if dashboards is None:
-                _raise_dashboard_registry_read_error(action="delete", url_path=url_path)
+                raise_registry_read_error(action="delete", url_path=url_path)
             if resolved is None:
-                _raise_unresolved_dashboard_delete(url_path, dashboards)
+                raise_unresolved_delete(url_path, dashboards)
             resolved_id = resolved["id"]
 
             response = await self._client.send_websocket_message(
@@ -3747,7 +3710,7 @@ class DashboardConfigTools:
                     create_error_response(
                         ws_failure_code(response),
                         f"Failed to delete dashboard: {response.get('error')}",
-                        suggestions=[_DASHBOARD_LIST_SUGGESTION],
+                        suggestions=[DASHBOARD_LIST_SUGGESTION],
                         context={"action": "delete", "url_path": url_path},
                     )
                 )
@@ -3772,7 +3735,7 @@ class DashboardConfigTools:
             exception_to_structured_error(
                 e,
                 context={"action": "delete", "url_path": url_path},
-                suggestions=[_DASHBOARD_LIST_SUGGESTION],
+                suggestions=[DASHBOARD_LIST_SUGGESTION],
             )
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 

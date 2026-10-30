@@ -25,7 +25,7 @@ const FEATURE_META = {
   },
   redact_secrets: {
     label: "Redact Secrets",
-    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
+    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Other fields are not detected, except private keys in app options and the app option names listed below. Off by default.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -69,11 +69,11 @@ const FEATURE_META = {
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue defers to the instructions field of its own response instead. Tuning the Backup-hint setting still applies in lite mode. WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue defers to the instructions field of its own response instead. WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
-    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" App (add-on), headless Chromium — which you install once (add balloob's repository to the App store, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect responsive Lovelace images. Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate app: balloob's Puppet or WPE Screenshot Engine. Install and configure one engine with its own Home Assistant long-lived access token. HA OS / Supervised discovers a started engine through Supervisor; Docker/Container deployments run it as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you enable this and install an engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
 };
 // FEATURE_META:END GENERATED
@@ -106,6 +106,18 @@ const YAML_PACKAGES_SUB_FLAGS = [
 const MANDATORY_BPS_SUB_FLAGS = [
   'enable_strict_mandatory_bps',
 ];
+
+// Non-master toggles with rows nested under them; flipping one re-renders
+// the panel so those rows dim or undim at once.
+const PARENTS_WITH_SUB_ROWS = new Set([
+  'enable_yaml_config_editing',
+  'enable_mandatory_bps',
+  'redact_secrets',
+]);
+
+// Advanced text settings edited as a one-per-line list and saved
+// comma-joined.
+const LIST_EDITOR_FIELDS = new Set(['extra_yaml_write_keys', 'redact_app_option_keys']);
 
 // Cached add-on flag. Each settings endpoint (/api/settings/features,
 // /api/settings/advanced, /api/settings/backup-config) returns
@@ -284,40 +296,18 @@ function renderFeatureFlags(flags) {
         // master off then back on restores the user's prior sub-flag
         // selections automatically, which is the intended UX for an
         // opt-in beta surface.
-        if (isMaster) {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
-        // Re-render on enable_yaml_config_editing flip so the 3
-        // packages sub-rows dim/undim immediately. Same pattern as the
-        // master flip above — value is mutated in the live cache and
-        // the panel re-renders synchronously while the save POST runs
-        // in the background.
-        if (fieldName === 'enable_yaml_config_editing') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
-        // Re-render on enable_mandatory_bps flip so the strict-mode
-        // sub-row dims/undims immediately. Same live-cache pattern as
-        // the master and yaml-config flips above.
-        if (fieldName === 'enable_mandatory_bps') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
+        //
+        // The other parents with nested rows re-render the same way, so
+        // their sub-rows dim/undim immediately.
+        if (
+          (isMaster || PARENTS_WITH_SUB_ROWS.has(fieldName)) &&
+          _lastFeatureFlags[fieldName]
+        ) {
+          _lastFeatureFlags[fieldName] = {
+            ..._lastFeatureFlags[fieldName],
+            value: input.checked,
+          };
+          renderFeatureFlags(_lastFeatureFlags);
         }
         saveFeatureFlag(fieldName, input.checked);
       });
@@ -384,6 +374,11 @@ function renderFeatureFlags(flags) {
         cssClass: 'mandatory-bps-sub',
         lockedByGate: !parentOn,
       });
+    }
+    // Extra app option keys to redact (#2843), nested under redact_secrets
+    // and dimmed while it is off.
+    if (fieldName === 'redact_secrets') {
+      renderAdvancedSubRows(targetBody, 'redact_keys', 'redact-sub', !f.value);
     }
     // After the enable_filesystem_tools row, inject the custom-directories
     // editor (issue #1567). Dimmed when either the master beta is off or
@@ -473,7 +468,8 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
 
 // Shared renderer for non-bool sub-rows that live in ADVANCED_SETTINGS_FIELDS
 // but render nested under a feature toggle (code-mode numerics under
-// enable_code_mode, extra YAML write keys under enable_yaml_config_editing).
+// enable_code_mode, extra YAML write keys under enable_yaml_config_editing,
+// extra redacted app option keys under redact_secrets).
 // They save through commitAdvancedEdit rather than saveFeatureFlag, which is
 // why renderSubFlagRows (checkbox-only) cannot serve them.
 function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
@@ -482,7 +478,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
     const meta = localizeMeta('advanced', f.field, {});
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
-    const multiline = f.field === 'extra_yaml_write_keys';
+    const multiline = LIST_EDITOR_FIELDS.has(f.field);
     if (multiline) row.classList.add('list-editor');
 
     const info = document.createElement('div');

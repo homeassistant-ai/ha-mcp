@@ -60,17 +60,25 @@ HA_URL = "http://ha.local:8123"
 
 @contextmanager
 def _server(
-    ws, *, info=None, version="1.0.0", embedded=False, disabled=False, oauth=False
+    ws,
+    *,
+    info=None,
+    version="1.0.0",
+    disabled=False,
+    oauth=False,
+    opted_in=True,
+    overrides=None,
 ):
     """Patch the startup gates, the WS client factory and the HACS refresh call."""
     get_ws = AsyncMock(return_value=ws)
     refresh = AsyncMock(return_value={"success": True})
+    save = AsyncMock(return_value=None)
     settings = SimpleNamespace(
         homeassistant_token=OAUTH_MODE_TOKEN if oauth else "a-real-llat",
         homeassistant_url=HA_URL,
+        hacs_refresh_after_update=opted_in,
     )
     with (
-        patch("ha_mcp.hacs_auto_refresh.is_embedded", return_value=embedded),
         patch(
             "ha_mcp.hacs_auto_refresh.is_update_check_disabled", return_value=disabled
         ),
@@ -81,8 +89,18 @@ def _server(
             "ha_mcp.tools.hacs_registration.send_hacs_repository_refresh", new=refresh
         ),
         patch("ha_mcp.client.websocket_client.get_websocket_client", new=get_ws),
+        patch(
+            "ha_mcp.hacs_auto_refresh._read_feature_flag_override_file",
+            return_value=overrides or {},
+        ),
+        patch(
+            "ha_mcp.settings_ui._handlers_advanced._write_advanced_overrides_file",
+            new=save,
+        ),
     ):
-        yield SimpleNamespace(get_websocket_client=get_ws, refresh=refresh)
+        yield SimpleNamespace(
+            get_websocket_client=get_ws, refresh=refresh, save=save, settings=settings
+        )
 
 
 @pytest.fixture
@@ -178,16 +196,50 @@ class TestMarkerFile:
 
 
 class TestMaybeRefreshHacsAfterUpdate:
-    async def test_embedded_server_is_a_no_op(self, data_dir: Path) -> None:
-        # The component manages the embedded server's updates.
-        with (
-            _server(_ws(), info=_info(), embedded=True) as mocks,
-            patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,
-        ):
+    async def test_embedded_server_nudges_its_component_too(
+        self, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Its component update is the one the Marketplace never checks for
+        # without a connected GitHub account.
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        with _server(_ws([_repo(456, LEGACY)]), info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
-        read_marker.assert_not_called()
+        assert _refreshed_ids(mocks) == ["456"]
+
+    async def test_off_by_default_on_a_new_install(self, data_dir, monkeypatch):
+        monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
+        with _server(_ws([_repo(456, LEGACY)]), info=_info(), opted_in=False) as mocks:
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
         mocks.get_websocket_client.assert_not_awaited()
+        mocks.save.assert_not_awaited()
+
+    async def test_install_that_already_ran_it_keeps_it_on(self, data_dir, monkeypatch):
+        # Its marker shows the nudge ran before it became opt-in; with no
+        # explicit choice the setting is saved on, so nothing changes for it.
+        monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
+        hacs_auto_refresh._write_marker(HA_URL, _marker(version="0.9.0"))
+        with _server(_ws([_repo(456, LEGACY)]), info=_info(), opted_in=False) as mocks:
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
+        mocks.save.assert_awaited_once_with({hacs_auto_refresh.SETTING: True})
+        assert mocks.settings.hacs_refresh_after_update is True
+        assert _refreshed_ids(mocks) == ["456"]
+
+    async def test_explicit_off_is_kept_even_with_a_marker(self, data_dir, monkeypatch):
+        monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
+        hacs_auto_refresh._write_marker(HA_URL, _marker(version="0.9.0"))
+        with _server(
+            _ws([_repo(456, LEGACY)]),
+            info=_info(),
+            opted_in=False,
+            overrides={hacs_auto_refresh.SETTING: False},
+        ) as mocks:
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
+        mocks.get_websocket_client.assert_not_awaited()
+        mocks.save.assert_not_awaited()
 
     async def test_disabled_update_check_is_a_no_op(self, data_dir):
         with (
@@ -220,8 +272,15 @@ class TestMaybeRefreshHacsAfterUpdate:
         # The due-pass line logs BEFORE any WS work — the observable the
         # HAOS add-on lane greps for, so it is contract, not decoration.
         assert "HACS auto-refresh: startup pass due" in caplog.text
-        # Both entries the component can be tracked under, and nothing else.
+        # Both entries the component can be tracked under, and nothing else,
+        # through the Marketplace that answered first.
         assert _refreshed_ids(mocks) == ["123", "456"]
+        assert ws.send_command.await_args_list[0].args == (
+            "marketplace/repositories/list",
+        )
+        assert {call.args[2].prefix for call in mocks.refresh.await_args_list} == {
+            "marketplace"
+        }
         assert _written_marker(data_dir) == {
             "server_version": "1.0.0",
             "latest": "1.1.0",
@@ -282,10 +341,25 @@ class TestMaybeRefreshHacsAfterUpdate:
         ):
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
-        # Immediate attempt + one retry: absence was NOT accepted first try.
-        assert ws.send_command.await_count == 2
+        # Immediate attempt + one retry, each asking the Marketplace and then
+        # HACS: absence was NOT accepted first try.
+        assert ws.send_command.await_count == 4
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir)["hacs"] == "absent"
+
+    async def test_older_core_falls_back_to_hacs(self, data_dir):
+        ws = _ws()
+        ws.send_command.side_effect = [
+            HomeAssistantCommandError(
+                "Command failed: Unknown command.", "unknown_command"
+            ),
+            {"success": True, "result": [_repo(456, LEGACY)]},
+        ]
+        with _server(ws, info=_info()) as mocks:
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
+        assert ws.send_command.await_args_list[1].args == ("hacs/repositories/list",)
+        assert mocks.refresh.await_args.args[2].prefix == "hacs"
 
     async def test_all_refreshes_failing_leaves_the_marker_unwritten(self, data_dir):
         # list succeeded but every installed candidate's refresh failed — an

@@ -13,7 +13,7 @@ removed automatically.
 | Path | Update semantics | Coordination |
 | --- | --- | --- |
 | `ha_config_set_label(areas=...)` | Read each area's labels and add one label | Hold the area lock through the write and post-write verification. |
-| `ha_set_entity(labels=..., label_operation="add"/"remove")` | Read entity labels and merge/filter them | Hold the entity lock from the read through the registry update, including bulk calls. |
+| `ha_set_entity(labels=..., label_operation="add"/"remove")` | Read entity labels and merge/filter them | Hold the entity lock from the read through the registry update, including bulk calls. A single-entity call also holds it through its options, device-rename and expose writes, and with `new_entity_id` it holds the locks of both the given and the new entity ID, in sorted order, as the entity backup restore does; an entity restore that locks either ID cannot run between them. A bulk call writes exposure in batched calls outside the entity locks. |
 | `ha_set_entity(label_operation="set")` | Replace labels explicitly | Use the same entity lock; replacement can intentionally remove earlier additions. |
 | `ha_set_area_or_floor(kind="area", labels=...)` | Replace labels explicitly | Use the same area lock through the existing verification. |
 | Helper create/update label setters | Replace entity labels explicitly | Share the entity lock, including config-entry and fallback helper paths. |
@@ -22,6 +22,7 @@ removed automatically.
 | Label/category registry metadata and other entity/device registry fields | Send only explicitly supplied fields | No client-side label merge. |
 | Template helper identity restore | Restore the saved entity ID/name, then verify | Lock both the created and saved entity IDs in sorted order, re-read after acquiring them, and hold through verification. |
 | Area backup restore | Deliberately replace saved registry values | Share the area lock for the replacement write; the wider restore remains non-atomic. |
+| Entity backup restore | Deliberately replace saved registry values, renaming the entity back | Lock both the current and the saved entity ID in sorted order and re-read the entry under them, as the template identity restore does. When the first lookup finds the entry, the locks are taken before the safety backup and held through the write, as a flow helper restore holds its config-entry guard; an entity renamed to a third ID after that lookup, by any writer before the locks are taken or by one they do not cover after, stops the restore. When that lookup fails or finds no entry, nothing is locked, and the restore refuses before it writes. |
 
 The lock does not coordinate separate processes/event loops, the Home Assistant
 UI, automations, or other integrations. Home Assistant provides no conditional

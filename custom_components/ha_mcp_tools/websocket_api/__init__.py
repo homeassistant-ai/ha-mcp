@@ -23,14 +23,15 @@ the info handshake carries no capability entry:
   services, entity/device/area registries, ``hass.config``, persistent
   notifications, repairs issues) in one call, so the server builds its existing
   overview envelope with no extra HA round-trips.
-* ``ha_mcp_tools/helpers_list`` — collection helpers (live state-attribute
-  bodies) AND flow helpers (``ConfigEntry.options``/``title``/``entry_id`` —
+* ``ha_mcp_tools/helpers_list`` — collection helpers (the stored items
+  ``<type>/list`` returns) AND flow helpers (``ConfigEntry.options``/``title``/``entry_id`` —
   never ``entry.data``), each with the CURRENT entity_id + display name from the
   registry (renamed helpers show current values — issue #1794), closing the
   documented "flow helpers cannot be listed" gap with no OptionsFlow dance. The
   response's ``covered_types`` names which helper_type values were authoritatively
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
-  uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
+  uncovered type (``person`` and ``tag``, whose lists add more than the stored
+  items) instead of trusting an
   empty result. A custom-only helper integration is listed with ``options: None``
   and ``options_withheld`` (see ``flow_domains._flow_helper_domains``).
 * ``ha_mcp_tools/states`` — a bulk state read: ``State.as_dict()`` for each
@@ -233,14 +234,6 @@ the info handshake carries no capability entry:
   categories, disabled_by, hidden_by}]}``. Multiple matches across platforms are
   all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
-* ``ha_mcp_tools/backup_prep`` — the backup identity the server needs before a
-  create: ``{agent_ids, local_agent_id, default_password}`` read from the backup
-  integration's in-process ``DATA_MANAGER``. ``local_agent_id`` uses the SAME
-  preference the server's ``_get_local_backup_agent_id`` does (``hassio.local``
-  over ``backup.local``). A missing backup integration / manager raises
-  ``HomeAssistantError`` so the server's command-error fallback fires. The
-  password is sensitive but the legacy ``backup/config/info`` already serves it
-  to the same admin connection — parity, not new exposure.
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
   the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
   legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
@@ -296,7 +289,7 @@ code lives in the submodules:
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries``,
   ``dashboards`` and ``logbook``: the read commands.
-* ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
+* ``system``: ``info``, ``system_snapshot``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
 * ``call_service`` and ``bulk``: the write commands.
 * ``oauth_callbacks``: read and replace the none-mode OAuth callback allowlist.
 
@@ -318,7 +311,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .. import core_contract, dashboard_cards_ws, helper_collections
+from .. import core_contract, dashboard_cards_ws, entity_restore, helper_collections
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_service import _call_service_prep, _do_call_service
 from .config_entries import _config_entries_prep, _do_config_entries
@@ -344,7 +337,6 @@ from .oauth_callbacks import command_specs as _oauth_callback_specs
 from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
 from .registries import _do_registries
 from .schemas import (
-    _backup_prep_schema,
     _blueprint_get_schema,
     _bulk_call_service_schema,
     _call_service_schema,
@@ -375,7 +367,6 @@ from .seam import PreSerializedResult
 from .search import _do_search, _search_prep
 from .services import _do_reference_data, _do_services_list, _services_list_prep
 from .system import (
-    _do_backup_prep,
     _do_info,
     _do_server_entry,
     _do_server_entry_update,
@@ -456,7 +447,6 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_registry_lookup_schema(), _do_registry_lookup, None),
         (_system_snapshot_schema(), _do_system_snapshot, None),
         (_entity_lookup_schema(), _do_entity_lookup, None),
-        (_backup_prep_schema(), _do_backup_prep, None),
         (_registries_schema(), _do_registries, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
@@ -490,6 +480,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         ),
         (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
         *helper_collections.command_specs(vol, er),
+        *entity_restore.command_specs(vol, er),
         *core_contract.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),
         *_oauth_callback_specs(),

@@ -4,8 +4,8 @@ E2E tests for storage-helper fields judged by Home Assistant itself (#2632).
 ha_config_set_helper sends a storage helper's fields to Home Assistant under
 its own names, and Home Assistant's schema decides what is valid. These tests
 pin that a rejected call reaches the caller as a validation error naming the
-problem, writes nothing, and that the few unusable configurations Home
-Assistant stores anyway are still refused by the tool.
+problem, writes nothing, and that a value Home Assistant accepts is not
+refused by a rule of the tool's own.
 """
 
 import uuid
@@ -137,18 +137,29 @@ class TestHomeAssistantJudgesStorageHelperFields:
                     },
                 )
 
-    async def test_step_wider_than_the_range_is_refused_by_the_tool(
+    async def test_config_home_assistant_accepts_is_not_refused_by_the_tool(
         self, mcp_client: Client
     ) -> None:
-        """Home Assistant stores this counter, but it could never change value."""
-        name = f"E2E Wide Step {uuid.uuid4().hex[:6]}"
-        await _rejected(
-            mcp_client,
-            {
-                "helper_type": "counter",
-                "name": name,
-                "config": {"minimum": 0, "maximum": 3, "step": 5},
-            },
-            expected_error="step",
-        )
-        assert name not in await _helper_names(mcp_client, "counter")
+        """A counter step of 0 passes Core's schema and the frontend's form, so
+        the tool writes it rather than refusing it with a rule of its own."""
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "counter",
+                    "name": f"E2E Zero Step {uuid.uuid4().hex[:6]}",
+                    "config": {"step": 0},
+                },
+            )
+            try:
+                assert created["data"]["step"] == 0
+            finally:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {
+                        "target": created["entity_id"],
+                        "helper_type": "counter",
+                        "confirm": True,
+                    },
+                )

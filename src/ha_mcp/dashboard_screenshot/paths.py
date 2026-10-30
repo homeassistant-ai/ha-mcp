@@ -12,13 +12,15 @@ from typing import Any, cast
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
+from ..tools.dashboard_read_errors import (
+    CONFIG_NOT_FOUND_CODE,
+    NO_STORED_CONFIG_MESSAGES,
+    NO_STORED_CONFIG_NOTE,
+    UNKNOWN_CONFIG_PREFIX,
+)
 from ..tools.helpers import raise_tool_error
 from .capture import _normalize_dashboard_path
 
-_UNKNOWN_CONFIG_PREFIX = "Unknown config specified:"
-_NO_CONFIG_MESSAGES = frozenset(
-    {"No config found.", "Command failed: No config found."}
-)
 _JS_DECIMAL_NUMBER = re.compile(
     r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?\Z"
 )
@@ -264,8 +266,14 @@ def _fallback_view_target(
     )
 
 
-async def fetch_dashboard_render_config(client: Any, url_path: str) -> dict[str, Any]:
-    """Fetch a Lovelace dashboard config for stable view-path resolution."""
+async def fetch_dashboard_render_config(
+    client: Any, url_path: str
+) -> dict[str, Any] | None:
+    """Fetch a Lovelace dashboard config for stable view-path resolution.
+
+    ``None`` when Home Assistant holds no config for the dashboard, which the
+    frontend renders as its generated default view.
+    """
     base_path = dashboard_frontend_path(url_path)
     request: dict[str, Any] = {"type": "lovelace/config", "force": True}
     if base_path != "lovelace":
@@ -296,12 +304,13 @@ async def fetch_dashboard_render_config(client: Any, url_path: str) -> dict[str,
         else:
             error_code = ""
             message = str(error)
-        missing_dashboard = (
-            error_code == "config_not_found"
-            or message.startswith(
-                (_UNKNOWN_CONFIG_PREFIX, f"Command failed: {_UNKNOWN_CONFIG_PREFIX}")
+        if message in NO_STORED_CONFIG_MESSAGES:
+            return None
+        missing_dashboard = error_code == CONFIG_NOT_FOUND_CODE or message.startswith(
+            (
+                f"{UNKNOWN_CONFIG_PREFIX}:",
+                f"Command failed: {UNKNOWN_CONFIG_PREFIX}:",
             )
-            or message in _NO_CONFIG_MESSAGES
         )
         if missing_dashboard:
             raise_tool_error(
@@ -433,7 +442,7 @@ def resolve_dashboard_view(
         elif has_static_views:
             warning = (
                 "No view_path was supplied; the dashboard base route renders "
-                "the first view visible to Puppet's Home Assistant user."
+                "the first view visible to the screenshot engine's Home Assistant user."
             )
         else:
             warning = (
@@ -502,14 +511,14 @@ async def _resolve_legacy_dashboard_target(
         raw_view = parts[1] if len(parts) > 1 else None
         numeric_index = _numeric_view_index(raw_view) if raw_view is not None else None
         return DashboardRenderTarget(
-            url_path="lovelace",
+            url_path=dashboard_root,
             view_path=None,
             render_path=render_path,
             view_index=numeric_index,
             stable=False,
             warnings=(
-                "Legacy built-in Lovelace routes are accepted without a stored "
-                "dashboard config; the selected view cannot be verified.",
+                "Routes of a dashboard without a stored config are accepted; "
+                "the selected view cannot be verified.",
             ),
         )
     if len(parts) == 1:
@@ -663,10 +672,29 @@ async def resolve_dashboard_render_target(
             stable=False,
             warnings=(
                 "No named view path was supplied; the built-in dashboard base route "
-                "renders the first view visible to Puppet's Home Assistant user.",
+                "renders the first view visible to the screenshot engine's Home Assistant user.",
             ),
         )
     config = await fetch_dashboard_render_config(client, url_path)
+    if config is None:
+        if view_path is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    NO_STORED_CONFIG_NOTE,
+                    context={"url_path": url_path, "view_path": view_path},
+                    suggestions=["Omit view_path: there are no static views"],
+                )
+            )
+        base_path = dashboard_frontend_path(url_path)
+        return DashboardRenderTarget(
+            url_path=base_path,
+            view_path=None,
+            render_path=base_path,
+            view_index=None,
+            stable=False,
+            warnings=(NO_STORED_CONFIG_NOTE,),
+        )
     return resolve_dashboard_view(url_path, config, view_path)
 
 
@@ -718,7 +746,7 @@ async def _numeric_view_warning(
         return []
     if config is None:
         config = await fetch_dashboard_render_config(client, url_path)
-    views = config.get("views")
+    views = (config or {}).get("views")
     if not isinstance(views, list):
         return []
     view_index = index if matched_view_index is None else matched_view_index

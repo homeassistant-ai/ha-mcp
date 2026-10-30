@@ -58,11 +58,15 @@ def _app_announcements(info: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _mcp_discovery_flows(info: dict[str, Any]) -> list[dict[str, Any]]:
+def _mcp_discovery_flows(info: dict[str, Any], uuid: str) -> list[dict[str, Any]]:
+    # Other apps announce an mcp service too (ESPHome does); Core's mcp flow
+    # takes the announcing message's uuid as its unique_id.
     return [
         flow
         for flow in _ws(info, {"type": "config_entries/flow/progress"})
-        if flow["handler"] == "mcp" and flow["context"].get("source") == "hassio"
+        if flow["handler"] == "mcp"
+        and flow["context"].get("source") == "hassio"
+        and flow["context"].get("unique_id") == uuid
     ]
 
 
@@ -93,8 +97,10 @@ def test_core_discovers_and_connects_to_the_app(
     # Deliver the stored message the way the Supervisor does for a new one.
     _rest(info, "POST", f"/api/hassio_push/discovery/{message['uuid']}")
     deadline = time.monotonic() + _FLOW_TIMEOUT
-    while not (flows := _mcp_discovery_flows(info)):
-        assert time.monotonic() < deadline, f"Core {version} opened no mcp flow"
+    while not (flows := _mcp_discovery_flows(info, message["uuid"])):
+        assert time.monotonic() < deadline, (
+            f"Core {version} opened no mcp flow for discovery {message['uuid']}"
+        )
         time.sleep(3)
     (flow,) = flows
     assert flow["step_id"] == "hassio_confirm"

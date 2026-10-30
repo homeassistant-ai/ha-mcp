@@ -54,6 +54,7 @@ from .test_component_ws_search import (
     FakeServices,
     FakeState,
     make_view,
+    stored_helpers,
     wsapi,
 )
 from .test_config_get_component_routing import RoutingClient as GetRoutingClient
@@ -412,7 +413,10 @@ class TestHelpersListSeam:
                 FakeState(
                     "input_boolean.guest_mode", "off", friendly_name="Current Guest"
                 )
-            ]
+            ],
+            data=stored_helpers(
+                {"input_boolean": [{"id": "guest_mode", "name": "Old"}]}
+            ),
         )
         monkeypatch.setattr(
             wsapi,
@@ -421,9 +425,8 @@ class TestHelpersListSeam:
                 entity={
                     "input_boolean.guest_mode": FakeRegEntry(
                         "input_boolean.guest_mode",
-                        name="Current Guest",
-                        original_name="Old Name",
                         unique_id="guest_mode",
+                        platform="input_boolean",
                     )
                 }
             ),
@@ -433,11 +436,8 @@ class TestHelpersListSeam:
         tool = _build_list_helpers(client)
         with patch_ws(ws, tools_config_helpers):
             resp = await tool(helper_type="input_boolean")
-        assert resp["success"] is True
-        assert resp["count"] == 1
-        rec = resp["helpers"][0]
-        # #1794 additive fix through the REAL component output: storage id
-        # preserved, current entity_id + name layered on.
+        (rec,) = resp["helpers"]
+        # #1794 via the REAL component output: storage id + current entity_id/name.
         assert rec["id"] == "guest_mode"
         assert rec["entity_id"] == "input_boolean.guest_mode"
         assert rec["name"] == "Current Guest"

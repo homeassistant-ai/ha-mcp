@@ -511,28 +511,35 @@
   .feature-row.beta-sub,
   .feature-row.codemode-sub,
   .feature-row.yaml-packages-sub,
-  .feature-row.mandatory-bps-sub { position: relative; }
+  .feature-row.mandatory-bps-sub,
+  .feature-row.redact-sub { position: relative; }
   .feature-row.beta-sub::before,
   .feature-row.codemode-sub::before,
   .feature-row.yaml-packages-sub::before,
-  .feature-row.mandatory-bps-sub::before {
+  .feature-row.mandatory-bps-sub::before,
+  .feature-row.redact-sub::before {
     content: ""; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--border);
   }
   .feature-row.beta-sub.dimmed,
   .feature-row.codemode-sub.dimmed,
   .feature-row.yaml-packages-sub.dimmed,
-  .feature-row.mandatory-bps-sub.dimmed { opacity: 0.38; }
+  .feature-row.mandatory-bps-sub.dimmed,
+  .feature-row.redact-sub.dimmed { opacity: 0.38; }
   .feature-row.beta-sub.dimmed input,
   .feature-row.codemode-sub.dimmed input,
   .feature-row.yaml-packages-sub.dimmed input,
-  .feature-row.mandatory-bps-sub.dimmed input { cursor: not-allowed; }
+  .feature-row.mandatory-bps-sub.dimmed input,
+  .feature-row.redact-sub.dimmed input { cursor: not-allowed; }
 
   /* Depth 1 — nested directly under a top-level toggle (beta-sub under the
-     master; strict-mode under the non-beta enable_mandatory_bps row). */
+     master; strict-mode under the non-beta enable_mandatory_bps row; extra
+     redacted app option keys under redact_secrets). */
   .feature-row.beta-sub,
-  .feature-row.mandatory-bps-sub { padding-left: 32px; }
+  .feature-row.mandatory-bps-sub,
+  .feature-row.redact-sub { padding-left: 32px; }
   .feature-row.beta-sub::before,
-  .feature-row.mandatory-bps-sub::before { left: 12px; }
+  .feature-row.mandatory-bps-sub::before,
+  .feature-row.redact-sub::before { left: 12px; }
 
   /* Depth 2 — nested under a beta-sub parent (yaml packages under
      enable_yaml_config_editing; code-mode numerics under enable_code_mode). */

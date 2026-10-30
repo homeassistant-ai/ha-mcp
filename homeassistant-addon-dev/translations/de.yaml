@@ -14,11 +14,6 @@ configuration:
       alle Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
       bleibt unverändert. 0 belässt das Verhalten unbegrenzt. Ein Aufruf, der auf
       Kapazität wartet, schlägt nach 60 Sekunden fehl. Bereich 0–32.
-  backup_hint:
-    name: Backup-Hinweisstufe
-    description: Wie nachdrücklich KI-Assistenten angewiesen werden, vor riskanten
-      Änderungen ein vollständiges Home Assistant-Backup vorzuschlagen. Ändert nur
-      diesen Hinweis; automatische Bearbeitungs-Backups haben ihre eigene Einstellung.
   custom_instructions:
     name: Eigene Server-Anweisungen
     description: Text, den jeder verbundene KI-Assistent als Teil der MCP-Server-Anweisungen
@@ -95,14 +90,23 @@ configuration:
       einen Neustart, um wirksam zu werden.
   redact_secrets:
     name: Geheimnisse schwärzen
-    description: Entfernt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
-      erreichen. App-Optionen (Add-on) und als Passwörter markierte Integrationsfelder
-      werden durch eine Markierung für gesetzt/leer ersetzt (sodass "ist diese Zugangsbezeichnung
-      konfiguriert?" beantwortet bleiben kann), und andere Tool-Antworten werden von
-      Geheimniswerten bereinigt, die der Server bereits gesehen hat (Werte, die kürzer
-      als 6 Zeichen sind, werden übersprungen, da das Ersetzen winziger Fragmente
-      zusammenhängende Ausgaben beschädigen würde). Felder, die von ihrem Schema nicht
-      als Passwörter markiert wurden, können nicht erkannt werden. Standardmäßig aus.
+    description: Entfernt Geheimnisse aus Werkzeugantworten, bevor sie den KI-Assistenten
+      erreichen. App- (Add-on-)Optionen und Integrationsfelder, die als Passwörter
+      markiert sind, werden durch eine Markierung für gesetzt/leer ersetzt (damit
+      „ist diese Zugangsmarke konfiguriert?“ beantwortet werden kann), und andere
+      Werkzeugantworten werden von Geheimnissen bereinigt, die der Server bereits
+      gesehen hat (Werte, die kürzer als 6 Zeichen sind, werden übersprungen, da das
+      Ersetzen kleiner Fragmente unrelated Ausgaben beschädigen würde). Andere Felder
+      werden nicht erkannt, außer privaten Schlüsseln in App-Optionen und den unten
+      aufgeführten App-Optionennamen. Standardmäßig aus.
+  redact_app_option_keys:
+    name: Zusätzliche App-Optionsschlüssel zum Schwärzen
+    description: App- (Add-on-)Optionsnamen zum Schwärzen wie Passwortfelder für Apps,
+      deren Schema ein Geheimnis im Klartext speichert (zum Beispiel backup_password).
+      Trenne Namen mit Kommas oder Zeilenumbrüchen. Ein Name gilt für jede App; schreibe
+      app_slug:name, um ihn auf eine App zu beschränken. Das Benennen einer Optionsgruppe
+      deckt jede Option darin ab. Wird nur verwendet, wenn Geheimnisse schwärzen aktiv
+      ist. Standardmäßig leer.
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
     description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten
@@ -178,24 +182,23 @@ configuration:
       ist.
   enable_lite_docstrings:
     name: Lite-Tool-Docstrings aktivieren (Beta)
-    description: 'Beta-Funktion. Ersetzt die Docstrings von 15 speicherintensiven
-      ha-mcp-Tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
-      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
-      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
-      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) durch kürzere
-      Varianten, die Schema- und Beispieldetails auf das ha_get_skill_guide-Tool (oder
-      dessen skill://-Ressource) auslagern. Eine Ausnahme: ha_report_issue verweist
-      stattdessen auf das instructions-Feld seiner eigenen Antwort. Die Anpassung
-      der Backup-Hinweis-Einstellung gilt weiterhin im Lite-Modus. WARNUNG: Dies reduziert
-      die Token-Nutzung im Ruhezustand, kann jedoch die LLM-Leistung beeinträchtigen
-      — die gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich
-      das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was nicht
-      garantiert ist (einige Modelle überspringen den zusätzlichen Tool-Aufruf und
-      erhalten dadurch weniger Hilfestellung als zuvor). Am besten in Kombination
-      mit einem Client, der MCP-Ressourcen unterstützt oder mit enable_tool_search.
-      Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass der übergeordnete
-      Schalter „Enable beta features“ oben (und in der Web-UI) aktiviert ist — andernfalls
-      wird dieses Unter-Flag zur Laufzeit unabhängig von seinem Wert hier ignoriert.'
+    description: 'Beta-Funktion. Ersetzt die Docstrings von 15 umfangreichen ha-mcp-Tools
+      (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script,
+      ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper,
+      ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml,
+      ha_search, ha_manage_backup, ha_report_issue) durch kürzere Varianten, die Schema-
+      und Beispieldetails auf das ha_get_skill_guide-Tool (oder dessen skill://-Ressource)
+      auslagern. Eine Ausnahme: ha_report_issue verweist stattdessen auf das instructions-Feld
+      der eigenen Antwort. WARNUNG: Dies reduziert die Token-Nutzung im Leerlauf,
+      kann jedoch die LLM-Leistung beeinträchtigen – die gekürzten Beschreibungen
+      hängen davon ab, dass das LLM tatsächlich das Skill-Tool aufruft oder die Skill-Ressource
+      für Details liest, was nicht garantiert ist (einige Modelle überspringen den
+      zusätzlichen Tool-Aufruf und erhalten dadurch weniger Anleitung als zuvor).
+      Lässt sich am besten mit einem Client kombinieren, der MCP-Ressourcen unterstützt
+      oder enable_tool_search nutzt. Erfordert einen Neustart, um wirksam zu werden.
+      ERFORDERT, dass der Hauptschalter „Enable beta features“ oben (und in der Web-UI)
+      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit unabhängig
+      von seinem Wert hier ignoriert.'
   enable_filesystem_tools:
     name: Dateisystem-Tools aktivieren (Beta)
     description: 'Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten Dateilese-/-schreibzugriff
@@ -223,21 +226,20 @@ configuration:
       hier ignoriert.
   enable_dashboard_screenshot:
     name: Dashboard-Screenshot-Modus aktivieren (Beta)
-    description: Beta-Funktion — standardmäßig deaktiviert. Fügt das Tool ha_get_dashboard_screenshot
-      sowie die Optionen include_screenshot / return_screenshot zu den Dashboard-Get/Set-Tools
-      hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder überprüfen
-      können (z. B. um ein gerade erst erstelltes Dashboard zu überprüfen). Unterstützt
-      stabile benannte Ansichten, Mobil-/Tablet-/Desktop-Batches sowie PNG/JPEG/WebP/BMP-Ausgaben.
-      Das Rendern erfolgt in einer separaten, optionalen Engine — balloobs "Puppet"
-      App (Add-on), headless Chromium —, die du einmalig installierst (füge balloobs
-      Repository dem App-Store hinzu, installiere dann "Puppet") und mit einem langlebigen
-      Zugriffstoken versiehst; bei Docker/Container-Bereitstellungen führst du diese
-      Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Es wird
-      nichts Schweres installiert, es sei denn, du aktivierst dies und installierst
-      die Engine. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass
-      der Hauptschalter "Beta-Funktionen aktivieren" oben (und im Web-UI) eingeschaltet
-      ist — andernfalls wird dieses Unterflag zur Laufzeit unabhängig von seinem Wert
-      hier ignoriert.
+    description: 'Beta-Funktion — standardmäßig deaktiviert. Fügt das ha_get_dashboard_screenshot-Tool
+      sowie die Optionen include_screenshot / return_screenshot zu den Dashboard-Get-/Set-Tools
+      hinzu, damit KI-Assistenten responsive Lovelace-Bilder untersuchen können. Unterstützt
+      stabile benannte Ansichten, Mobil-/Tablet-/Desktop-Batches sowie PNG-/JPEG-/WebP-/BMP-Ausgabe.
+      Das Rendern läuft in einer separaten App: balloob''s Puppet oder WPE Screenshot
+      Engine. Installiere und konfiguriere eine Engine mit einem eigenen langlebigen
+      Zugstoken (Long-Lived Access Token) für Home Assistant. HA OS / Supervised erkennt
+      eine gestartete Engine über Supervisor; Docker-/Container-Bereitstellungen führen
+      sie als Sidecar aus und legen HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL fest. Es
+      wird nichts Schweres installiert, es sei denn, du aktivierst dies und installierst
+      eine Engine. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass
+      der Master-Schalter „Beta-Funktionen aktivieren“ oben (und in der Web-UI) eingeschaltet
+      ist — andernfalls wird dieses Unter-Flag zur Laufzeit unabhängig von seinem
+      Wert hier ignoriert.'
   enable_auto_backup:
     name: Automatische Backup-Bearbeitungen
     description: Speichere einen Schnappschuss einer Entität, bevor ein Schreib- oder

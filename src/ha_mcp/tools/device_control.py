@@ -65,8 +65,8 @@ _BULK_ROW_SHAPE_SUGGESTION = (
 # The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
 # capability. When the component advertises ``bulk_call_service`` the consumer
 # resolves every op's domain/service server-side (D6), sends one register-before-fire
-# batch frame, and maps the inline-confirmed per-op transitions back into the legacy
-# bulk response shape — no operation-id polling needed. Named once so the routing
+# batch frame, and maps each op's inline result (confirmed or not) back into the
+# legacy bulk response shape — no operation-id polling needed. Named once so the routing
 # helper and its tests agree on the wire string.
 WS_BULK_CALL_SERVICE = "ha_mcp_tools/bulk_call_service"
 
@@ -887,30 +887,24 @@ class DeviceControlTools:
                 )
 
             # Route through the component's bulk_call_service capability when
-            # advertised (D5a): one register-before-fire batch frame confirms every
-            # op inline, so ops return already-verified (no operation-id polling). A
-            # None return means nothing dispatched (capability miss / unresolvable op
-            # / transport failure), so the legacy path below is a safe first fire
-            # (D9 at-most-once).
+            # advertised (D5a): one register-before-fire batch frame; HA confirms ops
+            # inline (no operation-id polling) and each op's result says whether it
+            # did. A None return means nothing dispatched (capability miss /
+            # unresolvable op / pre-send failure), so the legacy path below is a safe
+            # first fire (D9 at-most-once).
             component_response = await self._bulk_via_component(
                 operations, valid_operations, skipped_operations, parallel
             )
             if component_response is not None:
-                # M-progress-msg: the ambiguous batch response carries a top-level
-                # ``partial`` (dispatched but the batch confirmation never arrived — not
-                # retried); only a fully-served batch is "confirmed inline". The legacy
-                # ``_build_bulk_response`` never sets a top-level ``partial``, so this
-                # flag reliably marks the ambiguous path.
-                component_message = (
-                    "dispatched via component (unconfirmed — not retried)"
-                    if component_response.get("partial")
-                    else "dispatched via component (confirmed inline)"
-                )
+                # Report the dispatch only; each op's outcome is in its result and is
+                # never summarised here.
                 await safe_progress(
                     ctx,
                     progress=len(valid_operations),
                     total=len(valid_operations),
-                    message=component_message,
+                    message=(
+                        "dispatched via component; each op's result shows its outcome"
+                    ),
                 )
                 return component_response
 
@@ -1012,7 +1006,7 @@ class DeviceControlTools:
     ) -> dict[str, Any]:
         """Map one component op result into the legacy per-op result shape.
 
-        The component confirms inline, so the op returns already-verified with a
+        The component reports each op's confirmation inline, so the op returns a
         synthesized terminal status instead of the legacy ``pending_verification`` +
         operation-id handle. A ``command_sent: True`` result is counted ``successful``
         by ``_build_bulk_response`` exactly as the legacy dispatch result is; an op
@@ -1137,7 +1131,7 @@ class DeviceControlTools:
             "action": action,
             "parameters": op.get("parameters") or {},
             "command_sent": True,
-            # M-status: an inline-confirmed op has no operation_id, so a
+            # M-status: a component-path op has no operation_id, so a
             # "pending_verification" status is misleading (nothing will poll it). Use
             # "dispatched_unconfirmed" — the same label the ambiguous batch path uses.
             "status": "completed" if confirmed else "dispatched_unconfirmed",
@@ -1182,7 +1176,7 @@ class DeviceControlTools:
 
         Returns a legacy-shaped bulk response (built by the SAME
         ``_build_bulk_response`` the legacy path uses, with ``operation_ids`` empty
-        and ``follow_up`` None since ops are confirmed inline) when the component
+        and ``follow_up`` None since confirmation is inline) when the component
         advertises ``bulk_call_service`` and the frame lands, else ``None`` so the
         caller runs the unchanged legacy operation-registry path.
 
@@ -1316,7 +1310,7 @@ class DeviceControlTools:
                 valid_operations, rows, op_results, strict=True
             )
         ]
-        # Reuse the legacy response builder: operation_ids is empty (ops confirmed
+        # Reuse the legacy response builder: operation_ids is empty (confirmation is
         # inline, no polling handle) → follow_up is None, and the successful/failed
         # tallies key off command_sent exactly as the legacy path.
         return self._build_bulk_response(
@@ -1386,14 +1380,14 @@ class DeviceControlTools:
         skipped_operations: list[dict[str, Any]],
         parallel: bool,
     ) -> dict[str, Any]:
-        """Partial-success bulk response for a post-send batch-frame timeout/drop.
+        """Partial-success bulk response for a sent batch frame with no usable reply.
 
-        The batch frame WAS sent, so some/all ops may have dispatched; the batch
-        response never arrived. Per D9 at-most-once every valid op is reported
-        dispatched-but-unconfirmed (``partial``) and the batch is NEVER re-dispatched
-        via legacy. ``rows`` is aligned 1:1 with ``valid_operations`` (both built in
-        order; an unresolvable op returned to legacy earlier, so no ``None`` rows
-        reach here).
+        The batch frame WAS sent, so some/all ops may have dispatched, but the reply
+        timed out, the connection dropped, or the success envelope was malformed.
+        Per D9 at-most-once every valid op is reported dispatched-but-unconfirmed
+        (``partial``) and the batch is NEVER re-dispatched via legacy. ``rows`` is
+        aligned 1:1 with ``valid_operations`` (both built in order; an unresolvable op
+        returned to legacy earlier, so no ``None`` rows reach here).
         """
         results: list[dict[str, Any]] = [
             {
@@ -1413,8 +1407,8 @@ class DeviceControlTools:
                 },
                 "verification_method": "component_state_change",
                 "message": (
-                    f"{entity_id} {action} dispatched but the batch confirmation did "
-                    "not arrive within the timeout; not retried"
+                    f"{entity_id} {action} dispatched but no usable batch "
+                    "confirmation arrived; not retried"
                 ),
             }
             for (_idx, op, entity_id, action), row in zip(
@@ -1426,9 +1420,9 @@ class DeviceControlTools:
         )
         response["partial"] = True
         response.setdefault("warnings", []).append(
-            "The bulk operation was dispatched but Home Assistant did not confirm "
-            "within the timeout. Operations were NOT retried (at-most-once). Use "
-            "ha_get_state to verify the affected entities."
+            "The bulk operation was dispatched but no usable confirmation arrived "
+            "(timeout, dropped connection or malformed reply). Operations were NOT "
+            "retried (at-most-once). Use ha_get_state to verify the affected entities."
         )
         return response
 

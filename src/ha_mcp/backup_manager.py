@@ -83,6 +83,12 @@ from .backup_diff import (
     _compute_json_patch,
     _summarize_patch_counts,
 )
+from .backup_entities import (
+    current_entity_id,
+    fetch_entity,
+    restore_entity,
+    restore_locks,
+)
 from .backup_entity_ids import (
     _restore_entity_ids,
     update_with_registry_icon,
@@ -103,6 +109,7 @@ from .client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .storage_helper_types import SIMPLE_HELPER_TYPES
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
 
@@ -1492,6 +1499,11 @@ class BackupManager:
                     return await self._restore_snapshot_data(
                         name, data, take_safety_backup=take_safety_backup
                     )
+            if data["domain"] == "entity":
+                async with restore_locks(self._client, data["config"]):
+                    return await self._restore_snapshot_data(
+                        name, data, take_safety_backup=take_safety_backup
+                    )
             return await self._restore_snapshot_data(
                 name, data, take_safety_backup=take_safety_backup
             )
@@ -1636,6 +1648,11 @@ class BackupManager:
                 f"{_flow_label(_flow_type(domain))} helper no longer exists; "
                 "restore was not attempted"
             )
+        if path is None and target is not None and domain == "entity":
+            # Renamed since the lookup: the restore finds the entity by its
+            # entry id and would overwrite it without a safety backup.
+            message = "the entity was renamed while its safety backup was taken; retry"
+            raise MandatoryBackupError(message, safe_detail=message)
         if checked and path is None:
             _note_no_safety_backup(outcome, domain, target, config)
         return path
@@ -1655,7 +1672,10 @@ class BackupManager:
         handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
-        current = await handler.fetch(self._client, data["entity_id"])
+        target = data["entity_id"]
+        if domain == "entity":
+            target = await current_entity_id(self._client, target, data["config"])
+        current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)
             current = dashboard_comparison(current, legacy=legacy)
@@ -2656,25 +2676,6 @@ async def _restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
     )
 
 
-# Generic entity (ha_set_entity) — fetch via state API, restore by re-setting.
-
-
-async def _fetch_entity_state(client: Any, entity_id: str) -> Any:
-    return await _rest_get_or_none(client, f"states/{entity_id}")
-
-
-async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any:
-    # ha_set_entity just calls /api/states/<entity_id> POST with state+attributes.
-    if isinstance(config, dict):
-        payload = {
-            "state": config.get("state"),
-            "attributes": config.get("attributes", {}),
-        }
-    else:
-        payload = {"state": str(config)}
-    return await _rest_post(client, f"states/{entity_id}", payload)
-
-
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates
 # the user-editable registry fields (name_by_user / area_id / disabled_by /
 # labels); restore re-applies exactly those. A device deleted by
@@ -2730,20 +2731,7 @@ async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
 # endpoints (fetch: backup_helper_target.py). The decorator
 # constructs the domain key as ``helper_<type>`` so files group naturally.
 
-_HELPER_LIST_TYPES = {
-    "input_boolean",
-    "input_text",
-    "input_number",
-    "input_select",
-    "input_datetime",
-    "input_button",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-}
+_HELPER_LIST_TYPES = SIMPLE_HELPER_TYPES
 
 
 async def _restore_helper(
@@ -3478,7 +3466,7 @@ async def _check_entity_collision(
     occupied = {row["entity_id"] for row in registry} | state_ids
     if target in occupied and target not in owned_ids:
         raise BackupRestoreError(
-            "The saved entity ID is occupied; it will not be overwritten",
+            f"The saved entity ID {target} is occupied; it will not be overwritten",
             reason="entity_id_collision",
             conflicting_entity_id=target,
         )
@@ -3920,7 +3908,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
     )
     mgr.register(DomainHandler("todo_item", _fetch_todo_item, _restore_todo_item))
-    mgr.register(DomainHandler("entity", _fetch_entity_state, _restore_entity_state))
+    mgr.register(DomainHandler("entity", fetch_entity, restore_entity))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
     mgr.register(DomainHandler("integration", fetch_integration, restore_integration))
     mgr.register(DomainHandler("file", _fetch_file, _restore_file))

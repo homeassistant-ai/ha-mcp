@@ -522,14 +522,15 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
                     "service_availability, system_info, notification_count, notifications, "
                     "repair_count, dismissed_repair_count, repairs, repairs_error, "
                     "tool_discovery, settings_url, settings_url_hint, read_only_mode, "
-                    "read_only_mode_hint, ha_mcp_update. Note: ``settings_url`` (stdio "
+                    "read_only_mode_hint, ha_mcp_update, mcp_client. Note: ``settings_url`` (stdio "
                     "mode), ``settings_url_hint`` (standalone HTTP/Docker mode), the "
                     "``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read "
-                    "Only Mode is on), and ``ha_mcp_update`` (when an update check applies)"
-                    " are emitted regardless of ``fields=`` projection."
+                    "Only Mode is on), ``ha_mcp_update`` (when an update check applies)"
+                    " and ``mcp_client`` are emitted regardless of ``fields=`` projection."
                 ),
             ),
         ] = None,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
@@ -562,6 +563,11 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         app) — proactively tell the user when ``update_available`` is true.
         Omitted for the ``unknown`` version, when ``HA_MCP_DISABLE_UPDATE_CHECK``
         is set, or when the update check itself failed.
+
+        ``mcp_client`` reports the MCP protocol version, client info and
+        client capabilities this call arrived with, for diagnosing
+        client-specific behaviour. ``capabilities: null`` means the request
+        carried none to read, not that the client declared none.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields".
@@ -692,6 +698,9 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         if mcp_update is not None:
             projected["ha_mcp_update"] = mcp_update
 
+        from ..mcp_client_context import describe_mcp_client
+
+        projected["mcp_client"] = describe_mcp_client(ctx)
         return projected
 
     @tool(

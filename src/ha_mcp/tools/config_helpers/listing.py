@@ -66,6 +66,14 @@ def listed_items(listed: Any) -> list[Any]:
     return listed if isinstance(listed, list) else []
 
 
+def _outside_storage(rec: dict[str, Any]) -> bool:
+    """A component record of a helper ``<type>/list`` does not list (a YAML
+    helper, the home zone): the component sends it with a null storage id."""
+    return rec.get("kind") == "collection" and (
+        "storage_id" in rec and rec["storage_id"] is None
+    )
+
+
 def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     """Map one component collection-helper record onto the legacy list record.
 
@@ -205,7 +213,7 @@ def _shape_component_helpers_response(
     for rec in records:
         if not isinstance(rec, dict):
             continue
-        if (rec.get("kind") == "flow") != want_flow:
+        if (rec.get("kind") == "flow") != want_flow or _outside_storage(rec):
             continue
         helpers.append(
             _shape_flow_helper_record(rec)
@@ -228,8 +236,8 @@ def _component_covers(result: dict[str, Any], helper_type: str) -> bool:
     """Whether a helpers_list response authoritatively enumerated ``helper_type``.
 
     The component reports ``covered_types``: the helper types its response could
-    actually see. A type outside that list (e.g. ``tag`` — tags have no state
-    entity, so the component's from-states scan can't enumerate them) must NOT
+    actually see. A type outside that list (e.g. ``person`` or ``tag``, whose
+    ``<type>/list`` adds more than the stored items) must NOT
     be trusted as "none exist". A response with no ``covered_types`` at all (an
     older component) is treated conservatively as covering nothing, so the
     caller falls back rather than trusting a possibly-partial list.
@@ -290,8 +298,8 @@ async def shape_all_helpers_response(
     collection → ``_shape_collection_helper_record``) and stamped with its
     own ``helper_type`` so records of different types stay distinguishable in
     the flat list. Respecting ``covered_types`` (mirroring the single-type
-    path): a simple type the component could not enumerate from the state
-    machine — ``tag`` has no state entity — is fetched per-type via its
+    path): a simple type the component did not cover — ``person`` and ``tag``
+    — is fetched per-type via its
     legacy ``{type}/list`` (``legacy_list``) and merged, so ``all`` never silently drops it.
 
     ``flow_types`` is Core's current set of helper flow types; one the component
@@ -301,7 +309,7 @@ async def shape_all_helpers_response(
     records = raw if isinstance(raw, list) else []
     helpers: list[dict[str, Any]] = []
     for rec in records:
-        if not isinstance(rec, dict):
+        if not isinstance(rec, dict) or _outside_storage(rec):
             continue
         if rec.get("kind") == "flow":
             helpers.append(_shape_flow_helper_record(rec))

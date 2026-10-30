@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "HACS에서 HA-MCP 사용자 지정 구성요소를 업데이트하세요",
-      "description": "설치된 ha-mcp 서버는 HA-MCP 사용자 지정 구성요소 {required} 이상을 요구하지만 현재 {installed}을(를) 사용 중입니다. HACS에서 구성요소를 업데이트한 뒤(HA-MCP 사용자 지정 구성요소 항목을 열고 업데이트가 아직 보이지 않으면 '정보 업데이트'를 사용하세요) Home Assistant를 다시 시작하세요. 그동안에도 서버는 계속 동작하지만, 구성요소를 업데이트하기 전까지 일부 최신 기능이 동작하지 않을 수 있습니다."
+      "title": "HA-MCP 커스텀 구성 요소 업데이트",
+      "description": "설치된 ha-mcp 서버에는 HA-MCP 커스텀 구성 요소 {required} 버전 이상이 필요하지만 현재 {installed} 버전이 설치되어 있습니다. 설정 > 시스템 > 업데이트(HACS 또는 Home Assistant 2026.11+의 마켓플레이스)에서 HA-MCP 커스텀 구성 요소를 연 뒤, 업데이트가 아직 표시되지 않으면 '정보 업데이트'(HACS) 또는 '정보 새로 고침'(마켓플레이스)을 사용하고 Home Assistant를 다시 시작하세요. 그동안에도 서버는 계속 실행되지만 구성 요소가 업데이트될 때까지 일부 새로운 기능은 작동하지 않을 수 있습니다."
     },
     "legacy_oauth_restart": {
       "title": "레거시 OAuth 설정을 적용하려면 Home Assistant를 다시 시작하세요",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "웹훅을 통한 원격 접속이 꺼져 있습니다(로컬 전용 모드).",
     "oauth_creds_pending": "서버가 시작되면 클라이언트 ID와 클라이언트 시크릿이 여기에 표시됩니다.",
     "oauth_not_serving": "레거시 OAuth가 아직 이 값들을 제공하지 않습니다 — 안내가 나오면 Home Assistant를 다시 시작해 활성화하세요.",
-    "oauth_select_legacy_mode": "위에서 인증 방식을 레거시 OAuth로 설정하고 저장하면 클라이언트 ID와 클라이언트 시크릿이 생성됩니다.",
+    "oauth_select_legacy_mode": "최신 OAuth를 지원하지 않는 클라이언트의 경우, 모드를 레거시 OAuth로 변경하여 ID와 비밀번호(secret)를 생성하세요. \"Sign in with Home Assistant\"로 설정했을 때 연결에 문제가 있다면, 레거시 OAuth를 시도하기 전에 \"Secret webhook URL\"로 전환하여 먼저 연결을 테스트하는 것을 권장합니다.",
     "panel_hint": "도구 관리와 서버 설정은 [HA-MCP 설정 패널](/ha-mcp)에서 할 수 있습니다.",
     "tools_module_installed": "베타/고급 파일 및 YAML 도구 모듈(선택): 설치됨",
     "tools_module_not_installed": "베타/고급 파일 및 YAML 도구 모듈(선택): 설치되지 않음 — 이 통합 구성요소 페이지에서 \"항목 추가\"를 누르고 \"HA-MCP 파일 및 YAML 도구(HA-MCP File & YAML Tools)\"를 선택해 추가하세요",

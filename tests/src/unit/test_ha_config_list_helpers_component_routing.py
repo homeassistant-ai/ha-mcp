@@ -726,10 +726,11 @@ def _component_all_result() -> dict[str, Any]:
     """Merged component output: one collection helper + one flow helper.
 
     ``covered_types`` mirrors the real component: every simple type EXCEPT
-    ``tag`` (which has no state entity) plus the FULL flow universe
-    (``covered |= FLOW_HELPER_DOMAINS`` component-side — not just types with
-    instances). So only ``tag`` falls back to the legacy per-type list, and no
-    flow type triggers the incomplete-coverage hard error.
+    ``person`` and ``tag`` (whose ``<type>/list`` adds more than the stored
+    items) plus the FULL flow universe (``covered |= FLOW_HELPER_DOMAINS``
+    component-side — not just types with instances). So only those two fall
+    back to the legacy per-type list, and no flow type triggers the
+    incomplete-coverage hard error.
     """
     return {
         "helpers": [
@@ -752,13 +753,15 @@ def _component_all_result() -> dict[str, Any]:
             },
         ],
         "count": 2,
-        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | STUB_HELPER_FLOWS),
+        "covered_types": sorted(
+            (SIMPLE_HELPER_TYPES - {"person", "tag"}) | STUB_HELPER_FLOWS
+        ),
     }
 
 
 @pytest.mark.asyncio
 async def test_all_types_via_component_returns_merged_listing() -> None:
-    """helper_type='all' merges component records + a legacy tag fallback."""
+    """helper_type='all' merges component records + legacy person/tag lists."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -772,10 +775,10 @@ async def test_all_types_via_component_returns_merged_listing() -> None:
 
     assert resp["success"] is True
     assert resp["helper_type"] == "all"
-    # Collection + flow (component) + tag (legacy covered_types fallback).
-    assert resp["count"] == 3
+    # Collection + flow (component) + person x2 + tag (legacy fallbacks).
+    assert resp["count"] == 5
     by_type = {h.get("helper_type"): h for h in resp["helpers"]}
-    assert set(by_type) == {"input_boolean", "template", "tag"}
+    assert set(by_type) == {"input_boolean", "template", "person", "tag"}
     # Collection record: #1794 shape preserved and self-describes its type.
     assert by_type["input_boolean"]["id"] == "abc123"
     assert by_type["input_boolean"]["entity_id"] == "input_boolean.foo"
@@ -783,13 +786,44 @@ async def test_all_types_via_component_returns_merged_listing() -> None:
     # Flow record: entry_id + options carried through.
     assert by_type["template"]["entry_id"] == "cfgentry123"
     assert by_type["template"]["options"] == {"state": "{{ 1 + 1 }}"}
-    # Tag came from the legacy fallback (the only uncovered simple type).
+    # Person and tag came from the legacy fallback (the uncovered simple types).
     assert by_type["tag"]["id"] == "tag-42"
-    assert client.list_calls == 1
+    assert client.list_calls == 2
     # The component command requests all types (no helper_types filter).
     (call,) = _helpers_calls(ws)
     assert "helper_types" not in call.kwargs
     assert call.kwargs["include_flow_helpers"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("helper_type", ["input_boolean", "all"])
+async def test_yaml_helper_is_not_listed_as_a_stored_helper(helper_type: str) -> None:
+    """input_boolean/list lists stored helpers only. A YAML-defined one, which
+    the component sends with a null storage id and its state attributes, must
+    not appear as though those attributes were its stored config."""
+    result = _component_all_result()
+    result["helpers"].append(
+        {
+            "helper_type": "input_boolean",
+            "object_id": "yaml_flag",
+            "entity_id": "input_boolean.yaml_flag",
+            "name": "YAML Flag",
+            "kind": "collection",
+            "storage_id": None,
+            "config": {"friendly_name": "YAML Flag", "editable": False},
+        }
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
+    list_helpers = _build_list_helpers(RoutingClient())
+
+    with patch_ws(ws, tools_config_helpers):
+        resp = await list_helpers(helper_type=helper_type)
+
+    listed = {h.get("entity_id") for h in resp["helpers"]}
+    assert "input_boolean.foo" in listed
+    assert "input_boolean.yaml_flag" not in listed
 
 
 @pytest.mark.asyncio

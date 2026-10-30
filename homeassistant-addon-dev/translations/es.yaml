@@ -14,12 +14,6 @@ configuration:
       en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
       por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
       llamada que espera capacidad falla después de 60 segundos. Rango 0–32.
-  backup_hint:
-    name: Nivel de sugerencia de copia de seguridad
-    description: Con qué intensidad se indica a los asistentes de IA que sugieran
-      una copia de seguridad completa de Home Assistant antes de realizar cambios
-      arriesgados. Solo cambia esta sugerencia; las copias de seguridad de edición
-      automática tienen su propia configuración.
   custom_instructions:
     name: Instrucciones personalizadas del servidor
     description: Texto enviado a cada asistente de IA que se conecta, como parte de
@@ -101,14 +95,24 @@ configuration:
   redact_secrets:
     name: Redactar secretos
     description: Elimina información confidencial de las respuestas de las herramientas
-      antes de que lleguen al asistente de IA. Las opciones de la app (add-on) y los
-      campos de integración marcados como contraseñas se reemplazan por un marcador
-      de establecido/vacío (para que "¿está esta credencial configurada?" siga teniendo
-      respuesta), y las respuestas de otras herramientas se depuran de valores secretos
-      que el servidor ya ha visto (se omiten los valores de menos de 6 caracteres,
-      ya que reemplazar fragmentos diminutos corrompería resultados no relacionados).
-      Los campos no marcados como contraseñas por su esquema no se pueden detectar.
-      Desactivado por defecto.
+      antes de que lleguen al asistente de IA. Las opciones de la aplicación (complemento)
+      y los campos de integración marcados como contraseñas se reemplazan por un marcador
+      de establecido/vacío (para que se pueda responder a "¿está configurada esta
+      credencial?"), y en las respuestas de otras herramientas se eliminan los valores
+      confidenciales que el servidor ya ha visto (se omiten los valores de menos de
+      6 caracteres, ya que reemplazar fragmentos diminutos corrompería resultados
+      no relacionados). No se detectan otros campos, excepto las claves privadas en
+      las opciones de la aplicación y los nombres de opciones de la aplicación enumerados
+      a continuación. Desactivado por defecto.
+  redact_app_option_keys:
+    name: Claves adicionales de opciones de aplicación para ocultar
+    description: Nombres de opciones de la aplicación (complemento) para ocultar como
+      los campos de contraseña, para aplicaciones cuyo esquema almacena un secreto
+      como texto plano (por ejemplo, backup_password). Separa los nombres con comas
+      o saltos de línea. Un nombre se aplica a todas las aplicaciones; escribe app_slug:name
+      para limitarlo a una sola aplicación. Nombrar un grupo de opciones abarca todas
+      las opciones que contiene. Se usa solo mientras la opción Redactar secretos
+      esté activada. Vacío por defecto.
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las
@@ -191,19 +195,18 @@ configuration:
       ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
       ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
       ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) con variantes
-      más cortas que delegan los detalles de esquemas y ejemplos a la herramienta
+      más cortas que delegan los detalles del esquema y ejemplos en la herramienta
       ha_get_skill_guide (o su recurso skill://). Una excepción: ha_report_issue delega
-      al campo instructions de su propia respuesta en su lugar. El ajuste de la opción
-      Backup-hint sigue funcionando en modo lite. ADVERTENCIA: esto reduce el uso
-      de tokens en reposo, pero puede disminuir el rendimiento del LLM; las descripciones
-      recortadas dependen de que el LLM realmente llame a la herramienta de habilidades
-      o lea el recurso de habilidades para obtener detalles, lo cual no está garantizado
-      (algunos modelos omitirán la llamada adicional a la herramienta y terminarán
-      con menos orientación que antes). Se combina mejor con un cliente que admita
-      recursos MCP o con enable_tool_search. Requiere reiniciar para surtir efecto.
-      REQUIRES el interruptor maestro "Enable beta features" de arriba (y en la interfaz
-      web) activado; de lo contrario, esta subopción se ignorará en tiempo de ejecución
-      independientemente de su valor aquí.'
+      en el campo instructions de su propia respuesta en su lugar. ADVERTENCIA: esto
+      reduce el uso de tokens inactivos, pero puede degradar el rendimiento del LLM;
+      las descripciones recortadas dependen de que el LLM realmente llame a la herramienta
+      de habilidades o lea el recurso de habilidades para obtener detalles, lo cual
+      no está garantizado (algunos modelos omitirán la llamada a herramienta adicional
+      y terminarán con menos orientación que antes). Se combina mejor con un cliente
+      que admita recursos MCP o con enable_tool_search. Requiere reiniciar para surtir
+      efecto. REQUIERE que el interruptor principal "Enable beta features" de arriba
+      (y en la interfaz web) esté activado; de lo contrario, este subindicador se
+      ignorará en tiempo de ejecución independientemente de su valor aquí.'
   enable_filesystem_tools:
     name: Activar las herramientas de sistema de archivos (beta)
     description: 'Establece HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Habilita el acceso
@@ -232,22 +235,21 @@ configuration:
       de ejecución independientemente de su valor aquí.
   enable_dashboard_screenshot:
     name: Activar el modo de captura de pantalla de paneles (beta)
-    description: 'Función beta: deshabilitada por defecto. Añade la herramienta ha_get_dashboard_screenshot
+    description: 'Función beta — desactivada por defecto. Añade la herramienta ha_get_dashboard_screenshot
       además de las opciones include_screenshot / return_screenshot en las herramientas
       de obtención/configuración de paneles, para que los asistentes de IA puedan
-      inspeccionar una o más imágenes adaptables de Lovelace (por ejemplo, para verificar
-      un panel que acaban de crear). Soporta vistas con nombre estables, lotes para
-      móvil/tablet/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se ejecuta
-      en un motor opcional independiente (la App (add-on) "Puppet" de balloob, Chromium
-      sin interfaz gráfica), que instalas una vez (añadiendo el repositorio de balloob
-      a la tienda de aplicaciones e instalando "Puppet") y le proporcionas un token
-      de acceso de larga duración; en implementaciones de Docker/Container, ejecutas
-      ese motor como un sidecar y configuras HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      No se instala nada pesado a menos que habilites esto e instales el motor. Requiere
-      reiniciar para que surta efecto. REQUIERE que el interruptor principal "Enable
-      beta features" de arriba (y en la interfaz web) esté activado; de lo contrario,
-      este subindicador se ignorará en tiempo de ejecución independientemente de su
-      valor aquí.'
+      inspeccionar imágenes responsivas de Lovelace. Es compatible con vistas con
+      nombre estables, lotes para móvil/tablet/escritorio y salida PNG/JPEG/WebP/BMP.
+      El renderizado se ejecuta en una aplicación separada: Puppet de balloob o WPE
+      Screenshot Engine. Instala y configura un motor con su propio token de acceso
+      de larga duración de Home Assistant. HA OS / Supervised detecta un motor iniciado
+      a través de Supervisor; los despliegues en Docker/Container lo ejecutan como
+      un sidecar y configuran HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. No se instala
+      nada pesado a menos que habilites esto e instales un motor. Requiere reiniciar
+      para aplicar los cambios. REQUIERE que el interruptor principal "Enable beta
+      features" de arriba (y en la interfaz web) esté activado; de lo contrario, esta
+      subopción se ignorará en tiempo de ejecución sin importar el valor que tenga
+      aquí.'
   enable_auto_backup:
     name: Copia automática de las ediciones
     description: Guarda una copia de seguridad de una entidad antes de que cada llamada

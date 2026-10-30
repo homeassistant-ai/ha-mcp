@@ -41,6 +41,7 @@ from .utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME,
     best_practices_skill,
     list_skill_files,
+    log_skill_registration_summary,
     parse_skill_frontmatter,
 )
 
@@ -216,9 +217,12 @@ class HomeAssistantSmartMCPServer:
         # Keep the pre-rename tool names callable for clients that still hold
         # an older catalog. First in the chain, so everything after it sees the
         # current name it is keyed on.
+        from .mcp_client_context import McpClientDebugLogMiddleware
         from .tools.renamed_tool_middleware import RenamedToolAliasMiddleware
 
         self.mcp.add_middleware(RenamedToolAliasMiddleware())
+        # After the alias, so the DEBUG line logs the current tool name.
+        self.mcp.add_middleware(McpClientDebugLogMiddleware())
 
         # Convert Pydantic type-validation errors to structured ToolErrors so
         # models get actionable guidance instead of raw Pydantic messages.
@@ -396,50 +400,6 @@ class HomeAssistantSmartMCPServer:
     # unnecessarily trim context for other clients.
     _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {}
 
-    @staticmethod
-    def _lite_docstring_tokens() -> dict[str, str]:
-        """Operator-tuned values interpolated into the lite descriptions.
-
-        ``_LITE_DOCSTRINGS`` is a static ``ClassVar``, but not every full
-        description it replaces is static: ``ha_manage_backup``'s is an
-        f-string built in ``register_backup_tools()`` that interpolates
-        ``_get_backup_hint_text()`` from ``BACKUP_HINT``
-        (strong/normal/weak). Hard-coding one wording into the lite text
-        would make that setting a silent no-op whenever lite mode is on —
-        the add-on UI would confirm a Backup-hint change that changed
-        nothing. So the lite values carry ``{token}`` placeholders and are
-        resolved here, reading the same env var at the same point in
-        startup the full description does.
-        """
-        # Local import: same lazy-seam pattern as backup_manager's
-        # _normalize_config_for_roundtrip import. It does NOT keep the tools
-        # package off the module-load path — server.py already imports
-        # .tools.helpers at module scope — what it avoids is pulling in
-        # tools.backup, which is the actual reason to keep it local.
-        from .tools.backup import _get_backup_hint_text
-
-        return {"backup_hint_text": _get_backup_hint_text()}
-
-    @classmethod
-    def _resolve_lite_docstrings(cls) -> dict[str, str]:
-        """Return ``_LITE_DOCSTRINGS`` with its placeholders filled in.
-
-        Uses ``str.replace`` rather than ``str.format`` so the descriptions
-        stay free to contain literal braces (Jinja examples, JSON) without
-        a stray ``{`` turning into a ``KeyError`` at startup. An unknown
-        placeholder is left verbatim rather than raising —
-        ``test_every_placeholder_in_the_map_is_resolvable`` is what catches a
-        typo'd token, at test time instead of in a user's tool catalog.
-        """
-        tokens = cls._lite_docstring_tokens()
-        resolved: dict[str, str] = {}
-        for name, lite in cls._LITE_DOCSTRINGS.items():
-            filled = lite
-            for token, value in tokens.items():
-                filled = filled.replace("{" + token + "}", value)
-            resolved[name] = filled
-        return resolved
-
     def _apply_lite_docstrings(self) -> None:
         """Swap heavy tool descriptions for shorter variants if enabled.
 
@@ -449,10 +409,6 @@ class HomeAssistantSmartMCPServer:
         that defers detail to
         ``ha_get_skill_guide``. Tools not in the
         mapping pass through unchanged.
-
-        Descriptions are resolved through ``_resolve_lite_docstrings`` so
-        operator-tuned text (``BACKUP_HINT``) survives the swap instead of
-        being pinned to whatever wording the static map happened to carry.
 
         Emits a startup WARNING when enabled so non-addon users (Docker,
         uvx, pip) see the trade-off in their logs — the addon UI surfaces
@@ -488,7 +444,7 @@ class HomeAssistantSmartMCPServer:
 
         try:
             self.mcp.add_transform(
-                LiteDocstringsTransform(replacements=self._resolve_lite_docstrings())
+                LiteDocstringsTransform(replacements=self._LITE_DOCSTRINGS)
             )
         except Exception:
             logger.exception("Failed to apply LiteDocstringsTransform")
@@ -930,31 +886,7 @@ class HomeAssistantSmartMCPServer:
             )
             status["tool"] = "failed"
 
-        self._log_skill_registration_summary(status)
-
-    @staticmethod
-    def _log_skill_registration_summary(status: dict[str, str | int]) -> None:
-        """Emit one-line summary of skill registration outcome.
-
-        ``info`` when both provider and tool registered AND at least one
-        skill bundle parsed; ``warning`` otherwise. The guidance>0 gate
-        catches the "tool registered but exposes nothing" case (skills
-        directory missing, empty, or every SKILL.md fails to parse) —
-        the tool stays present so the failure is reachable via a tool
-        call, but operators should grep for this warning when a user
-        reports missing skill features.
-        """
-        provider = status.get("provider")
-        tool = status.get("tool")
-        raw_guidance = status.get("guidance_count", 0)
-        guidance = raw_guidance if isinstance(raw_guidance, int) else 0
-
-        message = "Skill system summary: provider=%s, tool=%s, guidance_count=%d"
-        args = (provider, tool, guidance)
-        if provider == "ok" and tool == "ok" and guidance > 0:
-            logger.info(message, *args)
-        else:
-            logger.warning(message, *args)
+        log_skill_registration_summary(status)
 
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
         """Register the ``ha_get_skill_guide`` tool unconditionally.

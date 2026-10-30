@@ -551,7 +551,7 @@ async def test_bulk_revalidates_references_after_entity_lock_wait(
         raise AssertionError(f"Unexpected WS message: {message}")
 
     monkeypatch.setattr(
-        "ha_mcp.tools.tools_entities.registry_update_lock", observed_lock
+        "ha_mcp.utils.registry_update_lock.registry_update_lock", observed_lock
     )
     params: dict[str, Any] = (
         {"categories": {"helpers": "reference"}}

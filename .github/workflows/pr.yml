@@ -306,7 +306,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       if: success() || failure()
@@ -482,7 +482,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.13.4-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.13.6-python3.13-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
@@ -611,7 +611,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -702,7 +702,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -810,7 +810,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -902,7 +902,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1017,7 +1017,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1097,7 +1097,7 @@ jobs:
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.0"
+        version: "0.13.4"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1105,18 +1105,20 @@ jobs:
     - name: Install test dependencies
       run: uv sync --dev
 
-    # ECR Public's anonymous data limit is shared by every GitHub runner; the
-    # same digest is on Docker Hub. The tests below run `docker build` on the
-    # default (docker) builder, which reads the pulled image from the host
-    # store, and take the registry that answered through the PYTHON_BASE
-    # build arg. (The buildx publish jobs use
-    # .github/actions/docker-build-python-base-fallback instead.)
-    - name: Pull python base image (ECR Public → Docker Hub fallback)
+    # ECR Public's and Docker Hub's anonymous limits are shared by every
+    # GitHub runner, so the pinned digest comes from the project's GHCR mirror
+    # (mirror-python-base.yml) first, with both public registries behind it.
+    # The tests below run `docker build` on the default (docker) builder,
+    # which reads the pulled image from the host store, and take the registry
+    # that answered through the PYTHON_BASE build arg. (The buildx publish
+    # jobs use .github/actions/docker-build-python-base-fallback instead.)
+    - name: Pull python base image (GHCR mirror → ECR Public → Docker Hub)
       run: |
         PYTHON_BASE_ECR=$(sed -n 's/^ARG PYTHON_BASE=//p' Dockerfile)
         [ -n "$PYTHON_BASE_ECR" ] || { echo "Dockerfile has no ARG PYTHON_BASE"; exit 1; }
+        PYTHON_BASE_MIRROR="ghcr.io/homeassistant-ai/ha-mcp-python-base@${PYTHON_BASE_ECR#*@}"
         PYTHON_BASE_DOCKERHUB="docker.io/library/${PYTHON_BASE_ECR#public.ecr.aws/docker/library/}"
-        for image in "$PYTHON_BASE_ECR" "$PYTHON_BASE_DOCKERHUB"; do
+        for image in "$PYTHON_BASE_MIRROR" "$PYTHON_BASE_ECR" "$PYTHON_BASE_DOCKERHUB"; do
           echo "Trying $image..."
           if docker pull "$image"; then
             echo "PYTHON_BASE=$image" >> "$GITHUB_ENV"

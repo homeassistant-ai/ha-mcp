@@ -1,10 +1,11 @@
 name: Build image with python base fallback
 description: >-
-  docker/build-push-action, repeated from Docker Hub's copy of the python base
-  image when the build from ECR Public fails. ECR Public's anonymous data limit
-  is shared by every GitHub runner; the Dockerfile's PYTHON_BASE pin names the
-  same manifest digest Docker Hub serves. The buildx docker-container builder
-  pulls on its own, so only a repeated build reaches the other registry.
+  docker/build-push-action from the project's GHCR mirror of the pinned python
+  base digest (mirror-python-base.yml), repeated from ECR Public and then from
+  Docker Hub when a build fails. ECR Public's and Docker Hub's anonymous limits
+  are shared by every GitHub runner; all three serve the same manifest digest
+  the Dockerfile's PYTHON_BASE pin names. The buildx docker-container builder
+  pulls on its own, so only a repeated build reaches another registry.
 
 inputs:
   file:
@@ -39,7 +40,7 @@ inputs:
     required: false
     default: ""
   build-args:
-    description: Build args; PYTHON_BASE is appended on the Docker Hub attempt.
+    description: Build args; PYTHON_BASE is appended on the mirror and Docker Hub attempts.
     required: false
     default: ""
 
@@ -53,9 +54,31 @@ runs:
       run: |
         pin=$(sed -n 's/^ARG PYTHON_BASE=//p' "$DOCKERFILE")
         [ -n "$pin" ] || { echo "::error::$DOCKERFILE has no ARG PYTHON_BASE line"; exit 1; }
+        echo "mirror=ghcr.io/homeassistant-ai/ha-mcp-python-base@${pin#*@}" >> "$GITHUB_OUTPUT"
         echo "dockerhub=docker.io/library/${pin#public.ecr.aws/docker/library/}" >> "$GITHUB_OUTPUT"
 
+    - id: mirror
+      continue-on-error: true
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        push: ${{ inputs.push }}
+        platforms: ${{ inputs.platforms }}
+        tags: ${{ inputs.tags }}
+        labels: ${{ inputs.labels }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+        build-args: |
+          ${{ inputs.build-args }}
+          PYTHON_BASE=${{ steps.base.outputs.mirror }}
+
+    - if: steps.mirror.outcome == 'failure'
+      shell: bash
+      run: echo "Build from the GHCR mirror failed; repeating from the ECR Public pin"
+
     - id: ecr
+      if: steps.mirror.outcome == 'failure'
       continue-on-error: true
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
       with:

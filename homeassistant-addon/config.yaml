@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server"
 description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
-version: "8.7.0"
+version: "9.0.0"
 slug: "ha_mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
@@ -44,7 +44,6 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 options:
   verify_ssl: true
   ha_tool_concurrency: 0
-  backup_hint: "normal"
   custom_instructions: ""
   enable_tool_search: false
   tool_search_max_results: 5
@@ -52,6 +51,7 @@ options:
   enable_security_policy_tool: false
   read_only_mode: false
   redact_secrets: false
+  redact_app_option_keys: ""
   enable_mandatory_bps: true
   enable_strict_mandatory_bps: true
   enable_auto_backup: true
@@ -66,7 +66,6 @@ options:
 schema:
   verify_ssl: bool?
   ha_tool_concurrency: int(0,32)?
-  backup_hint: list(strong|normal|weak|auto)
   custom_instructions: str?
   enable_tool_search: bool?
   tool_search_max_results: int(2,10)?
@@ -74,6 +73,7 @@ schema:
   enable_security_policy_tool: bool?
   read_only_mode: bool?
   redact_secrets: bool?
+  redact_app_option_keys: str?
   enable_mandatory_bps: bool?
   enable_strict_mandatory_bps: bool?
   enable_auto_backup: bool?

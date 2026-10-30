@@ -17,10 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_config_dashboards import (
-    _LAZY_RESOLVE_TRIGGER,
-    DashboardConfigTools,
-)
+from ha_mcp.tools.dashboard_read_errors import UNKNOWN_CONFIG_PREFIX
+from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
 
 class TestConfigGetDashboardSearchErrorHandling:
@@ -276,7 +274,7 @@ class TestResolvedUrlPathInErrorContext:
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": False,
-                "error": {"message": f"{_LAZY_RESOLVE_TRIGGER}: internal-id"},
+                "error": {"message": f"{UNKNOWN_CONFIG_PREFIX}: internal-id"},
             },
             {"result": [{"id": "internal-id", "url_path": "resolved-path"}]},
             {"result": {"views": [{"cards": []}]}},
@@ -300,7 +298,7 @@ class TestResolvedUrlPathInErrorContext:
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": False,
-                "error": {"message": f"{_LAZY_RESOLVE_TRIGGER}: internal-id"},
+                "error": {"message": f"{UNKNOWN_CONFIG_PREFIX}: internal-id"},
             },
             {"result": [{"id": "internal-id", "url_path": "resolved-path"}]},
             {"result": {"views": []}},

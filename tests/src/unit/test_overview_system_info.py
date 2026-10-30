@@ -1,5 +1,6 @@
 """Unit tests for ha_get_overview system_info builder."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -847,6 +848,42 @@ class TestHaGetOverviewHaMcpUpdate:
         )
         result = await overview_tool(detail_level="minimal")
         assert "ha_mcp_update" not in result
+
+    @pytest.mark.asyncio
+    async def test_mcp_client_survives_projection(self, overview_tool):
+        """The calling client's protocol and capabilities are always reported,
+        even on a narrow projection, so diagnosing a client needs no extra call."""
+        result = await overview_tool(fields=["system_info"])
+        assert result["mcp_client"] == {
+            "protocol_version": "unknown",
+            "client_info": {},
+            "capabilities": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_mcp_client_reports_the_calling_request(self, overview_tool):
+        from ha_mcp._vendor.mcp_types import ClientCapabilities, ElicitationCapability
+
+        session = SimpleNamespace(
+            client_params=SimpleNamespace(
+                client_info=SimpleNamespace(
+                    name="openai-mcp", version="1.0.0", title=""
+                )
+            ),
+            client_capabilities=ClientCapabilities(elicitation=ElicitationCapability()),
+        )
+        ctx = SimpleNamespace(
+            session=session,
+            request_context=SimpleNamespace(
+                protocol_version="2026-07-28", session=session
+            ),
+        )
+        result = await overview_tool(fields=["system_info"], ctx=ctx)
+        assert result["mcp_client"] == {
+            "protocol_version": "2026-07-28",
+            "client_info": {"name": "openai-mcp", "version": "1.0.0", "title": ""},
+            "capabilities": ["elicitation.form"],
+        }
 
 
 class TestHaGetOverviewAlwaysEmittedKeys:

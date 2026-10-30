@@ -11,6 +11,8 @@ name: Sync Integration Mirror
 #   stamped with the next release number and pinned to the exact build it
 #   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N. Server-only
 #   changes therefore reach pre-release users too, not just component changes.
+#   main takes the commit's component unstamped, matching master; the stamped
+#   snapshot is a commit only the dev tag references.
 #
 # HACS keys on the GitHub prerelease flag, so stable users never see dev
 # builds; users who enable the repository's HACS "Pre-release" switch entity
@@ -278,9 +280,13 @@ jobs:
             mkdir -p /tmp/mirror/custom_components
             cp -r "$SRC/custom_components/ha_mcp_tools" /tmp/mirror/custom_components/
             rm -rf /tmp/mirror/custom_components/ha_mcp_tools/__pycache__
-            python3 scripts/stamp_component_version.py \
-              --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
-              --version "$VER" --pin "$PIN" --dist "$DIST"
+            # main takes master's component as is, like this repository's
+            # master; a dev build's stamp goes on a commit only its tag names.
+            if [ "$CHANNEL" = stable ]; then
+              python3 scripts/stamp_component_version.py \
+                --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
+                --version "$VER" --pin "$PIN" --dist "$DIST"
+            fi
           fi
           python3 scripts/build_mirror_readme.py \
             --prefix .github/integration-mirror-readme-prefix.md \
@@ -309,6 +315,22 @@ jobs:
             git commit -m "Component snapshot from ${GITHUB_REPOSITORY}@${SOURCE_SHA} (${CHANNEL})"
             git push origin main
           fi
+
+      - name: Stamp the dev snapshot
+        # Committed on top of main without pushing it; the tag push below
+        # publishes this commit, as publish-dev.yml does for master.
+        if: env.CHANNEL == 'dev'
+        env:
+          VER: ${{ steps.release.outputs.version }}
+          PIN: ${{ steps.release.outputs.pin }}
+          DIST: ${{ steps.release.outputs.dist }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          python3 scripts/stamp_component_version.py \
+            --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
+            --version "$VER" --pin "$PIN" --dist "$DIST"
+          cd /tmp/mirror
+          git commit -qam "Component snapshot from ${GITHUB_REPOSITORY}@${SOURCE_SHA} (dev ${PIN})"
 
       - name: Wait for the pinned server build on PyPI
         # The tag is what HACS installs, and Home Assistant installs the pin

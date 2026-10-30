@@ -14,11 +14,6 @@ configuration:
       Intern REST-, WebSocket- och per-verktyg-samtidighet förblir oförändrad. 0 behåller
       obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.
       Intervall 0–32.
-  backup_hint:
-    name: Nivå för säkerhetskopieringstips
-    description: Hur starkt AI-assistenter uppmanas att föreslå en fullständig Home
-      Assistant-säkerhetskopia före riskabla ändringar. Det ändrar bara detta tips;
-      automatiska redigeringssäkerhetskopior har sin egen inställning.
   custom_instructions:
     name: Anpassade serverinstruktioner
     description: Text som skickas till varje AI-assistent som ansluter, som en del
@@ -90,14 +85,21 @@ configuration:
       omstart för att träda i kraft.
   redact_secrets:
     name: Redigera hemligheter
-    description: Döljer hemligheter från verktygssvar innan de når AI-assistenten.
-      Appalternativ (tilläggsalternativ) och integrationsfält markerade som lösenord
-      ersätts med en markering för satt/tomt (så att "är denna autentiseringsuppgift
-      konfigurerad?" fortfarande kan besvaras), och andra verktygssvar rensas från
-      hemliga värden som servern redan har sett (värden kortare än 6 tecken hoppas
-      över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata).
-      Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av
-      som standard.
+    description: Döljer hemligheter från verktygsrespons innan de når AI-assistenten.
+      Appalternativ (tillägg) och integreringsfält markerade som lösenord ersätts
+      med en satt/tom-markör (så att "är denna uppgift konfigurerad?" kan besvaras),
+      och annan verktygsrespons rensas från hemliga värden som servern redan har sett
+      (värden kortare än 6 tecken hoppas över, eftersom utbyte av små fragment skulle
+      skada orelaterad utdata. Andra fält upptäcks inte, förutom privata nycklar i
+      appalternativ och de appalternativnamn som listas nedan. Av som standard.
+  redact_app_option_keys:
+    name: Extra appalternativnycklar att dölja
+    description: Appalternativnamn (tillägg) att dölja som lösenordsfält, för appar
+      vars schema lagrar en hemlighet som klartext (till exempel backup_password).
+      Separera namn med kommatecken eller nya rader. Ett namn gäller för varje app;
+      skriv app_slug:name för att begränsa det till en app. Att namnge en alternativgrupp
+      täcker varje alternativ i den. Används endast när Dölj hemligheter är aktiverat.
+      Tom som standard.
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll
@@ -169,22 +171,22 @@ configuration:
       YAML-konfiguration" ovan också är påslagen.
   enable_lite_docstrings:
     name: Aktivera lätta verktygsdocstrings (beta)
-    description: 'Betafunktion. Ersätter docstrings på 15 tunga ha-mcp-verktyg (ha_config_get_automation,
-      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
-      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
-      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
-      ha_report_issue) med kortare varianter som flyttar schema- och exempletaljer
-      till ha_get_skill_guide-verktyget (eller dess skill://-resurs). Ett undantag:
-      ha_report_issue hänvisar till instruktionsfältet i sitt eget svar istället.
-      Justering av säkerhetskopieringsinställningen gäller fortfarande i lättlöst
-      läge. VARNING: detta minskar tokenanvändningen vid inaktivitet, men kan försämra
-      LLM-prestandan — de nedskurna beskrivningarna förlitar sig på att LLM faktiskt
-      anropar färdighetsverktyget eller läser färdighetsresursen för detaljer, vilket
-      inte garanteras (vissa modeller hoppar över det extra verktygsanropet och hamnar
-      med mindre vägledning än tidigare). Passar bäst med en klient som stöder MCP-resurser
-      eller med enable_tool_search. Kräver omstart för att träda i kraft. KRÄVER att
-      masterreglaget "Enable beta features" ovan (och i webbgränssnittet) är aktiverat
-      — annars ignoreras denna underflagga vid körning oavsett dess värde här.'
+    description: 'Betafunktion. Ersätter dokumentationssträngarna på 15 tunga ha-mcp-verktyg
+      (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script,
+      ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper,
+      ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml,
+      ha_search, ha_manage_backup, ha_report_issue) med kortare varianter som flyttar
+      schema- och exempletaljer till verktyget ha_get_skill_guide (eller dess skill://-resurs).
+      Ett undantag: ha_report_issue hänvisar till fältet instructions i sitt eget
+      svar istället. VARNING: detta minskar tokenanvändningen vid inaktivitet, men
+      kan försämra LLM-prestandan – de kortare beskrivningarna förlitar sig på att
+      LLM:en faktiskt anropar skill-verktyget eller läser skill-resursen för detaljer,
+      vilket inte är garanterat (vissa modeller hoppar över det extra verktygsanropet
+      och slutar med mindre vägledning än tidigare). Passar bäst med en klient som
+      stöder MCP-resurser eller med enable_tool_search. Kräver omstart för att träda
+      i kraft. KRÄVER att huvudreglaget "Enable beta features" ovan (och i webbgränssnittet)
+      är aktiverat – annars ignoreras denna underordnade flagga vid körning oavsett
+      dess värde här.'
   enable_filesystem_tools:
     name: Aktivera filsystemverktyg (beta)
     description: 'Sätter HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiverar direkt läs-/skrivåtkomst
@@ -208,19 +210,19 @@ configuration:
       är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_dashboard_screenshot:
     name: Aktivera skärmbildsläge för instrumentpanel (beta)
-    description: Betafunktion – av som standard. Lägger till verktyget ha_get_dashboard_screenshot
-      samt alternativen include_screenshot / return_screenshot på instrumentpanelens
-      hämta-/sättverktyg, så att AI-assistenter kan granska en eller flera responsiva
-      Lovelace-bilder (t.ex. för att verifiera en instrumentpanel de nyss skapade).
-      Stöder stabila namngivna vyer, mobil-/surfplatta-/skrivbordsbatchar samt PNG/JPEG/WebP/BMP-utdata.
-      Renderingen körs i en separat, frivillig motor – balloobs "Puppet"-app (tillägg),
-      headless Chromium – som du installerar en gång (lägg till balloobs förråd i
-      App Store och installera sedan "Puppet") och ger en långlivad åtkomsttoken;
-      på Docker-/Container-distributioner kör du den motorn som en sidovagn (sidecar)
-      och ställer in HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Inget tungt installeras
-      om du inte både aktiverar detta och installerar motorn. Kräver omstart för att
-      träda i kraft. KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
-      är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
+    description: 'Betafunktion — inaktiverad som standard. Lägger till verktyget ha_get_dashboard_screenshot
+      samt alternativen include_screenshot / return_screenshot för verktyg som hämtar/sparar
+      vyer, så att AI-assistenter kan granska responsiva Lovelace-bilder. Stöder fasta
+      namngivna vyer, mobil-/surfplatte-/datorbatchar samt utdata i PNG/JPEG/WebP/BMP.
+      Renderingen körs i en separat app: balloobs Puppet eller WPE Screenshot Engine.
+      Installera och konfigurera en motor med en egen långlivad åtkomsttoken (long-lived
+      access token) för Home Assistant. HA OS / Supervised upptäcker en startad motor
+      via Supervisor; Docker-/Container-distributioner kör den som en sidecar och
+      anger HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Inget tungt installeras om du inte
+      aktiverar detta och installerar en motor. Kräver omstart för att träda i kraft.
+      KRÄVER att huvudreglaget "Aktivera betafunktioner" ovan (och i webbgränssnittet)
+      är på — annars ignoreras denna underordnade flagga vid körning oavsett dess
+      värde här.'
   enable_auto_backup:
     name: Automatisk säkerhetskopiering av redigeringar
     description: Spara en ögonblicksbild av en entitet innan varje skriv- eller ta

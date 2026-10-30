@@ -229,9 +229,9 @@ def _raise_component_too_old(detail: str) -> NoReturn:
             ErrorCode.COMPONENT_NOT_INSTALLED,
             f"The installed ha_mcp_tools custom component is too old: {detail}. "
             f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
-            "Update via HACS and restart Home Assistant.",
+            "Update via HACS or the Marketplace and restart Home Assistant.",
             suggestions=[
-                "HACS → Integrations → HA-MCP Custom Component → Update",
+                "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
             ],
@@ -325,7 +325,7 @@ async def _fetch_caller_token(client: Any) -> str:
                 f"malformed version: {version!r}, so ha-mcp can't verify it "
                 f"meets the required >= {MIN_COMPONENT_VERSION}.",
                 suggestions=[
-                    "Reinstall ha_mcp_tools via HACS",
+                    "Reinstall ha_mcp_tools via HACS or the Marketplace",
                     "Restart Home Assistant after reinstalling",
                     "If the version is still malformed, file an issue at "
                     + "https://github.com/homeassistant-ai/ha-mcp/issues",
@@ -702,17 +702,17 @@ class FilesystemTools:
         EXAMPLE: ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
         """
         try:
-            # Check if custom component is available
-            await _assert_mcp_tools_available(self._client)
+            from .config_file_visibility import refuse_reading_hidden_definitions
 
-            # Build service data
+            await _assert_mcp_tools_available(self._client)
+            await refuse_reading_hidden_definitions(
+                self._client, "ha_read_file", [path]
+            )
             service_data: dict[str, Any] = {"path": path}
             if tail_lines is not None:
                 service_data["tail_lines"] = tail_lines
             if yaml_path is not None:
                 service_data["yaml_path"] = yaml_path
-
-            # Call the custom component service
             result = await call_mcp_tools_service(
                 self._client,
                 "read_file",
@@ -1020,7 +1020,7 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
             f"(reported version: {reported or 'unknown'}; requires >= "
             f"{MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS}).",
             suggestions=[
-                "HACS → Integrations → HA-MCP Custom Component → Update",
+                "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after the update completes",
                 # Parenthesised so this reads as one suggestion rather than
                 # a list entry with a missing comma (py/implicit-string-

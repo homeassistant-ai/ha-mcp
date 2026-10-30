@@ -34,6 +34,19 @@ class MockClient:
         self.delay = delay
         self.admin_route_refused = False
         self.get_states_call_count = 0
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def _latency(self) -> None:
+        # Overlapping calls, not elapsed time, show the fetches ran in
+        # parallel: a wall-clock bound fails on a slow CI runner.
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            if self.delay > 0:
+                await asyncio.sleep(self.delay)
+        finally:
+            self.in_flight -= 1
 
     async def get_states(self) -> list[dict]:
         self.get_states_call_count += 1
@@ -43,8 +56,7 @@ class MockClient:
         return self.services
 
     async def _request(self, method: str, path: str) -> list | dict:
-        if self.delay > 0:
-            await asyncio.sleep(self.delay)
+        await self._latency()
 
         if path == "/config/automation/config":
             return [
@@ -82,8 +94,7 @@ class MockClient:
         return {}
 
     async def send_websocket_message(self, message: dict) -> dict:
-        if self.delay > 0:
-            await asyncio.sleep(self.delay)
+        await self._latency()
 
         msg_type = message.get("type", "")
 
@@ -117,8 +128,7 @@ class MockClient:
         return {"success": False, "error": f"Unknown message type: {msg_type}"}
 
     async def get_automation_config(self, entity_id: str) -> dict:
-        if self.delay > 0:
-            await asyncio.sleep(self.delay)
+        await self._latency()
         return {
             "alias": f"Test Automation for {entity_id}",
             "trigger": [{"platform": "state", "entity_id": "light.test"}],
@@ -126,8 +136,7 @@ class MockClient:
         }
 
     async def get_script_config(self, script_id: str) -> dict:
-        if self.delay > 0:
-            await asyncio.sleep(self.delay)
+        await self._latency()
         return {
             "config": {
                 "alias": f"Test Script {script_id}",
@@ -220,10 +229,10 @@ class TestGetSystemOverview:
         assert result["system_summary"]["total_areas"] == 2
 
     @pytest.mark.asyncio
-    async def test_parallel_calls_faster_than_sequential(
+    async def test_overview_sources_are_fetched_in_parallel(
         self, sample_entities, sample_services
     ):
-        """With delays, parallel fetch should be much faster than sequential."""
+        """The overview's data sources are fetched concurrently, not one by one."""
         client = MockClient(
             entities=sample_entities,
             services=sample_services,
@@ -234,15 +243,10 @@ class TestGetSystemOverview:
             mock_settings.return_value.fuzzy_threshold = 60
             tools = SmartSearchTools(client=client)
 
-            import time
-
-            start = time.time()
             result = await tools.get_system_overview(detail_level="minimal")
-            elapsed = time.time() - start
 
         assert result["success"] is True
-        # 5 data sources at 0.05s each: sequential = 0.25s, parallel ≈ 0.05s
-        assert elapsed < 0.15, f"Expected parallel speedup, took {elapsed:.2f}s"
+        assert client.max_in_flight > 1
 
     @pytest.mark.asyncio
     async def test_websocket_failure_does_not_break_other_data(
@@ -822,18 +826,13 @@ class TestDeepSearchEfficiency:
         client = MockClient(delay=0.02)
         tools = _make_tools(client)
 
-        import time
-
-        start = time.time()
         result = await tools.deep_search(
             query="test",
             search_types=["helper"],
         )
-        elapsed = time.time() - start
 
         assert result["success"] is True
-        # 6 helper types at 0.02s each: sequential = 0.12s, parallel ≈ 0.02s
-        assert elapsed < 0.1, f"Expected parallel speedup, took {elapsed:.2f}s"
+        assert client.max_in_flight > 1
 
 
 class TestDeepSearchResilience:

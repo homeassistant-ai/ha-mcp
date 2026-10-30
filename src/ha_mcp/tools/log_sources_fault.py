@@ -97,7 +97,7 @@ def _raise_read_failure(error: str) -> NoReturn:
                 f"{MIN_COMPONENT_VERSION_FAULT_LOG}).",
                 details=error,
                 suggestions=[
-                    "HACS → Integrations → HA-MCP Custom Component → Update",
+                    "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                     "Restart Home Assistant after the update completes",
                 ],
                 context={"source": "fault_log"},

@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Aktualizujte vlastní komponentu HA-MCP přes HACS",
-      "description": "Nainstalovaný server ha-mcp vyžaduje vlastní komponentu HA-MCP {required} nebo novější, ale máte {installed}. Aktualizujte komponentu přes HACS (otevřete položku „HA-MCP Custom Component“ a použijte „Update information“, pokud se ještě nezobrazuje žádná aktualizace) a restartujte Home Assistanta. Server mezitím zůstane spuštěný, ale některé novější funkce nemusí fungovat, dokud nebude komponenta aktualizována."
+      "title": "Aktualizujte vlastní komponentu HA-MCP",
+      "description": "Nainstalovaný server ha-mcp vyžaduje vlastní komponentu HA-MCP verze {required} nebo novější, ale máte nainstalovanou verzi {installed}. Aktualizujte komponentu v nabídce Nastavení > Systém > Aktualizace (v HACS nebo v Marketplace v Home Assistant 2026.11+ otevřete vlastní komponentu HA-MCP a použijte možnost 'Update information' (HACS) nebo 'Refresh information' (Marketplace), pokud se aktualizace ještě nezobrazuje) a restartujte Home Assistanta. Server mezitím běží dál, ale některé novější funkce nemusí do aktualizace komponenty fungovat."
     },
     "legacy_oauth_restart": {
       "title": "Restartujte Home Assistanta pro použití nastavení legacy OAuth",
@@ -220,7 +220,7 @@
     "connect_webhook_disabled": "Vzdálený přístup přes webhook je zakázán (režim pouze lokální).",
     "oauth_creds_pending": "ID klienta a tajný klíč klienta se zde objeví, jakmile se server spustí.",
     "oauth_not_serving": "Legacy OAuth je zatím neposkytuje — restartujte Home Assistanta, až vás o to požádá, abyste je aktivovali.",
-    "oauth_select_legacy_mode": "Nastavte režim ověřování na „legacy OAuth“ výše a uložte pro vygenerování ID klienta a tajného klíče klienta.",
+    "oauth_select_legacy_mode": "Pro klienty, kteří nepodporují moderní OAuth, změňte režim na legacy OAuth pro vygenerování ID a secret. Pokud máte problémy s připojením při nastavení na možnost \"Sign in with Home Assistant\", doporučujeme nejprve přepnout na \"Secret webhook URL\" a otestovat připojení, než vyzkoušíte legacy OAuth.",
     "panel_hint": "Otevřete [panel nastavení HA-MCP](/ha-mcp) pro správu nástrojů a nastavení serveru.",
     "tools_module_installed": "Modul beta/pokročilých nástrojů pro soubory a YAML (volitelné): Nainstalováno",
     "tools_module_not_installed": "Modul beta/pokročilých nástrojů pro soubory a YAML (volitelné): Není nainstalováno – stiskněte „Add entry“ na stránce této integrace a vyberte „HA-MCP File & YAML Tools“ pro jeho přidání",

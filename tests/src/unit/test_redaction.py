@@ -43,7 +43,7 @@ def _clean_registry():
 def redact_on(monkeypatch):
     monkeypatch.setattr(
         "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True),
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
     )
 
 
@@ -51,7 +51,7 @@ def redact_on(monkeypatch):
 def redact_off(monkeypatch):
     monkeypatch.setattr(
         "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=False),
+        lambda: SimpleNamespace(redact_secrets=False, redact_app_option_keys=""),
     )
 
 
@@ -95,24 +95,24 @@ ADDON_OPTIONS = {
 
 class TestRedactAddonOptions:
     def test_password_value_becomes_set_sentinel(self):
-        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert out["github_pat"] == REDACTED_SET
 
     def test_empty_password_becomes_empty_sentinel(self):
-        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert out["empty_password"] == REDACTED_EMPTY
 
     def test_non_password_and_unlisted_keys_untouched(self):
-        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert out["log_level"] == "info"
         assert out["unlisted_key"] == "not in schema"
 
     def test_nested_group_password_redacted(self):
-        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert out["ssh"] == {"username": "root", "password": REDACTED_SET}
 
     def test_nested_group_list_password_redacted_per_item(self):
-        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert out["accounts"] == [
             {"user": "a", "token": REDACTED_SET},
             {"user": "b", "token": REDACTED_EMPTY},
@@ -144,7 +144,7 @@ class TestRedactAddonOptions:
             {"name": "description", "type": "string"},
         ]
 
-        out = redact_addon_options(options, schema)
+        out = redact_addon_options(options, schema, "app")
 
         assert out["deployment_key"] == REDACTED_SET
         assert out["description"] == "ordinary public configuration"
@@ -159,7 +159,7 @@ class TestRedactAddonOptions:
         }
         schema = [{"name": "deployment_key", "type": "string", "multiple": True}]
 
-        assert redact_addon_options(options, schema)["deployment_key"] == [
+        assert redact_addon_options(options, schema, "app")["deployment_key"] == [
             REDACTED_SET,
             REDACTED_SET,
             REDACTED_SET,
@@ -167,34 +167,34 @@ class TestRedactAddonOptions:
 
     def test_input_options_not_mutated(self):
         before = json.dumps(ADDON_OPTIONS, sort_keys=True)
-        redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert json.dumps(ADDON_OPTIONS, sort_keys=True) == before
 
     def test_non_dict_options_passthrough(self):
-        assert redact_addon_options(None, ADDON_SCHEMA) is None
-        assert redact_addon_options("x", ADDON_SCHEMA) == "x"
+        assert redact_addon_options(None, ADDON_SCHEMA, "app") is None
+        assert redact_addon_options("x", ADDON_SCHEMA, "app") == "x"
 
     def test_malformed_schema_passthrough(self):
-        assert redact_addon_options(ADDON_OPTIONS, None) == ADDON_OPTIONS
-        assert redact_addon_options(ADDON_OPTIONS, "bogus") == ADDON_OPTIONS
+        assert redact_addon_options(ADDON_OPTIONS, None, "app") == ADDON_OPTIONS
+        assert redact_addon_options(ADDON_OPTIONS, "bogus", "app") == ADDON_OPTIONS
 
     def test_multiple_password_list_keeps_container_shape(self):
         schema = [
             {"name": "tokens", "type": "string", "format": "password", "multiple": True}
         ]
         options = {"tokens": ["tok_one_11", "", "tok_two_22"]}
-        out = redact_addon_options(options, schema)
+        out = redact_addon_options(options, schema, "app")
         assert out["tokens"] == [REDACTED_SET, REDACTED_EMPTY, REDACTED_SET]
 
     def test_redaction_is_idempotent(self):
-        once = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
-        twice = redact_addon_options(once, ADDON_SCHEMA)
+        once = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+        twice = redact_addon_options(once, ADDON_SCHEMA, "app")
         assert twice == once
 
 
 class TestCollectAddonSecretValues:
     def test_collects_all_nonempty_password_values(self):
-        values = collect_addon_secret_values(ADDON_OPTIONS, ADDON_SCHEMA)
+        values = collect_addon_secret_values(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert values == {
             "github_pat_LIVESECRETVALUE",
             "hunter2secret",
@@ -202,7 +202,7 @@ class TestCollectAddonSecretValues:
         }
 
     def test_ignores_empty_and_non_password_values(self):
-        values = collect_addon_secret_values(ADDON_OPTIONS, ADDON_SCHEMA)
+        values = collect_addon_secret_values(ADDON_OPTIONS, ADDON_SCHEMA, "app")
         assert "" not in values
         assert "info" not in values
         assert "root" not in values
@@ -225,6 +225,7 @@ class TestCollectAddonSecretValues:
         values = collect_addon_secret_values(
             {"deployment_key": key},
             [{"name": "deployment_key", "type": "string"}],
+            "app",
         )
 
         assert values == {
@@ -246,6 +247,7 @@ class TestCollectAddonSecretValues:
         values = collect_addon_secret_values(
             options,
             [{"name": "deployment_key", "type": "string", "multiple": True}],
+            "app",
         )
 
         assert values == set(options["deployment_key"])
@@ -256,6 +258,7 @@ class TestCollectAddonSecretValues:
         values = collect_addon_secret_values(
             {"deployment_key": [key]},
             [{"name": "deployment_key", "type": "string", "multiple": True}],
+            "app",
         )
 
         assert values == {

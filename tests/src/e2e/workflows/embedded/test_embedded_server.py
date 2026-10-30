@@ -547,15 +547,14 @@ class TestEmbeddedServerEndToEnd:
                 assert stamps["ha_search"]["pinned"] is True
                 assert stamps["ha_get_state"]["pinned"] is False
 
-    async def test_embedded_server_skips_the_startup_nudge(self, embedded_ha):
-        """The in-process server must NOT run the HACS startup nudge.
+    async def test_embedded_server_leaves_the_nudge_off_by_default(self, embedded_ha):
+        """The in-process server runs the store startup nudge only when opted in.
 
         ``hacs_refresh_lifespan`` is attached to the server itself, so the
-        in-process server runs it too (``embedded_server`` enters
-        ``mcp._lifespan_manager()`` around uvicorn). The nudge inside it must
-        return at the ``is_embedded()`` gate: the embedded server arrives with
-        the component release HACS delivers, so there is nothing to refresh.
-        The negative lanes' positive counterparts live in
+        in-process server schedules it (``embedded_server`` enters
+        ``mcp._lifespan_manager()`` around uvicorn). The nudge is opt-in, and an
+        embedded install never ran it before, so it has no marker and nothing
+        turns it on for it. The opted-in launcher lanes live in
         tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py.
 
         Readiness is the ``embedded_ha`` fixture itself — it only yields once
@@ -585,22 +584,18 @@ class TestEmbeddedServerEndToEnd:
         def marker_files() -> list[Path]:
             return list(data_dir.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-        # 10 s: the container ships a loaded HACS, so a regressed
-        # is_embedded gate completes its pass (and writes the marker) on the
-        # immediate first attempt — this window is over the completion time,
-        # not the retry schedule, which only starts when that attempt fails.
+        # 10 s: the container ships a loaded store, so a nudge running without
+        # the opt-in completes its pass (and writes the marker) on the first
+        # attempt — this window covers the completion, not the retry schedule.
         appeared = await wait_for_condition(
             marker_files,
             timeout=10,
             condition_name=(
-                "(not expected) HACS refresh marker in the in-process server's data dir"
+                "(not expected) store refresh marker in the in-process server's data dir"
             ),
         )
         assert not appeared, (
-            "The in-process server wrote a HACS refresh marker "
-            f"({[p.name for p in marker_files()]}), but the embedded install "
-            "skips the nudge by design — it arrives with the component release "
-            "HACS delivers. The "
-            "is_embedded() gate in maybe_refresh_hacs_after_update is what "
-            "must hold here."
+            "The in-process server wrote a store refresh marker "
+            f"({[p.name for p in marker_files()]}) without opting in to the "
+            "nudge (HAMCP_HACS_REFRESH_AFTER_UPDATE)."
         )

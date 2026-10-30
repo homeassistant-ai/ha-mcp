@@ -299,6 +299,38 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
+    async def test_dispatch_read_after_the_close_swallows_transport_error(self):
+        """A close keeps the matching dispatch queued; its lookup meets a dead WS."""
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await queue.put(
+            {
+                "id": 7,
+                "type": "event",
+                "event": {
+                    "action": "registration",
+                    "repository": WATCHED_REPO,
+                    "repository_id": 42,
+                },
+            }
+        )
+        queue.shutdown(immediate=False)
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            # What reset_connection fails a list call already in flight with.
+            side_effect=[_list_response_empty(), HomeAssistantConnectionError("closed")]
+        )
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        assert (
+            await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
+            is None
+        )
+
+    @pytest.mark.asyncio
     async def test_last_chance_lookup_swallows_transport_error(self):
         """QueueShutDown + dead WS: list call fails → return None, no propagation."""
         from ha_mcp.client.rest_client import HomeAssistantConnectionError
@@ -453,12 +485,15 @@ class TestResolveHacsRepoIdUsesWait:
     @pytest.mark.asyncio
     async def test_numeric_id_short_circuits(self):
         """Pre-resolved numeric ids must NOT subscribe — just pass through."""
+        from ha_mcp.tools.hacs_backend import HACS_API
         from ha_mcp.tools.tools_hacs import _resolve_hacs_repo_id
 
         ws_client = MagicMock()
         ws_client.subscribe_command = AsyncMock()  # must not be called
 
-        numeric_id, display_name = await _resolve_hacs_repo_id(ws_client, "441028036")
+        numeric_id, display_name = await _resolve_hacs_repo_id(
+            ws_client, HACS_API, "441028036"
+        )
 
         assert numeric_id == "441028036"
         assert display_name == "441028036"
@@ -467,6 +502,7 @@ class TestResolveHacsRepoIdUsesWait:
     @pytest.mark.asyncio
     async def test_github_path_uses_subscribe_based_wait(self):
         """Github-path identifiers route through ``wait_for_repo_registration``."""
+        from ha_mcp.tools.hacs_backend import HACS_API
         from ha_mcp.tools.tools_hacs import _resolve_hacs_repo_id
 
         queue: asyncio.Queue = asyncio.Queue()
@@ -487,7 +523,7 @@ class TestResolveHacsRepoIdUsesWait:
         ws_client.unsubscribe_command = AsyncMock()
 
         numeric_id, display_name = await _resolve_hacs_repo_id(
-            ws_client, "piitaya/lovelace-mushroom"
+            ws_client, HACS_API, "piitaya/lovelace-mushroom"
         )
 
         assert numeric_id == "12345"

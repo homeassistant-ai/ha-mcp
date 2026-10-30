@@ -1,8 +1,7 @@
-"""Locate the dashboard screenshot engine for the current deployment.
+"""Locate a supported dashboard screenshot engine for this deployment.
 
-The engine is balloob's **Puppet** add-on (https://github.com/balloob/
-home-assistant-addons), a headless-Chromium renderer. ha-mcp does not vendor
-it — the user installs it themselves.
+The supported engines are balloob's **Puppet** app and the **WPE Screenshot
+Engine** app. ha-mcp does not vendor either engine — the user installs them.
 
 Three deployment modes, resolved lazily on first tool use (never at
 startup, never silently installed):
@@ -10,11 +9,10 @@ startup, never silently installed):
 1. **Explicit** — ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL`` is set. Used
    verbatim. This is the Docker / Container path (a docker-compose
    sidecar), and also lets HA OS users override auto-discovery.
-2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present. The Puppet
-   add-on (slug ``*_puppet``) is discovered via the Supervisor REST API and
-   reached on the internal network by its hostname. The user must have
-   installed + started it themselves (add balloob's repository to the App
-   store, then install "Puppet") — we never auto-install.
+2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present. A supported app
+   (slug ``*_puppet`` or ``*_wpe_screenshot_engine``) is verified through the
+   Supervisor REST API and reached on the internal network by its hostname.
+   The user must install and start the app themselves — we never auto-install.
 3. **Neither** (stdio / standalone) — a clear :class:`ToolError` explaining
    how to enable it.
 """
@@ -24,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -36,93 +34,143 @@ from .theme_guard import EngineCredential, addon_credential_from_options
 
 logger = logging.getLogger(__name__)
 
+EngineKind = Literal["puppet", "wpe"]
+
 
 @dataclass(frozen=True, slots=True)
 class EngineTarget:
     """A resolved screenshot engine endpoint.
 
-    ``addon_credential`` authenticates as the engine's user (extracted from
-    the Puppet add-on's Supervisor options during discovery, so the theme
-    guard needs no second round-trip and the raw secret-bearing options
-    dict never leaves this module). It is ``None`` for an explicitly
-    configured engine URL. The token inside never leaves the server process
-    — it must not be logged or surfaced in responses.
+    ``addon_credential`` authenticates as Puppet's user (extracted from its
+    Supervisor options during discovery, so the theme guard needs no second
+    round-trip and the raw secret-bearing options dict never leaves this
+    module). ``engine_kind`` and ``engine_version`` are populated only when
+    Supervisor verifies the selected app. An explicit URL does not prove which
+    engine or version it targets. WPE temporarily applies frontend preferences
+    and does not need the guard credential. An explicit URL may still carry
+    Puppet's credential when Supervisor discovery finds it. The token never
+    leaves the server process — it must not be logged or surfaced in responses.
     """
 
     url: str
+    engine_kind: EngineKind | None = None
+    engine_version: str | None = None
     addon_credential: EngineCredential | None = None
 
 
-ENGINE_PORT = 10000
-# The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
-# ``str.endswith`` accepts a tuple, kept as one for easy future extension.
-ENGINE_SLUG_SUFFIXES = ("_puppet",)
-_PUPPET_OPTION_NAMES = {
-    "access_token",
-    "home_assistant_url",
-    "keep_browser_open",
-}
+@dataclass(frozen=True, slots=True)
+class _EngineProfile:
+    """Supervisor identity and network details for a supported renderer."""
 
-_REPO_URL = "https://github.com/balloob/home-assistant-addons"
+    name: str
+    kind: EngineKind
+    slug_suffix: str
+    port: int
+    required_schema_options: frozenset[str]
+    has_persistent_theme_override: bool = False
 
-# The single source of truth for the "configure the access token" instruction,
+
+_PUPPET = _EngineProfile(
+    name="Puppet",
+    kind="puppet",
+    slug_suffix="_puppet",
+    port=10000,
+    required_schema_options=frozenset(
+        {"access_token", "home_assistant_url", "keep_browser_open"}
+    ),
+    has_persistent_theme_override=True,
+)
+_WPE = _EngineProfile(
+    name="WPE Screenshot Engine",
+    kind="wpe",
+    slug_suffix="_wpe_screenshot_engine",
+    port=8080,
+    required_schema_options=frozenset(
+        {"home_assistant_url", "home_assistant_token", "dashboard_path"}
+    ),
+)
+_SUPPORTED_ENGINES = (_PUPPET, _WPE)
+
+_PUPPET_REPO_URL = "https://github.com/balloob/home-assistant-addons"
+_WPE_REPO_URL = "https://github.com/Nischay-Pro/ha-wpe-screenshot-engine"
+
+# The single source of truth for the "configure the engine token" instruction,
 # reused across every engine-troubleshooting message here and in capture.py so
 # a copy edit only has to happen once.
 TOKEN_HINT = (
-    "set the app's 'access_token' option to a Home Assistant long-lived "
-    "access token (create one in Profile > Security, ideally for a dedicated "
-    "low-privilege user) and (re)start it"
+    "set the engine's token option ('access_token' for "
+    "Puppet or 'home_assistant_token' for WPE Screenshot Engine) to a "
+    "Home Assistant long-lived access token (create one in Profile > Security, "
+    "ideally for a dedicated low-privilege user) and (re)start it"
 )
 
 _INSTALL_HELP = (
-    "Dashboard screenshot mode is enabled, but the Puppet screenshot engine "
-    "app (add-on) is not installed. On HA OS / Supervised: (1) add balloob's "
-    f"repository ({_REPO_URL}) under Settings > Apps > Install app > ⋮ > "
-    "Repositories (Settings > Add-ons > Add-on store before Home Assistant "
-    "2026.2), then install the 'Puppet' app; and (2) it REQUIRES a "
-    f"token — {TOKEN_HINT}. Without a token the engine only serves a "
-    "configuration-instructions page. On Docker / Container, run the Puppet "
-    "image as a sidecar (with its access_token set) and point ha-mcp at it via "
-    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL (e.g. http://puppet:10000)."
+    "Dashboard screenshot mode is enabled, but no supported screenshot "
+    "engine app is installed. On HA OS / Supervised, add either balloob's "
+    f"repository ({_PUPPET_REPO_URL}) or WPE Screenshot Engine's repository "
+    f"({_WPE_REPO_URL}) under Settings > Apps > Install app > ⋮ > Repositories "
+    "(Settings > Add-ons > Add-on store before Home Assistant 2026.2), then "
+    "install and start Puppet or WPE Screenshot Engine. "
+    f"{TOKEN_HINT}. On Docker / Container, run "
+    "one of these engines as a sidecar and set "
+    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL to its reachable URL."
 )
 
 _NOT_STARTED_HELP = (
-    "The Puppet screenshot engine app (add-on) is installed but not started. "
-    "Open Settings > Apps > Puppet (Settings > Add-ons > Puppet before Home "
-    f"Assistant 2026.2), {TOKEN_HINT} (enable 'Start on boot' to keep "
-    "it available)."
+    "The supported screenshot engine app is installed but not started. Open "
+    "Settings > Apps > the selected engine (Settings > Add-ons before Home "
+    f"Assistant 2026.2), {TOKEN_HINT}. "
+    "Enable 'Start on boot' to keep it available."
 )
 
 _STDIO_HELP = (
-    "Dashboard screenshot mode needs either HA OS / Supervised (add balloob's "
-    "repository to the App store and install the 'Puppet' app) or a Puppet sidecar "
-    "reachable via HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. This deployment "
-    "(stdio / standalone) can host neither — see docs/beta.md."
+    "Dashboard screenshot mode needs either HA OS / Supervised with a "
+    "supported screenshot engine app installed, or a screenshot-engine "
+    "sidecar reachable via HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. This "
+    "deployment (stdio / standalone) can host neither — see docs/beta.md."
 )
 
 
-def _select_started_verified_puppet(
+def _verified_engine_profile(
+    slug: str, info: dict[str, Any], profiles: tuple[_EngineProfile, ...]
+) -> _EngineProfile | None:
+    """Return the profile whose slug, app name and schema all match."""
+    schema = info.get("schema")
+    schema_names = {
+        str(item.get("name"))
+        for item in schema or []
+        if isinstance(item, dict) and item.get("name") is not None
+    }
+    for profile in profiles:
+        if (
+            slug.endswith(profile.slug_suffix)
+            and info.get("name") == profile.name
+            and profile.required_schema_options <= schema_names
+        ):
+            return profile
+    return None
+
+
+def _select_started_verified_engine(
     addon_infos: list[tuple[str, dict[str, Any]]],
-) -> tuple[str, dict[str, Any]]:
-    """Select one started add-on that exactly matches Puppet's safe surface."""
-    verified: list[tuple[str, dict[str, Any]]] = []
+    profiles: tuple[_EngineProfile, ...] = _SUPPORTED_ENGINES,
+) -> tuple[str, dict[str, Any], _EngineProfile]:
+    """Select one started app that exactly matches a supported engine."""
+    verified: list[tuple[str, dict[str, Any], _EngineProfile]] = []
     for slug, info in addon_infos:
-        schema = info.get("schema")
-        schema_names = {
-            str(item.get("name"))
-            for item in schema or []
-            if isinstance(item, dict) and item.get("name") is not None
-        }
-        if info.get("name") == "Puppet" and schema_names >= _PUPPET_OPTION_NAMES:
-            verified.append((slug, info))
+        profile = _verified_engine_profile(slug, info, profiles)
+        if profile is not None:
+            verified.append((slug, info, profile))
     if not verified:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONFIG_VALIDATION_FAILED,
-                "Installed *_puppet apps did not match Puppet's expected schema.",
+                "Installed screenshot engine apps did not match a supported "
+                "engine's expected identity and schema.",
                 context={"matched_slugs": [slug for slug, _ in addon_infos]},
                 suggestions=[
-                    "Verify the installed screenshot engine is balloob's Puppet app"
+                    "Verify the app is Puppet or WPE Screenshot Engine and "
+                    "matches its repository configuration"
                 ],
             )
         )
@@ -131,18 +179,19 @@ def _select_started_verified_puppet(
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                "The schema-verified Puppet app is not started.",
+                "The schema-verified screenshot engine app is not started.",
                 details=_NOT_STARTED_HELP,
-                context={"matched_slugs": [slug for slug, _ in verified]},
+                context={"matched_slugs": [slug for slug, _, _ in verified]},
             )
         )
     if len(started) > 1:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONFIG_VALIDATION_FAILED,
-                "Multiple started Puppet apps matched the expected schema; "
+                "Multiple started screenshot engine apps matched supported "
+                "schemas; "
                 "refusing an ambiguous target.",
-                context={"matched_slugs": [slug for slug, _ in started]},
+                context={"matched_slugs": [slug for slug, _, _ in started]},
             )
         )
     return started[0]
@@ -207,9 +256,9 @@ async def _addon_credential_best_effort() -> EngineCredential | None:
     """Best-effort theme-guard credential for an explicitly configured URL.
 
     HA OS / Supervised users may set ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL``
-    to override auto-discovery while still running the Puppet add-on; without
-    its token the theme guard would go inactive exactly where the add-on
-    credential exists (``_client_credential`` refuses Supervisor-proxy auth).
+    to override auto-discovery while still running Puppet; without its token
+    the theme guard would go inactive exactly where the app credential exists
+    (``_client_credential`` refuses Supervisor-proxy auth).
     Any failure — no Supervisor, no verified add-on, not started — simply
     means "no credential": the explicit URL may point at a non-add-on
     engine, so this must never raise. If the explicit URL targets a
@@ -220,7 +269,12 @@ async def _addon_credential_best_effort() -> EngineCredential | None:
     if not os.environ.get("SUPERVISOR_TOKEN"):
         return None
     try:
-        return (await _discover_engine_via_supervisor()).addon_credential
+        # The theme guard is specific to Puppet, whose current renderer writes
+        # theme changes to the Home Assistant user profile. WPE applies these
+        # options temporarily and suppresses the corresponding user-data write.
+        return (
+            await _discover_engine_via_supervisor(preferred_engine="Puppet")
+        ).addon_credential
     except Exception:
         logger.debug(
             "No Supervisor-discoverable engine credential for the explicit "
@@ -230,12 +284,16 @@ async def _addon_credential_best_effort() -> EngineCredential | None:
         return None
 
 
-async def _discover_engine_via_supervisor() -> EngineTarget:
-    """Find the Puppet add-on via the Supervisor and return its endpoint.
+async def _discover_engine_via_supervisor(
+    *, preferred_engine: str | None = None
+) -> EngineTarget:
+    """Find one supported app through the Supervisor and return its endpoint.
 
     Requires the ha-mcp add-on's ``manager`` role (already declared) for the
     read-only ``/addons`` + ``/addons/<slug>/info`` endpoints. Raises a
-    ToolError with actionable guidance when the engine is missing or stopped.
+    ToolError with actionable guidance when no matching engine is available.
+    ``preferred_engine`` is used only for the best-effort Puppet theme guard
+    when the operator configured an explicit URL.
     """
     from ..client.supervisor_client import make_supervisor_httpx_client
 
@@ -245,16 +303,29 @@ async def _discover_engine_via_supervisor() -> EngineTarget:
             listing.raise_for_status()
             addons = _supervisor_addon_listing(listing.json())
 
+            profiles = tuple(
+                profile
+                for profile in _SUPPORTED_ENGINES
+                if preferred_engine is None or profile.name == preferred_engine
+            )
             matches = [
                 a
                 for a in addons
-                if str(a.get("slug", "")).endswith(ENGINE_SLUG_SUFFIXES)
+                if str(a.get("slug", "")).endswith(
+                    tuple(profile.slug_suffix for profile in profiles)
+                )
             ]
             if not matches:
+                engine_names = (
+                    [preferred_engine]
+                    if preferred_engine
+                    else [profile.name for profile in _SUPPORTED_ENGINES]
+                )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,
-                        "The Puppet screenshot engine app is not installed.",
+                        "A supported screenshot engine app is not installed.",
+                        context={"supported_engines": engine_names},
                         details=_INSTALL_HELP,
                     )
                 )
@@ -270,7 +341,7 @@ async def _discover_engine_via_supervisor() -> EngineTarget:
                 info.raise_for_status()
                 data = _supervisor_response_data(info.json(), f"/addons/{slug}/info")
                 addon_infos.append((slug, data))
-            slug, data = _select_started_verified_puppet(addon_infos)
+            slug, data, profile = _select_started_verified_engine(addon_infos, profiles)
             hostname = data.get("hostname") or data.get("ip_address")
             if not hostname:
                 raise_tool_error(
@@ -282,10 +353,21 @@ async def _discover_engine_via_supervisor() -> EngineTarget:
                     )
                 )
             options = data.get("options")
+            app_version = data.get("version")
             return EngineTarget(
-                url=f"http://{hostname}:{ENGINE_PORT}",
-                addon_credential=addon_credential_from_options(
-                    options if isinstance(options, dict) else None
+                url=f"http://{hostname}:{profile.port}",
+                engine_kind=profile.kind,
+                engine_version=(
+                    app_version.strip()
+                    if isinstance(app_version, str) and app_version.strip()
+                    else None
+                ),
+                addon_credential=(
+                    addon_credential_from_options(
+                        options if isinstance(options, dict) else None
+                    )
+                    if profile.has_persistent_theme_override
+                    else None
                 ),
             )
     except ToolError:
@@ -295,11 +377,10 @@ async def _discover_engine_via_supervisor() -> EngineTarget:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
-                "Could not query the Supervisor to locate the Puppet "
-                "screenshot engine app.",
+                "Could not query the Supervisor to locate the screenshot engine app.",
                 details=str(e),
                 suggestions=[
-                    "Verify the Puppet app is installed and started",
+                    "Verify the screenshot engine app is installed and started",
                     "Or set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL explicitly",
                 ],
             )

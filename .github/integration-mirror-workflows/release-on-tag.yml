@@ -127,3 +127,30 @@ jobs:
             echo "::error::one or more pre-release retirements failed; the next stable release re-runs the scan"
             exit 1
           fi
+
+      - name: Keep the newest five dev pre-releases
+        # The main repository keeps its newest five dev pre-releases
+        # (publish-dev.yml); the mirror keeps the same number. HACS reads a
+        # repository's 30 newest releases and installs the default branch
+        # when none of them is stable, so a dev channel left to grow for a
+        # whole release cycle pushes the stable release out of reach.
+        if: ${{ contains(github.ref_name, '-dev.') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAGS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '.[] | select(.prerelease) | .tag_name')
+          # The listing can miss the release created moments ago, so count
+          # this tag explicitly. Newest first by version, so dev.1000 sorts
+          # above dev.999.
+          OLD=$(printf '%s\n' "$GITHUB_REF_NAME" $TAGS | grep -e '-dev\.' \
+            | sort -rV | uniq | tail -n +6)
+          FAILED=0
+          for TAG in $OLD; do
+            echo "pruning old pre-release ${TAG}"
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || FAILED=1
+          done
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::one or more pre-release deletions failed; the next dev build re-runs the prune"
+            exit 1
+          fi

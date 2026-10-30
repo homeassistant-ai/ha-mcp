@@ -14,11 +14,6 @@ configuration:
       Intern REST-, WebSocket- och per-verktyg-samtidighet förblir oförändrad. 0 behåller
       obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.
       Intervall 0–32.
-  backup_hint:
-    name: Nivå för säkerhetskopieringstips
-    description: Hur starkt AI-assistenter uppmanas att föreslå en fullständig Home
-      Assistant-säkerhetskopia före riskabla ändringar. Det ändrar bara detta tips;
-      automatiska redigeringssäkerhetskopior har sin egen inställning.
   custom_instructions:
     name: Anpassade serverinstruktioner
     description: Text som skickas till varje AI-assistent som ansluter, som en del
@@ -82,14 +77,21 @@ configuration:
       omstart för att träda i kraft.
   redact_secrets:
     name: Redigera hemligheter
-    description: Döljer hemligheter från verktygssvar innan de når AI-assistenten.
-      Appalternativ (tilläggsalternativ) och integrationsfält markerade som lösenord
-      ersätts med en markering för satt/tomt (så att "är denna autentiseringsuppgift
-      konfigurerad?" fortfarande kan besvaras), och andra verktygssvar rensas från
-      hemliga värden som servern redan har sett (värden kortare än 6 tecken hoppas
-      över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata).
-      Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av
-      som standard.
+    description: Döljer hemligheter från verktygsrespons innan de når AI-assistenten.
+      Appalternativ (tillägg) och integreringsfält markerade som lösenord ersätts
+      med en satt/tom-markör (så att "är denna uppgift konfigurerad?" kan besvaras),
+      och annan verktygsrespons rensas från hemliga värden som servern redan har sett
+      (värden kortare än 6 tecken hoppas över, eftersom utbyte av små fragment skulle
+      skada orelaterad utdata. Andra fält upptäcks inte, förutom privata nycklar i
+      appalternativ och de appalternativnamn som listas nedan. Av som standard.
+  redact_app_option_keys:
+    name: Extra appalternativnycklar att dölja
+    description: Appalternativnamn (tillägg) att dölja som lösenordsfält, för appar
+      vars schema lagrar en hemlighet som klartext (till exempel backup_password).
+      Separera namn med kommatecken eller nya rader. Ett namn gäller för varje app;
+      skriv app_slug:name för att begränsa det till en app. Att namnge en alternativgrupp
+      täcker varje alternativ i den. Används endast när Dölj hemligheter är aktiverat.
+      Tom som standard.
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll

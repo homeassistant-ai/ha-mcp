@@ -173,6 +173,15 @@ class SystemTools:
         confirm: Annotated[
             bool, Field(description="Must be True to confirm the restart.")
         ] = False,
+        safe_mode: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Restart in safe mode: no custom integrations or custom "
+                    "frontend resources load until the next normal restart."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Execute a Home Assistant restart.
 
@@ -183,28 +192,15 @@ class SystemTools:
         configuration changes, consider ha_reload_core() instead, which reloads
         specific components without a full restart. When this server runs
         inside Home Assistant (embedded), it replies before the restart starts
-        and is unreachable until Home Assistant is back.
+        and is unreachable until Home Assistant is back; with safe_mode it
+        stays down until Home Assistant is next restarted normally, because it
+        is itself a custom integration.
 
         EXAMPLE: ha_restart(confirm=True)
         """
-        if not confirm:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Restart not confirmed",
-                    details=(
-                        "You must set confirm=True to restart Home Assistant. "
-                        "This is a safety measure to prevent accidental restarts."
-                    ),
-                    suggestions=[
-                        'Pre-check config via ha_get_system_health(include="config_check")',
-                        "Call ha_restart(confirm=True) to proceed with restart",
-                        "Consider using ha_reload_core() for config-only changes",
-                    ],
-                )
-            )
-
-        return await restart_home_assistant(self._client)
+        return await restart_home_assistant(
+            self._client, confirm=confirm, safe_mode=safe_mode
+        )
 
     @tool(
         name="ha_reload_core",

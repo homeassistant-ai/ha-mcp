@@ -923,31 +923,31 @@ class TestWithAutoBackupDecorator:
 
 
 def test_destructive_tools_carry_auto_backup_decorator() -> None:
-    """Source guard: the three destructive tools this PR wired must keep
-    their @with_auto_backup decorator — a deleted line would silently stop
-    capturing without failing any behavioral test."""
+    """Source guard: these destructive tools must keep their
+    @with_auto_backup decorator and its key — a deleted line would silently
+    stop capturing without failing any behavioral test."""
     from pathlib import Path
 
     tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
-    # (fname, func, domain, id_param-or-None, mandatory). The file/YAML writes
-    # (#1579) are mandatory; ha_config_set_yaml computes its key via id_fn so it
-    # has no id_param to assert.
+    # (fname, func, domain, key, mandatory); file/YAML writes are mandatory (#1579).
+    entity_key, device_key = "id_fn=_single_entity_target", 'id_param="device_id"'
     checks = [
-        ("tools_entities.py", "ha_remove_entity", "entity", "entity_id", False),
-        ("tools_registry.py", "ha_set_device", "device", "device_id", False),
-        ("tools_registry.py", "ha_remove_device", "device", "device_id", False),
-        ("tools_filesystem.py", "ha_write_file", "file", "path", True),
-        ("tools_filesystem.py", "ha_delete_file", "file", "path", True),
+        ("tools_entities.py", "ha_set_entity", "entity", entity_key, False),
+        ("tools_entities.py", "ha_remove_entity", "entity", entity_key, False),
+        ("tools_registry.py", "ha_set_device", "device", device_key, False),
+        ("tools_registry.py", "ha_remove_device", "device", device_key, False),
+        ("tools_filesystem.py", "ha_write_file", "file", 'id_param="path"', True),
+        ("tools_filesystem.py", "ha_delete_file", "file", 'id_param="path"', True),
         ("tools_yaml_config.py", "ha_config_set_yaml", "yaml", None, True),
     ]
-    for fname, func, domain, id_param, mandatory in checks:
+    for fname, func, domain, key, mandatory in checks:
         src = (tools_dir / fname).read_text(encoding="utf-8")
         idx = src.index(f"async def {func}(")
         head = src[max(0, idx - 600) : idx]  # the decorator block above the def
         assert "with_auto_backup(" in head, f"{func} lost @with_auto_backup"
         assert f'domain="{domain}"' in head, f"{func} wrong/missing backup domain"
-        if id_param is not None:
-            assert f'id_param="{id_param}"' in head, f"{func} wrong/missing id_param"
+        if key is not None:
+            assert key in head, f"{func} wrong/missing {key}"
         if mandatory:
             assert "mandatory=True" in head, f"{func} lost mandatory=True"
 

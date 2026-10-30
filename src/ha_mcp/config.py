@@ -167,6 +167,16 @@ def set_embedded_connection(
         _apply_embedded_connection(_settings)
 
 
+def is_embedded_mode() -> bool:
+    """True when ha-mcp runs in-process inside Home Assistant.
+
+    Set by the custom component's in-process server entry via
+    ``set_embedded_connection``; false for the CLI, the HTTP launchers and the
+    app (add-on) build.
+    """
+    return bool(_EMBEDDED_CONNECTION)
+
+
 def get_embedded_config_dir() -> str | None:
     """Home Assistant's configuration directory, when running embedded.
 

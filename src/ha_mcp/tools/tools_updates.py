@@ -29,6 +29,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .tool_hints import write_hints
+from .update_categories import categorize_update, update_platforms
 
 logger = logging.getLogger(__name__)
 
@@ -268,46 +269,6 @@ def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
     return has_release_notes_feature or attributes.get("release_url") is not None
 
 
-def _categorize_update(entity_id: str, attributes: dict[str, Any]) -> str:
-    """Categorize an update entity based on its entity_id and attributes."""
-    entity_lower = entity_id.lower()
-    # Use 'or ""' to handle both missing keys AND explicit None values
-    title_lower = (attributes.get("title") or "").lower()
-
-    # Core update
-    if "home_assistant_core" in entity_lower or (
-        "core" in entity_lower and "home_assistant" in title_lower
-    ):
-        return "core"
-
-    # Operating System
-    if "operating_system" in entity_lower or "haos" in entity_lower:
-        return "os"
-
-    # Supervisor
-    if "supervisor" in entity_lower:
-        return "supervisor"
-
-    # HACS updates
-    if "hacs" in entity_lower:
-        return "hacs"
-
-    # Add-ons (typically named update.xxx_update where xxx is addon name)
-    # Add-ons usually have "Add-on" in title or specific patterns
-    if "add-on" in title_lower or "addon" in title_lower:
-        return "addons"
-
-    # Device firmware updates (ESPHome, Z-Wave, Zigbee, etc.)
-    device_patterns = ["esphome", "zwave", "zigbee", "zha", "matter", "firmware"]
-    if any(
-        pattern in entity_lower or pattern in title_lower for pattern in device_patterns
-    ):
-        return "devices"
-
-    # Default to other
-    return "other"
-
-
 async def _try_raw_cdn(
     http_client: httpx.AsyncClient, owner: str, repo: str, tag: str
 ) -> dict[str, str] | None:
@@ -475,6 +436,7 @@ class UpdateTools:
     async def _list_updates(self, include_skipped: bool) -> dict[str, Any]:
         """Internal helper to list all update entities."""
         states = await self._client.get_states()
+        platforms = await update_platforms(self._client)
 
         update_entities = [
             s for s in states if s.get("entity_id", "").startswith("update.")
@@ -505,7 +467,9 @@ class UpdateTools:
                 ),
                 "skipped_version": attributes.get("skipped_version"),
                 "auto_update": attributes.get("auto_update", False),
-                "category": _categorize_update(entity_id, attributes),
+                "category": categorize_update(
+                    entity_id, attributes, platforms.get(entity_id, "")
+                ),
             }
 
             if is_skipped:
@@ -591,7 +555,11 @@ class UpdateTools:
             "in_progress": attributes.get("in_progress", False),
             "skipped_version": attributes.get("skipped_version"),
             "auto_update": attributes.get("auto_update", False),
-            "category": _categorize_update(entity_id, attributes),
+            "category": categorize_update(
+                entity_id,
+                attributes,
+                (await update_platforms(self._client)).get(entity_id, ""),
+            ),
         }
 
         # Try to fetch release notes

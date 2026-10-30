@@ -79,8 +79,8 @@ def _substrate_unavailable(name: str) -> Exception:
     the server trust an authoritative-negative it should instead fall back to legacy
     for (mistaking core DRIFT for "no such entry" / "empty catalog"). Raising routes
     the server's command-error path to its legacy WS/REST read, mirroring
-    :func:`_backup_unavailable` / :func:`_registries_missing_category_scopes`. A
-    genuinely-EMPTY-but-present substrate (a real empty registry) is NOT drift and
+    :func:`_registries_missing_category_scopes`. A genuinely-EMPTY-but-present
+    substrate (a real empty registry) is NOT drift and
     keeps returning its empty result — the guards below key off unavailability
     (``None`` / non-``Mapping``), never off an empty-but-valid collection.
     """
@@ -141,6 +141,18 @@ def _iter_config_entries(hass: HomeAssistant) -> list[Any]:
 
 def _reg_entity(view: _RegistryView, entity_id: str) -> Any:
     return _call_lookup(view, "entity", "async_get", entity_id)
+
+
+def _reg_entity_id(view: _RegistryView, platform: str, unique_id: str) -> str | None:
+    """The entity_id the registry holds for a helper's storage id."""
+    getter = getattr(view.entity, "async_get_entity_id", None)
+    if getter is None:
+        return None
+    try:
+        return getter(platform, platform, unique_id)  # type: ignore[no-any-return]
+    except Exception:  # noqa: BLE001
+        view._access_failures.add("entity")
+        return None
 
 
 def _device(view: _RegistryView, device_id: str | None) -> Any:

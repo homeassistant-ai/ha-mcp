@@ -7,13 +7,16 @@ Covers:
 - ha_get_entity unique_id -> entity_id resolver mode
 """
 
+import asyncio
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_entities import register_entity_tools
+from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 
 def _make_client():
@@ -342,7 +345,12 @@ class TestBulkRemove:
         client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True, "result": None},  # sensor.a removed
-                {"success": False, "error": "Entity not found"},  # sensor.b skipped
+                # sensor.b skipped on Core's not_found code
+                {
+                    "success": False,
+                    "error": "Entity missing",
+                    "error_code": "not_found",
+                },
                 {"success": False, "error": "Permission denied"},  # sensor.c error
             ]
         )
@@ -600,3 +608,65 @@ class TestUniqueIdResolver:
         body = _error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "resolver filter" in body["error"]["message"]
+
+
+# --------------------------------------------------------------------------
+# A single-entity ha_set_entity keeps the entity lock through all its writes
+# --------------------------------------------------------------------------
+class TestSingleSetHoldsEntityLock:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("new_entity_id", "locked_id"),
+        [
+            (None, "sensor.temp"),
+            ("sensor.new", "sensor.new"),
+            ("sensor.new", "sensor.temp"),
+        ],
+        ids=["same-id", "renamed", "renamed-old-id"],
+    )
+    async def test_restore_waits_for_every_write_of_the_set(
+        self, new_entity_id: str | None, locked_id: str
+    ) -> None:
+        """An entity restore takes the lock of the entity's ID, on a rename of
+        either ID. Queued while the registry update is in flight, it gets the
+        lock only after the options, device-rename and expose writes."""
+        entry = {"entity_id": "sensor.temp", "device_id": "d1", "options": {}}
+        order: list[str] = []
+        in_update = asyncio.Event()
+        restore_queued = asyncio.Event()
+
+        async def send(message: dict[str, Any]) -> dict[str, Any]:
+            await asyncio.sleep(0)
+            order.append(message["type"])
+            if message["type"] == "config/entity_registry/update" and "name" in message:
+                in_update.set()
+                await restore_queued.wait()
+            return {"success": True, "result": {"entity_entry": entry, **entry}}
+
+        async def restore() -> list[str]:
+            """What was sent before the restore got the lock."""
+            await in_update.wait()
+            lock = registry_update_lock("entity", locked_id)
+            restore_queued.set()
+            await lock.acquire()
+            lock.release()
+            return list(order)
+
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(side_effect=send)
+        tool = _register(client)["ha_set_entity"]
+        waiter = asyncio.ensure_future(restore())
+
+        await tool(
+            entity_id="sensor.temp",
+            name="N",
+            new_entity_id=new_entity_id,
+            options={"sensor": {"display_precision": 2}},
+            new_device_name="Dev X",
+            expose_to={"conversation": True},
+        )
+        before = await waiter
+
+        assert before.count("config/entity_registry/update") == 2, order
+        assert "config/device_registry/update" in before, order
+        assert "homeassistant/expose_entity" in before, order

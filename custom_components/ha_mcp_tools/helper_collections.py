@@ -21,20 +21,22 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-SIMPLE_HELPER_TYPES = (
+# The frontend's HELPER_DOMAINS (src/panels/config/helpers/const.ts); an E2E
+# test pins the server's copy to the installed frontend, a unit test this one.
+FRONTEND_HELPER_DOMAINS = (
     "input_boolean",
     "input_button",
-    "input_datetime",
-    "input_number",
-    "input_select",
     "input_text",
+    "input_number",
+    "input_datetime",
+    "input_select",
     "counter",
     "timer",
     "schedule",
-    "zone",
-    "person",
-    "tag",
 )
+# Storage collections with their own frontend pages that the helper tools
+# also manage.
+SIMPLE_HELPER_TYPES = (*FRONTEND_HELPER_DOMAINS, "zone", "person", "tag")
 
 WS_HELPER_SCHEMAS = "ha_mcp_tools/helper_schemas"
 WS_HELPER_ITEM = "ha_mcp_tools/helper_item"

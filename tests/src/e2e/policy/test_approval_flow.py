@@ -30,7 +30,9 @@ import pytest
 from test_constants import TEST_TOKEN
 
 from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.client.elicitation import ElicitResult
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.mcp_types import ElicitResult as MCPElicitResult
 from ha_mcp._vendor.mcp_types import InputRequiredResult
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.policy.handlers import build_policy_handlers
@@ -201,34 +203,46 @@ async def _install_rule(handlers, rule: dict[str, Any]) -> None:
     assert put_resp.status_code == 200, put_resp.body
 
 
+async def _accept_elicitation(*_args: Any) -> ElicitResult:
+    return ElicitResult(action="accept", content={"decided": True})
+
+
 @pytest.mark.asyncio
-async def test_mrtr_resumes_ui_approved_service_call(
+async def test_mrtr_asks_then_resumes_ui_approved_service_call(
     policy_enabled_mcp: tuple[Client, HomeAssistantSmartMCPServer, dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The production server keeps the UI row across MRTR and dispatches after approval."""
-    client, server, handlers = policy_enabled_mcp
+    """An elicitation-capable client is asked to decide in the settings UI; its
+    confirmed retry keeps the same row and dispatches once it is approved."""
+    _, server, handlers = policy_enabled_mcp
     monkeypatch.setattr("ha_mcp.policy.mrtr.ROUND_WAIT_SECONDS", 0.05)
     await _install_rule(
         handlers, {"tool_name": "ha_call_service", "when": [], "remember_minutes": 0}
     )
     args = {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"}
-    result = await client.session.call_tool(
-        "ha_call_service", args, allow_input_required=True
-    )
-    assert isinstance(result, InputRequiredResult), result
-    pending = server.approval_queue.list_pending()
-    assert len(pending) == 1
-    response = await handlers["policy_post_approve"](
-        _make_request({"token": pending[0].token})
-    )
-    assert response.status_code == 200, response.body
-    resumed = await client.session.call_tool(
-        "ha_call_service",
-        args,
-        request_state=result.request_state,
-        allow_input_required=True,
-    )
+    async with Client(server.mcp, elicitation_handler=_accept_elicitation) as client:
+        result = await client.session.call_tool(
+            "ha_call_service", args, allow_input_required=True
+        )
+        assert isinstance(result, InputRequiredResult), result
+        assert list(result.input_requests or {}) == ["ha_mcp_approval"]
+        pending = server.approval_queue.list_pending()
+        assert len(pending) == 1
+        response = await handlers["policy_post_approve"](
+            _make_request({"token": pending[0].token})
+        )
+        assert response.status_code == 200, response.body
+        resumed = await client.session.call_tool(
+            "ha_call_service",
+            args,
+            request_state=result.request_state,
+            input_responses={
+                "ha_mcp_approval": MCPElicitResult(
+                    action="accept", content={"decided": True}
+                )
+            },
+            allow_input_required=True,
+        )
     assert not resumed.is_error, resumed
     assert server.approval_queue.get(pending[0].token) is None
 

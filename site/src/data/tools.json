@@ -811,7 +811,7 @@
   {
     "name": "ha_get_dashboard_screenshot",
     "title": "Get Dashboard Screenshot",
-    "description": "Get rendered images of a Home Assistant Lovelace dashboard view.\n\nWhen not to use: while reading or writing dashboard configuration, use\nha_config_get_dashboard(include_screenshot=True) or\nha_config_set_dashboard(return_screenshot=True) for a single workflow.\n\nUse it for repeatable visual checks, including ordered mobile, tablet,\nand desktop captures. Puppet reports image bytes but does not confirm\nthat the frontend accepted a requested theme or language; structured\nmetadata therefore records the values sent to the engine. A requested\ntheme or dark_mode persists on the engine account's profile; the change\nis reported in warnings but not undone (see ha_manage_theme\naction='set_engine_theme').\n\nTo change the Puppet engine app (add-on) itself (keep_browser_open,\nrestart), use ha_manage_app.",
+    "description": "Get rendered images of a Home Assistant Lovelace dashboard view.\n\nWhen not to use: while reading or writing dashboard configuration, use\nha_config_get_dashboard(include_screenshot=True) or\nha_config_set_dashboard(return_screenshot=True) for a single workflow.\n\nUse it for repeatable visual checks, including ordered mobile, tablet,\nand desktop captures. The engine returns image bytes but does not\nconfirm that the frontend accepted a requested theme or language;\nstructured metadata therefore records the values sent to the engine.\nWPE Screenshot Engine applies frontend preferences temporarily. Puppet\nmay persist requested theme or dark-mode changes on the engine account;\nha-mcp reports detected changes in warnings but does not undo them (see\nha_manage_theme action='set_engine_theme').\n\nTo change the screenshot engine app's own options or restart it, use\nha_manage_app.",
     "inputSchema": {
       "properties": {
         "dashboard_path": {
@@ -877,7 +877,7 @@
         },
         "full_page": {
           "type": "bool",
-          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Uses Puppet's native auto-height capture (currently capped at 4000 px); raise wait_ms for lazy cards.",
+          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Height limits are engine-specific: Puppet caps at 4000 px; WPE's configured limit can be up to 12000 px, with a width-dependent effective cap. Raise wait_ms for lazy cards.",
           "default": false
         },
         "theme": {
@@ -978,7 +978,7 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get Lovelace dashboards: list them, read one config, or search their cards.\n\nNot for a render alone: ha_get_dashboard_screenshot (screenshot beta\nfeature) returns images without the config. Not for entity discovery:\nuse ha_search.\n\nThe parameters pick the mode:\n- list_only=True: storage and YAML dashboards alike.\n- Any of query / entity_id / card_type / heading searches cards and\n  header cards, AND-ing the criteria, in url_path or, when it is\n  omitted, every storage dashboard. View badges answer entity_id and\n  query, and heading excludes them.\n  Cards nested at any depth count, including\n  custom cards' own keys such as groups[].cards[].card. Nesting is\n  found heuristically, under the keys cards, card, custom_fields and\n  states; a card under any other key is read only as its parent's\n  text, by query. Each match has a\n  jq_path and a python_path to append to `config` in\n  ha_config_set_dashboard(python_transform=...), e.g.\n  f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"'. Each match carries its\n  dashboard's url_path and config_hash; a one-dashboard search also\n  returns the config_hash at the top level.\n- Otherwise the full config of url_path (the default dashboard when\n  omitted) is returned; with view_path only that view, while config_hash\n  still covers the full config.\n\nCaveats: config_hash stays the same across reads of an unchanged config.\nSearches stop at 200 matches (`truncated`). A search across dashboards\nskips YAML dashboards (HA resolves !secret in them) and, without a\ncurrent ha_mcp_tools component, the default dashboard (with a warning);\nname either by url_path.\nStrategy dashboards have no stored cards to search. An unknown view_path\nerrors and lists the available ones.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
+    "description": "Get Lovelace dashboards: list them, read one config, or search their cards.\n\nNot for a render alone: ha_get_dashboard_screenshot (screenshot beta\nfeature) returns images without the config. Not for entity discovery:\nuse ha_search.\n\nThe parameters pick the mode:\n- list_only=True: storage and YAML dashboards alike.\n- Any of query / entity_id / card_type / heading searches cards and\n  header cards, AND-ing the criteria, in url_path or, when it is\n  omitted, every storage dashboard. View badges answer entity_id and\n  query, and heading excludes them.\n  Cards nested at any depth count, including\n  custom cards' own keys such as groups[].cards[].card. Nesting is\n  found heuristically, under the keys cards, card, custom_fields and\n  states; a card under any other key is read only as its parent's\n  text, by query. Each match has a\n  jq_path and a python_path to append to `config` in\n  ha_config_set_dashboard(python_transform=...), e.g.\n  f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"'. Each match carries its\n  dashboard's url_path and config_hash; a one-dashboard search also\n  returns the config_hash at the top level.\n- Otherwise the full config of url_path (the default dashboard when\n  omitted) is returned; with view_path only that view, while config_hash\n  still covers the full config. stored_config is false (config null)\n  when Home Assistant holds no config for the dashboard.\n\nCaveats: config_hash stays the same across reads of an unchanged config.\nSearches stop at 200 matches (`truncated`). A search across dashboards\nskips YAML dashboards (HA resolves !secret in them) and, without a\ncurrent ha_mcp_tools component, the default dashboard (with a warning);\nname either by url_path.\nStrategy dashboards have no stored cards to search. An unknown view_path\nerrors and lists the available ones.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -1177,7 +1177,7 @@
   {
     "name": "ha_config_set_dashboard_resource",
     "title": "Set Dashboard Resource",
-    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (files in /config/www/),\n  /hacsfiles/... (HACS-installed cards) or https://... (CDN). Supports\n  all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- HACS card (after ha_manage_hacs(action='download')): ha_config_set_dashboard_resource(url=\"/hacsfiles/lovelace-mushroom/mushroom.js\", resource_type=\"module\")\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
+    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (HACS cards) or\n  https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
     "inputSchema": {
       "properties": {
         "content": {
@@ -1608,7 +1608,7 @@
   {
     "name": "ha_remove_entity",
     "title": "Remove Entity",
-    "description": "Remove one or more entities from the Home Assistant entity registry.\n\nPermanently removes the entity registration; the entity will no longer\nappear in the UI or be available to automations. Use only for orphaned\nor stale entity entries: if the underlying device, integration or\nstored helper is still there, the entity may be re-added on the next HA\nrestart or reload; for a stored helper's entity a single-id removal\nnames the tool that removes the helper. This cannot be undone without restoring\nfrom backup. For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False).\n\nBULK MODE:\nPass a list of entity IDs to remove up to 100 at once — handy for\nclearing the restored=true orphans an integration leaves behind after\nits filters change. Removals run sequentially and return:\n  {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}\nwhere skipped = ids already absent (not-found is idempotent, not an\nerror). Only single-id removal is auto-backed-up.\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Bulk cleanup: ha_remove_entity([\"sensor.orphan_1\", \"sensor.orphan_2\"])\n\nUse ha_search / ha_get_entity to verify an entity before removing it.",
+    "description": "Remove one or more entities from the Home Assistant entity registry.\n\nPermanently removes the entity registration; the entity will no longer\nappear in the UI or be available to automations. Use only for orphaned\nor stale entity entries: if the underlying device, integration or\nstored helper is still there, the entity may be re-added on the next HA\nrestart or reload; for a stored helper's entity a single-id removal\nnames the tool that removes the helper. Added again, it gets back its registry\nsettings while its config entry exists, and for 30 days after that entry, or an\nentity without one, was removed. For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False).\n\nBULK MODE:\nPass a list of entity IDs to remove up to 100 at once — handy for\nclearing the restored=true orphans an integration leaves behind after\nits filters change. Removals run sequentially and return:\n  {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}\nwhere skipped = ids already absent (not-found is idempotent, not an\nerror). A lost connection stops the run; not_attempted lists the ids\nleft, safe to retry. Only single-id removal is auto-backed-up.\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Bulk cleanup: ha_remove_entity([\"sensor.orphan_1\", \"sensor.orphan_2\"])\n\nUse ha_search / ha_get_entity to verify an entity before removing it.",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -2015,7 +2015,7 @@
   {
     "name": "ha_get_hacs_info",
     "title": "Get HACS Info",
-    "description": "Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.\n\nUse ``action=\"search\"`` to search/browse/list store repositories, or\n``action=\"info\"`` for one repository's full details (README, versions, GitHub\nstats). This tool is read-only; to install or add repositories use\n``ha_manage_hacs``, and for non-HACS entities/config use the domain-specific tools.\n\n**DASHBOARD TIP:** ``action=\"search\", installed_only=True, category=\"lovelace\"``\ndiscovers installed custom cards to wire into ``ha_config_set_dashboard()``.\n\n**Examples:**\n- Search the store: ha_get_hacs_info(action=\"search\", query=\"mushroom\", category=\"lovelace\")\n- List installed: ha_get_hacs_info(action=\"search\", installed_only=True)\n- Repository details: ha_get_hacs_info(action=\"info\", repository_id=\"441028036\")\n\n**Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub\nrate limits / needs HACS's configured GitHub token; ``search`` reads HACS's locally\ncached repository index.",
+    "description": "Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.\n\nOn Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool\nuses whichever the instance has. Use ``action=\"search\"`` to\nsearch/browse/list store repositories, or ``action=\"info\"`` for one\nrepository's full details as the store reports them (the README is in\n``additional_info``). This tool is read-only; to install or add\nrepositories use ``ha_manage_hacs``, and for non-HACS entities/config use\nthe domain-specific tools.\n\n**DASHBOARD TIP:** ``action=\"search\", installed_only=True, category=\"lovelace\"``\ndiscovers installed custom cards to wire into ``ha_config_set_dashboard()``.\n\n**Examples:**\n- Search the store: ha_get_hacs_info(action=\"search\", query=\"mushroom\", category=\"lovelace\")\n- List installed: ha_get_hacs_info(action=\"search\", installed_only=True)\n- Repository details: ha_get_hacs_info(action=\"info\", repository_id=\"441028036\")\n- Before an update: ha_get_hacs_info(action=\"info\", repository_id=\"owner/repo\", include_releases=True)\n\n**Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub\nrate limits without a connected GitHub account; ``search`` reads the locally cached\nrepository index.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -2028,8 +2028,8 @@
           "default": ""
         },
         "category": {
-          "type": "Literal['integration', 'lovelace', 'theme', 'appdaemon', 'python_script'] | None",
-          "description": "Filter by category (action='search')",
+          "type": "str | None",
+          "description": "Filter by category (action='search'). One of the categories the store reports (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
           "default": null
         },
         "installed_only": {
@@ -2058,6 +2058,11 @@
           "type": "str | None",
           "description": "Numeric HACS ID or 'owner/repo' path (action='info')",
           "default": null
+        },
+        "include_releases": {
+          "type": "bool",
+          "description": "Add the repository's GitHub releases and the release notes of versions newer than the installed one (action='info')",
+          "default": false
         }
       },
       "required": [
@@ -2078,7 +2083,7 @@
   {
     "name": "ha_manage_hacs",
     "title": "Manage HACS",
-    "description": "Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.\n\nThis tool performs writes; to search the store or read repository details use\n``ha_get_hacs_info``. Use ``action=\"update_information\"`` to run the HACS UI's\n\"Update information\" action — a forced re-fetch of one repository's release data\nfrom GitHub, so a pending update becomes visible to HACS and its update entity\nimmediately.\n\n**Examples:**\n- Install latest: ha_manage_hacs(action=\"download\", repository_id=\"441028036\")\n- Install a version: ha_manage_hacs(action=\"download\", repository_id=\"piitaya/lovelace-mushroom\", version=\"v4.0.0\")\n- Remove: ha_manage_hacs(action=\"remove\", repository_id=\"owner/repo\")\n- Add a custom repo: ha_manage_hacs(action=\"add_repository\", repository=\"owner/repo\", category=\"lovelace\")\n- Refresh release data: ha_manage_hacs(action=\"update_information\", repository_id=\"owner/repo\")\n\n**Caveats:** Installing an integration usually needs a Home Assistant restart to\nactivate; new Lovelace cards need a browser cache clear. ``add_repository`` requires ``owner/repo``\nformat plus a matching ``category``. Removing an integration deletes its files but\nthe loaded module persists until the next Home Assistant restart — delete its config\nentries first (``ha_remove_helpers_integrations``). HACS refreshes custom\nrepositories on its own only about every 48 hours, so ``update_information`` is the\nway to surface a just-published release.",
+    "description": "Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.\n\nOn Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool\nuses whichever the instance has. This tool performs writes; to search the\nstore or read repository details use ``ha_get_hacs_info``. Use\n``action=\"update_information\"`` to run the HACS UI's \"Update information\"\naction (\"Refresh information\" in the Marketplace) — a forced re-fetch of\none repository's release data from GitHub, so a pending update becomes\nvisible to the store and its update entity immediately.\n\n**Examples:**\n- Install latest: ha_manage_hacs(action=\"download\", repository_id=\"441028036\")\n- Install a version: ha_manage_hacs(action=\"download\", repository_id=\"piitaya/lovelace-mushroom\", version=\"v4.0.0\")\n- Remove: ha_manage_hacs(action=\"remove\", repository_id=\"owner/repo\")\n- Add a custom repo: ha_manage_hacs(action=\"add_repository\", repository=\"owner/repo\", category=\"lovelace\")\n- Refresh release data: ha_manage_hacs(action=\"update_information\", repository_id=\"owner/repo\")\n\n**Caveats:** Installing an integration usually needs a Home Assistant restart to\nactivate; new Lovelace cards need a browser cache clear. ``add_repository`` requires ``owner/repo``\nformat plus a matching ``category``. Removing an integration deletes its files but\nthe loaded module persists until the next Home Assistant restart — delete its config\nentries first (``ha_remove_helpers_integrations``). HACS refreshes custom\nrepositories on its own only about every 48 hours (the Marketplace only with a\nconnected GitHub account), so ``update_information`` is the way to surface a\njust-published release. The Marketplace refuses installs until the connected user has\naccepted its first-run warning, and adding a repository needs a connected GitHub\naccount; both are steps the user takes in the Marketplace panel.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -2101,8 +2106,13 @@
           "default": null
         },
         "category": {
-          "type": "Literal['integration', 'lovelace', 'theme', 'appdaemon', 'python_script'] | None",
-          "description": "Repository category (action='add_repository')",
+          "type": "str | None",
+          "description": "Repository category (action='add_repository'). One of the categories the store reports (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "default": null
+        },
+        "confirm_replace_built_in": {
+          "type": "bool | None",
+          "description": "Marketplace only (action='download'): install a repository that replaces the built-in integration of the same domain. Set it only after the user agrees.",
           "default": null
         }
       },
@@ -2221,7 +2231,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Automatic backups hold the registry icon of a person, tag or zone only, so restoring another helper's backup does not bring back an icon kept in the registry; without the component, every storage helper other than a zone keeps its icon there",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
           "default": null
         },
         "area_id": {
@@ -2611,27 +2621,27 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and the full exception\ntraceback, and its counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks, which structured=False gets back; use it for entries\nbelow system_log's WARNING+ ~50-entry cap, or for the per-component\nrollup. In structured mode limit/order do not apply: issues are ranked\nby count, then severity, then recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook responses\ncarry has_more plus a pagination_hint; error_log and fault_log carry\nhas_more with a next_offset to pass back while it stays true.",
+    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and the full exception\ntraceback, and its counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks; structured=False returns the raw records instead, so\nit covers what falls outside system_log's WARNING+ in-memory buffer. Use\nstructured=True for the per-component rollup; in structured mode\nlimit/order do not apply: issues are ranked by count, then severity,\nthen recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook\nresponses carry has_more plus a pagination_hint; error_log and fault_log\ncarry has_more with a next_offset to pass back while it stays true.",
     "inputSchema": {
       "properties": {
         "source": {
           "type": "Literal['logbook', 'system', 'error_log', 'supervisor', 'system_service', 'logger', 'fault_log']",
-          "description": "'logbook': entity state-change history. 'system': HA's structured system_log entries (errors, warnings). 'error_log': raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs). 'supervisor': app (add-on) container logs (needs slug). 'system_service': Supervisor-managed system service logs (needs slug). 'logger': effective log level per integration (confirms ha_set_integration(log_level=...) changes took effect). 'fault_log': HA Core's faulthandler crash dump (home-assistant.log.fault), written only when HA dies from a native fatal signal, which never reaches journald or error_log; empty on a healthy install (crash_recorded=False); whole crash blocks are ordered with each block's lines kept in place; reads through the 'HA-MCP File & YAML Tools' entry.",
+          "description": "'logbook': entity state-change history. 'system': HA's structured system_log entries (errors, warnings) with full exception tracebacks; search also matches those exceptions. 'error_log': raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs), grouped into records: a header line starts one and every following line that is not itself a header joins it — traceback frames, the blank lines around chained exceptions, and non-HA banners such as s6-overlay restart lines. 'supervisor': app (add-on) container logs (needs slug). 'system_service': Supervisor-managed system service logs (needs slug). 'logger': effective log level per integration (confirms ha_set_integration(log_level=...) changes took effect). 'fault_log': HA Core's faulthandler crash dump (home-assistant.log.fault), written only when HA dies from a native fatal signal, which never reaches journald or error_log; empty on a healthy install (crash_recorded=False); whole crash blocks are ordered with each block's lines kept in place; reads through the 'HA-MCP File & YAML Tools' entry.",
           "default": "logbook"
         },
         "limit": {
           "type": "int | None",
-          "description": "Max entries/lines to return. Does not apply to source='error_log' with structured=True.",
+          "description": "Max entries/lines to return. For source='error_log' with structured=False it bounds returned lines: whole records are selected within it, and a record longer than it is cut (header and last lines kept) with a warning naming how many lines were cut. Does not apply to source='error_log' with structured=True.",
           "default": null
         },
         "search": {
           "type": "str | None",
-          "description": "Keyword filter on entries/lines; matches the integration domain for source='logger'. In structured error_log mode it matches the message and logger name only; on the raw path the whole line.",
+          "description": "Keyword filter on entries/lines. For source='system' it matches message, name and exception text; for the raw error_log path it matches any line of a record, so a traceback frame brings back its header and siblings. Structured error_log mode matches message and logger name only; source='logger' matches the integration domain.",
           "default": null
         },
         "order": {
           "type": "Literal['newest', 'oldest']",
-          "description": "Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log): 'newest' returns most-recent first; 'oldest' returns chronological-first. For raw-text sources it sets the read direction of the most-recent window; fault_log orders whole crash blocks. Ignored for source='logger', and for source='error_log' with structured=True.",
+          "description": "Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log): 'newest' returns most-recent first; 'oldest' returns chronological-first. For raw-text sources it sets the read direction of the most-recent window; fault_log orders whole crash blocks; error_log orders whole records and keeps each record's lines in place. Ignored for source='logger', and for source='error_log' with structured=True.",
           "default": "newest"
         },
         "hours_back": {
@@ -2663,11 +2673,8 @@
           "default": null
         },
         "offset": {
-          "type": "int",
-          "constraints": {
-            "ge": 0
-          },
-          "description": "Page deeper into source='logbook', 'error_log' and 'fault_log' (ignored for other sources). On error_log it counts raw log lines back from the newest entry; on fault_log it counts lines from the start of the assembled crash text. Pass the response's 'next_offset' to continue while 'has_more' is true.",
+          "type": "int | str",
+          "description": "Page deeper into source='logbook', 'error_log' and 'fault_log' (ignored for other sources). On error_log it counts raw log lines back from the newest entry, or is the opaque token a previous page returned in 'next_offset' on Supervisor/journald installs, which keeps paging exact while new log lines arrive (`structured=True` accepts and returns that token too); on fault_log it counts lines from the start of the assembled crash text. Pass the response's 'next_offset' to continue while 'has_more' is true.",
           "default": 0
         },
         "compact": {
@@ -2677,7 +2684,7 @@
         },
         "level": {
           "type": "str | None",
-          "description": "system / error_log only: keep only entries at exactly this level (ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold.",
+          "description": "system / error_log only: keep only entries at exactly this level (ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold. For source='error_log' it matches the record's header only, so matching text in a traceback frame does not satisfy it.",
           "default": null
         },
         "structured": {
@@ -3542,7 +3549,7 @@
   {
     "name": "ha_get_overview",
     "title": "Get System Overview",
-    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Domain counts and states_summary\nare always complete regardless of entity pagination.\n\nRequests whose fields= are composed only of system_info, notification,\nrepair, or server metadata fields skip the unrelated state, service, and\nregistry reads.\n\nDo not use this tool to inspect a known entity or a narrow set of entities.\nUse ha_get_state for one entity, ha_get_entity for registry metadata, or\nha_search with a domain or area filter. An unprojected overview collects\nsystem-wide state, service, and registry data and can be expensive on large\nHome Assistant installations.\n\nWhen the ha-mcp settings-UI sidecar is running (stdio mode, e.g. Claude\nDesktop / Claude Code) the response carries ``settings_url``, the local\nURL of the tool-configuration page; in standalone HTTP / Docker modes\nwith an HTTP settings prefix it instead carries ``settings_url_hint``,\nsaying where the page is mounted and how to construct the full URL. Hand\nwhichever is present to the user when they ask how to enable or disable\ntools or change server settings.\n\nThe response also carries ``ha_mcp_update`` ``{current, latest,\nupdate_available}`` (PyPI for pip/Docker, the Supervisor store for the\napp) — proactively tell the user when ``update_available`` is true.\nOmitted for the ``unknown`` version, when ``HA_MCP_DISABLE_UPDATE_CHECK``\nis set, or when the update check itself failed.",
+    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Domain counts and states_summary\nare always complete regardless of entity pagination.\n\nRequests whose fields= are composed only of system_info, notification,\nrepair, or server metadata fields skip the unrelated state, service, and\nregistry reads.\n\nDo not use this tool to inspect a known entity or a narrow set of entities.\nUse ha_get_state for one entity, ha_get_entity for registry metadata, or\nha_search with a domain or area filter. An unprojected overview collects\nsystem-wide state, service, and registry data and can be expensive on large\nHome Assistant installations.\n\nWhen the ha-mcp settings-UI sidecar is running (stdio mode, e.g. Claude\nDesktop / Claude Code) the response carries ``settings_url``, the local\nURL of the tool-configuration page; in standalone HTTP / Docker modes\nwith an HTTP settings prefix it instead carries ``settings_url_hint``,\nsaying where the page is mounted and how to construct the full URL. Hand\nwhichever is present to the user when they ask how to enable or disable\ntools or change server settings.\n\nThe response also carries ``ha_mcp_update`` ``{current, latest,\nupdate_available}`` (PyPI for pip/Docker, the Supervisor store for the\napp) — proactively tell the user when ``update_available`` is true.\nOmitted for the ``unknown`` version, when ``HA_MCP_DISABLE_UPDATE_CHECK``\nis set, or when the update check itself failed.\n\n``mcp_client`` reports the MCP protocol version, client info and\nclient capabilities this call arrived with, for diagnosing\nclient-specific behaviour. ``capabilities: null`` means the request\ncarried none to read, not that the client declared none.",
     "inputSchema": {
       "properties": {
         "detail_level": {
@@ -3599,7 +3606,7 @@
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domain_stats\"]). None = full response. Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, dismissed_repair_count, repairs, repairs_error, tool_discovery, settings_url, settings_url_hint, read_only_mode, read_only_mode_hint, ha_mcp_update. Note: ``settings_url`` (stdio mode), ``settings_url_hint`` (standalone HTTP/Docker mode), the ``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read Only Mode is on), and ``ha_mcp_update`` (when an update check applies) are emitted regardless of ``fields=`` projection."
+          "description": "Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domain_stats\"]). None = full response. Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, dismissed_repair_count, repairs, repairs_error, tool_discovery, settings_url, settings_url_hint, read_only_mode, read_only_mode_hint, ha_mcp_update, mcp_client. Note: ``settings_url`` (stdio mode), ``settings_url_hint`` (standalone HTTP/Docker mode), the ``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read Only Mode is on), ``ha_mcp_update`` (when an update check applies) and ``mcp_client`` are emitted regardless of ``fields=`` projection."
         }
       }
     },
@@ -4134,7 +4141,7 @@
         "name": {
           "type": "str | None",
           "default": null,
-          "description": "(snapshot.create) Tarball name. Auto-generated if not provided."
+          "description": "(snapshot.create) Tarball name. Auto-generated if not provided. Home Assistant names a full backup made with its automatic-backup settings itself."
         },
         "backup_id": {
           "type": "str | None",
@@ -4142,9 +4149,49 @@
           "description": "(snapshot.restore / snapshot.delete) Tarball ID (e.g. 'dd7550ed')."
         },
         "restore_database": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.restore) Include the database in the restore. Default: restore it when the backup contains it. Must be false for a backup without one; on Supervisor installs it must match the backup."
+        },
+        "restore_addons": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.restore) Slugs of apps (add-ons) in the backup to restore, from its `addons` in the snapshot list. Default: none. Supervisor installs only."
+        },
+        "restore_folders": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.restore) Folders in the backup to restore, from its `folders` in the snapshot list (`share`, `addons/local`, `ssl`, `media`). Default: none. Supervisor installs only."
+        },
+        "include_homeassistant": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: include Home Assistant's configuration."
+        },
+        "include_database": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: include the database (history); needs include_homeassistant=True."
+        },
+        "include_addons": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: slugs of the installed apps (add-ons) to include. Supervisor installs only."
+        },
+        "include_all_addons": {
+          "type": "bool | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: include every app (add-on); not together with include_addons. Supervisor installs only."
+        },
+        "include_folders": {
+          "type": "list[str] | None",
+          "default": null,
+          "description": "(snapshot.create) Custom backup: folders to include (`share`, `addons/local`, `ssl`, `media`). Supervisor installs only."
+        },
+        "safety_backup": {
           "type": "bool",
           "default": false,
-          "description": "(snapshot.restore) Include the database in the restore; otherwise config only."
+          "description": "(snapshot.restore) Back up what the restore replaces (configuration, plus the database, apps and folders it restores) first, as a manual backup on the default location. Off by default; offer it to the user, who decides. Needs the default backup password."
         },
         "confirm": {
           "type": "bool",
@@ -4284,7 +4331,7 @@
   {
     "name": "ha_manage_theme",
     "title": "Manage Frontend Themes",
-    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(ha_manage_hacs); editing custom theme files goes through\nha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name\nand attempts an automatic theme reload).\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
+    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(the Marketplace on 2026.11+, both via ha_manage_hacs); editing custom theme files goes through\nha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name\nand attempts an automatic theme reload).\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
     "inputSchema": {
       "properties": {
         "action": {
@@ -4418,12 +4465,17 @@
   {
     "name": "ha_restart",
     "title": "Restart Home Assistant",
-    "description": "Execute a Home Assistant restart.\n\nWARNING: restarts the entire Home Assistant instance; all automations\nare unavailable during the restart, which typically takes 1-5 minutes.\nConfig is validated automatically before the restart proceeds (to\npre-check, call ha_get_system_health(include=\"config_check\")). For\nconfiguration changes, consider ha_reload_core() instead, which reloads\nspecific components without a full restart. When this server runs\ninside Home Assistant (embedded), it replies before the restart starts\nand is unreachable until Home Assistant is back.\n\nEXAMPLE: ha_restart(confirm=True)",
+    "description": "Execute a Home Assistant restart.\n\nWARNING: restarts the entire Home Assistant instance; all automations\nare unavailable during the restart, which typically takes 1-5 minutes.\nConfig is validated automatically before the restart proceeds (to\npre-check, call ha_get_system_health(include=\"config_check\")). For\nconfiguration changes, consider ha_reload_core() instead, which reloads\nspecific components without a full restart. When this server runs\ninside Home Assistant (embedded), it replies before the restart starts\nand is unreachable until Home Assistant is back; with safe_mode it\nstays down until Home Assistant is next restarted normally, because it\nis itself a custom integration.\n\nEXAMPLE: ha_restart(confirm=True)",
     "inputSchema": {
       "properties": {
         "confirm": {
           "type": "bool",
           "description": "Must be True to confirm the restart.",
+          "default": false
+        },
+        "safe_mode": {
+          "type": "bool",
+          "description": "Restart in safe mode: no custom integrations or custom frontend resources load until the next normal restart.",
           "default": false
         }
       }
