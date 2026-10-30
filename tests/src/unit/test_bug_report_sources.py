@@ -231,8 +231,8 @@ class TestFetchHaInstall:
 
     @pytest.mark.asyncio
     async def test_keeps_install_facts_and_drops_personal_ones(
-        self, client, monkeypatch
-    ):
+        self, client: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         event = {
             "event": {"type": "initial", "data": {"homeassistant": {"info": HA_INFO}}}
         }
@@ -253,8 +253,11 @@ class TestFetchHaInstall:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("error", [TimeoutError(), RuntimeError("boom")])
     async def test_failed_read_is_none_and_disconnects(
-        self, client, monkeypatch, error
-    ):
+        self,
+        client: SimpleNamespace,
+        monkeypatch: pytest.MonkeyPatch,
+        error: Exception,
+    ) -> None:
         ws = _ws_with_event(error=error)
         monkeypatch.setattr(
             bug_report_sources,
@@ -265,7 +268,9 @@ class TestFetchHaInstall:
         ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_unreachable_websocket_is_none(self, client, monkeypatch):
+    async def test_unreachable_websocket_is_none(
+        self, client: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(
             bug_report_sources,
             "get_connected_ws_client",
@@ -345,7 +350,7 @@ class TestReportRedactsKnownIdentifiers:
 
     @pytest.mark.asyncio
     async def test_bare_known_address_is_redacted_in_every_log(
-        self, monkeypatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
         replies = {"network/url": _ok(NETWORK_URL), "network": _ok(NETWORK)}
@@ -385,7 +390,7 @@ class TestReportRedactsKnownIdentifiers:
 
     @pytest.mark.asyncio
     async def test_failed_identifier_read_is_reported_not_fatal(
-        self, monkeypatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         replies = {
             "network/url": {
