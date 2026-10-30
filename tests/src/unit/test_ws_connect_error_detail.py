@@ -10,6 +10,7 @@ helper path).
 
 import json
 import ssl
+from typing import NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,36 +19,36 @@ import pytest
 class _FakeWS:
     """Minimal async-iterable websocket stand-in for connect() tests."""
 
-    def __aiter__(self):
+    def __aiter__(self) -> "_FakeWS":
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> str:
         raise StopAsyncIteration
 
-    async def close(self):
+    async def close(self) -> None:
         pass
 
-    async def send(self, *_args, **_kwargs):
+    async def send(self, *_args: object, **_kwargs: object) -> None:
         pass
 
 
 class TestConnectCapturesReason:
     """``connect()`` records the failure reason on ``last_connect_error``."""
 
-    def test_last_connect_error_is_none_before_any_connect(self):
+    def test_last_connect_error_is_none_before_any_connect(self) -> None:
         from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
         client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
         assert client.last_connect_error is None
 
     @pytest.mark.asyncio
-    async def test_connect_failure_captures_exception_text(self):
+    async def test_connect_failure_captures_exception_text(self) -> None:
         """A transport-level failure is captured verbatim (type + message)."""
         from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
         client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
 
-        async def fake_connect(*_args, **_kwargs):
+        async def fake_connect(*_args: object, **_kwargs: object) -> NoReturn:
             raise OSError("Connection refused")
 
         with patch(
@@ -61,7 +62,7 @@ class TestConnectCapturesReason:
         assert "Connection refused" in client.last_connect_error
 
     @pytest.mark.asyncio
-    async def test_missing_auth_required_is_captured(self):
+    async def test_missing_auth_required_is_captured(self) -> None:
         """The 'Did not receive auth_required' handshake failure is captured.
 
         This is the failure mode the issue bot hypothesised for Supervisor
@@ -71,7 +72,7 @@ class TestConnectCapturesReason:
 
         client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
 
-        async def fake_connect(*_args, **_kwargs):
+        async def fake_connect(*_args: object, **_kwargs: object) -> _FakeWS:
             return _FakeWS()
 
         # No auth message ever arrives -> the auth_required wait returns None.
@@ -87,14 +88,14 @@ class TestConnectCapturesReason:
         assert "Did not receive auth_required" in client.last_connect_error
 
     @pytest.mark.asyncio
-    async def test_reason_is_cleared_on_a_fresh_attempt(self):
+    async def test_reason_is_cleared_on_a_fresh_attempt(self) -> None:
         """A new connect() attempt resets the previous reason before running."""
         from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
         client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
         client._last_connect_error = "stale: from a previous attempt"
 
-        async def fake_connect(*_args, **_kwargs):
+        async def fake_connect(*_args: object, **_kwargs: object) -> NoReturn:
             raise OSError("brand new failure")
 
         with patch(
@@ -107,7 +108,7 @@ class TestConnectCapturesReason:
         assert "brand new failure" in (client.last_connect_error or "")
 
     @pytest.mark.asyncio
-    async def test_ssl_error_is_captured(self):
+    async def test_ssl_error_is_captured(self) -> None:
         """A TLS verification failure is captured like any other reason.
 
         Self-signed / hostname-mismatch certs are a common real-world cause,
@@ -119,7 +120,7 @@ class TestConnectCapturesReason:
             url="https://ha.example.com:8123", token="t"
         )
 
-        async def fake_connect(*_args, **_kwargs):
+        async def fake_connect(*_args: object, **_kwargs: object) -> NoReturn:
             raise ssl.SSLCertVerificationError("self-signed certificate")
 
         with patch(
@@ -133,7 +134,7 @@ class TestConnectCapturesReason:
         assert "self-signed" in client.last_connect_error
 
     @pytest.mark.asyncio
-    async def test_token_is_not_leaked_into_reason(self):
+    async def test_token_is_not_leaked_into_reason(self) -> None:
         """The captured reason must never contain the access token.
 
         The reason is built only from the exception text; the token travels
@@ -146,7 +147,7 @@ class TestConnectCapturesReason:
         token = "super-secret-token-DO-NOT-LEAK"
         client = HomeAssistantWebSocketClient(url="http://supervisor/core", token=token)
 
-        async def fake_connect(*_args, **_kwargs):
+        async def fake_connect(*_args: object, **_kwargs: object) -> NoReturn:
             raise OSError("[Errno 111] Connection refused")
 
         with patch(
@@ -163,7 +164,7 @@ class TestManagerSurfacesReason:
     """``WebSocketManager.get_client`` appends the reason to its raised error."""
 
     @pytest.mark.asyncio
-    async def test_get_client_includes_reason_in_message(self):
+    async def test_get_client_includes_reason_in_message(self) -> None:
         from ha_mcp.client.websocket_client import (
             HomeAssistantWebSocketClient,
             WebSocketManager,
@@ -194,7 +195,7 @@ class TestManagerSurfacesReason:
             manager._current_loop = None
 
     @pytest.mark.asyncio
-    async def test_get_client_omits_suffix_when_reason_absent(self):
+    async def test_get_client_omits_suffix_when_reason_absent(self) -> None:
         """A client whose connect() captured no reason yields the bare message.
 
         No trailing colon, no repr — the ``isinstance`` guard turns a ``None``
@@ -233,7 +234,7 @@ class TestHelperSurfacesReason:
     """``get_connected_ws_client`` puts the reason in the error ``details``."""
 
     @pytest.mark.asyncio
-    async def test_helper_uses_reason_as_details(self):
+    async def test_helper_uses_reason_as_details(self) -> None:
         from ha_mcp.tools import helpers
 
         fake = MagicMock()
@@ -254,7 +255,7 @@ class TestHelperSurfacesReason:
         assert "Did not receive auth_required" in json.dumps(error)
 
     @pytest.mark.asyncio
-    async def test_helper_falls_back_when_reason_absent(self):
+    async def test_helper_falls_back_when_reason_absent(self) -> None:
         """No captured reason -> the generic default lands in details, no mock repr."""
         from ha_mcp.tools import helpers
 

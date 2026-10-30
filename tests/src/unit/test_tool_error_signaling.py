@@ -26,7 +26,7 @@ from ha_mcp.tools.helpers import exception_to_structured_error, raise_tool_error
 class TestRaiseToolError:
     """Tests for the raise_tool_error helper function."""
 
-    def test_raises_tool_error(self):
+    def test_raises_tool_error(self) -> None:
         """raise_tool_error should raise ToolError exception."""
         error_response = create_error_response(
             ErrorCode.ENTITY_NOT_FOUND, "Entity light.test not found"
@@ -35,7 +35,7 @@ class TestRaiseToolError:
         with pytest.raises(ToolError):
             raise_tool_error(error_response)
 
-    def test_tool_error_contains_structured_json(self):
+    def test_tool_error_contains_structured_json(self) -> None:
         """ToolError message should contain the structured error as JSON."""
         error_response = create_error_response(
             ErrorCode.ENTITY_NOT_FOUND,
@@ -54,7 +54,7 @@ class TestRaiseToolError:
         # suggestion (singular) is always present, suggestions (plural) only when multiple
         assert "suggestion" in error_data["error"]
 
-    def test_preserves_all_error_fields(self):
+    def test_preserves_all_error_fields(self) -> None:
         """ToolError should preserve all fields from the error response."""
         error_response = {
             "success": False,
@@ -82,12 +82,12 @@ class TestRaiseToolError:
 class TestExceptionToStructuredError:
     """Tests for the exception_to_structured_error function."""
 
-    def test_raises_tool_error_by_default(self):
+    def test_raises_tool_error_by_default(self) -> None:
         """exception_to_structured_error should raise ToolError by default."""
         with pytest.raises(ToolError):
             exception_to_structured_error(ValueError("test error"))
 
-    def test_returns_dict_when_raise_error_false(self):
+    def test_returns_dict_when_raise_error_false(self) -> None:
         """exception_to_structured_error should return dict when raise_error=False."""
         result = exception_to_structured_error(
             ValueError("test error"), raise_error=False
@@ -97,7 +97,7 @@ class TestExceptionToStructuredError:
         assert result["success"] is False
         assert "error" in result
 
-    def test_error_contains_correct_code(self):
+    def test_error_contains_correct_code(self) -> None:
         """Structured error should contain appropriate error code."""
         result = exception_to_structured_error(
             ValueError("test validation error"), raise_error=False
@@ -105,7 +105,7 @@ class TestExceptionToStructuredError:
 
         assert result["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_context_is_preserved(self):
+    def test_context_is_preserved(self) -> None:
         """Context should be preserved in the error response for relevant error types."""
         # Use an error type that includes context (API errors with 400 status)
         from ha_mcp.client.rest_client import HomeAssistantAPIError
@@ -121,7 +121,7 @@ class TestExceptionToStructuredError:
         assert result.get("entity_id") == "light.test"
         assert result.get("action") == "get"
 
-    def test_suggestions_embedded_when_raising(self):
+    def test_suggestions_embedded_when_raising(self) -> None:
         """Suggestions should be embedded in the error and raised as ToolError."""
         suggestions = ["Check connection", "Retry later"]
         with pytest.raises(ToolError) as exc_info:
@@ -133,7 +133,7 @@ class TestExceptionToStructuredError:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["suggestions"] == suggestions
 
-    def test_suggestions_embedded_when_returning(self):
+    def test_suggestions_embedded_when_returning(self) -> None:
         """Suggestions should be embedded in the returned error dict."""
         suggestions = ["Try a different query", "Check spelling"]
         result = exception_to_structured_error(
@@ -144,7 +144,7 @@ class TestExceptionToStructuredError:
 
         assert result["error"]["suggestions"] == suggestions
 
-    def test_no_suggestions_when_none(self):
+    def test_no_suggestions_when_none(self) -> None:
         """No suggestions key is added when the caller passes none AND the
         classified error code has no configured default.
 
@@ -166,7 +166,7 @@ class TestExceptionToStructuredError:
         assert "suggestions" not in result["error"]
         assert "suggestion" not in result["error"]
 
-    def test_tool_error_message_is_valid_json(self):
+    def test_tool_error_message_is_valid_json(self) -> None:
         """ToolError message should be valid JSON."""
         with pytest.raises(ToolError) as exc_info:
             exception_to_structured_error(
@@ -190,7 +190,9 @@ class TestInternalErrorTracebackLogging:
     pins that observability at the centralized helper instead.
     """
 
-    def test_internal_error_path_logs_traceback(self, caplog):
+    def test_internal_error_path_logs_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """An unclassified exception logs at exception level with traceback."""
         with caplog.at_level(logging.ERROR, logger="ha_mcp.tools.helpers"):
             result = exception_to_structured_error(
@@ -205,7 +207,9 @@ class TestInternalErrorTracebackLogging:
             f"{[(r.levelname, r.message) for r in caplog.records]}"
         )
 
-    def test_classified_error_does_not_log_traceback(self, caplog):
+    def test_classified_error_does_not_log_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A classified exception (VALIDATION_FAILED here) does not log."""
         with caplog.at_level(logging.ERROR, logger="ha_mcp.tools.helpers"):
             result = exception_to_structured_error(
@@ -224,21 +228,21 @@ class TestInternalErrorTracebackLogging:
 class TestErrorCodeMapping:
     """Tests for exception type to error code mapping."""
 
-    def test_value_error_maps_to_validation_failed(self):
+    def test_value_error_maps_to_validation_failed(self) -> None:
         """ValueError should map to VALIDATION_FAILED error code."""
         result = exception_to_structured_error(
             ValueError("Invalid parameter"), raise_error=False
         )
         assert result["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_timeout_error_maps_to_timeout_operation(self):
+    def test_timeout_error_maps_to_timeout_operation(self) -> None:
         """TimeoutError should map to TIMEOUT_OPERATION error code."""
         result = exception_to_structured_error(
             TimeoutError("Request timed out"), raise_error=False
         )
         assert result["error"]["code"] == "TIMEOUT_OPERATION"
 
-    def test_connection_error_in_message_maps_correctly(self):
+    def test_connection_error_in_message_maps_correctly(self) -> None:
         """Error messages containing 'connection' should be connection errors."""
         result = exception_to_structured_error(
             Exception("Connection refused"), raise_error=False
@@ -249,14 +253,14 @@ class TestErrorCodeMapping:
 class TestIntegrationWithMCPProtocol:
     """Integration tests simulating MCP protocol behavior."""
 
-    def test_tool_error_enables_client_error_detection(self):
+    def test_tool_error_enables_client_error_detection(self) -> None:
         """ToolError exception should enable MCP clients to detect errors.
 
         MCP clients can detect tool failures by catching ToolError exceptions,
         which FastMCP converts to isError=true in the protocol response.
         """
 
-        def simulated_tool_call():
+        def simulated_tool_call() -> None:
             """Simulates a tool call that returns an error."""
             error = create_validation_error("Invalid parameter value")
             raise_tool_error(error)
@@ -301,7 +305,7 @@ class TestSchemaAndAuthClassification:
        classification entirely.
     """
 
-    def test_schema_phrase_without_command_prefix_not_validation(self):
+    def test_schema_phrase_without_command_prefix_not_validation(self) -> None:
         """Negative test for the "command failed:" outer gate.
 
         A plain Exception containing a schema phrase but without the
@@ -314,7 +318,7 @@ class TestSchemaAndAuthClassification:
 
     # --- Regression tests: substrings that must NOT trigger auth ---
 
-    def test_authorized_keys_substring_not_auth_error(self):
+    def test_authorized_keys_substring_not_auth_error(self) -> None:
         """Plain Exception mentioning 'authorized_keys' must not be AUTH_INVALID_TOKEN.
 
         Covers the root cause of #993: the old ``"auth" in error_str``
@@ -327,7 +331,7 @@ class TestSchemaAndAuthClassification:
 
     # --- Command-failed fallback: known failure, not INTERNAL_ERROR ---
 
-    def test_command_error_unknown_message_is_service_call_failed(self):
+    def test_command_error_unknown_message_is_service_call_failed(self) -> None:
         """HomeAssistantCommandError without a specific marker => SERVICE_CALL_FAILED.
 
         A WS ``success=False`` is a known failure mode, not "unexpected".
@@ -342,7 +346,7 @@ class TestSchemaAndAuthClassification:
 
     # --- Typed exceptions: type dispatch skips string classification ---
 
-    def test_auth_required_handshake_is_connection_error(self):
+    def test_auth_required_handshake_is_connection_error(self) -> None:
         """Handshake failure carrying 'auth_required' classifies as CONNECTION_FAILED.
 
         websocket_client.py raises ``HomeAssistantConnectionError("Did not
@@ -357,7 +361,7 @@ class TestSchemaAndAuthClassification:
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "CONNECTION_FAILED"
 
-    def test_typed_auth_error_classified_as_auth(self):
+    def test_typed_auth_error_classified_as_auth(self) -> None:
         """HomeAssistantAuthError routes to AUTH_INVALID_TOKEN via type dispatch.
 
         Covers __main__.py raise sites (OAuth token missing, HA credentials
@@ -370,7 +374,7 @@ class TestSchemaAndAuthClassification:
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
 
-    def test_typed_connection_error_classified_as_connection(self):
+    def test_typed_connection_error_classified_as_connection(self) -> None:
         """HomeAssistantConnectionError routes to CONNECTION_FAILED via type dispatch.
 
         Covers websocket_client.py raise sites (WebSocket state guards).
@@ -526,7 +530,8 @@ class TestEmbeddedAuthHints:
             raise_error=False,
             suggestions=list(self.TOOL_HINTS),
         )
-        return response["error"]["suggestions"]
+        suggestions: list[str] = response["error"]["suggestions"]
+        return suggestions
 
     def test_the_token_fix_comes_before_the_tool_hints(
         self, monkeypatch: pytest.MonkeyPatch
