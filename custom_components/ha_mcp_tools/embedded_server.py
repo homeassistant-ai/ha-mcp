@@ -83,7 +83,11 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
-from .embedded_listen import DirectListener, default_host_origin_guard_off
+from .embedded_listen import (
+    DirectListener,
+    async_probe_loopback,
+    default_host_origin_guard_off,
+)
 from .embedded_worker_teardown import (
     shutdown_server_resources_bounded,
     teardown_worker_loop,
@@ -369,6 +373,7 @@ class EmbeddedServerManager:
         self._maybe_purge_stale_modules(ready_version)
 
         self._thread_exc = None
+        self._uv_server: Any = None
         self._startup_phase = "waiting for the worker thread"
         self._stop_requested = threading.Event()
         self._thread = threading.Thread(
@@ -1609,7 +1614,7 @@ class EmbeddedServerManager:
             access_log=False,
             timeout_keep_alive=SERVER_KEEPALIVE_SECONDS,
         )
-        uv_server = uvicorn.Server(config)
+        uv_server = self._uv_server = uvicorn.Server(config)
 
         self._note_startup_phase("starting the HTTP listener")
         try:
@@ -1695,7 +1700,7 @@ class EmbeddedServerManager:
                 raise EmbeddedServerError(
                     "HA-MCP in-process server thread exited during startup."
                 )
-            if await self._async_probe_port():
+            if await self._async_server_ready():
                 _LOGGER.info(
                     "HA-MCP in-process server is listening on %s:%d",
                     self._bind_host,
@@ -1729,23 +1734,18 @@ class EmbeddedServerManager:
         await self.async_stop()
         raise EmbeddedServerError(failure)
 
-    async def _async_probe_port(self) -> bool:
-        """Return True if a loopback TCP connection to the server port succeeds.
+    async def _async_server_ready(self) -> bool:
+        """Return True once this worker's uvicorn serves and loopback reaches it.
 
-        Probes 127.0.0.1 regardless of bind host — a 0.0.0.0 bind still accepts
-        on loopback, and the forwarding webhook only ever talks to loopback.
+        A loopback connect alone also succeeds when another process already
+        holds the port, which reported a dead server as running (#2915).
         """
-        try:
-            _reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", self._port),
-                timeout=_READY_POLL_INTERVAL_SECONDS,
-            )
-        except (TimeoutError, OSError):
-            return False
-        writer.close()
-        with suppress(OSError, TimeoutError):
-            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
-        return True
+        server = self._uv_server
+        return bool(server and server.started) and await self._async_probe_port()
+
+    async def _async_probe_port(self) -> bool:
+        """Return True if a loopback TCP connection to the server port succeeds."""
+        return await async_probe_loopback(self._port, _READY_POLL_INTERVAL_SECONDS)
 
 
 # Worker threads that may still be executing their ha_mcp imports. Purging

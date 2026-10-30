@@ -6,9 +6,11 @@ it needs is imported before that window closes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from .const import BIND_HOST_ALL
@@ -96,3 +98,21 @@ def default_host_origin_guard_off() -> None:
     except ImportError:
         return
     ensure_host_origin_guard_default_off()
+
+
+async def async_probe_loopback(port: int, timeout: float) -> bool:
+    """Return True if a loopback TCP connection to ``port`` succeeds.
+
+    Probes 127.0.0.1 regardless of bind host: a 0.0.0.0 bind still accepts on
+    loopback, and the forwarding webhook only ever talks to loopback.
+    """
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=timeout
+        )
+    except (TimeoutError, OSError):
+        return False
+    writer.close()
+    with suppress(OSError, TimeoutError):
+        await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+    return True

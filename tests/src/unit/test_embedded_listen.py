@@ -161,3 +161,20 @@ def test_busy_port_reads_as_a_startup_exit(
     message = str(mgr._thread_exc)
     assert "exited during startup" in message
     assert "Address already in use" in message
+
+
+async def test_readiness_ignores_another_process_on_the_port(tmp_path: Path) -> None:
+    # Another listener on the port answered the loopback probe, so a server
+    # that never started was reported as running.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other:
+        other.bind(("127.0.0.1", 0))
+        other.listen()
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_PORT: other.getsockname()[1]}
+        )
+        mgr._uv_server = None
+        assert await mgr._async_server_ready() is False
+        mgr._uv_server = SimpleNamespace(started=False)
+        assert await mgr._async_server_ready() is False
+        mgr._uv_server = SimpleNamespace(started=True)
+        assert await mgr._async_server_ready() is True
