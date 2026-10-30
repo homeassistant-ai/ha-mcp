@@ -38,6 +38,8 @@ jobs:
   # Skip on odd ISO weeks (biweekly cadence) unless manually triggered
   biweekly-gate:
     name: Biweekly schedule gate
+    # Releases of this repository only; the release jobs depend on this one.
+    if: github.repository == 'homeassistant-ai/ha-mcp'
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.gate.outputs.should_run }}
@@ -112,6 +114,8 @@ jobs:
   # Validate Docker build before committing to a release
   validate-docker:
     name: Validate Docker Build
+    # Releases of this repository only, like biweekly-gate.
+    if: github.repository == 'homeassistant-ai/ha-mcp'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
