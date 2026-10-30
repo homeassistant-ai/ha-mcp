@@ -202,6 +202,9 @@ def test_port_held_on_ipv6_only_keeps_the_ipv4_listener(
     assert sockets is not None
     try:
         assert [sock.family for sock in sockets] == [socket.AF_INET]
+        # The family is set at creation; serving proves the socket really bound.
+        sockets[0].listen()
+        assert _connects("127.0.0.1", port)
         assert "already in use on IPv6" in caplog.text
     finally:
         for sock in sockets:
