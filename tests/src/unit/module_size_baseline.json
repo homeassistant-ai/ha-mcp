@@ -19,7 +19,7 @@
   "src/ha_mcp/tools/smart_search/_deep.py": 1721,
   "src/ha_mcp/tools/smart_search/_entities.py": 1002,
   "src/ha_mcp/tools/tools_addons.py": 4046,
-  "src/ha_mcp/tools/tools_bug_report.py": 1288,
+  "src/ha_mcp/tools/tools_bug_report.py": 1194,
   "src/ha_mcp/tools/tools_code.py": 1421,
   "src/ha_mcp/tools/tools_config_automations.py": 1949,
   "src/ha_mcp/tools/tools_config_dashboards.py": 3756,
