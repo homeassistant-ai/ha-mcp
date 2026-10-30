@@ -325,8 +325,12 @@ class TestServiceFailures:
         ids=["not_authenticated", "token_rejected_on_connect"],
     )
     async def test_unsent_command_is_not_reported_as_possibly_applied(
-        self, tools, mock_client, cause, code
-    ):
+        self,
+        tools: GroupTools,
+        mock_client: MagicMock,
+        cause: BaseException | None,
+        code: str,
+    ) -> None:
         unsent = HomeAssistantCommandNotSent("not authenticated")
         unsent.__cause__ = cause
         mock_client.send_websocket_message = AsyncMock(side_effect=unsent)
