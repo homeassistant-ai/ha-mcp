@@ -41,6 +41,10 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
    ```
 
+   The app listens on every IPv4 and IPv6 address of the Home Assistant
+   host. For an IPv6 address, put it in brackets:
+   `http://[2001:db8::10]:9583/private_...`.
+
 5. **Configure your AI client** using one of the options below
 
 ---
