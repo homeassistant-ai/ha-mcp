@@ -225,10 +225,17 @@ class TestKnownIdentifierRedaction:
             assert self._scrub(text) == text
 
     def test_known_address_inside_a_longer_hostname_is_kept(self) -> None:
-        assert self._scrub("host2 172.17.0.3.example up") == (
-            "host2 172.17.0.3.example up"
-        )
+        for text in ("host2 172.17.0.3.example up", "via router-172.17.0.3 up"):
+            assert self._scrub(text) == text
         assert self._scrub("ended 172.17.0.3. next") == "ended [IP]. next"
+
+    def test_known_ipv6_after_a_label_colon_is_redacted(self) -> None:
+        assert self._scrub("address:fd6a:ebdb:5b2c:4791::6c69 up") == (
+            "address:[IP] up"
+        )
+        # The known address as a prefix of a longer one is a different address.
+        text = "peer fd6a:ebdb:5b2c:4791::6c69:1234 up"
+        assert self._scrub(text) == text
 
     def test_known_ipv4_mapped_ipv6_address_is_redacted(self) -> None:
         ids = KnownIdentifiers(addresses=frozenset({"::ffff:192.0.2.1"}))

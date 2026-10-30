@@ -43,9 +43,11 @@ def known_identifiers_scope(identifiers: KnownIdentifiers) -> Iterator[None]:
 
 # Two or more colon-separated hex groups, optionally ending in a dotted quad
 # (``::ffff:192.0.2.1``); ``hh:mm:ss`` and other non-addresses fail to parse in
-# the callback and are left alone.
+# the callback and are left alone. A preceding label colon (``address:``) is
+# allowed: the leftmost match always consumes a whole address, so a candidate
+# never starts inside a longer one.
 _IPV6_CANDIDATE_RE = re.compile(
-    r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}"
+    r"(?<![\w.])(?:[0-9A-Fa-f]{0,4}:){2,7}"
     r"(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{0,4})(?![\w:]|\.\d)"
 )
 
@@ -75,7 +77,7 @@ def _known_identifier_rules(
     if ipv4:
         rules.append(
             (
-                re.compile(rf"(?<![\w.])(?:{_alternation(ipv4)})(?![\w-]|\.[\w-])"),
+                re.compile(rf"(?<![\w.-])(?:{_alternation(ipv4)})(?![\w-]|\.[\w-])"),
                 "[IP]",
             )
         )
