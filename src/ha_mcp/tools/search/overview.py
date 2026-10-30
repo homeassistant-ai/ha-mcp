@@ -469,12 +469,13 @@ class OverviewMixin(SearchToolsBase):
           ``None``): treated like the command-error branch (legacy + warning +
           log), so a partial snapshot never serves a silently-degraded overview.
         - ``HomeAssistantConnectionError`` (pooled-WS drop or a failed (re)connect
-          in ``get_websocket_client()``) or ``HomeAssistantAuthError`` (token rejected):
-          served the same way — the legacy overview reads ``/api/states`` +
-          ``/api/services`` over REST and the registries through the swallowing
-          ``send_websocket_message`` bridge, so it degrades to a partial overview
-          rather than dying identically on a pooled-WS drop; a transport failure
-          must not escape.
+          in ``get_websocket_client()``): served the same way — the legacy
+          overview reads ``/api/states`` + ``/api/services`` over REST and the
+          registries through the ``send_websocket_message`` bridge, so it
+          degrades to a partial overview rather than dying identically on a
+          pooled-WS drop; a transport failure must not escape. A token HA
+          rejects (``HomeAssistantAuthError``) takes this branch too, but the
+          legacy reads use the same token and fail with it.
         """
         try:
             raw = await self._send_component_overview(inputs)
