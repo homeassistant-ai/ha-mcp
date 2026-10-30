@@ -4,9 +4,10 @@ Dependency-free on purpose: only the standard library, so the rules can be
 exercised in isolation.
 """
 
+import ipaddress
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -40,6 +41,20 @@ def known_identifiers_scope(identifiers: KnownIdentifiers) -> Iterator[None]:
         _known_identifiers.reset(token)
 
 
+# Anything with two or more colons between hex groups; ``hh:mm:ss`` and other
+# non-addresses fail to parse in the callback and are left alone.
+_IPV6_CANDIDATE_RE = re.compile(
+    r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])"
+)
+
+
+def _parse_v6(value: str) -> ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.IPv6Address(value)
+    except ValueError:
+        return None
+
+
 def _alternation(values: frozenset[str]) -> str:
     # Longest first, so an alternative never stops short inside a longer one.
     return "|".join(re.escape(v) for v in sorted(values, key=len, reverse=True))
@@ -48,11 +63,11 @@ def _alternation(values: frozenset[str]) -> str:
 @lru_cache(maxsize=8)
 def _known_identifier_rules(
     identifiers: KnownIdentifiers,
-) -> tuple[tuple[re.Pattern[str], str], ...]:
+) -> tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], ...]:
     """Whole-token patterns: a known value never matches inside a longer
     address or hostname, but does match before ``:port``, ``/``, a quote,
     a bracket, a comma or a sentence-ending dot."""
-    rules: list[tuple[re.Pattern[str], str]] = []
+    rules: list[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]]] = []
     ipv4 = frozenset(a for a in identifiers.addresses if ":" not in a)
     ipv6 = identifiers.addresses - ipv4
     if ipv4:
@@ -60,17 +75,19 @@ def _known_identifier_rules(
             (re.compile(rf"(?<![\w.])(?:{_alternation(ipv4)})(?!\w|\.\d)"), "[IP]")
         )
     if ipv6:
-        # A following ``:`` plus a hex digit or colon would make a longer
-        # address, so only a bare colon (end of a log field) may follow.
-        rules.append(
-            (
-                re.compile(
-                    rf"(?<![\w:.])(?:{_alternation(ipv6)})(?!\w|:[\w:]|\.\d)",
-                    re.IGNORECASE,
-                ),
-                "[IP]",
-            )
-        )
+        # An IPv6 address has many spellings (``::`` vs zero groups, leading
+        # zeros), so candidates are parsed and compared, not matched as text.
+        known_v6 = frozenset(_parse_v6(a) for a in ipv6) - {None}
+
+        def _redact_v6(match: re.Match[str]) -> str:
+            try:
+                parsed = ipaddress.IPv6Address(match.group(0))
+            except ValueError:
+                return match.group(0)
+            return "[IP]" if parsed in known_v6 else match.group(0)
+
+        if known_v6:
+            rules.append((_IPV6_CANDIDATE_RE, _redact_v6))
     if identifiers.hosts:
         rules.append(
             (
@@ -109,9 +126,11 @@ _PLEX_DIRECT_DASHED_IPV4_RE = re.compile(
 )
 # Internal hostnames. A match starts only where a name starts, so a long dotted
 # run stays linear instead of being rescanned from every label.
-_LAN_HOST_RE = re.compile(r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)+lan\b", re.IGNORECASE)
+_LAN_HOST_RE = re.compile(
+    r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)+lan(?![\w-]|\.[\w-])", re.IGNORECASE
+)
 _TAILNET_HOST_RE = re.compile(
-    r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)+ts\.net\b", re.IGNORECASE
+    r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)+ts\.net(?![\w-]|\.[\w-])", re.IGNORECASE
 )
 # Microsoft Graph calendar ID in a URL path.
 _GRAPH_CALENDAR_ID_RE = re.compile(r"(/me/calendars/)[^/?#\s'\"]+", re.IGNORECASE)

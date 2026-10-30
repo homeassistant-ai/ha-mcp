@@ -169,12 +169,17 @@ class _UnsuccessfulReply(Exception):
     """A WebSocket command Home Assistant answered with an error."""
 
 
+# Each read gets its own short deadline: a silent socket must not add the
+# default 30 s command wait, twice, before the report is assembled.
+_IDENTIFIER_READ_TIMEOUT_S = 10.0
+
+
 async def _ws_result(client: Any, command: str) -> Any:
-    reply = await client.send_websocket_message({"type": command})
+    reply = await client.send_websocket_message(
+        {"type": command, "_wait_timeout": _IDENTIFIER_READ_TIMEOUT_S}
+    )
     if not reply.get("success"):
-        error = reply.get("error")
-        code = error.get("code") if isinstance(error, dict) else None
-        raise _UnsuccessfulReply(code or "unsuccessful reply")
+        raise _UnsuccessfulReply(reply.get("error_code") or "unsuccessful reply")
     return reply.get("result")
 
 

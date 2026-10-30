@@ -1,10 +1,13 @@
 """ha_report_issue E2E tests against a live Home Assistant."""
 
+import ipaddress
 import logging
 import uuid
 from urllib.parse import urlparse
 
 import pytest
+
+from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import (
     extract_error_message,
@@ -114,7 +117,9 @@ class TestReportIssueE2E:
         assert description in data["issue_body"]
 
     @pytest.mark.asyncio
-    async def test_instance_address_is_redacted_from_the_report(self, mcp_client):
+    async def test_instance_address_is_redacted_from_the_report(
+        self, mcp_client: Client
+    ) -> None:
         """A bare internal address of this instance in home-assistant.log has
         no network context for the regex rules, so only the known-identifier
         pass read from Home Assistant keeps it out of the report."""
@@ -127,6 +132,13 @@ class TestReportIssueE2E:
             pytest.skip("Home Assistant reported no internal URL")
         host = urlparse(internal).hostname
         assert host, f"internal URL without a host: {internal!r}"
+        # Production keeps loopback addresses and single-label names readable.
+        try:
+            eligible = not ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            eligible = "." in host
+        if not eligible:
+            pytest.skip(f"internal host {host!r} is kept readable by design")
 
         marker = f"e2e-2905-{uuid.uuid4().hex[:8]}"
         written = parse_mcp_result(

@@ -51,6 +51,8 @@ HA_INFO = {
 
 def _ws_client(replies: dict[str, Any], base_url: str) -> SimpleNamespace:
     async def send(message: dict[str, Any]) -> dict[str, Any]:
+        # Every identifier read carries its own short deadline (#2916 review).
+        assert message["_wait_timeout"] == bug_report_sources._IDENTIFIER_READ_TIMEOUT_S
         return replies[message["type"]]
 
     return SimpleNamespace(send_websocket_message=send, base_url=base_url)
@@ -62,7 +64,7 @@ def _ok(result: Any) -> dict[str, Any]:
 
 class TestCollectKnownIdentifiers:
     @pytest.mark.asyncio
-    async def test_reads_urls_adapters_and_the_configured_url(self):
+    async def test_reads_urls_adapters_and_the_configured_url(self) -> None:
         replies = {
             "network/url": _ok(
                 {
@@ -84,7 +86,7 @@ class TestCollectKnownIdentifiers:
         )
 
     @pytest.mark.asyncio
-    async def test_loopback_and_single_label_hosts_stay_readable(self):
+    async def test_loopback_and_single_label_hosts_stay_readable(self) -> None:
         """``supervisor`` is the app's own proxy URL host: redacting it would
         blank every mention of the Supervisor in the logs."""
         replies = {
@@ -99,10 +101,17 @@ class TestCollectKnownIdentifiers:
         assert identifiers == KnownIdentifiers()
 
     @pytest.mark.asyncio
-    async def test_unsuccessful_reply_yields_no_identifiers_and_one_warning(self):
+    async def test_unsuccessful_reply_yields_no_identifiers_and_one_warning(
+        self,
+    ) -> None:
         replies = {
             "network/url": _ok(NETWORK_URL),
-            "network": {"success": False, "error": {"code": "unauthorized"}},
+            # The client's failure envelope: a string error plus error_code.
+            "network": {
+                "success": False,
+                "error": "Command failed: Unauthorized",
+                "error_code": "unauthorized",
+            },
         }
         client = _ws_client(replies, "http://ha.example.net:8123")
         identifiers, warning = await collect_known_identifiers(client)
@@ -111,7 +120,7 @@ class TestCollectKnownIdentifiers:
         assert "network: unauthorized" in warning
 
     @pytest.mark.asyncio
-    async def test_transport_failure_warning_does_not_echo_the_error_text(self):
+    async def test_transport_failure_warning_does_not_echo_the_error_text(self) -> None:
         """The exception text may name the host the report is hiding."""
         client = SimpleNamespace(
             send_websocket_message=AsyncMock(
@@ -185,14 +194,14 @@ class TestFetchHaInstall:
 
 
 class TestFormatHaInstallValue:
-    def test_container_install(self):
+    def test_container_install(self) -> None:
         install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
         assert _format_ha_install_value({"ha_install": install}) == (
             "Home Assistant Container; Linux 7.0.0-1017-azure "
             "(x86_64, container amd64); Python 3.14.9"
         )
 
-    def test_install_without_container_arch(self):
+    def test_install_without_container_arch(self) -> None:
         install = {
             "installation_type": "Home Assistant Core",
             "os_name": "Linux",
@@ -204,7 +213,7 @@ class TestFormatHaInstallValue:
             "Home Assistant Core; Linux 6.8.0 (aarch64); Python 3.13.7"
         )
 
-    def test_unavailable(self):
+    def test_unavailable(self) -> None:
         assert _format_ha_install_value({"ha_install": None}) == (
             "unknown (system_health unavailable)"
         )
@@ -251,7 +260,9 @@ class TestReportRedactsKnownIdentifiers:
         return report
 
     @pytest.mark.asyncio
-    async def test_bare_known_address_is_redacted_in_every_log(self, monkeypatch):
+    async def test_bare_known_address_is_redacted_in_every_log(
+        self, monkeypatch
+    ) -> None:
         install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
         replies = {"network/url": _ok(NETWORK_URL), "network": _ok(NETWORK)}
         report = self._report(monkeypatch, replies, install)
@@ -269,8 +280,16 @@ class TestReportRedactsKnownIdentifiers:
         assert "warnings" not in result
 
     @pytest.mark.asyncio
-    async def test_failed_identifier_read_is_reported_not_fatal(self, monkeypatch):
-        replies = {"network/url": {"success": False, "error": {"code": "unauthorized"}}}
+    async def test_failed_identifier_read_is_reported_not_fatal(
+        self, monkeypatch
+    ) -> None:
+        replies = {
+            "network/url": {
+                "success": False,
+                "error": "Command failed: Unauthorized",
+                "error_code": "unauthorized",
+            }
+        }
         report = self._report(monkeypatch, replies, None)
         result = await report.ha_report_issue(report_type="runtime_bug")
         assert result["success"] is True
