@@ -236,7 +236,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr.yml` | Pull request | Fast checks and validation orchestration. |
+| `pr.yml` | Pull request or manual | Fast checks and validation orchestration. |
 | `renovate.yml` | Hourly, human dashboard/PR checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
@@ -245,21 +245,21 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
-| `publish-dev.yml` | Push to `master`; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |
+| `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |
 | `sync-integration-mirror.yml` | `workflow_run` after SemVer Release or Publish Dev Channel; docs pushes; manual | HACS mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), tagged once PyPI serves the pinned build. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
 | `semver-release.yml` | Biweekly or manual; this repository only | Stable version tag and GitHub release. |
 | `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable container images and MCP registry. |
 | `addon-publish.yml` | Called by `semver-release.yml`, or manual | Home Assistant app publishing. |
 | `deploy.yml` | `workflow_run` after SemVer Release; push to `master` touching the workflow; weekly; or manual with a `ref` | Build the docs site from the `stable` tag (or the dispatched `ref`) and deploy it to GitHub Pages. |
-| `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py`; this repository only | Regenerate `tools.json`, README, and app `DOCS.md`. |
+| `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py`, or manual; this repository only | Regenerate `tools.json`, README, and app `DOCS.md`. |
 | `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual; this repository only | Lower the module-size and duplicate-code baselines, which pull requests only check. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `dev-ha-env.yml` | Manual, forks only | Live throwaway HA (Docker or HAOS) running a branch's server standalone, embedded or as the app, behind encrypted-URL tunnels; see [`docs/dev-ha-env.md`](../dev-ha-env.md). |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
 | `report-gate.yml` | Hourly or manual | Close bug reports whose `missing bug report output` label is 24 hours old. |
-| `slash-agent.yml` | Maintainer slash command or trusted continuation event | Issue response and issue-to-PR implementation through readiness. |
+| `slash-agent.yml` | Maintainer slash command, trusted continuation event, or manual | Issue response and issue-to-PR implementation through readiness. |
 | `slash-agent-review-event.yml` | PR review or inline comment | Secretless wakeup for the slash controller; it reads no PR code. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
 | `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
