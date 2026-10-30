@@ -35,9 +35,11 @@ from pathlib import Path
 from typing import Any
 
 if __package__:  # imported by the unit tests
+    from .dev_addon_tree import stage_dev_addon_tree
     from .python_base import copy_addon_tree
     from .supervisor_logs import log_supervisor_tail
 else:  # python3 tests/haos_image_build/build_image.py
+    from dev_addon_tree import stage_dev_addon_tree
     from python_base import copy_addon_tree
     from supervisor_logs import log_supervisor_tail
 
@@ -1285,22 +1287,6 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
-# Files the dev addon's Dockerfile copies from the stable addon dir, staged at
-# the build-context root with their COPY lines rewritten to match.
-STABLE_ADDON_FILES = ("start.py", "app_options.json")
-# Other repo files it copies, besides src/. Supervisor builds with the addon
-# dir as the context, so they are staged into it. Both tuples must match
-# haos_runtime's (kept in sync by hand like HA_MCP_TEST_SECRET_PATH;
-# test_haos_dev_addon_context checks both against the Dockerfile).
-DEV_ADDON_REPO_FILES = (
-    "pyproject.toml",
-    "uv.lock",
-    "README.md",
-    "LICENSE",
-    "tests/test-env/pyproject.toml",
-)
-
-
 def _tar_in_local_addon(qcow2: Path, workdir: Path, name: str) -> None:
     """Copy ``workdir/name`` into the qcow2's /supervisor/addons/local/ as root-owned files."""
     seed_tar = workdir / f"{name}.tar"
@@ -1332,10 +1318,9 @@ def stage_dev_addon_source(qcow2: Path) -> None:
     of a full first-install (~5 min).
 
     The dev addon's Dockerfile expects ``start.py``, ``src/`` and the
-    ``DEV_ADDON_REPO_FILES`` at the build-context root — same shape as the
-    addon-repo-branch flow used for manual fork testing (see
-    ``~/ha-mcp-fork/FORK-DEV.md``). We mirror that prep here so the
-    in-HAOS build succeeds without any additional setup at install time.
+    ``DEV_ADDON_REPO_FILES`` at the build-context root, which
+    ``dev_addon_tree.stage_dev_addon_tree`` lays out, so the in-HAOS build
+    succeeds without any additional setup at install time.
     """
     repo_root = Path(__file__).resolve().parent.parent.parent
     dev_addon_src = repo_root / "homeassistant-addon-dev"
@@ -1351,69 +1336,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
     try:
         staging = workdir / "ha_mcp_dev"
-        copy_addon_tree(dev_addon_src, staging)
-
-        # Files outside the addon dir that the Dockerfile COPYs from.
-        # Mirrors the addon-repo-branch manual steps.
-        for name in STABLE_ADDON_FILES:
-            shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
-        for name in DEV_ADDON_REPO_FILES:
-            (staging / name).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(repo_root / name, staging / name)
-        # src/ha_mcp: nuke + copy fresh so a stale tree (e.g. left over from
-        # a prior local run) doesn't shadow the current version.
-        addon_src_dir = staging / "src"
-        if addon_src_dir.exists():
-            shutil.rmtree(addon_src_dir)
-        addon_src_dir.mkdir()
-        shutil.copytree(repo_root / "src" / "ha_mcp", addon_src_dir / "ha_mcp")
-
-        # Dockerfile in homeassistant-addon-dev/ uses
-        # ``COPY homeassistant-addon/start.py /`` because it's authored to
-        # be built from the repo root context. Inside /supervisor/addons/local/ the
-        # build context is the addon dir itself, so the path needs to be
-        # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
-        dockerfile = staging / "Dockerfile"
-        patched = dockerfile.read_text()
-        for name in STABLE_ADDON_FILES:
-            line = f"COPY homeassistant-addon/{name} /"
-            if line not in patched:
-                # Fail fast: an unpatched Dockerfile fails the addon build
-                # opaquely 5+ min later, during ``addons/{slug}/install``.
-                raise RuntimeError(
-                    f"Dockerfile patch failed: expected line {line!r} not "
-                    f"found in {dockerfile}. The dev addon's Dockerfile may "
-                    f"have been restructured; update the patch in "
-                    f"stage_dev_addon_source to match the new shape."
-                )
-            patched = patched.replace(line, f"COPY {name} /")
-        dockerfile.write_text(patched)
-
-        # Strip the ``image:`` field from config.yaml. Production dev-addon
-        # ships built images at ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch};
-        # when Supervisor sees ``image:``, it tries to PULL from GHCR rather
-        # than build from the local Dockerfile. Per-PR version bumps produce
-        # tags that don't exist in GHCR → 404 → addon update fails.
-        # Removing the field forces Supervisor to build locally from the
-        # Dockerfile it sees in /supervisor/addons/local/ha_mcp_dev/.
-        config_yaml = staging / "config.yaml"
-        config_lines = [
-            ln
-            for ln in config_yaml.read_text().splitlines(keepends=True)
-            if not ln.startswith("image:")
-        ]
-        config_yaml.write_text("".join(config_lines))
-        # Verify the strip: a future restructure that indents the field
-        # under a parent key would make the line-prefix filter a no-op,
-        # silently re-introducing GHCR-pull behavior.
-        post_strip = config_yaml.read_text()
-        if "\nimage:" in post_strip or post_strip.startswith("image:"):
-            raise RuntimeError(
-                f"config.yaml ``image:`` strip did not remove the field "
-                f"from {config_yaml}; Supervisor will pull from GHCR and "
-                f"the per-PR version bump will 404. The field may now be "
-                f"indented under a parent — update the filter accordingly."
-            )
+        stage_dev_addon_tree(repo_root, staging)
 
         # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.

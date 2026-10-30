@@ -8,7 +8,8 @@ ha-mcp-oauth with DEVENV_OAUTH, or embedded server) or HAOS
 DEVENV_TARGETS and keeps the instance up. The standalone and embedded servers
 run in developer mode, so a branch is iterated on with the same tools as on any
 live HA: ha_dev_manage_server (update_source) for the embedded server, HACS for
-the component, ha_restart. The app is changed by a new run.
+the component, ha_restart. The app is updated by installing the branch's build
+from an app repository (stage_app_repo.py; docs/dev-ha-env.md, step 5).
 
 Status lines (STATUS {...}) go to the job log.
 """

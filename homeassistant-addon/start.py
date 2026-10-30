@@ -437,6 +437,20 @@ def _arm_kill_signal_diagnostics_if_debug(effective_log_level: int) -> None:
         log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
 
 
+def _ipv6_lan_guard() -> dict[str, Any]:
+    """Return ``mcp.run`` kwargs keeping the IPv6 listener local-network-only.
+
+    The guard re-applies uvicorn's proxy-header handling after its own check,
+    so the caller turns uvicorn's off (#2915).
+    """
+    from starlette.middleware import Middleware
+
+    from ha_mcp.ipv6_lan_guard import IPv6LanGuard, configured_allowed_networks
+
+    allowed = configured_allowed_networks()
+    return {"middleware": [Middleware(IPv6LanGuard, allowed_networks=allowed)]}
+
+
 def _run_mcp_server(
     mcp: Any,
     bind_host: str,
@@ -449,6 +463,17 @@ def _run_mcp_server(
         log_info("Starting MCP server...")
         if bind_host != "0.0.0.0":
             log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
+        from ha_mcp.listen_sockets import (
+            announce_when_listening,
+            wildcard_listen_sockets,
+        )
+
+        sockets = wildcard_listen_sockets(bind_host, port)
+        guard_kwargs: dict[str, Any] = {}
+        if sockets is not None:
+            announce_when_listening(sockets, bind_host, port)
+            guard_kwargs = _ipv6_lan_guard()
+            uvicorn_config = {**uvicorn_config, "proxy_headers": False}
         # Do not pass log_level here: fastmcp's temporary_log_level would
         # rebuild its rich log handlers at the default 80-column width,
         # undoing widen_fastmcp_log_console (#1918).
@@ -456,9 +481,11 @@ def _run_mcp_server(
             transport="http",
             host=bind_host,
             port=port,
+            sockets=sockets,
             path=secret_path,
             stateless_http=True,
             uvicorn_config=uvicorn_config,
+            **guard_kwargs,
         )
     except KeyboardInterrupt:
         log_info("Interrupted, exiting")
@@ -666,7 +693,8 @@ def main() -> int:
     # on arbitrary hosts -- is covered. See ha_mcp.transport_security.
 
     # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
-    # reach it inside the container; MCP_HOST override is provided for
+    # reach it inside the container, widened to IPv6 as well by
+    # _run_mcp_server (#2915); MCP_HOST override is provided for
     # parity with the standard CLI entry points (see issue #1434).
     bind_host = os.getenv("MCP_HOST", "0.0.0.0")
 

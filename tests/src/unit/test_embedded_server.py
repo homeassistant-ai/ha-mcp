@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from ._embedded_stubs import install
+from ._embedded_stubs import install, no_direct_listener_helpers  # noqa: F401
 
 # Install stubs + put the component package on sys.path before importing the
 # integration modules below. Also an isort barrier so the imports below are never
@@ -1711,7 +1711,7 @@ class TestReadinessProbe:
         async def _probe():
             return True
 
-        monkeypatch.setattr(mgr, "_async_probe_port", _probe)
+        monkeypatch.setattr(mgr, "_async_server_ready", _probe)
         await mgr._async_wait_until_ready()  # must not raise
         assert mgr._thread_exc is None
 
@@ -1945,7 +1945,7 @@ class TestReadinessProbe:
         mgr._thread = SimpleNamespace(is_alive=lambda: True)
         mgr._startup_phase = "pinned"
         monkeypatch.setattr(mgr, "_progress_signature", lambda: (0, "pinned"))
-        monkeypatch.setattr(mgr, "_async_probe_port", AsyncMock(return_value=False))
+        monkeypatch.setattr(mgr, "_async_server_ready", AsyncMock(return_value=False))
         stop = AsyncMock()
         monkeypatch.setattr(mgr, "async_stop", stop)
         monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
@@ -1971,7 +1971,7 @@ class TestReadinessProbe:
             mgr, "_progress_signature", lambda: (next(ticks), "importing")
         )
         monkeypatch.setattr(
-            mgr, "_async_probe_port", AsyncMock(side_effect=[False, True])
+            mgr, "_async_server_ready", AsyncMock(side_effect=[False, True])
         )
         monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
 
@@ -1988,7 +1988,7 @@ class TestReadinessProbe:
         monkeypatch.setattr(
             mgr, "_progress_signature", lambda: (next(ticks), "importing")
         )
-        monkeypatch.setattr(mgr, "_async_probe_port", AsyncMock(return_value=False))
+        monkeypatch.setattr(mgr, "_async_server_ready", AsyncMock(return_value=False))
         stop = AsyncMock()
         monkeypatch.setattr(mgr, "async_stop", stop)
         monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())

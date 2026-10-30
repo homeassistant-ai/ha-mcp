@@ -86,6 +86,14 @@ configuration:
       names with commas or new lines. A name applies to every app; write app_slug:name
       to limit it to one app. Naming an option group covers every option in it. Used
       only while Redact Secrets is on. Empty by default.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: ghItlhDI' mIw nIvmey yIchel
     description: 'jan ghItlh laH De'' nobmeH pat wa''DIch SeH (issue #1182). chu''lu''chugh

@@ -107,6 +107,14 @@ configuration:
       app_slug:name, um ihn auf eine App zu beschränken. Das Benennen einer Optionsgruppe
       deckt jede Option darin ab. Wird nur verwendet, wenn Geheimnisse schwärzen aktiv
       ist. Standardmäßig leer.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
     description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten

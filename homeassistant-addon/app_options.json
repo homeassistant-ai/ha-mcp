@@ -105,6 +105,15 @@
     "always": true
   },
   {
+    "key": "ipv6_allowed_networks",
+    "env": "IPV6_ALLOWED_NETWORKS",
+    "type": "str",
+    "default": "",
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
     "key": "enable_mandatory_bps",
     "env": "ENABLE_MANDATORY_BPS",
     "type": "bool",

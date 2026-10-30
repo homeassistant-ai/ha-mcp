@@ -49,6 +49,14 @@ configuration:
     name: 要脱敏的额外应用选项键
     description: 要像密码字段一样进行脱敏的应用（加载项）选项名称，适用于其架构将机密存储为纯文本的应用（例如 backup_password）。使用逗号或换行符分隔名称。名称适用于所有应用；若要将其限制为一个应用，请编写
       app_slug:name。命名选项组将涵盖其中的所有选项。仅在开启“Redact Secrets”时使用。默认留空。
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: 写入时附加最佳实践技能
     description: '写入工具技能内容投递功能（issue #1182）的主开关。启用时（默认），六个配置写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始

@@ -83,6 +83,11 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .embedded_listen import (
+    DirectListener,
+    async_probe_loopback,
+    default_host_origin_guard_off,
+)
 from .embedded_worker_teardown import (
     shutdown_server_resources_bounded,
     teardown_worker_loop,
@@ -368,6 +373,7 @@ class EmbeddedServerManager:
         self._maybe_purge_stale_modules(ready_version)
 
         self._thread_exc = None
+        self._uv_server: Any = None
         self._startup_phase = "waiting for the worker thread"
         self._stop_requested = threading.Event()
         self._thread = threading.Thread(
@@ -1571,21 +1577,9 @@ class EmbeddedServerManager:
         # uvicorn.Config defaults + _lifespan_manager), pinned by ha-mcp.
         import uvicorn
 
-        # fastmcp >= 3.4.3 ships an on-by-default Host/Origin (DNS-rebinding)
-        # guard that would 421 this in-process server's direct LAN listener
-        # (bind 0.0.0.0:9584 by default), reached on arbitrary hosts. Default it
-        # off to match the CLI / add-on entry points. Guard only the import: a
-        # bundled ha-mcp old enough to lack the helper also predates the guard,
-        # so there is nothing to disable.
-        try:
-            from ha_mcp.transport_security import (
-                ensure_host_origin_guard_default_off,
-            )
-        except ImportError:
-            # Older bundled ha-mcp: no helper, and no guard to disable either.
-            pass
-        else:
-            ensure_host_origin_guard_default_off()
+        # The listener's ha_mcp imports happen before the import window closes.
+        default_host_origin_guard_off()
+        listener = DirectListener(self._bind_host, self._port)
 
         # The cold import — the multi-minute window that crashed in #1904 —
         # is complete: every explicit ha_mcp import in _serve precedes this
@@ -1597,10 +1591,13 @@ class EmbeddedServerManager:
         with _IMPORTING_WORKERS_LOCK:
             _IMPORTING_WORKERS.discard(threading.current_thread())
 
-        app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
+        app, proxy_headers = listener.wrap(
+            server.mcp.http_app(path=self._secret_path, stateless_http=True)
+        )
         config = uvicorn.Config(
             app,
             host=self._bind_host,
+            proxy_headers=proxy_headers,
             port=self._port,
             timeout_graceful_shutdown=2,
             lifespan="on",
@@ -1617,7 +1614,7 @@ class EmbeddedServerManager:
             access_log=False,
             timeout_keep_alive=SERVER_KEEPALIVE_SECONDS,
         )
-        uv_server = uvicorn.Server(config)
+        uv_server = self._uv_server = uvicorn.Server(config)
 
         self._note_startup_phase("starting the HTTP listener")
         try:
@@ -1633,8 +1630,13 @@ class EmbeddedServerManager:
                         "listener started"
                     )
                     return
+                try:
+                    serve_kwargs = listener.bind()
+                except OSError as err:
+                    # Report a busy port as uvicorn does for its own bind.
+                    raise SystemExit(3) from err
                 stop_task = asyncio.create_task(stop_event.wait())
-                serve_task = asyncio.create_task(uv_server.serve())
+                serve_task = asyncio.create_task(uv_server.serve(**serve_kwargs))
                 done, _pending = await asyncio.wait(
                     {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
                 )
@@ -1653,6 +1655,7 @@ class EmbeddedServerManager:
                     # etc.).
                     serve_task.result()
         finally:
+            listener.close()
             # CLI parity: the HTTP runner's shutdown path releases the served
             # stack's HA connections; this in-process runner must too, on this
             # loop, while it still runs — otherwise the reader tasks are only
@@ -1697,7 +1700,7 @@ class EmbeddedServerManager:
                 raise EmbeddedServerError(
                     "HA-MCP in-process server thread exited during startup."
                 )
-            if await self._async_probe_port():
+            if await self._async_server_ready():
                 _LOGGER.info(
                     "HA-MCP in-process server is listening on %s:%d",
                     self._bind_host,
@@ -1731,23 +1734,18 @@ class EmbeddedServerManager:
         await self.async_stop()
         raise EmbeddedServerError(failure)
 
-    async def _async_probe_port(self) -> bool:
-        """Return True if a loopback TCP connection to the server port succeeds.
+    async def _async_server_ready(self) -> bool:
+        """Return True once this worker's uvicorn serves and loopback reaches it.
 
-        Probes 127.0.0.1 regardless of bind host — a 0.0.0.0 bind still accepts
-        on loopback, and the forwarding webhook only ever talks to loopback.
+        A loopback connect alone also succeeds when another process already
+        holds the port, which reported a dead server as running (#2915).
         """
-        try:
-            _reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", self._port),
-                timeout=_READY_POLL_INTERVAL_SECONDS,
-            )
-        except (TimeoutError, OSError):
-            return False
-        writer.close()
-        with suppress(OSError, TimeoutError):
-            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
-        return True
+        server = self._uv_server
+        return bool(server and server.started) and await self._async_probe_port()
+
+    async def _async_probe_port(self) -> bool:
+        """Return True if a loopback TCP connection to the server port succeeds."""
+        return await async_probe_loopback(self._port, _READY_POLL_INTERVAL_SECONDS)
 
 
 # Worker threads that may still be executing their ha_mcp imports. Purging

@@ -62,6 +62,14 @@ configuration:
       앱(추가 기능) 옵션 이름입니다. 쉼표나 새 줄로 이름을 구분하세요. 이름은 모든 앱에 적용되며, 특정 앱으로 제한하려면 app_slug:name
       형식으로 작성하세요. 옵션 그룹 이름을 지정하면 그 안의 모든 옵션이 포함됩니다. ''민감한 정보 숨기기''가 켜져 있는 동안에만 사용됩니다.
       기본값은 비어 있음입니다.'
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: 쓰기 시 모범 사례 스킬 첨부
     description: '쓰기 도구 스킬 콘텐츠 전달 기능(이슈 #1182)의 마스터 스위치입니다. 켜져 있으면(기본값) 여섯 개의 설정 쓰기

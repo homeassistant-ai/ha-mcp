@@ -107,6 +107,14 @@ configuration:
       укажите app_slug:name, чтобы ограничить его одним приложением. Указание имени
       группы опций охватывает каждую опцию в ней. Используется только при включенной
       функции «Скрывать секреты». По умолчанию пусто.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: Прикреплять навыки с рекомендациями при записи
     description: 'Главный переключатель функции доставки содержимого навыков для инструментов

@@ -29,6 +29,8 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 # The embedded server modules now live inside the ha_mcp_tools component
 # (``custom_components/ha_mcp_tools/``), importable as
 # ``custom_components.ha_mcp_tools.*`` exactly like the rest of the component's
@@ -694,3 +696,17 @@ class FakeSession:
 
     async def close(self) -> None:
         self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def no_direct_listener_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the worker against a server without the #2915 listener helpers.
+
+    Tests that drive ``_serve`` stub ``ha_mcp`` piecemeal; a real
+    ``ha_mcp.listen_sockets`` / ``ha_mcp.ipv6_lan_guard`` cached by another
+    test would otherwise bind real sockets behind their stub uvicorn. A test
+    module opts in by importing this fixture; ``test_embedded_listen`` covers
+    the helpers themselves.
+    """
+    monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", None)
+    monkeypatch.setitem(sys.modules, "ha_mcp.ipv6_lan_guard", None)

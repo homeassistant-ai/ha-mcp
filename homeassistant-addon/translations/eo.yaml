@@ -93,6 +93,14 @@ configuration:
       Disigu nomojn per komoj aŭ novaj linioj. Nomo aplikiĝas al ĉiu aplikaĵo; skribu
       app_slug:name por limigi ĝin al unu aplikaĵo. Nomi opciogrupon kovras ĉiun opcion
       en ĝi. Uzata nur dum "Redact Secrets" estas ŝaltita. Malplena defaŭlte.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: Aligi plejbonajn praktikajn kapablojn ĉe skriboj
     description: 'Majstra ŝaltilo por la funkcio de liverado de enhavo de skrib-ila

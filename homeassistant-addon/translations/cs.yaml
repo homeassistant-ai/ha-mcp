@@ -94,6 +94,14 @@ configuration:
       platí pro každou aplikaci; zápisem app_slug:name jej omezíte na jednu aplikaci.
       Pojmenování skupiny možností zahrnuje každou možnost v ní. Používá se pouze
       tehdy, když je zapnuto Skrýt tajné údaje. Ve výchozím nastavení prázdné.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
   enable_mandatory_bps:
     name: Připojit dovednosti osvědčených postupů při zápisu
     description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů
