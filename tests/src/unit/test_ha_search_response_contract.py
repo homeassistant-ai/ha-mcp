@@ -95,22 +95,34 @@ async def test_no_surface_answering_is_a_structured_error() -> None:
     with pytest.raises(ToolError) as excinfo:
         await tools._legacy_ha_search(_entities_only_request(), None)
 
-    assert json.loads(str(excinfo.value))["success"] is False
+    payload = json.loads(str(excinfo.value))
+    assert payload["success"] is False
+    assert payload["error"]["code"] == "TIMEOUT_OPERATION"
 
 
 @pytest.mark.asyncio
-async def test_no_surface_answering_keeps_the_branch_tool_error() -> None:
-    """A branch that already raised a structured error is re-raised as is."""
+async def test_no_surface_answering_keeps_the_first_branch_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first surface's own structured error is re-raised as is, not the
+    error of a surface after it."""
     branch_error = ToolError('{"success": false, "error": {"code": "X"}}')
 
     async def _fail(**kwargs: object) -> dict:
         raise branch_error
 
+    monkeypatch.setattr(
+        search_legacy,
+        "_prefetch_shared_search_snapshots",
+        AsyncMock(return_value=(None, None)),
+    )
     tools = tools_search.SearchTools(MagicMock(), MagicMock())
     tools._ha_search_entities = _fail  # type: ignore[method-assign]
+    tools._ha_deep_search = _time_out  # type: ignore[method-assign]
+    request = dataclasses.replace(_entities_only_request(), body_eligible=True)
 
     with pytest.raises(ToolError) as excinfo:
-        await tools._legacy_ha_search(_entities_only_request(), None)
+        await tools._legacy_ha_search(request, None)
 
     assert excinfo.value is branch_error
 
