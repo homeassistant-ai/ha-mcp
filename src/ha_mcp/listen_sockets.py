@@ -48,8 +48,8 @@ def wildcard_listen_sockets(host: str, port: int) -> list[socket.socket] | None:
                     continue
                 raise
     except BaseException:
-        for sock in sockets:
-            sock.close()
+        for opened in sockets:
+            opened.close()
         raise
     if not sockets:
         raise OSError(f"No address family could bind port {port}")
