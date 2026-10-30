@@ -62,7 +62,7 @@ def test_wildcard_host_accepts_ipv4_and_ipv6_clients() -> None:
 
 def test_port_in_use_is_reported_not_skipped() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
-        taken.bind(("0.0.0.0", 0))
+        taken.bind(("127.0.0.1", 0))
         taken.listen()
         with pytest.raises(OSError):
             listen_sockets.wildcard_listen_sockets("0.0.0.0", taken.getsockname()[1])
