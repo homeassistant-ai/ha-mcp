@@ -48,7 +48,11 @@ Run it **from your fork only**. The job refuses to run in
 `homeassistant-ai/ha-mcp`, whose runners are shared CI capacity.
 
 1. Enable Actions on your fork and sync its `master`, since GitHub only
-   dispatches workflows that exist on the default branch.
+   dispatches workflows that exist on the default branch. Keep that `master` a
+   plain fast-forward of upstream: the post-merge workflows that commit to
+   `master` skip every repository but `homeassistant-ai/ha-mcp`, and a branch
+   for a pull request is cut from upstream's `master`, never from a fork
+   `master` that carries commits of its own.
 2. Make a throwaway key pair for this run. The tunnel URLs are published
    only encrypted to its public key, so nothing secret goes to GitHub and
    any machine can start a run:

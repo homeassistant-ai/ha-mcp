@@ -32,6 +32,9 @@ concurrency:
 jobs:
   sync-tools-json:
     name: Regenerate tools.json & README
+    # Post-merge maintenance of this repository only; see
+    # sync-ratchet-baselines.yml for why a fork must not run it.
+    if: github.repository == 'homeassistant-ai/ha-mcp'
     runs-on: ubuntu-latest
     permissions:
       contents: write

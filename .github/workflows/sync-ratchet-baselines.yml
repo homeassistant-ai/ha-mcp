@@ -38,6 +38,12 @@ concurrency:
 jobs:
   sync-ratchet-baselines:
     name: Lower the ratchet baselines
+    # Post-merge maintenance of this repository only. A fork with Actions
+    # enabled (the dev environment needs that) receives the same push to its
+    # master, and without this guard the job commits the recomputed baselines
+    # to the fork's master, so the fork diverges and every later sync becomes a
+    # merge commit that a branch cut from it then drags into a pull request.
+    if: github.repository == 'homeassistant-ai/ha-mcp'
     runs-on: ubuntu-latest
     permissions:
       contents: write
