@@ -1308,7 +1308,7 @@ class HomeAssistantClient:
     ) -> str:
         """Fetch app (add-on) container logs directly from Supervisor REST.
 
-        Distinct from ``tools_bug_report._fetch_addon_logs``: that auxiliary
+        Distinct from ``bug_report_sources._fetch_addon_logs``: that auxiliary
         helper uses the app self-service path ``/addons/self/logs`` and may skip
         failures. This helper takes arbitrary slugs and surfaces failures because
         callers (``ha_get_logs(source="supervisor", slug=...)``) need them.

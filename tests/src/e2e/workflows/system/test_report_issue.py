@@ -1,13 +1,19 @@
 """ha_report_issue E2E tests against a live Home Assistant."""
 
+import ipaddress
 import logging
+import uuid
+from urllib.parse import urlparse
 
 import pytest
+
+from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import (
     extract_error_message,
     parse_mcp_result,
 )
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +115,61 @@ class TestReportIssueE2E:
 
         assert data["issue_title"] == f"{prefix} E2E report title"
         assert description in data["issue_body"]
+
+    @pytest.mark.asyncio
+    async def test_instance_address_is_redacted_from_the_report(
+        self, mcp_client: Client
+    ) -> None:
+        """A bare internal address of this instance in home-assistant.log has
+        no network context for the regex rules, so only the known-identifier
+        pass read from Home Assistant keeps it out of the report."""
+        urls = parse_mcp_result(
+            await mcp_client.call_tool("ha_call_service", {"ws_command": "network/url"})
+        )
+        assert urls.get("success") is True, extract_error_message(urls)
+        internal = (urls.get("result") or {}).get("internal")
+        if not internal:
+            pytest.skip("Home Assistant reported no internal URL")
+        host = urlparse(internal).hostname
+        assert host, f"internal URL without a host: {internal!r}"
+        # Production keeps loopback addresses and single-label names readable.
+        try:
+            eligible = not ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            eligible = "." in host
+        if not eligible:
+            pytest.skip(f"internal host {host!r} is kept readable by design")
+
+        marker = f"e2e-2905-{uuid.uuid4().hex[:8]}"
+        written = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "system_log",
+                    "service": "write",
+                    "data": {"message": f"{marker} lost {host}", "level": "error"},
+                },
+            )
+        )
+        assert written.get("success") is True, extract_error_message(written)
+
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_report_issue",
+            arguments={
+                "report_type": "runtime_bug",
+                "fields": "issue_body,diagnostic_info",
+            },
+            predicate=lambda d: marker in d.get("issue_body", ""),
+            timeout=30,
+            poll_interval=2,
+            description="report carrying the written log line",
+        )
+        body = data["issue_body"]
+        assert host not in body
+        assert f"{marker} lost [IP]" in body or f"{marker} lost [HA_HOST]" in body
+        install_rows = [
+            line for line in body.splitlines() if "**Home Assistant Install:**" in line
+        ]
+        assert len(install_rows) == 1, body
+        assert "system_health unavailable" not in install_rows[0]

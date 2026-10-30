@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 
-import httpx
 from pydantic import Field
 
 from ha_mcp import __version__
@@ -27,7 +26,6 @@ from ha_mcp._vendor.fastmcp.server.dependencies import get_http_headers
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from .._version import is_embedded, is_running_in_addon
-from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..errors import create_validation_error
 from ..mcp_client_context import (
@@ -43,11 +41,19 @@ from ..utils.usage_logger import (
     get_startup_logs,
 )
 from .bug_report_config import collect_config_toggles
+from .bug_report_redaction import _sanitize_log_text, known_identifiers_scope
+from .bug_report_sources import (
+    _fetch_addon_logs,
+    _fetch_core_error_log,
+    collect_known_identifiers,
+    fetch_ha_install,
+)
 from .bug_report_templates import (
     REPORT_END_MARKER,
     _build_issue_url,
     _format_client_host_for_template,
     _format_client_info_for_template,
+    _format_ha_install_value,
     _format_server_entry_value,
     _format_supervisor_value,
     _format_tools_entry_value,
@@ -57,10 +63,9 @@ from .bug_report_templates import (
     _generate_runtime_bug_template,
     _generate_search_keywords,
     _ReportText,
-    _sanitize_log_text,
     _suggested_title,
 )
-from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import InfoResult, read_component_version, read_info, webhook_auth
 from .helpers import (
     log_tool_usage,
@@ -134,25 +139,6 @@ KNOWN_CLIENT_ISSUES_HINT = (
     "works.\n"
     "Only file a bug if the problem persists after the matching workaround."
 )
-
-# Max characters to include from addon container logs.
-# 3000 chars ≈ 750 LLM tokens — keeps the tool response well below context budgets
-# while still capturing enough recent output to diagnose most issues.
-_ADDON_LOG_MAX_CHARS = 3000
-
-# Max characters to include from the Home Assistant error log (home-assistant.log).
-# Slightly larger than the addon cap: this log carries the highest-value
-# diagnostic lines (auth failures, integration tracebacks) and the recent tail
-# is where they land. ~5000 chars ≈ 1250 LLM tokens.
-_CORE_LOG_MAX_CHARS = 5000
-
-# Log window requested from the install for that tail. Only the last
-# _CORE_LOG_MAX_CHARS survive into the report — a few dozen lines of typical
-# HA log text — so anything deeper is fetched and then thrown away, which on
-# Supervisor-backed installs is exactly the cost that made the unconditional
-# 20,000-line fetch hang (#2279). 500 keeps an order of magnitude of headroom
-# for short lines.
-_CORE_LOG_WINDOW_LINES = 500
 
 # A slow or missing Supervisor must not hold up the whole report.
 _SUPERVISOR_PROBE_TIMEOUT = 10.0
@@ -412,98 +398,6 @@ def _detect_mcp_transport() -> str:
     return "unknown"
 
 
-async def _fetch_addon_logs() -> str:
-    """Fetch ha-mcp addon container logs via the Supervisor REST API.
-
-    Only works when running as a Home Assistant add-on (SUPERVISOR_TOKEN set).
-    Uses /addons/self/logs which resolves to the calling addon's own logs via
-    the Supervisor's per-addon token binding — no slug interpolation needed.
-
-    Direct httpx against ``http://supervisor`` is the documented add-on access
-    pattern: it uses the Supervisor token directly (no extra HA hop) and
-    preserves the ``self`` shortcut, which the WebSocket ``supervisor/api``
-    proxy used by other tools may not.
-
-    Returns sanitized log text (last _ADDON_LOG_MAX_CHARS chars, with a
-    truncation marker prepended when truncation occurs), or empty string on
-    failure.
-    """
-    # Redundant with the caller's `install_method == "addon"` gate, but kept
-    # as a defensive guard for any direct callers added later.
-    if not is_running_in_addon():
-        return ""
-
-    try:
-        async with make_supervisor_httpx_client(
-            timeout=10.0, verify=get_global_settings().verify_ssl
-        ) as http_client:
-            resp = await http_client.get("/addons/self/logs")
-            if resp.status_code != 200:
-                logger.info("Addon log fetch returned HTTP %s", resp.status_code)
-                return ""
-
-            # Strip ANSI escape codes first, then sanitize, then truncate.
-            # Sanitizing before truncating prevents secrets that straddle the
-            # truncation boundary from leaking through.
-            cleaned = ANSI_ESCAPE_RE.sub("", resp.text)
-            sanitized = _sanitize_log_text(cleaned)
-            if len(sanitized) > _ADDON_LOG_MAX_CHARS:
-                marker = (
-                    f"[...truncated, showing last {_ADDON_LOG_MAX_CHARS} of "
-                    f"{len(sanitized)} chars...]\n"
-                )
-                return marker + sanitized[-_ADDON_LOG_MAX_CHARS:]
-            return sanitized
-    except httpx.RequestError as e:
-        logger.warning(f"Failed to fetch addon logs: {e}")
-
-    return ""
-
-
-async def _fetch_core_error_log(client: Any) -> str:
-    """Fetch the Home Assistant error log (home-assistant.log) via the client.
-
-    Works on every install type — ``HomeAssistantClient.get_error_log`` routes
-    add-on installs to the Supervisor, supervised/HAOS to the hassio proxy, and
-    container/pip to ``/api/error_log``. Captured over REST, which stays up even
-    when the WebSocket path is failing; that is exactly the failure mode in
-    issue #1694, where the high-value auth lines
-    (``InsecureKeyLengthWarning``, "invalid authentication") only appeared in
-    home-assistant.log, not in the add-on log this tool already captured.
-
-    Best-effort: returns sanitized text (last ``_CORE_LOG_MAX_CHARS`` chars of a
-    ``_CORE_LOG_WINDOW_LINES`` window, with a truncation marker prepended) or an
-    empty string on any failure, so a log-fetch problem never breaks the
-    bug-report path.
-    """
-    try:
-        page = await client.get_error_log(lines=_CORE_LOG_WINDOW_LINES)
-    except Exception as e:  # noqa: BLE001
-        # Broad by design — the bug-report path must stay robust whatever the
-        # client raises (auth, role, connection, transport). Logged at INFO so
-        # a missing error log is visible without alarming on a routine 403.
-        logger.info(
-            "Could not fetch HA error log for bug report: %s (%s)",
-            e,
-            type(e).__name__,
-        )
-        return ""
-
-    if not page.text:
-        return ""
-
-    # Strip ANSI, then sanitize, then truncate — sanitizing before truncating
-    # keeps a secret straddling the cut boundary from leaking through.
-    sanitized = _sanitize_log_text(ANSI_ESCAPE_RE.sub("", page.text))
-    if len(sanitized) > _CORE_LOG_MAX_CHARS:
-        marker = (
-            f"[...truncated, showing last {_CORE_LOG_MAX_CHARS} of "
-            f"{len(sanitized)} chars...]\n"
-        )
-        return marker + sanitized[-_CORE_LOG_MAX_CHARS:]
-    return sanitized
-
-
 # Entry titles assigned by the component's config flow (config_flow.py /
 # const.py in custom_components/ha_mcp_tools) — the server code cannot import
 # the separately-shipped component package, so the defaults are mirrored here.
@@ -564,6 +458,7 @@ def _build_formatted_report(
         f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
         f"Python Version: {platform_info['python_version']}",
         f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
+        f"Home Assistant Install: {_format_ha_install_value(diagnostic_info)}",
         f"Supervisor: {_format_supervisor_value(diagnostic_info)}",
         f"Connection Status: {diagnostic_info['connection_status']}",
         f"Entity Count: {diagnostic_info['entity_count']}",
@@ -931,6 +826,9 @@ class BugReportTools:
         tool_policy = await asyncio.to_thread(_tool_policy_summary)
         mcp_transport = _detect_mcp_transport()
         client_info = extract_client_info(ctx)
+        (known_identifiers, identifier_warning), ha_install = await asyncio.gather(
+            collect_known_identifiers(self._client), fetch_ha_install(self._client)
+        )
         mcp_protocol_version = protocol_version(ctx)
         mcp_capabilities = capability_names(client_capabilities(ctx))
         client_host = (
@@ -971,220 +869,228 @@ class BugReportTools:
             "tool_policy": tool_policy,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",
+            "ha_install": ha_install,
             "entity_count": 0,
         }
 
-        await self._add_home_assistant_info(diagnostic_info)
+        # Every text sanitized from here on also loses this instance's own
+        # hostnames and addresses.
+        with known_identifiers_scope(known_identifiers):
+            await self._add_home_assistant_info(diagnostic_info)
 
-        # Calculate how many log entries to retrieve
-        # Formula: AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count (doubled from 2x to 4x)
-        max_log_entries = AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count
-        recent_logs = get_recent_logs(max_entries=max_log_entries)
+            # Calculate how many log entries to retrieve
+            # Formula: AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count (doubled from 2x to 4x)
+            max_log_entries = AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count
+            recent_logs = get_recent_logs(max_entries=max_log_entries)
 
-        # Get startup logs (first minute of server operation)
-        startup_logs = get_startup_logs()
+            # Get startup logs (first minute of server operation)
+            startup_logs = get_startup_logs()
 
-        # Fetch addon container logs when running as HA add-on
-        addon_logs = ""
-        if install_method == "addon":
-            addon_logs = await _fetch_addon_logs()
+            # Fetch addon container logs when running as HA add-on
+            addon_logs = ""
+            if install_method == "addon":
+                addon_logs = await _fetch_addon_logs()
 
-        # Fetch the Home Assistant error log (home-assistant.log) on every
-        # install type. It's pulled over REST — which stays up even when the
-        # WebSocket path is failing — so the report captures auth / integration
-        # errors (issue #1694) that never appear in the add-on log above.
-        core_error_log = await _fetch_core_error_log(self._client)
+            # Fetch the Home Assistant error log (home-assistant.log) on every
+            # install type. It's pulled over REST — which stays up even when the
+            # WebSocket path is failing — so the report captures auth / integration
+            # errors (issue #1694) that never appear in the add-on log above.
+            core_error_log = await _fetch_core_error_log(self._client)
 
-        # Format logs for inclusion (sanitized summary)
-        log_summary = _format_logs_for_report(recent_logs)
-        startup_log_summary = _format_startup_logs(startup_logs)
+            # Format logs for inclusion (sanitized summary)
+            log_summary = _format_logs_for_report(recent_logs)
+            startup_log_summary = _format_startup_logs(startup_logs)
 
-        # Build the formatted report
-        formatted_report = _build_formatted_report(
-            diagnostic_info,
-            mcp_transport,
-            client_info,
-            platform_info,
-            config_toggles,
-            startup_logs,
-            startup_log_summary,
-            recent_logs,
-            log_summary,
-            addon_logs,
-            core_error_log,
-        )
+            # Build the formatted report
+            formatted_report = _build_formatted_report(
+                diagnostic_info,
+                mcp_transport,
+                client_info,
+                platform_info,
+                config_toggles,
+                startup_logs,
+                startup_log_summary,
+                recent_logs,
+                log_summary,
+                addon_logs,
+                core_error_log,
+            )
 
-        # Without the agent's title, a fallback keeps reports from being filed
-        # under a bare prefix: the last error for a bug, a fixed name for a
-        # feature request.
-        suggested_title = _suggested_title(report_type, diagnostic_info, recent_logs)
-        issue_title = _issue_title(report_type, text, suggested_title)
+            # Without the agent's title, a fallback keeps reports from being filed
+            # under a bare prefix: the last error for a bug, a fixed name for a
+            # feature request.
+            suggested_title = _suggested_title(
+                report_type, diagnostic_info, recent_logs
+            )
+            issue_title = _issue_title(report_type, text, suggested_title)
 
-        def build_body(include_logs: bool, text_cap: int | None = None) -> str:
-            if report_type == "runtime_bug":
-                return _generate_runtime_bug_template(
+            def build_body(include_logs: bool, text_cap: int | None = None) -> str:
+                if report_type == "runtime_bug":
+                    return _generate_runtime_bug_template(
+                        diagnostic_info,
+                        log_summary,
+                        startup_log_summary,
+                        recent_logs,
+                        startup_logs,
+                        addon_logs=addon_logs,
+                        core_error_log=core_error_log,
+                        text=text,
+                        include_logs=include_logs,
+                        text_cap=text_cap,
+                    )
+                return _AGENT_SIDE_TEMPLATES[report_type](
                     diagnostic_info,
                     log_summary,
-                    startup_log_summary,
-                    recent_logs,
-                    startup_logs,
-                    addon_logs=addon_logs,
-                    core_error_log=core_error_log,
                     text=text,
                     include_logs=include_logs,
                     text_cap=text_cap,
                 )
-            return _AGENT_SIDE_TEMPLATES[report_type](
-                diagnostic_info,
-                log_summary,
-                text=text,
-                include_logs=include_logs,
-                text_cap=text_cap,
+
+            issue_body = build_body(include_logs=True)
+            issue_url = _build_issue_url(
+                issue_title, lambda cap: build_body(include_logs=False, text_cap=cap)
             )
 
-        issue_body = build_body(include_logs=True)
-        issue_url = _build_issue_url(
-            issue_title, lambda cap: build_body(include_logs=False, text_cap=cap)
-        )
+            # Generate search keywords and URLs for duplicate check
+            search_keywords = _generate_search_keywords(
+                diagnostic_info,
+                recent_logs,
+                text.title if report_type == "feature_request" else None,
+            )
+            duplicate_check_urls = [
+                f"https://github.com/homeassistant-ai/ha-mcp/issues?q=is%3Aissue+{quote_plus(keyword)}"
+                for keyword in search_keywords[:3]  # Limit to top 3 keywords
+            ]
 
-        # Generate search keywords and URLs for duplicate check
-        search_keywords = _generate_search_keywords(
-            diagnostic_info,
-            recent_logs,
-            text.title if report_type == "feature_request" else None,
-        )
-        duplicate_check_urls = [
-            f"https://github.com/homeassistant-ai/ha-mcp/issues?q=is%3Aissue+{quote_plus(keyword)}"
-            for keyword in search_keywords[:3]  # Limit to top 3 keywords
-        ]
-
-        result: dict[str, Any] = {
-            "success": True,
-            "diagnostic_info": diagnostic_info,
-            "recent_logs": recent_logs,
-            # Scrub the startup-log *messages* — they aren't sanitized at source,
-            # so the connect-URL secret path can otherwise surface here.
-            # recent_logs is also returned, but its sensitive *parameters* are
-            # key-masked at the logging chokepoint and its error_message is
-            # returned as-is to the trusted client by design (see SECURITY.md);
-            # formatted_report and addon_logs already route through
-            # _sanitize_log_text. This copies entries — the underlying log
-            # records stay raw.
-            "startup_logs": [
-                {**entry, "message": _sanitize_log_text(entry.get("message", ""))}
-                for entry in startup_logs
-            ],
-            "addon_logs": addon_logs,
-            # Already sanitized + truncated by _fetch_core_error_log.
-            "core_error_log": core_error_log,
-            "log_count": len(recent_logs),
-            "startup_log_count": len(startup_logs),
-            "formatted_report": formatted_report,
-            "issue_title": issue_title,
-            "issue_body": issue_body,
-            "issue_url": issue_url,
-            "anonymization_guide": _generate_anonymization_guide(),
-            "duplicate_check_urls": duplicate_check_urls,
-            "missing_tool_hint": MISSING_TOOL_HINT,
-            "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
-            "instructions": (
-                "WORKFLOW FOR FILING A REPORT:\n\n"
-                "0. **PRE-CHECK — is the problem a missing/unavailable tool?** If "
-                "the user's issue is that a tool they expected is missing or "
-                "cannot be called, DO NOT file a bug yet. See the "
-                "`missing_tool_hint` field: the likely cause is a stale MCP "
-                "client tool list (not a server bug), fixed by refreshing or "
-                "reconnecting the MCP connection. Only continue with this report "
-                "if the tool is still missing after the user refreshes.\n\n"
-                "0b. **PRE-CHECK — is it a known Claude Desktop bug?** A write "
-                "tool that hangs to a 4-minute timeout, or every call failing "
-                "with 'expected nonoptional, received undefined', is a client "
-                "bug with an upstream ticket. See the `known_client_issues_hint` "
-                "field for the workaround to give the user, and only continue "
-                "if the problem persists after it.\n\n"
-                "1. **Check for duplicates FIRST**:\n"
-                "   - Use the duplicate_check_urls to search for similar issues\n"
-                '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
-                "   - Otherwise: inform user to check the duplicate_check_urls\n"
-                "   - If duplicates found, ask user if they want to comment on existing issue instead\n\n"
-                "2. **Pass the report text** (call ha_report_issue again if this "
-                "call had none): report_type, title, description, user_comment, "
-                "user_prompt, tool_calls, ai_model and client_app. The server builds "
-                "issue_title, issue_body and issue_url from them. Anonymize the "
-                "text first (step 3).\n"
-                "   - report_type: 'runtime_bug' when ha-mcp errored or behaved "
-                "wrongly; 'agent_behavior' when the user says YOU used the wrong "
-                "tool, should have done something differently, or worked "
-                "inefficiently; 'feature_request' when the user wants ha-mcp "
-                "to do something it cannot do yet. For a feature request, "
-                "first try to do it with the tools you have: the tool calls "
-                "show the feature is missing. If unclear, ASK: 'Are you "
-                "reporting a bug in ha-mcp, giving feedback on how I used the "
-                "tools, or requesting a feature?'\n"
-                "   - user_prompt and tool_calls: the EXACT user message and the "
-                "tool call(s) that produced the problem, copied verbatim. This "
-                "is the single most useful part for triage. Do not skip it.\n"
-                "   - user_comment: ASK the user to say in their own words what "
-                "went wrong or what bothered them, and pass it verbatim. Never "
-                "write it yourself: maintainers need the user's view, not "
-                "yours.\n"
-                "   - ai_model: your own identity, as specific as you know it. "
-                "Do not invent a version number.\n"
-                "   - client_app: the **MCP Client Host:** line in issue_body is "
-                'auto-detected. If it says "not detected", "stdio bridge", '
-                'or the version is "unknown", ASK the user which app and '
-                "version they are using (usually on the app's About screen or "
-                "from its --version command) and pass THEIR answer. NEVER "
-                "fill it in yourself: you cannot know the app or its version, "
-                "and a guessed value sends triage the wrong way. If the user "
-                'does not know, pass "unknown (user asked)". Client-side '
-                "regressions often depend on the exact app release.\n\n"
-                "3. **ANONYMIZE** (CRITICAL), both in the text you pass and in "
-                "the logs inside issue_body:\n"
-                "   a. Replace person names with generic labels (person.user1, person.user2)\n"
-                "   b. Replace location names with generic names (Home, Location1)\n"
-                "   c. Replace device names containing personal info (e.g., 'juliens_bedroom') with generic ones (e.g., 'bedroom_1')\n"
-                "   d. Verify no tokens, passwords, or IPs are visible\n"
-                "   e. Keep entity domains, error messages, and technical details\n"
-                "   See anonymization_guide for full details. Apart from these "
-                "replacements, pass issue_body on UNCHANGED: do not summarize, "
-                "shorten or rewrite it.\n\n"
-                "4. **Show the user issue_title and issue_body, then file it "
-                "the first way you can.** The issue must contain issue_body "
-                "itself, starting with its Auto-Generated heading: a bug "
-                "report that carries a summary or your own write-up instead "
-                "is closed after 24 hours.\n"
-                "   a. You can act on GitHub (gh CLI, a GitHub connector, or a "
-                "browser you control): file the issue only after the user says "
-                "yes.\n"
-                "      - gh: save issue_title and issue_body to files, then run "
-                "`gh issue create --repo homeassistant-ai/ha-mcp --title "
-                '"$(cat <title-file>)" --body-file <body-file>`. Never put the '
-                "title text itself on the command line: the shell would run "
-                "backticks or $(...) inside it.\n"
-                "      - Browser: open https://github.com/homeassistant-ai/ha-mcp/issues/new "
-                "in the user's signed-in browser, set the title and description "
-                "fields directly (fill or set the value; do not type it key by "
-                "key), and let the user review it and click Create.\n"
-                "   b. You can write files: save issue_body as a .md file. Tell "
-                "the user to open issue_url, replace the pre-filled description "
-                "with the file's content, and click Create.\n"
-                "   c. Chat only: give the user issue_url prominently. It opens "
-                "a new issue with the title and report filled in, without the "
-                "logs. Then show issue_body in a code block fenced with FOUR "
-                "backticks (````markdown ... ````) so it stays in one piece, and "
-                "ask the user to paste its log sections into the issue. You "
-                "cannot edit the link's text, and its error messages come from "
-                "the server: if they show personal names, tell the user to "
-                "replace them in GitHub's editor. Remind them to check the "
-                "pre-filled text for personal information before clicking "
-                "Create.\n\n"
-                f"5. The last line of issue_body is `{REPORT_END_MARKER}`. A "
-                "copy without it was cut short.\n\n"
-                "CRITICAL: Always ANONYMIZE before showing or filing the report!"
-            ),
-        }
-        return project_fields(result, parsed_fields)
+            result: dict[str, Any] = {
+                "success": True,
+                "diagnostic_info": diagnostic_info,
+                "recent_logs": recent_logs,
+                # Scrub the startup-log *messages* — they aren't sanitized at source,
+                # so the connect-URL secret path can otherwise surface here.
+                # recent_logs is also returned, but its sensitive *parameters* are
+                # key-masked at the logging chokepoint and its error_message is
+                # returned as-is to the trusted client by design (see SECURITY.md);
+                # formatted_report and addon_logs already route through
+                # _sanitize_log_text. This copies entries — the underlying log
+                # records stay raw.
+                "startup_logs": [
+                    {**entry, "message": _sanitize_log_text(entry.get("message", ""))}
+                    for entry in startup_logs
+                ],
+                "addon_logs": addon_logs,
+                # Already sanitized + truncated by _fetch_core_error_log.
+                "core_error_log": core_error_log,
+                "log_count": len(recent_logs),
+                "startup_log_count": len(startup_logs),
+                "formatted_report": formatted_report,
+                "issue_title": issue_title,
+                "issue_body": issue_body,
+                "issue_url": issue_url,
+                "anonymization_guide": _generate_anonymization_guide(),
+                "duplicate_check_urls": duplicate_check_urls,
+                "missing_tool_hint": MISSING_TOOL_HINT,
+                "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
+                "instructions": (
+                    "WORKFLOW FOR FILING A REPORT:\n\n"
+                    "0. **PRE-CHECK — is the problem a missing/unavailable tool?** If "
+                    "the user's issue is that a tool they expected is missing or "
+                    "cannot be called, DO NOT file a bug yet. See the "
+                    "`missing_tool_hint` field: the likely cause is a stale MCP "
+                    "client tool list (not a server bug), fixed by refreshing or "
+                    "reconnecting the MCP connection. Only continue with this report "
+                    "if the tool is still missing after the user refreshes.\n\n"
+                    "0b. **PRE-CHECK — is it a known Claude Desktop bug?** A write "
+                    "tool that hangs to a 4-minute timeout, or every call failing "
+                    "with 'expected nonoptional, received undefined', is a client "
+                    "bug with an upstream ticket. See the `known_client_issues_hint` "
+                    "field for the workaround to give the user, and only continue "
+                    "if the problem persists after it.\n\n"
+                    "1. **Check for duplicates FIRST**:\n"
+                    "   - Use the duplicate_check_urls to search for similar issues\n"
+                    '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
+                    "   - Otherwise: inform user to check the duplicate_check_urls\n"
+                    "   - If duplicates found, ask user if they want to comment on existing issue instead\n\n"
+                    "2. **Pass the report text** (call ha_report_issue again if this "
+                    "call had none): report_type, title, description, user_comment, "
+                    "user_prompt, tool_calls, ai_model and client_app. The server builds "
+                    "issue_title, issue_body and issue_url from them. Anonymize the "
+                    "text first (step 3).\n"
+                    "   - report_type: 'runtime_bug' when ha-mcp errored or behaved "
+                    "wrongly; 'agent_behavior' when the user says YOU used the wrong "
+                    "tool, should have done something differently, or worked "
+                    "inefficiently; 'feature_request' when the user wants ha-mcp "
+                    "to do something it cannot do yet. For a feature request, "
+                    "first try to do it with the tools you have: the tool calls "
+                    "show the feature is missing. If unclear, ASK: 'Are you "
+                    "reporting a bug in ha-mcp, giving feedback on how I used the "
+                    "tools, or requesting a feature?'\n"
+                    "   - user_prompt and tool_calls: the EXACT user message and the "
+                    "tool call(s) that produced the problem, copied verbatim. This "
+                    "is the single most useful part for triage. Do not skip it.\n"
+                    "   - user_comment: ASK the user to say in their own words what "
+                    "went wrong or what bothered them, and pass it verbatim. Never "
+                    "write it yourself: maintainers need the user's view, not "
+                    "yours.\n"
+                    "   - ai_model: your own identity, as specific as you know it. "
+                    "Do not invent a version number.\n"
+                    "   - client_app: the **MCP Client Host:** line in issue_body is "
+                    'auto-detected. If it says "not detected", "stdio bridge", '
+                    'or the version is "unknown", ASK the user which app and '
+                    "version they are using (usually on the app's About screen or "
+                    "from its --version command) and pass THEIR answer. NEVER "
+                    "fill it in yourself: you cannot know the app or its version, "
+                    "and a guessed value sends triage the wrong way. If the user "
+                    'does not know, pass "unknown (user asked)". Client-side '
+                    "regressions often depend on the exact app release.\n\n"
+                    "3. **ANONYMIZE** (CRITICAL), both in the text you pass and in "
+                    "the logs inside issue_body:\n"
+                    "   a. Replace person names with generic labels (person.user1, person.user2)\n"
+                    "   b. Replace location names with generic names (Home, Location1)\n"
+                    "   c. Replace device names containing personal info (e.g., 'juliens_bedroom') with generic ones (e.g., 'bedroom_1')\n"
+                    "   d. Verify no tokens, passwords, or IPs are visible\n"
+                    "   e. Keep entity domains, error messages, and technical details\n"
+                    "   See anonymization_guide for full details. Apart from these "
+                    "replacements, pass issue_body on UNCHANGED: do not summarize, "
+                    "shorten or rewrite it.\n\n"
+                    "4. **Show the user issue_title and issue_body, then file it "
+                    "the first way you can.** The issue must contain issue_body "
+                    "itself, starting with its Auto-Generated heading: a bug "
+                    "report that carries a summary or your own write-up instead "
+                    "is closed after 24 hours.\n"
+                    "   a. You can act on GitHub (gh CLI, a GitHub connector, or a "
+                    "browser you control): file the issue only after the user says "
+                    "yes.\n"
+                    "      - gh: save issue_title and issue_body to files, then run "
+                    "`gh issue create --repo homeassistant-ai/ha-mcp --title "
+                    '"$(cat <title-file>)" --body-file <body-file>`. Never put the '
+                    "title text itself on the command line: the shell would run "
+                    "backticks or $(...) inside it.\n"
+                    "      - Browser: open https://github.com/homeassistant-ai/ha-mcp/issues/new "
+                    "in the user's signed-in browser, set the title and description "
+                    "fields directly (fill or set the value; do not type it key by "
+                    "key), and let the user review it and click Create.\n"
+                    "   b. You can write files: save issue_body as a .md file. Tell "
+                    "the user to open issue_url, replace the pre-filled description "
+                    "with the file's content, and click Create.\n"
+                    "   c. Chat only: give the user issue_url prominently. It opens "
+                    "a new issue with the title and report filled in, without the "
+                    "logs. Then show issue_body in a code block fenced with FOUR "
+                    "backticks (````markdown ... ````) so it stays in one piece, and "
+                    "ask the user to paste its log sections into the issue. You "
+                    "cannot edit the link's text, and its error messages come from "
+                    "the server: if they show personal names, tell the user to "
+                    "replace them in GitHub's editor. Remind them to check the "
+                    "pre-filled text for personal information before clicking "
+                    "Create.\n\n"
+                    f"5. The last line of issue_body is `{REPORT_END_MARKER}`. A "
+                    "copy without it was cut short.\n\n"
+                    "CRITICAL: Always ANONYMIZE before showing or filing the report!"
+                ),
+            }
+            if identifier_warning:
+                result["warnings"] = [identifier_warning]
+            return project_fields(result, parsed_fields)
 
 
 def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -1259,7 +1165,7 @@ Before submitting your bug report, please review and anonymize:
 
 ### MUST ANONYMIZE (security-sensitive):
 - API tokens, passwords, secrets -> Replace with "[REDACTED]"
-- IP addresses (internal/external) -> Replace with "192.168.x.x" or "[IP]"
+- IP addresses and internal hostnames (.lan, .ts.net) -> Replace with "[IP]" or "[HOST]"
 - MAC addresses -> Replace with "[MAC]"
 - Email addresses -> Replace with "user@example.com"
 - Phone numbers -> Replace with "[PHONE]"

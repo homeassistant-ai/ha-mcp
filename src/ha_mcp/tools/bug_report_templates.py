@@ -1,36 +1,18 @@
 """Rendering of ha_report_issue reports: the issue body templates and the
-formatting and redaction helpers they share."""
+formatting helpers they share."""
 
-import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlencode
 
+from .bug_report_redaction import _sanitize_log_text
 from .helpers import extract_tool_error_message
 
 # Last line of every generated issue body. A paste that lost its end, for
 # example because a chat UI closed the code block early, is visibly short.
 REPORT_END_MARKER = "<!-- end of ha_report_issue report -->"
-
-# IPv4 sanitization: only redact addresses with strong network context so that
-# four-segment version strings (e.g. "ha-mcp version 1.2.3.4") are preserved.
-_IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
-
-_IPV4 = rf"(?:{_IPV4_OCTET}\.){{3}}{_IPV4_OCTET}"
-
-# IP followed by :port or /CIDR — always a network address, never a version.
-_IPV4_WITH_PORT_OR_CIDR_RE = re.compile(rf"\b{_IPV4}(?::\d+|/\d{{1,2}})\b(?!\.\d)")
-
-# IP preceded by a network keyword (from, to, host=, addr=, etc.).
-_IPV4_AFTER_KEYWORD_RE = re.compile(
-    rf"\b((?:from|to|host|hostname|addr|address|ip|src|dst|server|client|peer|via)\b\s*[=:]?\s*){_IPV4}\b(?!\.\d)",
-    re.IGNORECASE,
-)
-
-# IP appearing inside a URL (`scheme://1.2.3.4...`).
-_IPV4_IN_URL_RE = re.compile(rf"(://){_IPV4}\b(?!\.\d)")
 
 
 def _format_version_value(diagnostic_info: dict[str, Any]) -> str:
@@ -147,95 +129,24 @@ def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
     return "; ".join(parts) or HOST_NOT_DETECTED
 
 
-# URL userinfo, anchored on "://" rather than on the scheme: a match that began
-# at the scheme made every character of a long unbroken word a candidate start,
-# quadratic in its length (about a minute for a 200 kB base64 blob).
-_URL_USERINFO_RE = re.compile(r"(://)([^:/?#\s@]+):([^@/\s]+)@")
-
-
-def _sanitize_log_text(text: str) -> str:
-    """Best-effort secret scrubber for log text.
-
-    Defense-in-depth, not exhaustive — bug reports still pass through human
-    review (see ``_generate_anonymization_guide``). Rules cover the most common
-    leak shapes seen in HA add-on logs:
-    JWTs, bearer tokens, long hex tokens, ``key=value`` style credentials,
-    URL userinfo, IPv4 addresses with network context, and the MCP connect-URL
-    secret path (the add-on's LAN auth).
-    """
-    # JWT tokens (header.payload.signature)
-    text = re.sub(
-        r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
-        "[REDACTED_JWT]",
-        text,
+def _format_ha_install_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render Home Assistant's own install facts from ``system_health/info``."""
+    install = diagnostic_info.get("ha_install")
+    if not install:
+        return "unknown (system_health unavailable)"
+    os_text = " ".join(
+        str(part)
+        for part in (install.get("os_name"), install.get("os_version"))
+        if part
     )
-    # Bearer tokens — match any casing (BEARER, Bearer, bearer, BeArEr, …)
-    # via re.IGNORECASE, but preserve the original casing in the output by
-    # echoing m.group(1) back through the lambda.
-    text = re.sub(
-        r"\b(bearer)\s+\S+",
-        lambda m: f"{m.group(1)} [REDACTED]",
-        text,
-        flags=re.IGNORECASE,
+    arch = str(install.get("arch") or "unknown")
+    if install.get("container_arch"):
+        arch += f", container {install['container_arch']}"
+    return (
+        f"{install.get('installation_type') or 'unknown'}; "
+        f"{os_text or 'unknown'} ({arch}); "
+        f"Python {install.get('python_version') or 'unknown'}"
     )
-    # Authorization values in any other scheme (Basic, Digest, ...). The
-    # Bearer rule above has already handled Bearer, so it is skipped here.
-    text = re.sub(
-        r"\b(authorization['\"]?\s*[:=]\s*['\"]?)(?!bearer\b)(?:[A-Za-z]+\s+)?[^\s'\",}]+",
-        r"\1[REDACTED]",
-        text,
-        flags=re.IGNORECASE,
-    )
-    # Generic key=value credentials (api_key, token, secret, password, etc.).
-    # Negative lookbehind for a letter so OPENAI_API_KEY=... still matches
-    # (underscore is a word-char, so \b doesn't fire there).
-    # "authorization" has its own rule above.
-    # A quoted key and value, as in JSON or a Python dict repr, are covered
-    # too: {"token": "a b"} and {'password': 'x'}.
-    text = re.sub(
-        r"(?<![A-Za-z])(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd)\b"
-        r"(['\"]?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,}]+)",
-        r"\1\2[REDACTED]",
-        text,
-        flags=re.IGNORECASE,
-    )
-    # URL userinfo: scheme://user:password@host -> scheme://user:[REDACTED]@host
-    text = _URL_USERINFO_RE.sub(r"\1\2:[REDACTED]@", text)
-    # Long hex strings (API keys, tokens) - 32+ contiguous hex chars
-    text = re.sub(
-        r"(?<![a-fA-F0-9])[a-fA-F0-9]{32,}(?![a-fA-F0-9])",
-        "[REDACTED_HEX]",
-        text,
-    )
-    # IPv4 addresses — only when there's strong network context, so that
-    # four-segment version strings (e.g. "version 1.2.3.4") survive intact.
-    text = _IPV4_WITH_PORT_OR_CIDR_RE.sub("[IP]", text)
-    text = _IPV4_IN_URL_RE.sub(r"\1[IP]", text)
-    text = _IPV4_AFTER_KEYWORD_RE.sub(r"\1[IP]", text)
-    # MCP connect-URL secret path — the add-on's LAN auth. Redact by the
-    # configured value (catches custom paths) and the generated
-    # ``/private_<token>`` convention. Only bug-report output is scrubbed here;
-    # the raw logs this text is copied from are left intact.
-    # The dedicated settings-UI secret path (OAuth/OIDC) is a second secret whose
-    # leak grants the same unauthenticated settings access, so redact a custom
-    # value the same way. The auto-generated /private_<token> form is caught by
-    # the generic pattern below.
-    for env_name in ("MCP_SECRET_PATH", "MCP_SETTINGS_SECRET_PATH"):
-        # Strip before rstrip: the resolver strips MCP_SETTINGS_SECRET_PATH before
-        # mounting, so a whitespace-bearing value mounts at the stripped path — the
-        # redaction pattern must match that, not the raw value (GHSA-mx64-982r-65vg).
-        configured = os.getenv(env_name, "").strip().rstrip("/")
-        if configured and configured != "/mcp":
-            # Anchor on a path-segment boundary so a short/substring-prone
-            # configured value (e.g. "/ha") cannot corrupt unrelated text
-            # (e.g. "/happy").
-            text = re.sub(
-                re.escape(configured) + r"(?![A-Za-z0-9_-])",
-                "[REDACTED_SECRET_PATH]",
-                text,
-            )
-    text = re.sub(r"/private_[A-Za-z0-9_-]+", "[REDACTED_SECRET_PATH]", text)
-    return text
 
 
 def _format_tools_entry_value(diagnostic_info: dict[str, Any]) -> str:
@@ -580,6 +491,7 @@ def _generate_runtime_bug_template(
 - **Operating System:** {platform_info.get("os", "Unknown")} {platform_info.get("os_release", "")} ({platform_info.get("architecture", "Unknown")})
 - **Python Version:** {platform_info.get("python_version", "Unknown")}
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+- **Home Assistant Install:** {_format_ha_install_value(diagnostic_info)}
 - **Supervisor:** {_format_supervisor_value(diagnostic_info)}
 - **Connection Status:** {diagnostic_info.get("connection_status", "Unknown")}
 - **Entity Count:** {diagnostic_info.get("entity_count", 0)}
@@ -643,6 +555,7 @@ def _agent_environment_sections(
 - **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
 - **AI Model:** {text.ai_model or ""}
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+- **Home Assistant Install:** {_format_ha_install_value(diagnostic_info)}
 - **Supervisor:** {_format_supervisor_value(diagnostic_info)}
 
 ---
