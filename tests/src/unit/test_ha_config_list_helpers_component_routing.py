@@ -563,7 +563,7 @@ async def test_flow_type_capsless_raises_component_required() -> None:
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     assert "flow-based" in str(excinfo.value)
     # Never falls back to the legacy path and never issues the component command.
     assert client.list_calls == 0
@@ -584,7 +584,7 @@ async def test_flow_type_component_error_raises_no_legacy_fallback() -> None:
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     # The legacy path cannot serve flow helpers, so it must not be attempted.
     assert client.list_calls == 0
 
@@ -603,7 +603,7 @@ async def test_flow_type_unknown_command_raises_component_required() -> None:
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     assert client.list_calls == 0
 
 
@@ -688,7 +688,7 @@ async def test_flow_command_timeout_raises_component_required() -> None:
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     assert client.list_calls == 0
 
 
@@ -711,7 +711,7 @@ async def test_flow_type_missing_covered_types_raises_component_required() -> No
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     assert client.list_calls == 0
 
 
@@ -846,7 +846,7 @@ async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="all")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     assert "my_custom_helper" in str(excinfo.value)
 
 
@@ -941,7 +941,7 @@ async def test_all_types_without_component_raises_component_required() -> None:
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="all")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     # Never falls back to any legacy list and never issues the component command.
     assert client.list_calls == 0
     assert not _helpers_calls(ws)
@@ -961,6 +961,6 @@ async def test_all_types_component_error_raises_component_required() -> None:
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="all")
 
-    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     # No legacy all-types path exists, so nothing is served from legacy.
     assert client.list_calls == 0
