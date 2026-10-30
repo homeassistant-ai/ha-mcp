@@ -41,10 +41,12 @@ def known_identifiers_scope(identifiers: KnownIdentifiers) -> Iterator[None]:
         _known_identifiers.reset(token)
 
 
-# Anything with two or more colons between hex groups; ``hh:mm:ss`` and other
-# non-addresses fail to parse in the callback and are left alone.
+# Two or more colon-separated hex groups, optionally ending in a dotted quad
+# (``::ffff:192.0.2.1``); ``hh:mm:ss`` and other non-addresses fail to parse in
+# the callback and are left alone.
 _IPV6_CANDIDATE_RE = re.compile(
-    r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])"
+    r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}"
+    r"(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{0,4})(?![\w:]|\.\d)"
 )
 
 
@@ -72,7 +74,10 @@ def _known_identifier_rules(
     ipv6 = identifiers.addresses - ipv4
     if ipv4:
         rules.append(
-            (re.compile(rf"(?<![\w.])(?:{_alternation(ipv4)})(?!\w|\.\d)"), "[IP]")
+            (
+                re.compile(rf"(?<![\w.])(?:{_alternation(ipv4)})(?![\w-]|\.[\w-])"),
+                "[IP]",
+            )
         )
     if ipv6:
         # An IPv6 address has many spellings (``::`` vs zero groups, leading

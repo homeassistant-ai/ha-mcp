@@ -224,6 +224,20 @@ class TestKnownIdentifierRedaction:
         for text in ("seen 172.17.0.30 ok", "build 1172.17.0.3 ok"):
             assert self._scrub(text) == text
 
+    def test_known_address_inside_a_longer_hostname_is_kept(self) -> None:
+        assert self._scrub("host2 172.17.0.3.example up") == (
+            "host2 172.17.0.3.example up"
+        )
+        assert self._scrub("ended 172.17.0.3. next") == "ended [IP]. next"
+
+    def test_known_ipv4_mapped_ipv6_address_is_redacted(self) -> None:
+        ids = KnownIdentifiers(addresses=frozenset({"::ffff:192.0.2.1"}))
+        with known_identifiers_scope(ids):
+            assert _sanitize_log_text("peer2 ::ffff:192.0.2.1 up") == "peer2 [IP] up"
+            assert _sanitize_log_text("peer2 ::ffff:192.0.2.10 up") == (
+                "peer2 ::ffff:192.0.2.10 up"
+            )
+
     def test_known_ipv6_address_is_redacted_in_any_spelling(self) -> None:
         # Home Assistant reports the compressed form; a log may spell the same
         # address with every zero group written out.
