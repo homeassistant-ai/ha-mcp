@@ -107,14 +107,9 @@ class TestGetHistory:
                 },
             )
 
-            data = parse_mcp_result(result)
-
-            # Check nested data for success
-            inner_data = data.get("data", data)
-            if inner_data.get("success") or "entities" in inner_data:
-                logger.info(f"Time format '{time_format}' accepted")
-            else:
-                logger.warning(f"Time format '{time_format}' may not be supported")
+            data = assert_mcp_success(result, f"History for start_time={time_format}")
+            entities = data.get("data", data)["entities"]
+            assert [e["entity_id"] for e in entities] == ["sun.sun"]
 
     async def test_get_history_multiple_entities(self, mcp_client):
         """Test retrieving history for multiple entities."""
@@ -244,20 +239,12 @@ class TestGetHistory:
             },
         )
 
-        data = parse_mcp_result(result)
+        data = assert_mcp_success(result, "History for a non-existent entity")
 
-        # History data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        # Should succeed but return empty history
-        if inner_data.get("success") or "entities" in inner_data:
-            if inner_data.get("entities"):
-                entity_history = inner_data["entities"][0]
-                states = entity_history.get("states", [])
-                logger.info(
-                    f"Non-existent entity returned {len(states)} states (expected 0)"
-                )
-        else:
-            logger.info("Non-existent entity properly handled")
+        # Succeeds with an empty history for the requested entity.
+        (entity,) = data.get("data", data)["entities"]
+        assert entity["entity_id"] == "sensor.nonexistent_test_xyz_12345"
+        assert entity["states"] == []
 
     async def test_get_history_entity_ids_as_comma_string(self, mcp_client):
         """Test history with comma-separated entity_ids string."""
@@ -272,16 +259,9 @@ class TestGetHistory:
             },
         )
 
-        data = parse_mcp_result(result)
-
-        # History data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        if inner_data.get("success") or "entities" in inner_data:
-            logger.info(
-                f"Comma-separated entities accepted: {len(inner_data.get('entities', []))} entities"
-            )
-        else:
-            logger.info("Comma-separated format may not be supported")
+        data = assert_mcp_success(result, "History for comma-separated entity_ids")
+        entities = data.get("data", data)["entities"]
+        assert [e["entity_id"] for e in entities] == ["sun.sun", "person.test"]
 
     @pytest.mark.parametrize("minimal", [True, False])
     async def test_get_history_preserves_native_rows(
