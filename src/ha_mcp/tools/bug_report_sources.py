@@ -196,7 +196,7 @@ async def collect_known_identifiers(
     """
     hosts: set[str] = set()
     addresses: set[str] = set()
-    _add_url_host(client.base_url, hosts, addresses)
+    _add_url_host(getattr(client, "base_url", None), hosts, addresses)
     warning = None
     command = "network/url"
     try:

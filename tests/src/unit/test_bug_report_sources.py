@@ -101,6 +101,18 @@ class TestCollectKnownIdentifiers:
         assert identifiers == KnownIdentifiers()
 
     @pytest.mark.asyncio
+    async def test_client_without_a_configured_url_is_tolerated(self) -> None:
+        """The collector never raises; a client with no ``base_url`` (test
+        doubles, or a future client type) just contributes no host."""
+        replies = {"network/url": _ok({}), "network": _ok({"adapters": []})}
+        client = SimpleNamespace(
+            send_websocket_message=_ws_client(replies, "").send_websocket_message
+        )
+        identifiers, warning = await collect_known_identifiers(client)
+        assert identifiers == KnownIdentifiers()
+        assert warning is None
+
+    @pytest.mark.asyncio
     async def test_failed_adapter_read_keeps_what_was_read_and_warns(self) -> None:
         """``network`` is admin-only in Core while ``network/url`` is not, so a
         non-admin token must still get the URL hosts redacted."""
