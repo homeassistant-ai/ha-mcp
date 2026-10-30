@@ -499,7 +499,7 @@
         },
         "python_transform": {
           "type": "str | None",
-          "description": "Python expression to transform existing automation config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config['actions'][0]['data']['brightness'] = 255\" Pattern: python_transform=\"for a in config['actions']: if a.get('alias') == 'My Step': a['data']['value'] = 100\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
+          "description": "Python expression to transform existing automation config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config['actions'][0]['data']['brightness'] = 255\" Pattern: python_transform=\"for a in config['actions']: if a.get('alias') == 'My Step': a['data']['value'] = 100\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend, index, count, sort,\n  reverse\n- Dict methods: update, get, setdefault, keys, values, items, pop, clear\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,\n  removeprefix, removesuffix, split, join, replace, count, index\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
           "default": null
         },
         "config_hash": {
@@ -1107,7 +1107,7 @@
         },
         "python_transform": {
           "type": "str | None",
-          "description": "Python expression to transform existing dashboard config. Mutually exclusive with config and patch. Requires config_hash for validation. See PYTHON TRANSFORM SECURITY below for allowed operations. Examples: Simple: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'\" Pattern: python_transform=\"for card in config['views'][0]['cards']: if 'light' in card.get('entity', ''): card['icon'] = 'mdi:lightbulb'\" Multi-op: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'; del config['views'][0]['cards'][2]\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
+          "description": "Python expression to transform existing dashboard config. Mutually exclusive with config and patch. Requires config_hash for validation. See PYTHON TRANSFORM SECURITY below for allowed operations. Examples: Simple: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'\" Pattern: python_transform=\"for card in config['views'][0]['cards']: if 'light' in card.get('entity', ''): card['icon'] = 'mdi:lightbulb'\" Multi-op: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'; del config['views'][0]['cards'][2]\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend, index, count, sort,\n  reverse\n- Dict methods: update, get, setdefault, keys, values, items, pop, clear\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,\n  removeprefix, removesuffix, split, join, replace, count, index\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
           "default": null
         },
         "config_hash": {
@@ -3368,7 +3368,7 @@
         },
         "python_transform": {
           "type": "str | None",
-          "description": "Python expression to transform existing scene config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Add entity: python_transform=\"config['entities']['light.bed'] = {'state': 'on'}\" Update brightness: python_transform=\"config['entities']['light.kitchen']['brightness'] = 50\" Remove entity: python_transform=\"del config['entities']['light.kitchen']\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
+          "description": "Python expression to transform existing scene config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Add entity: python_transform=\"config['entities']['light.bed'] = {'state': 'on'}\" Update brightness: python_transform=\"config['entities']['light.kitchen']['brightness'] = 50\" Remove entity: python_transform=\"del config['entities']['light.kitchen']\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend, index, count, sort,\n  reverse\n- Dict methods: update, get, setdefault, keys, values, items, pop, clear\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,\n  removeprefix, removesuffix, split, join, replace, count, index\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
           "default": null
         },
         "config_hash": {
@@ -3489,7 +3489,7 @@
         },
         "python_transform": {
           "type": "str | None",
-          "description": "Python expression to transform existing script config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\" Pattern: python_transform=\"for step in config['sequence']: if step.get('alias') == 'My Step': step['data']['value'] = 100\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
+          "description": "Python expression to transform existing script config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\" Pattern: python_transform=\"for step in config['sequence']: if step.get('alias') == 'My Step': step['data']['value'] = 100\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend, index, count, sort,\n  reverse\n- Dict methods: update, get, setdefault, keys, values, items, pop, clear\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,\n  removeprefix, removesuffix, split, join, replace, count, index\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
           "default": null
         },
         "config_hash": {
@@ -4494,7 +4494,7 @@
   {
     "name": "ha_get_todo",
     "title": "Get Todo",
-    "description": "Get todo lists or items - list all todo lists or get items from a specific list.\n\nWithout an entity_id: lists every entity in the 'todo' domain (shopping\nlists and other todo-type integrations) with entity_id, friendly_name\nand state (number of incomplete items or current status).\n\nWith an entity_id: returns that list's items — uid, summary, status\n(needs_action or completed), description, and due date where supported\n— optionally filtered by status (None returns all).\n\nEXAMPLES:\n- List all todo lists: ha_get_todo()\n- Get incomplete items: ha_get_todo(\"todo.shopping_list\", status=\"needs_action\")",
+    "description": "Get todo lists or items - list all todo lists or get items from a specific list.\n\nWithout an entity_id: lists every entity in the 'todo' domain (shopping\nlists and other todo-type integrations) with entity_id, friendly_name\nand state (number of incomplete items or current status).\n\nWith an entity_id: returns that list's items as Home Assistant reports\nthem — uid, summary, status, and description, due and completed where\nset.\n\nEXAMPLES:\n- List all todo lists: ha_get_todo()\n- Get incomplete items: ha_get_todo(\"todo.shopping_list\", status=\"needs_action\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -4503,8 +4503,8 @@
           "default": null
         },
         "status": {
-          "type": "Literal['needs_action', 'completed'] | None",
-          "description": "Filter items by status: 'needs_action' for incomplete, 'completed' for done. Only applies when entity_id is provided.",
+          "type": "str | list[str] | None",
+          "description": "Only items with this status, or with any of a list of statuses: 'needs_action' (open) or 'completed' (done). Only applies when entity_id is provided.",
           "default": null
         }
       }
@@ -4523,7 +4523,7 @@
   {
     "name": "ha_remove_todo_item",
     "title": "Remove Todo Item",
-    "description": "Remove an item from a Home Assistant todo list.\n\nPermanently deletes an item from the specified todo list. To mark it\ncompleted instead, use ha_set_todo_item() with status=\"completed\".\n\nEXAMPLE: ha_remove_todo_item(\"todo.shopping_list\", \"Buy milk\")",
+    "description": "Remove items from a Home Assistant todo list.\n\nGive `item` or `remove_completed=True`, not both. Removal is permanent;\nto mark an item done instead, use ha_set_todo_item() with\nstatus=\"completed\". `removed` lists the items the call asked for that\nare gone afterwards; with remove_completed=True that includes a\ncompleted item another client removed meanwhile. With auto-backup on,\neach item is backed up before it is removed; `warnings` names a backup\nnot taken because the item could not be read or the backup could not\nstart, and with remove_completed=True an item gone afterwards that was\nnot completed when the list was read, so was not backed up.\n\nEXAMPLES:\n- ha_remove_todo_item(\"todo.shopping_list\", \"Buy milk\")\n- ha_remove_todo_item(\"todo.shopping_list\", [\"Buy milk\", \"Bread\"])\n- ha_remove_todo_item(\"todo.shopping_list\", remove_completed=True)",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -4531,19 +4531,24 @@
           "description": "Todo list entity ID (e.g., 'todo.shopping_list')"
         },
         "item": {
-          "type": "str",
-          "description": "Item to remove - can be the item UID (from ha_get_todo) or the exact item summary/name"
+          "type": "str | list[str] | None",
+          "description": "Item to remove, or a list of items - each the item UID (from ha_get_todo) or the exact item summary/name. A string that names no item but holds a JSON array of strings is that list.",
+          "default": null
+        },
+        "remove_completed": {
+          "type": "bool",
+          "description": "Remove every completed item",
+          "default": false
         }
       },
       "required": [
-        "entity_id",
-        "item"
+        "entity_id"
       ]
     },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true,
+      "idempotentHint": false,
       "openWorldHint": false
     },
     "tags": [
@@ -4554,7 +4559,7 @@
   {
     "name": "ha_set_todo_item",
     "title": "Set Todo Item",
-    "description": "Create or update a todo item in Home Assistant.\n\nWithout `item` (create mode): creates a new item; summary is required.\nWith `item` (update mode): updates that item; at least one of rename,\nstatus, description, due_date or due_datetime is required.\n\nEXAMPLES:\n- Add item: ha_set_todo_item(\"todo.tasks\", summary=\"Pay bills\", due_date=\"2024-12-31\")\n- Complete item: ha_set_todo_item(\"todo.shopping_list\", item=\"Buy milk\", status=\"completed\")\n- Rename item: ha_set_todo_item(\"todo.tasks\", item=\"Old task\", rename=\"New task name\")\n\nNot all todo integrations support all features: the Shopping List\nintegration supports summary and status but not descriptions or due dates.",
+    "description": "Create, update or reorder a todo item in Home Assistant.\n\nWithout `item` (create mode): creates a new item from summary.\nWith `item` (update mode): changes the fields given, and moves the item\nwhen `move_after` is given, alone or together with other changes.\nHome Assistant refuses a description or due date the list does not\nsupport, and says which. The reply carries `todo_item`, the item as\nHome Assistant stores it afterwards, uid included, or null with a\nwarning when it cannot be read back. With auto-backup on, an updated\nitem is backed up first; `warnings` names a backup that was not taken\nbecause the item could not be read or the backup could not start.\n\nEXAMPLES:\n- Add item: ha_set_todo_item(\"todo.tasks\", summary=\"Pay bills\", due_date=\"2024-12-31\")\n- Complete item: ha_set_todo_item(\"todo.shopping_list\", item=\"Buy milk\", status=\"completed\")\n- Rename item: ha_set_todo_item(\"todo.tasks\", item=\"Old task\", rename=\"New task name\")\n- Move to top: ha_set_todo_item(\"todo.tasks\", item=\"Pay bills\", move_after=\"\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -4572,28 +4577,33 @@
           "default": null
         },
         "status": {
-          "type": "Literal['needs_action', 'completed'] | None",
-          "description": "Item status: 'completed' to mark done, 'needs_action' to mark incomplete. Only used in update mode.",
+          "type": "str | None",
+          "description": "Item status: 'completed' to mark done, 'needs_action' to mark incomplete. Update mode only: to add a done item, create it, then update it.",
           "default": null
         },
         "description": {
           "type": "str | None",
-          "description": "Detailed description for the item",
+          "description": "Detailed description for the item. An empty string clears it on update.",
           "default": null
         },
         "due_date": {
           "type": "str | None",
-          "description": "Due date in YYYY-MM-DD format (e.g., '2024-12-25')",
+          "description": "Due date in YYYY-MM-DD format (e.g., '2024-12-25'). An empty string clears the due date on update.",
           "default": null
         },
         "due_datetime": {
           "type": "str | None",
-          "description": "Due datetime in ISO format (e.g., '2024-12-25T14:00:00'). Overrides due_date if both provided.",
+          "description": "Due datetime in ISO format (e.g., '2024-12-25T14:00:00'). An empty string clears the due date on update.",
           "default": null
         },
         "rename": {
           "type": "str | None",
-          "description": "New name/summary for an existing item. Only used in update mode.",
+          "description": "New name/summary for an existing item.",
+          "default": null
+        },
+        "move_after": {
+          "type": "str | None",
+          "description": "Move the item directly below this item (UID or exact summary). An empty string moves it to the top of the list.",
           "default": null
         }
       },

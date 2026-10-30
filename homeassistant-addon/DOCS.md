@@ -829,8 +829,8 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Todo Lists
 - `ha_get_todo` — Get todo lists or items - list all todo lists or get items from a specific list.
-- `ha_remove_todo_item` — Remove an item from a Home Assistant todo list.
-- `ha_set_todo_item` — Create or update a todo item in Home Assistant.
+- `ha_remove_todo_item` — Remove items from a Home Assistant todo list.
+- `ha_set_todo_item` — Create, update or reorder a todo item in Home Assistant.
 
 ### Utilities
 - `ha_eval_template` — Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
