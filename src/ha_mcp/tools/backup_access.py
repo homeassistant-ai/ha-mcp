@@ -1,8 +1,6 @@
 """Argument validation and access checks for explicit backup tool actions."""
 
 import json
-import posixpath
-import urllib.parse
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -10,6 +8,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..config import Settings, get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
+from .util_helpers import normalized_path, supervisor_path
 
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
@@ -145,22 +144,11 @@ _SNAPSHOT_WS_ACTIONS: dict[str, str] = {
 }
 
 
-def _normalized_path(path: str) -> str:
-    """Fold percent-escapes, ``//``, ``.`` and ``..`` so an equivalent spelling
-    cannot slip past (HTTP clients decode ``%62ackups`` to ``backups``).
-
-    Leading slashes are stripped first: POSIX normpath keeps exactly two.
-    """
-    decoded = urllib.parse.unquote(path.split("?", 1)[0])
-    stripped = decoded.strip().lower().lstrip("/")
-    return posixpath.normpath("/" + stripped)
-
-
 def _supervisor_backup_action(endpoint: Any, method: Any) -> str | None:
     """Classify a request against Supervisor's ``/backups`` API."""
     if not isinstance(endpoint, str):
         return None
-    path = _normalized_path(endpoint)
+    path = supervisor_path(endpoint)
     if path != "/backups" and not path.startswith("/backups/"):
         return None
     verb = str(method).strip().lower()
@@ -184,7 +172,7 @@ def _snapshot_route_action(
     rest_path: str | None,
 ) -> str | None:
     if rest_path is not None:
-        parts = _normalized_path(rest_path).split("/")
+        parts = normalized_path(rest_path).split("/")
         if len(parts) == 4 and parts[1] == "services":
             return _service_action(parts[2], parts[3])
         if len(parts) > 2 and parts[1] == "hassio":

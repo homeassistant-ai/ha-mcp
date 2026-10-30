@@ -60,8 +60,8 @@ from .response_helpers import compact_service_result, project_entity_record
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
-    BLOCKED_WS_WRITE_COMMANDS,
     is_single_entity_target,
+    raw_ws_refusal,
 )
 from .ws_waiters import wait_for_state_change
 
@@ -1320,16 +1320,6 @@ class ServiceTools:
                     parameter="ws_command",
                 )
             )
-        if command_type.lower() in BLOCKED_WS_WRITE_COMMANDS:
-            raise_tool_error(
-                create_validation_error(
-                    f"ws_command '{command_type}' mutates persistent state that a "
-                    "dedicated tool guards with backups and conflict checks. Use "
-                    "the corresponding ha-mcp tool (e.g. ha_config_set_dashboard, "
-                    "ha_set_area_or_floor, ha_remove_entity) instead.",
-                    parameter="ws_command",
-                )
-            )
         command_params = (
             _parse_json_dict_param(
                 data, type_error_message="ws_command data must be a JSON object"
@@ -1344,6 +1334,14 @@ class ServiceTools:
                     f"{', '.join(sorted(reserved))}; the command type is set by "
                     "ws_command, and the message id is managed by the transport.",
                     parameter="data",
+                )
+            )
+        if refusal := raw_ws_refusal(command_type, command_params):
+            raise_tool_error(
+                create_validation_error(
+                    refusal.message,
+                    parameter="ws_command",
+                    suggestions=refusal.suggestions,
                 )
             )
         # send_websocket_message returns a {"success": ...} dict for anything

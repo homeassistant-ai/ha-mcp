@@ -40,14 +40,22 @@ SNAPSHOT_WRITE_WS = [
         {"endpoint": "//addons/../backups/new/partial", "method": "POST"},
     ),
     ("supervisor/api", {"endpoint": "/%62ackups/new/full", "method": "post"}),
+    # Supervisor's /v2 mount, reachable once supervisor_v2_api is switched on
+    ("supervisor/api", {"endpoint": "/v2/backups/new/full", "method": "post"}),
+    (
+        "supervisor/api",
+        {"endpoint": "/v2/backups/abc12345/restore/full", "method": "post"},
+    ),
 ]
 SNAPSHOT_READ_WS = [
     ("backup/info", None),
     ("supervisor/api", {"endpoint": "/backups", "method": "get"}),
+    ("supervisor/api", {"endpoint": "/v2/backups", "method": "get"}),
 ]
 SNAPSHOT_DELETE_WS = [
     ("backup/delete", {"backup_id": "abc12345"}),
     ("supervisor/api", {"endpoint": "/backups/abc12345", "method": "delete"}),
+    ("supervisor/api", {"endpoint": "/v2/backups/abc12345", "method": "delete"}),
 ]
 
 
@@ -216,12 +224,28 @@ class TestCodeModeBridges:
         assert "enable_snapshot_actions=false" in result["error"]
         bridge.client.send_websocket_message.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            {"type": "backup/delete", "backup_id": "x"},
+            {
+                "type": "supervisor/api",
+                "endpoint": "/backups/abc12345",
+                "method": "delete",
+            },
+            {
+                "type": "supervisor/api",
+                "endpoint": "/v2/backups/abc12345",
+                "method": "delete",
+            },
+        ],
+    )
     async def test_ws_send_refuses_snapshot_delete(
-        self, settings: SimpleNamespace
+        self, settings: SimpleNamespace, message: dict[str, Any]
     ) -> None:
         bridge = _make_bridge()
 
-        result = await bridge.ws_send({"type": "backup/delete", "backup_id": "x"})
+        result = await bridge.ws_send(message)
 
         assert "ha_manage_backup(scope='snapshot'" in result["error"]
         bridge.client.send_websocket_message.assert_not_awaited()
@@ -242,6 +266,7 @@ class TestCodeModeBridges:
             "/api/services/hassio/backup_full",
             "services/%68assio/restore_full",
             "hassio/backups/abc12345/restore/full",
+            "hassio/v2/backups/abc12345/restore/full",
         ],
     )
     async def test_api_post_refuses_snapshot_write_under_backup_read_only(
