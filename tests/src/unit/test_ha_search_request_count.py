@@ -68,6 +68,8 @@ class CountingClient:
     """
 
     def __init__(self) -> None:
+        # The real client's default; deep_search reads it when a config fetch failed.
+        self.admin_route_refused = False
         self.get_states_calls = 0
         self.get_config_calls = 0
         self.ws_types: Counter[str] = Counter()
