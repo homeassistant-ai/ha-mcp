@@ -1620,6 +1620,7 @@ class EmbeddedServerManager:
         uv_server = uvicorn.Server(config)
 
         self._note_startup_phase("starting the HTTP listener")
+        listen_kwargs: dict[str, Any] = {}
         try:
             async with server.mcp._lifespan_manager():
                 # A stop that came during the cold import, the server build or
@@ -1634,9 +1635,8 @@ class EmbeddedServerManager:
                     )
                     return
                 stop_task = asyncio.create_task(stop_event.wait())
-                serve_task = asyncio.create_task(
-                    uv_server.serve(**self._listen_kwargs())
-                )
+                listen_kwargs = self._listen_kwargs()
+                serve_task = asyncio.create_task(uv_server.serve(**listen_kwargs))
                 done, _pending = await asyncio.wait(
                     {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
                 )
@@ -1655,6 +1655,11 @@ class EmbeddedServerManager:
                     # etc.).
                     serve_task.result()
         finally:
+            # uvicorn closes pre-bound sockets only on a clean shutdown; a serve
+            # that exits early would otherwise hold the port into the next
+            # bring-up inside HA's long-lived process.
+            for sock in listen_kwargs.get("sockets", []):
+                sock.close()
             # CLI parity: the HTTP runner's shutdown path releases the served
             # stack's HA connections; this in-process runner must too, on this
             # loop, while it still runs — otherwise the reader tasks are only
@@ -1741,11 +1746,17 @@ class EmbeddedServerManager:
         ha-mcp too old to ship the helper keeps the IPv4-only bind.
         """
         try:
-            from ha_mcp.listen_sockets import wildcard_listen_sockets
+            from ha_mcp.listen_sockets import (
+                announce_when_listening,
+                wildcard_listen_sockets,
+            )
         except ImportError:
             return {}
         sockets = wildcard_listen_sockets(self._bind_host, self._port)
-        return {} if sockets is None else {"sockets": sockets}
+        if sockets is None:
+            return {}
+        announce_when_listening(sockets, self._bind_host, self._port)
+        return {"sockets": sockets}
 
     async def _async_probe_port(self) -> bool:
         """Return True if a loopback TCP connection to the server port succeeds.

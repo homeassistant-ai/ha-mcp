@@ -449,8 +449,14 @@ def _run_mcp_server(
         log_info("Starting MCP server...")
         if bind_host != "0.0.0.0":
             log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
-        from ha_mcp.listen_sockets import wildcard_listen_sockets
+        from ha_mcp.listen_sockets import (
+            announce_when_listening,
+            wildcard_listen_sockets,
+        )
 
+        sockets = wildcard_listen_sockets(bind_host, port)
+        if sockets is not None:
+            announce_when_listening(sockets, bind_host, port)
         # Do not pass log_level here: fastmcp's temporary_log_level would
         # rebuild its rich log handlers at the default 80-column width,
         # undoing widen_fastmcp_log_console (#1918).
@@ -458,7 +464,7 @@ def _run_mcp_server(
             transport="http",
             host=bind_host,
             port=port,
-            sockets=wildcard_listen_sockets(bind_host, port),
+            sockets=sockets,
             path=secret_path,
             stateless_http=True,
             uvicorn_config=uvicorn_config,

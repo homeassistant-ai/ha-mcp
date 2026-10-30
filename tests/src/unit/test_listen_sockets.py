@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import errno
 import importlib.util
+import logging
 import socket
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -100,6 +102,28 @@ def test_machine_without_ipv6_still_serves_ipv4(
         assert [sock.family for sock in sockets] == [socket.AF_INET]
         sockets[0].listen()
         assert _connects("127.0.0.1", port)
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
+def test_startup_line_logged_once_serving(caplog: pytest.LogCaptureFixture) -> None:
+    port = _free_port()
+    sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
+    assert sockets is not None
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    try:
+        listen_sockets.announce_when_listening(sockets, "0.0.0.0", port)
+        time.sleep(0.3)
+        assert "Uvicorn running" not in caplog.text, "logged before serving"
+        for sock in sockets:
+            sock.listen()
+        deadline = time.monotonic() + 5
+        while "Uvicorn running" not in caplog.text and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert f"Uvicorn running on http://0.0.0.0:{port} (Press CTRL+C to quit)" in (
+            caplog.text
+        )
     finally:
         for sock in sockets:
             sock.close()
