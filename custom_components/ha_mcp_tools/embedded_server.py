@@ -54,6 +54,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
+    BIND_HOST_ALL,
     DATA_LAST_PIP_SPEC,
     DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
@@ -1600,7 +1601,7 @@ class EmbeddedServerManager:
         app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
         config = uvicorn.Config(
             app,
-            host=self._bind_host,
+            host=_listen_host(self._bind_host),
             port=self._port,
             timeout_graceful_shutdown=2,
             lifespan="on",
@@ -1748,6 +1749,16 @@ class EmbeddedServerManager:
         with suppress(OSError, TimeoutError):
             await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
         return True
+
+
+def _listen_host(bind_host: str) -> str:
+    """Map the stored bind-host option to the host uvicorn listens on.
+
+    "Local network" is stored as ``0.0.0.0``, which accepts IPv4 only (#2915).
+    An empty host makes asyncio open one listener per address family, as Home
+    Assistant's own HTTP server does, so IPv6 clients connect too.
+    """
+    return "" if bind_host == BIND_HOST_ALL else bind_host
 
 
 # Worker threads that may still be executing their ha_mcp imports. Purging

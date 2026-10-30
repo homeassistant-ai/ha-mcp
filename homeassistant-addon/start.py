@@ -437,6 +437,18 @@ def _arm_kill_signal_diagnostics_if_debug(effective_log_level: int) -> None:
         log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
 
 
+def resolve_bind_host() -> str:
+    """Return the host the MCP listener binds to.
+
+    The default empty host listens on every IPv4 and IPv6 address (asyncio
+    opens one socket per family), so Supervisor ingress and IPv4 clients keep
+    working and IPv6 clients can connect too (#2915). ``0.0.0.0`` would be
+    IPv4-only and ``::`` IPv6-only. MCP_HOST overrides it for parity with the
+    CLI entry points (#1434).
+    """
+    return os.getenv("MCP_HOST", "")
+
+
 def _run_mcp_server(
     mcp: Any,
     bind_host: str,
@@ -447,7 +459,7 @@ def _run_mcp_server(
     """Run the FastMCP HTTP server, returning the process exit code."""
     try:
         log_info("Starting MCP server...")
-        if bind_host != "0.0.0.0":
+        if bind_host:
             log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
         # Do not pass log_level here: fastmcp's temporary_log_level would
         # rebuild its rich log handlers at the default 80-column width,
@@ -665,14 +677,9 @@ def main() -> int:
     # built), so the addon -- ingress, direct port, and reverse proxies / tunnels
     # on arbitrary hosts -- is covered. See ha_mcp.transport_security.
 
-    # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
-    # reach it inside the container; MCP_HOST override is provided for
-    # parity with the standard CLI entry points (see issue #1434).
-    bind_host = os.getenv("MCP_HOST", "0.0.0.0")
-
     return _run_mcp_server(
         mcp,
-        bind_host,
+        resolve_bind_host(),
         port,
         secret_path,
         # ws="none": uvicorn's default imports the shared websockets package.

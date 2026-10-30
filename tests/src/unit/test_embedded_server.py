@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 import pytest
 
 from ._embedded_stubs import install
+from ._listener_families import reachable_loopbacks, require_ipv6_loopback
 
 # Install stubs + put the component package on sys.path before importing the
 # integration modules below. Also an isort barrier so the imports below are never
@@ -37,6 +38,8 @@ import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
 # failing index by parsed hostname, and the fakes below match it the same way.
 _WHEELS_HOST = "wheels.home-assistant.io"
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    BIND_HOST_ALL,
+    BIND_HOST_LOOPBACK,
     CHANNEL_DEV,
     DATA_LAST_PIP_SPEC,
     DATA_REINSTALL_REQUESTED,
@@ -214,6 +217,19 @@ class TestConstruction:
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://ha.local:8123"
         assert mgr._pip_spec == "ha-mcp @ https://example/tarball.tgz"
+
+
+class TestListenFamilies:
+    """Issue #2915: "Local network" listened on IPv4 only."""
+
+    async def test_local_network_accepts_ipv6_clients(self):
+        require_ipv6_loopback()
+        host = es._listen_host(BIND_HOST_ALL)
+        assert await reachable_loopbacks(host) == {"127.0.0.1", "::1"}
+
+    async def test_loopback_choice_stays_off_other_families(self):
+        host = es._listen_host(BIND_HOST_LOOPBACK)
+        assert await reachable_loopbacks(host) == {"127.0.0.1"}
 
 
 class TestLoopbackDerivation:
