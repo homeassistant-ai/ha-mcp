@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Re-exported so ``HomeAssistantClient`` can inherit it without a new import
+# line (that module is over the module-size ratchet and may not grow).
+from .event_listeners import EventListenersMixin as EventListenersMixin
+
 
 @dataclass(frozen=True)
 class ErrorLogPage:

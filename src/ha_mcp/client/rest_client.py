@@ -24,7 +24,7 @@ from .error_log_journald import (
     journald_page,
     range_header,
 )
-from .models import ErrorLogPage
+from .models import ErrorLogPage, EventListenersMixin
 from .supervisor_client import make_supervisor_httpx_client
 
 
@@ -328,7 +328,7 @@ async def _read_render_verdict(
     return response
 
 
-class HomeAssistantClient:
+class HomeAssistantClient(EventListenersMixin):
     """Authenticated HTTP client for Home Assistant API."""
 
     def __init__(
