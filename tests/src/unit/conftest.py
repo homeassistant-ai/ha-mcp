@@ -139,6 +139,11 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
       the ``@with_auto_backup`` pre-write hook fails on their ``base_url``.
     - ``HA_MCP_DISABLE_UPDATE_CHECK=1``: the status tools would otherwise call
       pypi.org.
+    - No inherited ``GIT_*`` variables, and no global or system git config:
+      lefthook runs the suite inside a git hook, whose variables would make
+      git in ``tmp_path`` act on the contributor's repository (#2907), and a
+      global ``commit.gpgsign`` or ``tag.gpgsign`` would break the tests'
+      commits and tags. Details: *Git isolation* in ``tests/AGENTS.md``.
 
     The cached ``Settings`` is reset too, since it holds the values read for
     the previous test. ``monkeypatch`` restores all of it after each test, so
@@ -151,6 +156,10 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
     monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
+    for name in [var for var in os.environ if var.startswith("GIT_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     try:
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.utils.data_paths import get_data_dir
