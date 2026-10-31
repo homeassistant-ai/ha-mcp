@@ -33,6 +33,8 @@ concurrency:
 jobs:
   # Skip if commit is from semantic-release
   check-skip:
+    # Dev add-on publishing of this repository only; every later job depends on this one.
+    if: github.repository == 'homeassistant-ai/ha-mcp'
     runs-on: ubuntu-latest
     outputs:
       should_skip: ${{ steps.check.outputs.should_skip }}
