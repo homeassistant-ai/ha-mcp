@@ -6,16 +6,23 @@ import httpx
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ha_mcp.tools.tools_service import ServiceTools
 
 
-def _make_tools(fire_event_return: dict | Exception) -> ServiceTools:
+def _make_tools(
+    fire_event_return: dict | Exception,
+    listener_counts: dict[str, int] | Exception | None = None,
+) -> ServiceTools:
     client = MagicMock()
     if isinstance(fire_event_return, Exception):
         client.fire_event = AsyncMock(side_effect=fire_event_return)
     else:
         client.fire_event = AsyncMock(return_value=fire_event_return)
+    if isinstance(listener_counts, Exception):
+        client.get_event_listeners = AsyncMock(side_effect=listener_counts)
+    else:
+        client.get_event_listeners = AsyncMock(return_value=listener_counts or {})
     tools = ServiceTools.__new__(ServiceTools)
     tools._client = client
     tools._device_tools = MagicMock()
@@ -126,3 +133,41 @@ class TestHaCallEvent:
         assert any("timed out" in w.lower() for w in warnings), (
             f"Expected timeout-related warning content; got: {warnings!r}"
         )
+
+    async def test_reports_exact_listener_count(self):
+        tools = _make_tools({"message": "ok"}, {"my_event": 2})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["listener_count"] == 2
+        assert result["wildcard_listener_count"] == 0
+        assert "warnings" not in result
+
+    async def test_wildcard_listener_suppresses_the_no_listener_warning(self):
+        tools = _make_tools({"message": "ok"}, {"*": 3})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["listener_count"] == 0
+        assert result["wildcard_listener_count"] == 3
+        assert "warnings" not in result
+
+    async def test_warns_when_no_listener_is_registered(self):
+        tools = _make_tools({"message": "ok"}, {})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert result["listener_count"] == 0
+        assert result["wildcard_listener_count"] == 0
+        assert any("no event listeners" in w.lower() for w in result["warnings"])
+
+    async def test_listener_lookup_failure_still_fires(self):
+        tools = _make_tools({"message": "ok"}, HomeAssistantAPIError("events down"))
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert "listener_count" not in result
+        assert "wildcard_listener_count" not in result
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)

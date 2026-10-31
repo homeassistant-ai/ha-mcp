@@ -36,7 +36,7 @@ from ..errors import (
     create_validation_error,
 )
 from ..utils.usage_logger import log_tool_call
-from .coercion import UNSET
+from .coercion import UNSET, parse_json_param
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,36 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
         json.dumps(error_response, indent=2, default=str),
         log_level=TOOL_ERROR_LOG_LEVEL,
     )
+
+
+def _parse_json_dict_param(
+    data: str | dict[str, Any] | None,
+    *,
+    type_error_message: str,
+) -> dict[str, Any] | None:
+    """Parse a JSON-object tool parameter, rejecting lists and invalid JSON."""
+    if data is None:
+        return None
+    raw: Any = None
+    try:
+        raw = parse_json_param(data, "data")
+    except ValueError as e:
+        raise_tool_error(
+            create_validation_error(
+                f"Invalid data parameter: {e}",
+                parameter="data",
+                invalid_json=True,
+            )
+        )
+    if raw is not None and not isinstance(raw, dict):
+        raise_tool_error(
+            create_validation_error(
+                type_error_message,
+                parameter="data",
+                details=f"Received type: {type(raw).__name__}",
+            )
+        )
+    return raw if isinstance(raw, dict) else None
 
 
 def extract_tool_error_message(te: ToolError | str) -> str:
