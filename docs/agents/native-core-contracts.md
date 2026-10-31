@@ -132,6 +132,46 @@ backup and the diff also follow. The snapshot holds no position and Core's
 services cannot set a uid, so a removed item comes back through `todo.add_item`
 with a new uid, at the place the list gives new items.
 
+The automation config tools prefer the component's
+`ha_mcp_tools/automation_config` bridge (capability `automation_config`).
+Its `validate` runs Core's own automation validator in process and answers
+Core's validation status and humanized error, so a config Core would refuse
+is refused before the write, naming the section Core failed on. Its
+`describe` returns Core's registered trigger or condition descriptions;
+when Core's error names an unknown trigger or condition key, the closest
+live keys and the matched description come from there, never from a
+hand-kept list. Its `lookup` returns the automation's entity registry row,
+the load failure Core recorded in its `{entity_id}_validation_*` repair
+issue, and the entities, devices, areas, floors, labels and blueprint Core
+says the automation references. Without the component the config goes to
+Core's REST config endpoint and its 400 text leads the error; WebSocket
+`validate_config` then names the failed section, the closest keys come from
+the first event of `trigger_platforms/subscribe` or
+`condition_platforms/subscribe`, the registry row from
+`config/entity_registry/get` and the load failure from
+`repairs/list_issues`, and references are not available. On both paths the
+config reaches Core as written and Core's text is never rewritten: no root
+key is pluralised, no alias or trigger key is required or renamed by the
+tool. The stored body comes from REST `GET /api/config/automation/config/<id>`,
+which Core reads under its mutation lock; WebSocket `automation/config`
+returns the entity's `raw_config`, which stays stale until the reload after
+a write completes. An `automation.x` entity_id resolves to its config id
+through the entity registry first, so a registry-disabled automation, which
+has no state, still resolves; the state's `id` attribute is the fallback.
+`operation` is `created` when Core held no config under the id before the
+write and `updated` otherwise, and an `automation.x` that does not resolve
+is not found, never a create. Core's DELETE answers 400 "Resource not
+found" for a missing id, which the remove tool reports as not found. The
+reference validator also checks device, area, floor and label targets when
+the component's `reference_data` advertises `reference_data_targets`, and
+entities and services only otherwise. The tools' own checks are HA-MCP
+policies, not Core rules: the `config_hash` optimistic lock, the
+alias-replacement guard, the guard against a config `id` passed without an
+entity_id, the config-`id` mismatch guard, write-mode exclusivity, keeping
+the `enabled` and `category` parameters out of the stored config, blueprint
+empty-list stripping, the best-practice checker and the reference
+validator.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative
