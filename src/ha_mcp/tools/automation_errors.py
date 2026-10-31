@@ -14,7 +14,7 @@ import asyncio
 import difflib
 import logging
 import re
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, cast
 
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
@@ -28,16 +28,8 @@ logger = logging.getLogger(__name__)
 
 REJECTION_PREFIX = "Home Assistant rejected the automation: "
 
-# Core raises both quote styles (helpers/condition.py uses each once).
+# Core raises both quote styles (the helpers/condition package uses each once).
 _INVALID_KEY = re.compile(r"Invalid (trigger|condition) ['\"]([^'\"]+)['\"] specified")
-
-_STATUS_SECTIONS = {
-    "failed_schema": "schema",
-    "failed_triggers": "triggers",
-    "failed_conditions": "conditions",
-    "failed_actions": "actions",
-    "failed_blueprint": "blueprint",
-}
 
 # Bounds the wait for a platform subscription's first event, which Core sends
 # right after the subscription result.
@@ -46,7 +38,11 @@ _DESCRIPTIONS_TIMEOUT_S = 5.0
 
 def section_from_status(status: str | None) -> str | None:
     """The config section a component ``validate`` status names."""
-    return _STATUS_SECTIONS.get(status or "")
+    return (
+        status.removeprefix("failed_")
+        if status and status.startswith("failed_")
+        else None
+    )
 
 
 def core_rejection_text(exc: HomeAssistantAPIError) -> str | None:
@@ -141,16 +137,10 @@ def _text_suggestions(core_text: str, config: dict[str, Any]) -> list[str]:
     """Targeted hints for Core rejections agents commonly cause."""
     lowered = core_text.lower()
     suggestions = []
-    if "'service'" in core_text and "not allowed" in core_text:
+    if "unexpected keyword argument" in lowered:
         suggestions.append(
-            "Use 'action:' not 'service:' for service calls in action steps "
-            "(renamed in HA 2024.8)."
-        )
-    elif "unexpected keyword argument" in lowered:
-        suggestions.append(
-            "An action step contains a field that belongs at the automation root "
-            "(e.g. alias, trigger, condition). Each action step should only contain "
-            "action/target/data/delay/choose/if/repeat/parallel keys."
+            "A root-level field such as alias, triggers or conditions is inside "
+            "an action step."
         )
     elif "'variables'" in core_text and "dictionary" in core_text:
         suggestions.append(
@@ -179,9 +169,7 @@ async def raise_core_rejection(
     suggestions = _text_suggestions(core_text, config)
     match = _INVALID_KEY.search(core_text)
     if match:
-        kind: Literal["trigger", "condition"] = (
-            "trigger" if match.group(1) == "trigger" else "condition"
-        )
+        kind = cast(Literal["trigger", "condition"], match.group(1))
         key = match.group(2)
         descriptions = await platform_descriptions(client, kind) or {}
         matches = closest_matches(key, sorted(descriptions))

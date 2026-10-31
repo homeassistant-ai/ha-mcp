@@ -42,6 +42,7 @@ async def _automation_config(
         return None
     if not result.get("success"):
         if result.get("error_code") == "unknown_command":
+            logger.debug("%s is not registered", WS_AUTOMATION_CONFIG)
             invalidate_caps(client)
         else:
             logger.warning(
@@ -49,7 +50,12 @@ async def _automation_config(
             )
         return None
     reply = result.get("result")
-    if not isinstance(reply, dict) or reply.get("status") == "unavailable":
+    if not isinstance(reply, dict):
+        return None
+    if reply.get("status") == "unavailable":
+        logger.warning(
+            "%s %s unavailable: %s", WS_AUTOMATION_CONFIG, action, reply.get("error")
+        )
         return None
     return reply
 
@@ -74,8 +80,10 @@ async def automation_describe(
 async def automation_lookup(
     client: Any, *, entity_id: str | None = None, unique_id: str | None = None
 ) -> dict[str, Any] | None:
-    """The automation's ``{found, entity, validation, references}``."""
-    fields = {"entity_id": entity_id} if entity_id is not None else {}
+    """The automation's ``{found, entity, loaded, validation, references}``."""
+    fields: dict[str, str] = {}
+    if entity_id is not None:
+        fields["entity_id"] = entity_id
     if unique_id is not None:
         fields["unique_id"] = unique_id
     reply = await _automation_config(client, "lookup", **fields)
