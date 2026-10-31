@@ -259,17 +259,10 @@ async def test_targets_left_unchecked_are_named(
     assert result["unchecked_target_kinds"] == unchecked
 
 
-@pytest.mark.parametrize(
-    ("sentinels", "warned"),
-    [(["none", "all"], set()), (None, {"none", "all"})],
-    ids=["core-sent-them", "older-component"],
-)
-async def test_cores_match_sentinels_are_not_unknown_targets(
-    sentinels: list[str] | None, warned: set[str]
-) -> None:
+async def test_cores_match_sentinels_are_not_unknown_targets() -> None:
     """Core accepts ``none`` and ``all`` as targets; they were warned as
     missing registry items. The values come from Core through the component,
-    so a reply without them changes nothing."""
+    never from a list kept here."""
     reply: dict[str, Any] = {
         "services": _LIGHT_SERVICES,
         "entity_ids": [],
@@ -277,9 +270,8 @@ async def test_cores_match_sentinels_are_not_unknown_targets(
         "area_ids": [],
         "floor_ids": [],
         "label_ids": [],
+        "match_sentinels": ["none", "all"],
     }
-    if sentinels is not None:
-        reply["match_sentinels"] = sentinels
     config = {
         "actions": [
             {
@@ -291,18 +283,48 @@ async def test_cores_match_sentinels_are_not_unknown_targets(
 
     result = await _references(reply, config)
 
-    assert {w["value"] for w in result["warnings"]} == warned
+    assert result["warnings"] == []
+
+
+async def test_a_service_or_event_field_named_like_a_target_is_not_checked() -> None:
+    """``device_id`` inside ``event_data`` or a service's ``data`` is that
+    service's or event's own field; it was warned as a missing device."""
+    reply: dict[str, Any] = {
+        "services": _LIGHT_SERVICES,
+        "entity_ids": [],
+        "device_ids": [],
+        "area_ids": [],
+        "floor_ids": [],
+        "label_ids": [],
+    }
+    config = {
+        "actions": [
+            {"event": "vendor_event", "event_data": {"device_id": "vendor-local"}},
+            {"action": "light.turn_on", "data": {"area_id": "zone-7"}},
+        ]
+    }
+
+    result = await _references(reply, config)
+
+    assert result["warnings"] == []
+    assert "unchecked_target_kinds" not in result
 
 
 # --- component refusals -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("action", ["validate", "describe"])
+@pytest.mark.parametrize(
+    ("action", "fields"),
+    [("validate", {}), ("describe", {}), ("lookup", {"entity_id": ""})],
+    ids=["validate-without-config", "describe-without-kind", "lookup-empty-id"],
+)
 async def test_request_without_its_input_is_refused_not_answered(
     core: Any,  # noqa: F811
     action: str,
+    fields: dict[str, Any],
 ) -> None:
     """Answered, a validate without a config or a describe without a kind
-    would read as Core's verdict on nothing."""
+    would read as Core's verdict on nothing, and a lookup of ``""`` as an
+    automation that does not exist."""
     with pytest.raises(_StubHomeAssistantError):
-        await _run(core, action)
+        await _run(core, action, **fields)

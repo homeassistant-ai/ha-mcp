@@ -55,6 +55,13 @@ _REFERENCE_KEYS: dict[str, RefKind] = {
     "label_id": "label",
 }
 
+# Blocks whose keys are the service's, the event's or the user's own, not Core's
+# target fields: a ``device_id`` there is a parameter, not a registry device.
+# ``entity_id`` is still read there, as the validator always did.
+_DATA_KEYS: frozenset[str] = frozenset(
+    {"data", "service_data", "event_data", "variables", "trigger_variables"}
+)
+
 # ``reference_data`` reply key holding each target kind's registry ids.
 _TARGET_ID_KEYS: dict[RefKind, str] = {
     "device": "device_ids",
@@ -155,7 +162,7 @@ def extract_refs(config: Any) -> WalkerResult:
     # it without a ``nonlocal`` dance.
     unvalidated_templates = [0]
 
-    def _walk(node: Any, path: str) -> None:
+    def _walk(node: Any, path: str, in_data: bool) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
                 sub_path = f"{path}.{key}" if path else key
@@ -165,22 +172,26 @@ def extract_refs(config: Any) -> WalkerResult:
                     continue
 
                 kind = _REFERENCE_KEYS.get(key)
-                if kind and _extract_registry_refs(
-                    sub_path, value, kind, refs, unvalidated_templates
+                if (
+                    kind
+                    and (kind == "entity" or not in_data)
+                    and _extract_registry_refs(
+                        sub_path, value, kind, refs, unvalidated_templates
+                    )
                 ):
                     continue
 
                 # Neither a service nor an entity key (or an entity key whose
                 # value is neither str nor list): recurse so deeply nested
                 # action blocks (choose/if/parallel/repeat) still get walked.
-                _walk(value, sub_path)
+                _walk(value, sub_path, in_data or key in _DATA_KEYS)
 
         elif isinstance(node, list):
             for i, item in enumerate(node):
-                _walk(item, f"{path}[{i}]")
+                _walk(item, f"{path}[{i}]", in_data)
         # Primitives: nothing to extract.
 
-    _walk(config, "")
+    _walk(config, "", False)
     return {
         "refs": refs,
         "unvalidated_templates": unvalidated_templates[0],
@@ -321,8 +332,12 @@ async def validate_config_references(
         # same ``services_payload`` / ``states_payload`` shapes the reducers
         # consume, so the warnings are identical (pinned by the cross-seam
         # contract test).
+        # The four registries are read only when a target kind is referenced.
         reference_data = await fetch_reference_data_via_component(
-            client, include_targets=True
+            client,
+            include_targets=any(
+                ref["kind"] in _TARGET_ID_KEYS for ref in walker_result["refs"]
+            ),
         )
         target_ids: dict[RefKind, set[str]] = {}
         sentinels: frozenset[str] = frozenset()

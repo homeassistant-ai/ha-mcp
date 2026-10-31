@@ -209,7 +209,7 @@ def _require(msg: dict[str, Any]) -> None:
     does, rather than answer a result the caller could take for "not found"."""
     action = msg["action"]
     needs = _NEEDS[action]
-    if all(msg.get(field) is None for field in needs):
+    if all(msg.get(field) in (None, "") for field in needs):
         from homeassistant.exceptions import HomeAssistantError
 
         raise HomeAssistantError(

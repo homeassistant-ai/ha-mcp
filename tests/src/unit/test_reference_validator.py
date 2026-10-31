@@ -243,7 +243,12 @@ class TestExtractRefs:
             ],
         }
         kinds = {(r["value"], r["kind"]) for r in extract_refs(config)["refs"]}
-        assert {("dev-1", "device"), ("kitchen", "area"), ("evening", "label")} <= kinds
+        assert kinds == {
+            ("dev-1", "device"),
+            ("kitchen", "area"),
+            ("evening", "label"),
+            ("light.turn_on", "service"),
+        }
 
     def test_non_string_service_values_ignored(self):
         """A non-string service value shouldn't crash the walker."""

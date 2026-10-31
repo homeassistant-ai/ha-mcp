@@ -705,3 +705,39 @@ class TestReferenceValidationMeta:
         result = await tools.ha_config_set_automation(config=_config(), wait=False)
 
         assert result["validation"]["references_unchecked"] == "down"
+
+
+class TestSceneCreateMisrouteThroughTheTool:
+    async def test_nested_scene_create_without_a_trigger_is_refused_before_any_write(
+        self, tools, mock_client
+    ) -> None:
+        """The guard is only worth having if the public tool runs it: a
+        choose option's scene.create under an empty trigger list must be refused
+        by ha_config_set_automation itself, with nothing sent to Core."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_automation(
+                config={
+                    "alias": "Movie Snapshot",
+                    "triggers": [],
+                    "actions": [
+                        {
+                            "choose": [
+                                {
+                                    "conditions": [],
+                                    "sequence": [
+                                        {
+                                            "action": "scene.create",
+                                            "data": {"scene_id": "movie_night"},
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    ],
+                },
+                MandatoryBPS=False,
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene.create" in error["message"]
+        mock_client.upsert_automation_config.assert_not_awaited()
