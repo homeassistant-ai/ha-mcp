@@ -193,7 +193,7 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_LIST, exc)
         return None
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError / plain establish Exception → legacy (the
+        # HomeAssistantConnectionError or any other error → legacy (the
         # legacy device list rides the send_websocket_message bridge).
         logger.warning(
             "%s connection error; falling back to legacy: %r", WS_DEVICE_LIST, exc

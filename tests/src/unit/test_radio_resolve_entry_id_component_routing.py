@@ -7,7 +7,7 @@ component advertises ``config_entries`` the domain-scoped read now rides one
 ``ha_mcp_tools/config_entries`` frame (shared ``_fetch_entries_via_component``);
 the legacy ``config_entries/get`` dump stays the fallback. These pin the seam:
 component-hit (no legacy dump), legacy fallback on no-caps, ``unknown_command`` →
-invalidate caps + legacy, a plain-``Exception`` establish failure → legacy, and
+invalidate caps + legacy, an establish failure → legacy, and
 "integration not configured" → None.
 """
 
@@ -17,7 +17,10 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import component_api, tools_integrations
 from ha_mcp.tools.radio.base import resolve_entry_id
 
@@ -127,16 +130,17 @@ async def test_resolve_entry_id_unknown_command_invalidates_and_falls_back() -> 
 
 @pytest.mark.asyncio
 async def test_resolve_entry_id_establish_failure_falls_back_to_legacy() -> None:
-    """A plain-``Exception`` WS establish failure after caps cached → legacy dump.
+    """A WS establish failure after caps cached → legacy dump.
 
-    The config_entries legacy path is the REST-client WS bridge (never raises),
-    NOT the shared pooled WS, so the establish failure must route to legacy.
+    The config_entries legacy path is the ``send_websocket_message`` bridge, which
+    acquires the pooled socket again itself, so the establish failure must route
+    to legacy.
     """
     caps_ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES)
     client = RoutingClient(entries=[_entry()])
 
     with patch_ws_establish_failure(
-        caps_ws, tools_integrations, RuntimeError("WS establish failed")
+        caps_ws, tools_integrations, HomeAssistantConnectionError("WS establish failed")
     ):
         entry_id = await resolve_entry_id(client, "zwave_js")
 

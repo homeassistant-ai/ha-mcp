@@ -37,6 +37,7 @@ from .search.overview import (
 )
 from .search.response import (
     _compute_eligibility,
+    _omit_empty_warnings,
     _ResolvedSearch,
     _validate_search_types,
 )
@@ -417,9 +418,9 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
                         req, ctx, visibility=visibility, caps=caps
                     )
                     if component_response is not None:
-                        return component_response
+                        return _omit_empty_warnings(component_response)
 
-        return await self._legacy_ha_search(req, ctx)
+        return _omit_empty_warnings(await self._legacy_ha_search(req, ctx))
 
     @tool(
         name="ha_get_overview",
@@ -759,10 +760,9 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         preserved. `attribute_keys=` further narrows the `attributes` sub-dict
         and is only applied when `"attributes"` is in `fields=` (or
         `fields=None`); otherwise it is a no-op and a `warnings` list is emitted
-        outside the projected record(s) — at the response wrapper level in bulk
-        mode, at the top-level result (sibling of `data`/`metadata`) in
-        single-entity mode — so `fields=["state"]` still returns a record with
-        only `state`.
+        at the top level of the result (sibling of `data`/`metadata`), outside
+        the projected record(s), so `fields=["state"]` still returns a record
+        with only `state`.
 
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")

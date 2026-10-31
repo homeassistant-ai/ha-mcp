@@ -416,10 +416,27 @@ async def add_timezone_metadata(
     - Naive strings (no offset) are assumed to be UTC before conversion.
     - ``ZoneInfoNotFoundError`` (tzdata not installed) falls back to UTC.
     - Any config-fetch failure also falls back to UTC without conversion.
+
+    A top-level ``warnings`` list in *data* is returned beside ``data`` instead
+    of inside it, ahead of any timezone warning the wrapper adds, and omitted
+    when empty; *data* itself is left unchanged.
     """
     if not include_metadata:
         return data
 
+    result = await _wrap_with_timezone(client, data, convert_timestamps)
+    inner = result["data"]
+    if isinstance(inner, dict) and isinstance(inner.get("warnings"), list):
+        result["data"] = {k: v for k, v in inner.items() if k != "warnings"}
+        if warnings := inner["warnings"] + result.get("warnings", []):
+            result["warnings"] = warnings
+    return result
+
+
+async def _wrap_with_timezone(
+    client: Any, data: dict[str, Any], convert_timestamps: bool
+) -> dict[str, Any]:
+    """Fetch the timezone, convert *data* and wrap it; may add top-level ``warnings``."""
     ha_timezone, fetch_failed = await fetch_ha_timezone(client)
 
     if not convert_timestamps:

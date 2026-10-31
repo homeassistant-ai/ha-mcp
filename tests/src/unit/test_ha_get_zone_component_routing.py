@@ -396,9 +396,9 @@ async def test_command_timeout_falls_back_with_warning() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_with_warning() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → legacy ``zone/list`` AND a ``warnings[]`` entry, not a propagated
-    error. The legacy zone list rides the swallowing bridge, so it does not die
+    error. The legacy zone list rides the WS bridge, so it does not die
     identically on a pooled-WS drop."""
     caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
     client = RoutingClient()

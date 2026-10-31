@@ -219,7 +219,7 @@ async def _via_component(client: Any, domain: str, path: str) -> _ComponentBody:
             )
         return _NO_COMPONENT_BODY
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError / plain establish Exception → metadata-only
+        # HomeAssistantConnectionError or any other error → metadata-only
         # (no full-body legacy fetch exists; the base metadata is already served).
         logger.warning(
             "ha_mcp_tools/blueprint_get connection error; served metadata-only: %r",

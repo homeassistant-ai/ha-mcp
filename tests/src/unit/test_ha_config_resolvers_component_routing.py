@@ -21,10 +21,10 @@ These pin, per consumer, the standard component-routing taxonomy: component
 preferred, capability-miss -> legacy, ``unknown_command`` -> invalidate caps +
 legacy, non-unknown command error -> legacy WITHOUT invalidating, AND — uniform
 across every consumer — a transport failure -> legacy: both a
-``HomeAssistantConnectionError`` off the frame AND a plain ``Exception`` from
+``HomeAssistantConnectionError`` off the frame AND the same error from
 ``get_websocket_client()`` failing to establish the socket fall back rather than
 propagate. None of the legacy paths dies identically on a pooled-WS drop: the
-scene resolver's legacy scan rides the swallowing ``send_websocket_message`` bridge
+scene resolver's legacy scan rides the ``send_websocket_message`` bridge
 (with a naive ``scene.{id}`` fallback), the automation resolver scans REST
 ``get_states()``, and the validator's legacy path is the REST
 ``get_services()``/``get_states()`` pair — so an escaping error would abort a
@@ -363,7 +363,7 @@ class TestSceneResolverRouting:
     async def test_connection_error_falls_back_to_legacy(self) -> None:
         """A WS-down error on the entity_lookup frame falls back to the legacy list.
 
-        The resolver's legacy path rides the swallowing ``send_websocket_message``
+        The resolver's legacy path rides the ``send_websocket_message``
         bridge (and, on an empty scan, the naive ``scene.{id}`` fallback), so it does
         NOT die identically on a pooled-WS drop. ``fetch_entity_lookup_via_component``
         catches the error and returns ``None`` so the legacy scan runs — an escaping
@@ -390,12 +390,12 @@ class TestSceneResolverRouting:
 
     @pytest.mark.asyncio
     async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
-        """A plain establish ``Exception`` from ``get_websocket_client()`` → legacy.
+        """A failed establish in ``get_websocket_client()`` → legacy.
 
-        After caps are cached, ``WebSocketManager`` can raise a plain ``Exception``
-        (not ``HomeAssistantConnectionError``) when it cannot (re)establish the
-        pooled socket for the read. The helper catches it broadly → ``None`` so the
-        resolver's legacy scan runs.
+        After caps are cached, ``WebSocketManager`` raises
+        ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled
+        socket for the read. The helper catches it → ``None`` so the resolver's
+        legacy scan runs.
         """
         caps_ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
         client = RoutingClient(
@@ -563,7 +563,7 @@ class TestAutomationResolverRouting:
 
     @pytest.mark.asyncio
     async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
-        """A plain establish ``Exception`` from ``get_websocket_client()`` → legacy
+        """A failed establish in ``get_websocket_client()`` → legacy
         ``get_states()`` scan."""
         caps_ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
         client = RoutingClient(states=self._states())
@@ -709,13 +709,13 @@ class TestReferenceDataRouting:
 
     @pytest.mark.asyncio
     async def test_ws_establish_failure_falls_back_to_rest(self) -> None:
-        """``get_websocket_client()`` raising a plain ``Exception`` falls back to REST.
+        """A failed establish in ``get_websocket_client()`` falls back to REST.
 
-        After caps are cached, ``WebSocketManager`` can raise a plain ``Exception``
-        (not ``HomeAssistantConnectionError``) when it cannot (re)establish the
-        pooled socket. ``fetch_reference_data_via_component`` catches it broadly and
-        returns ``None`` so the validator's REST legacy fetch still produces the
-        reference warnings.
+        After caps are cached, ``WebSocketManager`` raises
+        ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled
+        socket. ``fetch_reference_data_via_component`` catches it and returns
+        ``None`` so the validator's REST legacy fetch still produces the reference
+        warnings.
         """
         caps_ws = make_ws(
             "ha_mcp_tools/reference_data", info_result=_CAPS_REFERENCE_DATA

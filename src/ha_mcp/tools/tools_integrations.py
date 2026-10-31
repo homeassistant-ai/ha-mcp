@@ -354,9 +354,9 @@ async def _fetch_entries_via_component(
         return None
     except Exception as exc:  # noqa: BLE001
         # DEVIATION (see docstring): the legacy path is pure REST / the REST-client
-        # WS bridge, NOT the shared pooled WS. A pooled-WS drop
-        # (HomeAssistantConnectionError) OR get_websocket_client() raising a plain
-        # Exception when WebSocketManager can't (re)connect must fall back to legacy
+        # WS bridge, NOT the shared pooled WS. A pooled-WS drop or a failed
+        # (re)connect (HomeAssistantConnectionError), a rejected token
+        # (HomeAssistantAuthError) or any other error must fall back to legacy
         # rather than kill the tool.
         logger.warning(
             "%s connection error; falling back to legacy: %r",

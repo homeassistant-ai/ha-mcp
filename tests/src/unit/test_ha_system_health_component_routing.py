@@ -15,13 +15,13 @@ reach into the radio integration), and its ``entities``/``states``/
 
 Routing is all-or-nothing per call: a capability miss, a component command
 error/timeout, a malformed slice, OR a transport failure (both a
-``HomeAssistantConnectionError`` off the frame and a plain ``Exception`` from
+``HomeAssistantConnectionError`` off the frame and the same error from
 ``get_websocket_client()`` failing to establish the socket) falls back to every
 consuming section's own legacy fetch — never a partial hybrid where one section
 reads the snapshot and a sibling reads legacy data from a different instant, and
 never a WHOLE-tool failure where legacy would have degraded per-section (the
-legacy sections use a dedicated health WS + REST + the never-raising bridge, not
-the pooled snapshot socket). These tests pin: the snapshot is fetched exactly
+legacy sections use a dedicated health WS + REST + the WS bridge, which
+reconnects a dropped pooled socket). These tests pin: the snapshot is fetched exactly
 once for a multi-section call and replaces every legacy fetch it covers; a
 capability miss or snapshot failure degrades ALL consuming sections back to
 legacy; ``unknown_command`` invalidates the cached caps while any other command
@@ -555,8 +555,8 @@ async def test_section_error_still_degrades_to_error_subdict() -> None:
 async def test_snapshot_connection_error_falls_back_to_legacy() -> None:
     """A ``HomeAssistantConnectionError`` on the snapshot frame degrades to the
     per-section legacy fetches rather than failing the WHOLE tool: the legacy
-    sections run on a dedicated health WS + REST + the never-raising bridge, not
-    the pooled snapshot socket, so they still serve their data."""
+    sections run on a dedicated health WS + REST + the WS bridge, which
+    reconnects a dropped pooled socket, so they still serve their data."""
     ws = make_ws(
         "ha_mcp_tools/system_snapshot",
         info_result=_CAPS_SNAPSHOT,
@@ -576,7 +576,7 @@ async def test_snapshot_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` after caps
+    """A failed establish in ``get_websocket_client()`` after caps
     are cached degrades to the per-section legacy fetches, not a whole-tool error."""
     caps_ws = make_ws("ha_mcp_tools/system_snapshot", info_result=_CAPS_SNAPSHOT)
     health_ws = _health_ws(repairs_issues=[_issue("iss-1")])

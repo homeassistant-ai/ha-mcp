@@ -167,8 +167,7 @@ class EntityModesMixin(EntityEnrichmentMixin):
         merge_visibility_warnings(search_data, enrich_warnings)
 
         # No add_timezone_metadata: entity records carry no timestamp fields, so
-        # the enrichment converted nothing and its /api/config fetch was pure
-        # waste (the orchestrator discards its metadata wrapper anyway).
+        # the enrichment converted nothing and its /api/config fetch was pure waste.
         return search_data
 
     async def _search_area_only_populated(

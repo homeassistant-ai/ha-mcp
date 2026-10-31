@@ -320,13 +320,13 @@ async def test_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """``get_websocket_client()`` raising a plain ``Exception`` falls back to REST.
+    """A failed establish in ``get_websocket_client()`` falls back to REST.
 
-    After caps are cached, ``WebSocketManager`` can raise a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when it cannot (re)establish the pooled socket
-    for the read command. ``_fetch_services_list_via_component`` catches it broadly
-    and returns ``None`` so the REST catalog + WS translations legacy fetch serves
-    the result rather than the tool erroring out.
+    After caps are cached, ``WebSocketManager`` raises
+    ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled socket
+    for the read command. ``_fetch_services_list_via_component`` catches it and
+    returns ``None`` so the REST catalog + WS translations legacy fetch serves the
+    result rather than the tool erroring out.
     """
     caps_ws = make_ws("ha_mcp_tools/services_list", info_result=_CAPS_SERVICES_LIST)
     client = RoutingClient()

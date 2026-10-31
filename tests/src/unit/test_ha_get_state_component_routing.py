@@ -204,13 +204,21 @@ async def test_single_missing_via_component_raises_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_states_payload_falls_back_to_legacy() -> None:
-    """A component payload whose ``states`` is not a dict (shape drift) is a None
-    miss → legacy per-id REST fetch serves the read (issue #1813 T3)."""
+@pytest.mark.parametrize(
+    "cmd_result",
+    [{"states": ["not", "a", "dict"], "missing": []}, ["not", "a", "dict"]],
+    ids=["states-not-dict", "result-not-dict"],
+)
+async def test_malformed_states_payload_falls_back_to_legacy(
+    cmd_result: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A component payload whose ``states`` (or whole ``result``) is not a dict
+    (shape drift) is a None miss → legacy per-id REST fetch serves the read
+    (issue #1813 T3), and the operator log names the drift."""
     ws = make_ws(
         "ha_mcp_tools/states",
         info_result=_CAPS_STATES,
-        cmd_result={"states": ["not", "a", "dict"], "missing": []},
+        cmd_result=cmd_result,
     )
     client = RoutingClient()
     get_state = _build_get_state(client)
@@ -223,6 +231,11 @@ async def test_malformed_states_payload_falls_back_to_legacy() -> None:
     # The component was tried once, but its malformed shape routed to legacy REST.
     assert len(_states_calls(ws)) == 1
     assert client.get_state_calls == 1
+    assert "warnings" not in resp
+    assert any(
+        r.levelname == "WARNING" and "malformed payload" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -262,10 +275,14 @@ async def test_capsless_component_uses_legacy_per_id() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert not _states_calls(ws)
     assert client.get_state_calls == 2
+    assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio
-async def test_unknown_command_falls_back_to_legacy_silently() -> None:
+async def test_unknown_command_falls_back_to_legacy_silently(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """unknown_command on the states call → invalidate caps + silent legacy fetch."""
     ws = make_ws(
         "ha_mcp_tools/states",
@@ -281,10 +298,19 @@ async def test_unknown_command_falls_back_to_legacy_silently() -> None:
     assert resp["data"]["states"]["light.a"]["state"] == "on"
     assert client.get_state_calls == 1
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
+    # The caps were invalidated, so the timezone wrapper probes info again.
+    info_calls = [
+        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
+    ]
+    assert len(info_calls) == 2
+    assert not any("states failed" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_command_error_falls_back_to_legacy_silently() -> None:
+async def test_command_error_falls_back_to_legacy_silently(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A non-unknown command error / timeout → silent legacy fetch (no warning)."""
     ws = make_ws(
         "ha_mcp_tools/states",
@@ -300,10 +326,22 @@ async def test_command_error_falls_back_to_legacy_silently() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
+    # A timeout keeps the cached caps (one info probe) and logs as a command failure.
+    info_calls = [
+        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
+    ]
+    assert len(info_calls) == 1
+    assert any(
+        r.levelname == "WARNING" and "states failed" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_ws_connection_error_falls_back_to_legacy_rest() -> None:
+async def test_ws_connection_error_falls_back_to_legacy_rest(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A WS transport failure on the component read falls back to the REST legacy
     path — a SEPARATE transport — instead of surfacing a spurious connection error.
 
@@ -326,15 +364,22 @@ async def test_ws_connection_error_falls_back_to_legacy_rest() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
     # The component was tried exactly once before falling back.
     assert len(_states_calls(ws)) == 1
+    assert any(
+        r.levelname == "WARNING" and "connection error" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy_rest() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (the case the
-    ``HomeAssistantConnectionError`` tuple does NOT cover) also falls back to the
-    REST legacy path instead of surfacing a spurious connection error."""
+async def test_ws_establish_failure_falls_back_to_legacy_rest(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed (re)connect in ``get_websocket_client()`` (a
+    ``HomeAssistantConnectionError``, #1947) also falls back to the REST legacy
+    path instead of surfacing a spurious connection error."""
     caps_ws = make_ws("ha_mcp_tools/states", info_result=_CAPS_STATES)
     client = RoutingClient()
     get_state = _build_get_state(client)
@@ -349,3 +394,8 @@ async def test_ws_establish_failure_falls_back_to_legacy_rest() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+    assert "warnings" not in resp
+    assert any(
+        r.levelname == "WARNING" and "connection error" in r.getMessage()
+        for r in caplog.records
+    )

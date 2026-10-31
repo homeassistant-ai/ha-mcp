@@ -237,12 +237,13 @@ class ZoneTools:
           entry, and ``log.warning``.
         - a response that does not authoritatively enumerate ``zone`` (an older
           component with no ``covered_types``): fall back to legacy silently.
-        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
-          served from the legacy listing (its reads ride the swallowing
-          ``send_websocket_message`` bridge, so a transport failure surfaces
-          there as a structured error or a listing gap rather than dying
-          identically), with a ``warnings[]`` entry + ``log.warning``.
+        - ``HomeAssistantConnectionError`` (pooled-WS drop or a failed (re)connect
+          in ``get_websocket_client()``): served from the legacy listing (its
+          reads ride the ``send_websocket_message`` bridge, so a transport
+          failure surfaces there as a structured error or a listing gap rather
+          than dying identically), with a ``warnings[]`` entry + ``log.warning``.
+          A token HA rejects (``HomeAssistantAuthError``) takes this branch too,
+          but the legacy reads use the same token and fail with it.
         """
         try:
             raw = await self._send_component_zone_list()

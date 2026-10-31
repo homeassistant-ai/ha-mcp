@@ -405,10 +405,10 @@ async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) ->
 async def test_ws_establish_failure_falls_back_with_warning(
     tmp_path, monkeypatch
 ) -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → legacy path AND a ``warnings[]`` entry, not a propagated error.
 
-    The legacy overview reads REST states/services + the swallowing registry
+    The legacy overview reads REST states/services + the registry
     bridge, so it does not die identically on a pooled-WS drop."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     _quiet_tail(monkeypatch)

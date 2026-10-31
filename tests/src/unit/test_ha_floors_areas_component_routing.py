@@ -10,9 +10,9 @@ that: the component-served path skips both legacy calls, and every backend
 degradation still falls back to the byte-identical legacy 2-call gather — no
 caps, ``unknown_command`` → invalidate + fall back, a non-unknown command
 error, AND a transport failure (both a ``HomeAssistantConnectionError`` off the
-frame and a plain ``Exception`` from ``get_websocket_client()`` failing to
+frame and the same error from ``get_websocket_client()`` failing to
 establish the socket). The registries legacy path does NOT die identically on a
-pooled-WS drop (``ha_list_floors_areas`` rides the swallowing
+pooled-WS drop (``ha_list_floors_areas`` rides the
 ``send_websocket_message`` bridge; the auto-backup capture fetchers use a
 dedicated one-shot socket under a best-effort warn-and-skip contract), so a
 transport failure falls back rather than propagating.
@@ -259,7 +259,7 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
 async def test_connection_error_falls_back_to_legacy() -> None:
     """A WS connection error on the component read falls back to the legacy 2-call
     gather rather than propagating — ``ha_list_floors_areas``' legacy path rides the
-    swallowing bridge, so it does not die identically on a pooled-WS drop."""
+    WS bridge, so it does not die identically on a pooled-WS drop."""
     ws = make_ws(
         "ha_mcp_tools/registries",
         info_result=_CAPS_REGISTRIES,
@@ -283,7 +283,7 @@ async def test_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) falls back to the legacy 2-call gather."""
     caps_ws = make_ws("ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES)
     client = RoutingClient(
@@ -533,11 +533,11 @@ class TestBackupCaptureLegacyFallback:
         expected: dict[str, Any],
         monkeypatch: Any,
     ) -> None:
-        """A plain establish ``Exception`` from ``get_websocket_client()`` after caps
-        are cached (review-5 I-1) must NOT block the wrapped write: the capture
+        """A failed establish in ``get_websocket_client()`` after caps are cached
+        (review-5 I-1) must NOT cost the wrapped write its capture: the capture
         fetcher catches it → legacy list, returning the matching row so the capture
-        proceeds instead of the ``with_auto_backup`` decorator erroring out on a raw
-        exception the transient tuple never covered."""
+        proceeds instead of being skipped as a transient failure (or, for a
+        mandatory backup, blocking the write)."""
         caps_ws = make_ws("ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES)
         calls: list[str] = []
 

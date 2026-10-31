@@ -963,7 +963,7 @@ async def test_command_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish Exception (after caps cached) → exactly one legacy POST."""
+    """A failed establish (after caps cached) → exactly one legacy POST."""
     caps_ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
     client = RoutingClient()
     call_service = _build_call_service(client)

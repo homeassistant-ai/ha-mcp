@@ -135,6 +135,14 @@ class LegacySearchMixin(EntityModesMixin):
                 continue
             _apply_search_outcome(response, label, outcome)
 
+        if outcomes and len(errors) == len(outcomes):
+            # No surface answered, so empty buckets would read as "nothing
+            # matched": report the first surface's error instead.
+            first = cast(Exception, outcomes[0])
+            if isinstance(first, ToolError):
+                raise first
+            exception_to_structured_error(first)
+
         # ``count`` mirrors the previous ha_search_entities semantics: items
         # returned in this response (post-pagination), not total matches across
         # the corpus. Total matches live in entity_total_matches +
@@ -347,17 +355,9 @@ class LegacySearchMixin(EntityModesMixin):
                 # carry area_result's warnings; forward them here in one place so a
                 # visibility/registry degradation on the area path is not silently
                 # dropped (mirrors the non-area path's merge_visibility_warnings).
-                # The builders now return the search dict directly (no
-                # add_timezone_metadata wrapper), so warnings merge into that dict;
-                # the ``["data"]`` unwrap is a defensive holdover for a hypothetical
-                # future wrapped payload.
-                warn_target = (
-                    area_search["data"]
-                    if isinstance(area_search, dict) and "data" in area_search
-                    else area_search
+                return merge_visibility_warnings(
+                    area_search, area_result.get("warnings", [])
                 )
-                merge_visibility_warnings(warn_target, area_result.get("warnings", []))
-                return area_search
 
             if domain_filter and (not query or not query.strip()):
                 return await self._search_domain_only(

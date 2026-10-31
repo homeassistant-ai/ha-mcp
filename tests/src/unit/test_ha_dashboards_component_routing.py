@@ -11,9 +11,9 @@ body, search matches), the per-call YAML fallback (a ``yaml_excluded`` get drops
 to legacy), the legacy search walk never reading a YAML dashboard's body, and the
 error-taxonomy fallbacks — capability miss, ``unknown_command`` (invalidate caps +
 legacy), a command error/timeout, and a transport failure (both a
-``HomeAssistantConnectionError`` off the frame and a plain ``Exception`` from
+``HomeAssistantConnectionError`` off the frame and the same error from
 ``get_websocket_client()`` failing to establish the socket) → ``None`` (legacy):
-the legacy dashboards path rides the never-raising bridge and the auto-backup
+the legacy dashboards path rides the WS bridge and the auto-backup
 capture consumer must not be blocked, so a transport failure falls back rather
 than propagating.
 """
@@ -713,7 +713,7 @@ async def test_blank_search_criteria_are_rejected_not_searched(criterion: str) -
 @pytest.mark.asyncio
 async def test_connection_error_falls_back_to_legacy() -> None:
     """A WS-down error on the dashboards frame returns ``None`` (legacy fallback),
-    not a raise — the legacy dashboards path rides the never-raising bridge, so it
+    not a raise — the legacy dashboards path rides the WS bridge, so it
     does not die identically, and the auto-backup capture consumer must not be
     blocked from its write by an escaping transport error."""
     ws = make_ws(
@@ -733,7 +733,7 @@ async def test_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) returns ``None`` (legacy fallback), not a raise."""
     caps_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)
     client = RoutingClient()

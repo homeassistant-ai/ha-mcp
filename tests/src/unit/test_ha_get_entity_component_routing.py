@@ -294,7 +294,7 @@ async def test_command_error_omits_fields_silently() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_establish_failure_omits_fields_silently() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) → enrichment fields absent, base record intact, not a propagated
     error. Enrichment is strictly additive (no legacy enrichment fetch), so a
     transport failure just skips it."""

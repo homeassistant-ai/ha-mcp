@@ -13,7 +13,6 @@ from ...client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
 )
 from ...client.websocket_client import get_websocket_client
 from ...errors import create_validation_error
@@ -297,11 +296,11 @@ class StateMixin(SearchToolsBase):
         Returns the component's ``{states, missing}`` payload (found ids mapped to
         their ``State.as_dict()`` body) or ``None`` when the component lacks the
         ``states`` capability, was downgraded (``unknown_command`` → invalidate the
-        cached caps), or errored (logged). Falls back **silently** — unlike
-        ``ha_search`` / ``ha_get_zone`` which append a ``warnings[]`` entry —
-        because ``ha_get_state``'s single- and bulk-mode responses do not share one
-        warnings channel; the ``log.warning`` preserves operator visibility and the
-        legacy REST path returns the byte-identical correct data either way.
+        cached caps), errored, or returned a malformed payload (both logged).
+        Falls back **silently** — unlike ``ha_search`` / ``ha_get_zone``, which
+        append a ``warnings[]`` entry — because the legacy REST path returns the
+        byte-identical correct data either way, so the caller has nothing to act
+        on; the ``log.warning`` preserves operator visibility.
         ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
         SEPARATE transport, so a WS transport/connect failure
         (``HomeAssistantConnectionError``, covering both a pooled-WS drop and a
@@ -316,11 +315,7 @@ class StateMixin(SearchToolsBase):
             return None
         try:
             raw = await self._send_component_states(entity_ids)
-        except (
-            HomeAssistantCommandError,
-            HomeAssistantCommandTimeout,
-            HomeAssistantConnectionError,
-        ) as exc:
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
             else:
@@ -329,14 +324,19 @@ class StateMixin(SearchToolsBase):
                 )
             return None
         except Exception as exc:  # noqa: BLE001
-            # Anything the tuple above doesn't cover → legacy REST, so an
-            # install whose REST API still works keeps answering.
+            # Mostly HomeAssistantConnectionError (a pooled-WS drop or a failed
+            # (re)connect); a WS auth failure or a raw socket error lands here
+            # too. Legacy REST rides a separate transport, so an install whose
+            # REST API still works keeps answering.
             logger.warning(
                 "ha_mcp_tools/states connection error; fell back to legacy: %r", exc
             )
             return None
-        result = raw.get("result") or {}
-        if not isinstance(result.get("states"), dict):
+        result = raw.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("states"), dict):
+            logger.warning(
+                "ha_mcp_tools/states returned a malformed payload; fell back to legacy"
+            )
             return None
         return result
 

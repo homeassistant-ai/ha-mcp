@@ -318,7 +318,7 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
         return None
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError / plain establish Exception → legacy probe
+        # HomeAssistantConnectionError or any other error → legacy probe
         # (which rides the send_websocket_message bridge).
         logger.warning(
             "%s connection error; falling back to legacy: %r", WS_SERVER_ENTRY, exc

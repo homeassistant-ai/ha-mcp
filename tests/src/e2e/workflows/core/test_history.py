@@ -95,9 +95,15 @@ class TestGetHistory:
         """Test various relative time formats."""
         logger.info("Testing ha_get_history relative time formats")
 
-        time_formats = ["1h", "2h", "12h", "1d", "7d"]
+        time_formats = {
+            "1h": timedelta(hours=1),
+            "2h": timedelta(hours=2),
+            "12h": timedelta(hours=12),
+            "1d": timedelta(days=1),
+            "7d": timedelta(days=7),
+        }
 
-        for time_format in time_formats:
+        for time_format, window in time_formats.items():
             result = await mcp_client.call_tool(
                 "ha_get_history",
                 {
@@ -107,14 +113,13 @@ class TestGetHistory:
                 },
             )
 
-            data = parse_mcp_result(result)
-
-            # Check nested data for success
+            data = assert_mcp_success(result, f"History for start_time={time_format}")
             inner_data = data.get("data", data)
-            if inner_data.get("success") or "entities" in inner_data:
-                logger.info(f"Time format '{time_format}' accepted")
-            else:
-                logger.warning(f"Time format '{time_format}' may not be supported")
+            assert [e["entity_id"] for e in inner_data["entities"]] == ["sun.sun"]
+            # Without end_time the window ends at the same "now" it starts from.
+            period = inner_data["period"]
+            start = datetime.fromisoformat(period["start"])
+            assert datetime.fromisoformat(period["end"]) - start == window
 
     async def test_get_history_multiple_entities(self, mcp_client):
         """Test retrieving history for multiple entities."""
@@ -244,20 +249,12 @@ class TestGetHistory:
             },
         )
 
-        data = parse_mcp_result(result)
+        data = assert_mcp_success(result, "History for a non-existent entity")
 
-        # History data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        # Should succeed but return empty history
-        if inner_data.get("success") or "entities" in inner_data:
-            if inner_data.get("entities"):
-                entity_history = inner_data["entities"][0]
-                states = entity_history.get("states", [])
-                logger.info(
-                    f"Non-existent entity returned {len(states)} states (expected 0)"
-                )
-        else:
-            logger.info("Non-existent entity properly handled")
+        # Succeeds with an empty history for the requested entity.
+        (entity,) = data.get("data", data)["entities"]
+        assert entity["entity_id"] == "sensor.nonexistent_test_xyz_12345"
+        assert entity["states"] == []
 
     async def test_get_history_entity_ids_as_comma_string(self, mcp_client):
         """Test history with comma-separated entity_ids string."""
@@ -272,16 +269,9 @@ class TestGetHistory:
             },
         )
 
-        data = parse_mcp_result(result)
-
-        # History data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        if inner_data.get("success") or "entities" in inner_data:
-            logger.info(
-                f"Comma-separated entities accepted: {len(inner_data.get('entities', []))} entities"
-            )
-        else:
-            logger.info("Comma-separated format may not be supported")
+        data = assert_mcp_success(result, "History for comma-separated entity_ids")
+        entities = data.get("data", data)["entities"]
+        assert [e["entity_id"] for e in entities] == ["sun.sun", "person.test"]
 
     @pytest.mark.parametrize("minimal", [True, False])
     async def test_get_history_preserves_native_rows(
@@ -528,23 +518,12 @@ class TestGetHistoryStatisticsSource:
             },
         )
 
-        data = parse_mcp_result(result)
+        data = assert_mcp_success(result, "Statistics for sun.sun")
 
-        # Statistics data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        # May succeed but with warnings or empty data
-        if inner_data.get("success") or "entities" in inner_data:
-            if inner_data.get("warnings"):
-                logger.info(
-                    f"Properly warned about no statistics: {inner_data['warnings']}"
-                )
-            entities_data = inner_data.get("entities", [])
-            if entities_data and entities_data[0].get("count") == 0:
-                logger.info(
-                    "Entity returned 0 statistics (expected for non-numeric entity)"
-                )
-        else:
-            logger.info("Properly returned error for entity without state_class")
+        # sun.sun records no statistics, so the warning is always there,
+        # beside data and not inside it.
+        assert "warnings" not in data.get("data", data)
+        assert any("No statistics found for: sun.sun" in w for w in data["warnings"])
 
 
 @pytest.mark.core

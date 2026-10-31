@@ -377,7 +377,7 @@ class TestWsCommandBackendFailure:
         assert "boom" in str(excinfo.value)
 
     async def test_none_backend_return_raises_websocket_command_failed(self):
-        """send_websocket_message never raises (it always returns a dict),
+        """send_websocket_message returns a dict whenever HA answers,
         but defend the non-dict-return shape anyway: None must still surface
         as a structured failure, not an AttributeError from a bare .get()."""
         tools = _make_tools(None)

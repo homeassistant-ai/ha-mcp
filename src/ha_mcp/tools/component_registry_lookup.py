@@ -104,7 +104,7 @@ async def fetch_entities_for_config_entry_via_component(
             )
         return None
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError / plain establish Exception → legacy (the
+        # HomeAssistantConnectionError or any other error → legacy (the
         # legacy entity_registry/list dump rides the bridge; see module
         # docstring). Never propagate a transport failure out of the read.
         logger.warning(
@@ -159,7 +159,7 @@ async def resolve_entities_via_component(
             )
         return None
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError / plain establish Exception → legacy. The
+        # HomeAssistantConnectionError or any other error → legacy. The
         # simple-delete consumer's legacy per-id retry loop only runs when this
         # returns None, so an escaping transport failure would skip it entirely.
         logger.warning(

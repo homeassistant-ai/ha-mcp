@@ -767,7 +767,9 @@ class ComponentSearchMixin(LegacySearchMixin):
           ``send_websocket_message`` bridge, so a component-side fault degrades
           to partial results rather than escaping. The bridge shares this
           pooled connection, so a dead transport raises there too (#1947) and
-          the registry-unavailable warning names what was skipped.
+          the registry-unavailable warning names what was skipped. When no
+          legacy surface answers either, the legacy search raises its
+          structured error instead.
         """
         if isinstance(exc, (HomeAssistantCommandError, HomeAssistantCommandTimeout)):
             if is_unknown_command(exc):

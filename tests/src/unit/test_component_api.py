@@ -213,9 +213,10 @@ async def test_expired_transient_negative_reprobes_and_adopts(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_establish_failure_caches_short_transient_negative(monkeypatch) -> None:
-    """The plain ``Exception`` ``get_websocket_client()`` raises when it can't build
-    the socket (review-5 M8's slow-connect case) also caches the short transient
-    negative, so a repeat within the window skips the connect attempt entirely."""
+    """The ``HomeAssistantConnectionError`` ``get_websocket_client()`` raises when
+    it can't build the socket (review-5 M8's slow-connect case) also caches the
+    short transient negative, so a repeat within the window skips the connect
+    attempt entirely."""
     clock = _clock()
     monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     client = _client()

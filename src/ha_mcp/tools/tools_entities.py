@@ -174,7 +174,7 @@ async def fetch_entity_enrichment_via_component(
             logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
         return None
     except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError / plain establish Exception → skip
+        # HomeAssistantConnectionError or any other error → skip
         # enrichment (strictly additive; no legacy fetch dies here).
         logger.warning(
             "%s connection error; skipped enrichment: %r", WS_ENTITY_ENRICH, exc

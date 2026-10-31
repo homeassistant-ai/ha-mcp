@@ -1959,8 +1959,8 @@ class HomeAssistantClient:
         for attempt in range(max_retries):
             # Whether the failure happened before a usable connection existed.
             # Failing to obtain one is transport death whatever class the
-            # manager raises, and it raises a bare ``Exception`` when
-            # ``connect()`` returns False, so this cannot be decided by type.
+            # manager raises; an auth failure or the pool-lock guard's bare
+            # ``Exception`` is not a connection error; type cannot decide this.
             acquiring = True
             try:
                 # Use per-client WebSocket keyed to this client's credentials
@@ -1999,10 +1999,10 @@ class HomeAssistantClient:
                     continue
 
                 # Phase first, type second. Failing before a client exists is
-                # evidence about the transport whatever class was raised, and
-                # the pooled manager raises a bare ``Exception`` when
-                # ``connect()`` returns False, so that case cannot be decided
-                # by type. Past acquisition only the no-answer classes count:
+                # evidence about the transport whatever class was raised; an
+                # auth failure or the pool-lock guard's bare ``Exception`` is not
+                # a no-answer class, so that case cannot be decided by type.
+                # Past acquisition only the no-answer classes count:
                 # ``send_command`` deliberately re-raises the original
                 # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
                 # rather than wrapping it, to keep at-most-once semantics for

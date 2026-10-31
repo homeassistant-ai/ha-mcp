@@ -18,10 +18,10 @@ Two helper paths resolve entities from the registry today:
 These pin that: the component-served resolves never dump the registry NOR run the
 retry-loop sleeps, and every backend degradation (no caps, ``unknown_command`` →
 invalidate + fall back, a non-unknown command error, a malformed reply, AND a
-transport failure — both a ``HomeAssistantConnectionError`` off the frame and a
-plain ``Exception`` from ``get_websocket_client()`` failing to establish the
+transport failure — both a ``HomeAssistantConnectionError`` off the frame and the
+same error from ``get_websocket_client()`` failing to establish the
 socket) still produces the byte-identical legacy result. The registry_lookup
-consumers' legacy reads ride the swallowing ``send_websocket_message`` bridge, so a
+consumers' legacy reads ride the ``send_websocket_message`` bridge, so a
 transport failure falls back rather than propagating — and, crucially, letting it
 escape the SIMPLE resolve would skip its legacy retry loop entirely.
 """
@@ -299,7 +299,7 @@ async def test_simple_delete_command_error_falls_back_keeps_caps() -> None:
 @pytest.mark.asyncio
 async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
     """A HomeAssistantConnectionError from the component resolve falls back to the
-    legacy retry loop (which rides the swallowing bridge, so it does not die
+    legacy retry loop (which rides the WS bridge, so it does not die
     identically) rather than propagating — an escaping error would SKIP the legacy
     resolve entirely."""
     ws = make_ws(
@@ -329,7 +329,7 @@ async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) falls back to the legacy retry loop, not a propagated error."""
     caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
     client = RoutingClient(
@@ -621,7 +621,7 @@ async def test_get_entities_component_connection_error_falls_back_to_legacy() ->
     Under the uniform transport taxonomy the seam maps a
     ``HomeAssistantConnectionError`` to ``None``, so
     ``_get_entities_for_config_entry`` reads the legacy
-    ``config/entity_registry/list`` dump (the swallowing bridge) and returns its
+    ``config/entity_registry/list`` dump (the WS bridge) and returns its
     rows with NO warning — the flow-helper delete proceeds exactly as on a
     component-less install."""
     ws = make_ws(
@@ -709,7 +709,7 @@ async def test_resolve_entities_malformed_shape_falls_back() -> None:
 async def test_resolve_entities_connection_error_falls_back() -> None:
     """The seam catches a connection error and returns ``None`` (legacy fallback)
     so the caller's legacy per-id resolve runs — the legacy read rides the
-    swallowing bridge, so it does not die identically."""
+    ``send_websocket_message`` bridge, so it does not die identically."""
     ws = make_ws(
         "ha_mcp_tools/registry_lookup",
         info_result=_CAPS_REGISTRY,
@@ -727,7 +727,7 @@ async def test_resolve_entities_connection_error_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_entities_ws_establish_failure_falls_back() -> None:
-    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    """A failed establish in ``get_websocket_client()`` (after caps
     are cached) returns ``None`` (legacy fallback)."""
     caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
     client = RoutingClient()
