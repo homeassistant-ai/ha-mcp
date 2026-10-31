@@ -39,6 +39,7 @@ from ..backup_todo import TodoListNotLoaded
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import raise_if_snapshot_path_refused
 from .backup_access import (
     gate_backup_combo as _gate_combo,
 )
@@ -552,7 +553,8 @@ async def _edits_diff(
                 context={"backup_name": bname},
             )
         )
-    except ToolError:
+    except ToolError as err:
+        raise_if_snapshot_path_refused(err, "diff", bname)
         raise
     except Exception as err:  # noqa: BLE001
         # Fetching the live config for diff goes through the
@@ -645,6 +647,8 @@ async def _edits_restore(
             )
         )
     except MandatoryBackupError as err:
+        # Its live file's path is no longer allowed: retrying can't help.
+        raise_if_snapshot_path_refused(err, "restore", bname)
         # A restore's mandatory pre-restore safety snapshot genuinely
         # failed — the overwrite was blocked, nothing changed. Same
         # fail-closed contract + error code as the @with_auto_backup write
@@ -668,7 +672,8 @@ async def _edits_restore(
                 or ["Retry once the underlying issue is resolved"],
             )
         )
-    except ToolError:
+    except ToolError as err:
+        raise_if_snapshot_path_refused(err, "restore", bname)
         raise
     except Exception as err:  # noqa: BLE001
         # ``handler.restore`` is domain-specific and can surface HA-side

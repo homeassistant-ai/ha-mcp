@@ -58,27 +58,93 @@ _DECORATOR_TRANSIENT_ERRORS = _CAPTURE_TRANSIENT_ERRORS
 class PathNotAllowedError(ToolError):
     """The File & YAML Tools component refused the file path itself.
 
-    Raised by the ``file`` capture's read, which passes the same path gate as
-    the wrapped write or delete, so that call would be refused too (#2908).
+    Raised by the ``file`` capture's read. The write and delete allowlist is a
+    subset of the read gate, so a path the read refuses, the wrapped write or
+    delete would refuse too (#2908). The message names no operation and leaves
+    out the component's read allowlist, which would mislead a write; the
+    component's own text stays in ``context``.
     """
 
-    def __init__(self, path: str, component_error: str) -> None:
+    def __init__(
+        self,
+        path: str,
+        component_error: str,
+        *,
+        message: str | None = None,
+        suggestions: list[str] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        self.path = path
+        self.component_error = component_error
         super().__init__(
             json.dumps(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    component_error,
-                    suggestions=[
-                        "Use a path inside an allowed directory, or add one "
-                        "under Custom filesystem paths in the ha-mcp settings UI"
-                    ],
-                    context={"path": path},
+                    message or f"Path not allowed: {path}",
+                    suggestions=suggestions or _custom_path_suggestions(path),
+                    context={
+                        **(context or {}),
+                        "path": path,
+                        "component_error": component_error,
+                    },
                 ),
                 indent=2,
                 default=str,
             ),
             log_level=TOOL_ERROR_LOG_LEVEL,
         )
+
+
+def _custom_path_suggestions(path: str) -> list[str]:
+    """Suggest a custom path only where the settings UI can accept one."""
+    parts = path.lower().split("/")
+    if ".storage" in parts or parts[-1] in ("secrets.yaml", "approval_pin.json"):
+        return ["This path is never available to the file tools"]
+    if path.startswith("/"):
+        return [
+            "Custom filesystem paths accept absolute paths only under /share, "
+            "/media and /ssl; other absolute paths cannot be allowed"
+        ]
+    return [
+        "Add it, or a folder above it, under Custom filesystem paths in the "
+        "ha-mcp settings UI"
+    ]
+
+
+def path_refusal(err: BaseException) -> PathNotAllowedError | None:
+    """The component's path refusal that is, or caused, ``err``; else ``None``."""
+    if isinstance(err, PathNotAllowedError):
+        return err
+    cause = _component_refusal_cause(err)
+    return cause if isinstance(cause, PathNotAllowedError) else None
+
+
+def raise_if_snapshot_path_refused(
+    err: BaseException, action: str, backup_name: str
+) -> None:
+    """Re-frame a refused live-file read during diff/restore/create of a snapshot.
+
+    A snapshot of a path that is no longer allowed (a removed custom path, or
+    any ``/backup`` path after #2875) can't be compared with or written back to
+    its live file. Say that, instead of the write-oriented path refusal.
+    """
+    refusal = path_refusal(err)
+    if refusal is None:
+        return
+    raise PathNotAllowedError(
+        refusal.path,
+        refusal.component_error,
+        message=(
+            f"Cannot {action} {backup_name!r}: its live file {refusal.path} is "
+            "no longer readable through the file tools (the path is not allowed)"
+        ),
+        suggestions=[
+            "View the snapshot with ha_manage_backup(scope='edits', "
+            f"action='view', backup_name={backup_name!r}) to recover its content",
+            *_custom_path_suggestions(refusal.path),
+        ],
+        context={"backup_name": backup_name, "action": action},
+    ) from None
 
 
 def _component_refusal_cause(err: BaseException) -> ToolError | None:
@@ -420,16 +486,15 @@ async def _capture_pre_write_snapshot(
             component_error = _component_refusal_cause(err)
             if component_error is not None:
                 # The capture failed because the component refused the call —
-                # the same reason the wrapped write itself would refuse.
-                # Surface that actionable error, not a backup complaint (#2292,
-                # #2908). The write is still blocked. ``from
-                # None`` because this IS the underlying error being unwrapped;
-                # chaining it back onto the wrapper it came out of would only
-                # print the chain twice (and B904 wants the intent explicit).
-                # ``from None`` also drops the wrapper's own text from the
-                # traceback, so record it here or the only account of WHICH
-                # mandatory capture was re-pointed at the component error is
-                # gone.
+                # the same reason the wrapped write itself would refuse. Surface
+                # that actionable error, not a backup complaint (#2292, #2908).
+                # The write is still blocked. ``from None`` because this IS the
+                # underlying error being unwrapped; chaining it back onto the
+                # wrapper it came out of would only print the chain twice (and
+                # B904 wants the intent explicit). ``from None`` also drops the
+                # wrapper's own text from the traceback, so record it here or
+                # the only account of WHICH mandatory capture was re-pointed at
+                # the component error is gone.
                 logger.warning(
                     "Auto-backup: mandatory capture for '%s' failed (%s) — "
                     "surfacing the underlying component error instead; the "
