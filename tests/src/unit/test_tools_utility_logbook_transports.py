@@ -215,6 +215,20 @@ class TestLogbookTransports:
         client.get_logbook.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_component_refused_connection_falls_back_to_rest(
+        self, logbook_component_caps: ComponentCaps
+    ) -> None:
+        # The shape send_websocket_message raises when Core refused the connection.
+        unsent = HomeAssistantCommandNotSent("Failed to connect")
+        unsent.__cause__ = HomeAssistantConnectionError("Failed to connect")
+        client = self._client(ws_error=unsent)
+        client.get_logbook = AsyncMock(return_value=self._component_rows())
+        tools = LogTools(client)
+        result = await tools.get_logs(**_call_kwargs(source="logbook"))
+        assert result["data"]["total_entries"] == 2
+        client.get_logbook.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_component_rejected_token_surfaces_without_a_rest_fallback(
         self, logbook_component_caps: ComponentCaps
     ) -> None:

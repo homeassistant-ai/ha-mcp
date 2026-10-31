@@ -519,7 +519,11 @@ class TestClient:
         assert client.sent == []
 
     async def test_not_sent_falls_back(self, caps: MagicMock) -> None:
-        client = _Client(raise_=HomeAssistantCommandNotSent("down"))
+        # The shape send_websocket_message raises when Core refused the
+        # connection (test_rest_client_ws_transport_failure).
+        unsent = HomeAssistantCommandNotSent("down")
+        unsent.__cause__ = HomeAssistantConnectionError("down")
+        client = _Client(raise_=unsent)
         assert await component_todo.todo_item(client, LIST, "add") is None
 
     async def test_rejected_token_does_not_fall_back(self, caps: MagicMock) -> None:

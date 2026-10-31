@@ -299,11 +299,12 @@ class LogbookLogSourceMixin:
         """Run the component's Core-processor command, or ``None`` to fall back.
 
         ``None`` means the component is absent, downgraded (``unknown_command``
-        drops the cached capability) or the transport failed before Home
-        Assistant saw the request. Core's own rejections surface unchanged; a
-        timeout (the recorder query still runs inside Home Assistant) surfaces
-        instead of falling back, and so does a token rejected on the command
-        itself. A token already rejected on the capability probe falls back.
+        drops the cached capability) or the transport gave no answer: no
+        connection, or one that dropped before the reply. Core's own rejections
+        surface unchanged; a timeout (the recorder query still runs inside Home
+        Assistant) surfaces instead of falling back, and so does a token
+        rejected on the command itself. A token already rejected on the
+        capability probe falls back.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
