@@ -31,7 +31,7 @@ import pytest
 
 # Path to the harness — repo-relative, resolved once at import time.
 HARNESS_PATH = Path(__file__).resolve().parents[2] / "js" / "harness.mjs"
-EXTRACT_ASTRO_VARS_PATH = HARNESS_PATH.parent / "extract_astro_vars.mjs"
+BUNDLE_SCRIPT_PATH = HARNESS_PATH.parent / "bundle_script.mjs"
 JS_DEPS_DIR = HARNESS_PATH.parent
 
 
@@ -355,47 +355,62 @@ def _stop_worker() -> None:
 atexit.register(_stop_worker)
 
 
-def extract_astro_frontmatter_vars(
-    astro_path: Path, names: list[str]
-) -> dict[str, Any]:
-    """Return ``{name: value}`` for each Astro frontmatter const requested.
-
-    Spawns ``tests/js/extract_astro_vars.mjs``, which evaluates the
-    frontmatter (TypeScript stripped via esbuild) with ``import`` lines
-    removed and ``base = ""`` stubbed for ``import.meta.env.BASE_URL``.
-    Use to feed the wizard's data arrays into the JS behaviour harness
-    so tests see the real production set, not a hand-maintained mock.
-    """
+def _run_bundle_script(request: dict[str, Any], label: str) -> str:
     skip_if_unsupported()
     proc = subprocess.run(
-        [_node_binary(), str(EXTRACT_ASTRO_VARS_PATH)],
-        input=json.dumps({"path": str(astro_path), "names": names}),
+        [_node_binary(), str(BUNDLE_SCRIPT_PATH)],
+        input=json.dumps(request),
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
         check=False,
-        timeout=15,
+        timeout=30,
     )
     if proc.returncode != 0:
         raise AssertionError(
-            f"extract_astro_vars failed for {astro_path.name}: "
+            f"bundle_script failed for {label}: "
             f"stderr={proc.stderr}\nstdout={proc.stdout[:1000]}",
         )
-    return json.loads(proc.stdout)
+    return proc.stdout
 
 
-def astro_vars_prelude(vars_: dict[str, Any]) -> str:
-    """Render a JS prelude that assigns each var as a const.
+def bundle_inline_script(
+    contents: str, resolve_dir: Path, *, define: dict[str, str] | None = None
+) -> str:
+    """Bundle an Astro page's ``<script>`` body into one classic script.
 
-    Used as the ``prelude`` argument to :func:`run_script` so the rest
-    of the Astro page script sees the same names Astro would have
-    injected via ``<script define:vars={...}>``.
+    Astro bundles a plain ``<script>`` with the modules it imports, so a page
+    can keep its behaviour in ``site/src/scripts/`` and ship a two-line entry.
+    The harness runs classic scripts only, so this resolves the entry's
+    relative imports from ``resolve_dir`` (the page's own directory) with
+    esbuild and returns a single IIFE for :func:`run_script`. ``define``
+    maps build-time constants such as ``import.meta.env.BASE_URL`` to literal
+    values, as Astro does at build.
     """
-    parts = []
-    for name, value in vars_.items():
-        parts.append(f"const {name} = {json.dumps(value)};")
-    return "\n".join(parts)
+    request: dict[str, Any] = {"contents": contents, "resolveDir": str(resolve_dir)}
+    if define:
+        request["define"] = define
+    return _run_bundle_script(request, label=str(resolve_dir))
+
+
+def module_exports(module_path: Path, names: list[str]) -> dict[str, Any]:
+    """Return ``{name: value}`` for the named exports of an ES module.
+
+    Bundles ``module_path`` with esbuild and evaluates it, so a test can read
+    production data (the setup wizard's ``data.ts`` arrays) instead of
+    keeping a copy that drifts. Values must be JSON-serialisable.
+    """
+    if not names:
+        return {}
+    contents = f"import {{ {', '.join(names)} }} from './{module_path.name}';\n"
+    contents += "".join(f"globalThis.{name} = {name};\n" for name in names)
+    request = {
+        "contents": contents,
+        "resolveDir": str(module_path.parent),
+        "names": names,
+    }
+    return json.loads(_run_bundle_script(request, label=str(module_path)))
 
 
 def _strip_astro_frontmatter(source: str, *, source_label: str = "<source>") -> str:

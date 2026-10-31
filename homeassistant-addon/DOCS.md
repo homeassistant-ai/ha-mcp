@@ -56,15 +56,17 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Claude Desktop talks to MCP servers over stdio, so it reaches the app through **fastmcp-remote**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
+Claude Desktop talks to MCP servers over stdio, so it reaches the app through **mcp-remote**, run automatically via `npx`. That only needs **Node.js 20.18.1 or newer** on the computer running Claude Desktop:
 
 ```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# macOS
+brew install node
 
 # Windows (PowerShell)
-winget install --id=astral-sh.uv -e
+winget install --id=OpenJS.NodeJS.LTS -e
 ```
+
+On Linux, install Node.js from [nodejs.org](https://nodejs.org/en/download): the Debian 12 and Ubuntu 24.04 packages are Node.js 18, which is too old for mcp-remote.
 
 Then add to your Claude Desktop configuration file:
 
@@ -78,20 +80,20 @@ Then add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "home-assistant": {
-      "command": "uvx",
-      "args": ["fastmcp-remote", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw", "--allow-http"]
     }
   }
 }
 ```
 
-Replace the URL in `args` with the one from your app logs. No token goes here — the app handles authentication behind the secret path in the URL.
+Replace the URL in `args` with the one from your app logs. `--allow-http` lets mcp-remote reach a plain `http://` URL on your local network; drop it if your URL starts with `https://`. No token goes here — the app handles authentication behind the secret path in the URL.
 
 **Restart Claude Desktop** after saving the configuration.
 
-**How it works:** `uvx` runs fastmcp-remote, which converts the app's HTTP endpoint to the stdio Claude Desktop expects.
+**How it works:** `npx` runs [mcp-remote](https://github.com/punkpeye/mcp-remote#usage), which converts the app's HTTP endpoint to the stdio Claude Desktop expects.
 
-**Migrating from mcp-proxy:** switch to `fastmcp-remote` using the configuration above, or follow the [`mcp-remote` setup instructions](https://github.com/punkpeye/mcp-remote#usage). For `mcp-remote`, install Node.js and set `"command": "npx"` with `"args": ["-y", "mcp-remote", "YOUR_CONNECT_URL", "--allow-http"]` for a trusted LAN HTTP URL. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
+**Migrating from mcp-proxy:** replace the whole server entry with the configuration above. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
 </details>
 
