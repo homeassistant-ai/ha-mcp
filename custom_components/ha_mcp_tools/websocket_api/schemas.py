@@ -261,6 +261,7 @@ def _reference_data_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_REFERENCE_DATA,
         vol.Optional("include_states", default=True): bool,
+        vol.Optional("include_targets", default=False): bool,
     }
 
 

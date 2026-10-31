@@ -9,7 +9,16 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .overview import _overview_services
-from .registry import _call_no_arg, _iter_states, _substrate_unavailable
+from .registry import (
+    _all_area_entries,
+    _all_device_entries,
+    _all_floor_entries,
+    _all_label_entries,
+    _call_no_arg,
+    _iter_states,
+    _resolve_registries,
+    _substrate_unavailable,
+)
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
@@ -172,6 +181,10 @@ def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str,
     catalogs — which would make EVERY reference emit a false "not found" warning,
     where the legacy failure mode is skip-validation. A genuinely-empty (but
     present) substrate still returns its empty result.
+
+    ``include_targets`` adds ``device_ids`` / ``area_ids`` / ``floor_ids`` /
+    ``label_ids``, the ids a ``target`` may name; a missing registry raises
+    for the same reason.
     """
     include_states = params.get("include_states", True)
     if not isinstance(
@@ -187,4 +200,27 @@ def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str,
             entity_id = getattr(state, "entity_id", None)
             if entity_id:
                 entity_ids.append(entity_id)
-    return {"services": _overview_services(hass), "entity_ids": entity_ids}
+    result: dict[str, Any] = {
+        "services": _overview_services(hass),
+        "entity_ids": entity_ids,
+    }
+    if params.get("include_targets"):
+        result |= _target_ids(hass)
+    return result
+
+
+def _target_ids(hass: HomeAssistant) -> dict[str, list[str]]:
+    view = _resolve_registries(hass)
+    for name in ("device", "area", "floor", "label"):
+        if getattr(view, name) is None:
+            raise _substrate_unavailable(f"{name} registry")
+    readers = {
+        "device_ids": (_all_device_entries, "id"),
+        "area_ids": (_all_area_entries, "id"),
+        "floor_ids": (_all_floor_entries, "floor_id"),
+        "label_ids": (_all_label_entries, "label_id"),
+    }
+    return {
+        key: [ident for entry in read(view) if (ident := getattr(entry, attr, None))]
+        for key, (read, attr) in readers.items()
+    }
