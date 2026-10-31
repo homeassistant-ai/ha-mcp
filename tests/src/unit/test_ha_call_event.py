@@ -6,7 +6,10 @@ import httpx
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_service import ServiceTools
 
 

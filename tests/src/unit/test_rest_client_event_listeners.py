@@ -29,7 +29,9 @@ class TestGetEventListeners:
         assert await mock_client.get_event_listeners() == {}
 
     @pytest.mark.asyncio
-    async def test_skips_rows_without_a_string_event_and_integer_count(self, mock_client):
+    async def test_skips_rows_without_a_string_event_and_integer_count(
+        self, mock_client
+    ):
         mock_client._request = AsyncMock(
             return_value=[
                 {"event": "good", "listener_count": 1},
