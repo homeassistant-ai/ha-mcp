@@ -111,23 +111,27 @@ def raise_dashboard_edit_error(
     )
 
 
-def raise_dashboard_write_not_sent(
-    exc: Exception, url_path: str | None, action: str
+def raise_dashboard_edit_unsent(
+    exc: Exception, url_path: str | None, action: str, reason: str
 ) -> NoReturn:
-    """Raise for a save that never left the process; a token rejected on connect
-    (an auth ``__cause__``) reports its AUTH_* code instead of CONNECTION_FAILED."""
-    if isinstance(exc.__cause__, HomeAssistantAuthError):
+    """Raise for an edit that failed before anything was sent; a token rejected
+    on connect (the error itself or its ``__cause__``) reports its AUTH_* code
+    instead of the code ``reason`` maps to. A failed capability probe arrives as
+    a ``ComponentDiscoveryError`` without a cause and keeps ``reason``'s code."""
+    if isinstance(exc, HomeAssistantAuthError) or isinstance(
+        exc.__cause__, HomeAssistantAuthError
+    ):
         exception_to_structured_error(
             exc,
             context={
                 "action": action,
                 "url_path": url_path,
-                "reason": "write_not_sent",
+                "reason": reason,
                 "write_committed": False,
                 "post_write_verified": False,
             },
         )
-    raise_dashboard_edit_error(url_path, "write_not_sent", str(exc), False, action)
+    raise_dashboard_edit_error(url_path, reason, str(exc), False, action)
 
 
 def raise_dashboard_edit_fetch_error(

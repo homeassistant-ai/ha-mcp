@@ -71,7 +71,7 @@ from .dashboard_card_describe import describe_card_response
 from .dashboard_edit_errors import (
     raise_dashboard_edit_error,
     raise_dashboard_edit_fetch_error,
-    raise_dashboard_write_not_sent,
+    raise_dashboard_edit_unsent,
     raise_known_dashboard_save_rejection,
 )
 from .dashboard_list_checks import (
@@ -3372,7 +3372,7 @@ class DashboardConfigTools:
                 )
             )
         except HomeAssistantCommandNotSent as exc:
-            raise_dashboard_write_not_sent(exc, url_path, action)
+            raise_dashboard_edit_unsent(exc, url_path, action, "write_not_sent")
         except Exception as exc:  # noqa: BLE001
             exception_to_structured_error(
                 exc,
