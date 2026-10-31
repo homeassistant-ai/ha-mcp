@@ -145,7 +145,7 @@ async def test_call_event_delivery_verified(mcp_client):
             try:
                 await mcp_client.call_tool(
                     "ha_config_remove_automation",
-                    {"identifier": automation_id},
+                    {"entity_id": automation_id},
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

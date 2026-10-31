@@ -80,7 +80,7 @@ async def test_deep_search_exact_match_default(mcp_client):
     finally:
         await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": "automation.exact_match_test_automation"},
+            {"entity_id": "automation.exact_match_test_automation"},
         )
         logger.info("Cleaned up test automation")
 
@@ -128,7 +128,7 @@ async def test_deep_search_fuzzy_match_opt_in(mcp_client):
     finally:
         await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": "automation.fuzzy_search_test_automation"},
+            {"entity_id": "automation.fuzzy_search_test_automation"},
         )
         logger.info("Cleaned up test automation")
 

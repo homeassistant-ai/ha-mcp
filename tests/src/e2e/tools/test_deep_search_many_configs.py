@@ -154,7 +154,7 @@ async def bulk_automations(mcp_client):
         try:
             await mcp_client.call_tool(
                 "ha_config_remove_automation",
-                {"identifier": auto_id},
+                {"entity_id": auto_id},
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Cleanup failed for {auto_id}: {e}")

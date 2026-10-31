@@ -30,7 +30,7 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     config_hash = get_result["config_hash"]
     assert config_hash is not None
@@ -38,7 +38,7 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     result = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": config_hash,
             "python_transform": "config['actions'][0]['data']['brightness'] = 255",
         },
@@ -49,7 +49,7 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     assert result["config_hash"] is not None
 
     verify = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     assert verify["config"]["actions"][0]["data"]["brightness"] == 255
 
@@ -91,14 +91,14 @@ async def test_python_transform_pattern_update(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     config_hash = get_result["config_hash"]
 
     result = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": config_hash,
             "python_transform": """
 for a in config['actions']:
@@ -111,7 +111,7 @@ for a in config['actions']:
     assert result["success"] is True
 
     verify = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     actions = verify["config"]["actions"]
     assert actions[0]["data"]["brightness"] == 200
@@ -141,7 +141,7 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
     result = await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "python_transform": "config['actions'] = []",
         },
     )
@@ -173,7 +173,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
     result = await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": "automation.test",
+            "entity_id": "automation.test",
             "config": {"alias": "test", "trigger": [], "action": []},
             "python_transform": "config['actions'] = []",
         },
@@ -202,14 +202,14 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     config_hash = get_result["config_hash"]
 
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": config_hash,
             "config": {
                 "alias": "Test Conflict Modified",
@@ -224,7 +224,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
     result = await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": config_hash,
             "python_transform": "config['actions'][0]['data'] = {'brightness': 100}",
         },
@@ -253,14 +253,14 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     config_hash = get_result["config_hash"]
 
     result = await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": config_hash,
             "python_transform": "import os; os.system('echo pwned')",
         },
@@ -293,14 +293,14 @@ async def test_chained_transforms(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     # First transform
     result1 = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": get_result["config_hash"],
             "python_transform": "config['actions'][0]['data']['brightness'] = 100",
         },
@@ -311,7 +311,7 @@ async def test_chained_transforms(mcp_client, ha_client):
     result2 = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": result1["config_hash"],
             "python_transform": "config['actions'][0]['data']['brightness'] = 200",
         },
@@ -339,20 +339,20 @@ async def test_returned_hash_matches_next_get(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     transform_result = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": get_result["config_hash"],
             "python_transform": "config['alias'] = 'Updated Hash Match'",
         },
     )
 
     next_get = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     assert transform_result["config_hash"] == next_get["config_hash"]
@@ -378,14 +378,14 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     # Remove action — should be rejected by validation
     result = await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": get_result["config_hash"],
             "python_transform": "del config['actions']",
         },
@@ -416,10 +416,10 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     read1 = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     read2 = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
@@ -451,10 +451,10 @@ async def test_plural_key_hash_stability(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     read1 = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     read2 = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
@@ -464,7 +464,7 @@ async def test_plural_key_hash_stability(mcp_client, ha_client):
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": read1["config_hash"],
             "python_transform": "config['alias'] = 'Plural Keys Updated'",
         },
@@ -491,14 +491,14 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
 
     # Full config update with matching hash — should succeed
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": get_result["config_hash"],
             "config": {
                 "alias": "Full Hash Updated",
@@ -531,7 +531,7 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     old_hash = get_result["config_hash"]
 
@@ -539,7 +539,7 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": old_hash,
             "config": {
                 "alias": "Modified",
@@ -553,7 +553,7 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
     result = await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": old_hash,
             "config": {
                 "alias": "Should Fail",
@@ -606,7 +606,7 @@ async def test_categorized_automation_transform_preserves_category(
 
     # Get config_hash
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     config_hash = get_result["config_hash"]
     assert get_result["config"].get("category") == category_id
@@ -615,7 +615,7 @@ async def test_categorized_automation_transform_preserves_category(
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": entity_id,
+            "entity_id": entity_id,
             "config_hash": config_hash,
             "python_transform": "config['actions'][0]['data']['brightness'] = 200",
         },
@@ -623,7 +623,7 @@ async def test_categorized_automation_transform_preserves_category(
 
     # Verify category is preserved and transform applied
     verify = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id}
     )
     assert verify["config"]["actions"][0]["data"]["brightness"] == 200
     assert verify["config"].get("category") == category_id

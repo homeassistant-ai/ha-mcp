@@ -33,7 +33,7 @@ async def test_create_disabled_then_enable_standalone(mcp_client, cleanup_tracke
 
     created = await mcp.call_tool_success(
         "ha_config_set_automation",
-        {"identifier": identifier, "config": _config(identifier), "enabled": False},
+        {"entity_id": identifier, "config": _config(identifier), "enabled": False},
     )
     entity_id = created["automation_id"]
     assert entity_id.startswith("automation.")
@@ -41,18 +41,18 @@ async def test_create_disabled_then_enable_standalone(mcp_client, cleanup_tracke
     assert await _state(mcp, entity_id) == "off"
 
     stored = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
     assert "enabled" not in stored["config"]
 
     enabled = await mcp.call_tool_success(
-        "ha_config_set_automation", {"identifier": identifier, "enabled": True}
+        "ha_config_set_automation", {"entity_id": identifier, "enabled": True}
     )
     assert enabled["action"] == "set_enabled"
     assert await _state(mcp, entity_id) == "on"
 
     await mcp.call_tool_success(
-        "ha_config_set_automation", {"identifier": entity_id, "enabled": False}
+        "ha_config_set_automation", {"entity_id": entity_id, "enabled": False}
     )
     assert await _state(mcp, entity_id) == "off"
 
@@ -70,7 +70,7 @@ async def test_config_write_disable_survives_reload(mcp_client, cleanup_tracker)
     config = _config(identifier, initial_state=True)
 
     created = await mcp.call_tool_success(
-        "ha_config_set_automation", {"identifier": identifier, "config": config}
+        "ha_config_set_automation", {"entity_id": identifier, "config": config}
     )
     entity_id = created["automation_id"]
     assert await _state(mcp, entity_id) == "on"
@@ -78,7 +78,7 @@ async def test_config_write_disable_survives_reload(mcp_client, cleanup_tracker)
     updated = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": identifier,
+            "entity_id": identifier,
             "config": {**config, "description": "changed"},
             "enabled": False,
             "wait": False,
@@ -98,16 +98,16 @@ async def test_python_transform_cannot_store_enabled(mcp_client, cleanup_tracker
 
     await mcp.call_tool_success(
         "ha_config_set_automation",
-        {"identifier": identifier, "config": _config(identifier)},
+        {"entity_id": identifier, "config": _config(identifier)},
     )
     before = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
 
     await mcp.call_tool_failure(
         "ha_config_set_automation",
         {
-            "identifier": identifier,
+            "entity_id": identifier,
             "python_transform": "config['enabled'] = False",
             "config_hash": before["config_hash"],
         },
@@ -115,7 +115,7 @@ async def test_python_transform_cannot_store_enabled(mcp_client, cleanup_tracker
     )
 
     after = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
     assert after["config_hash"] == before["config_hash"]
 
@@ -144,12 +144,12 @@ async def test_run_actions_standalone_and_after_write(mcp_client, cleanup_tracke
     config = _config(identifier)
 
     created = await mcp.call_tool_success(
-        "ha_config_set_automation", {"identifier": identifier, "config": config}
+        "ha_config_set_automation", {"entity_id": identifier, "config": config}
     )
     entity_id = created["automation_id"]
 
     ran = await mcp.call_tool_success(
-        "ha_config_set_automation", {"identifier": identifier, "run_actions": True}
+        "ha_config_set_automation", {"entity_id": identifier, "run_actions": True}
     )
     assert ran["action"] == "run_actions"
     assert ran["actions_triggered"] is True
@@ -158,7 +158,7 @@ async def test_run_actions_standalone_and_after_write(mcp_client, cleanup_tracke
     updated = await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": identifier,
+            "entity_id": identifier,
             "config": {**config, "description": "changed"},
             "run_actions": True,
         },

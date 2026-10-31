@@ -254,13 +254,13 @@ class TestAutomationLifecycle:
 
         before_update = parse_mcp_result(
             await mcp_client.call_tool(
-                "ha_config_get_automation", {"identifier": automation_entity}
+                "ha_config_get_automation", {"entity_id": automation_entity}
             )
         )
         update_result = await mcp_client.call_tool(
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 "config_hash": before_update["config_hash"],
             },
@@ -302,7 +302,7 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Deleting automation...")
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
 
         assert_mcp_success(delete_result, "automation deletion")
@@ -324,7 +324,7 @@ class TestAutomationLifecycle:
         final_data = await safe_call_tool(
             mcp_client,
             "ha_config_get_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
         # Automation should not exist anymore - this should fail
         assert not final_data.get("success"), (
@@ -430,7 +430,7 @@ class TestAutomationLifecycle:
         # Clean up
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
         assert_mcp_success(delete_result, "automation cleanup")
         logger.info("🗑️ Automation cleaned up")
@@ -482,7 +482,7 @@ class TestAutomationLifecycle:
 
         # Verify configuration structure
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
 
         get_data = assert_mcp_success(get_result, "configuration retrieval")
@@ -544,7 +544,7 @@ class TestAutomationLifecycle:
         # Clean up valid automation
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
         assert_mcp_success(delete_result, "valid automation cleanup")
         logger.info("🗑️ Test automations cleaned up")
@@ -643,7 +643,7 @@ class TestAutomationLifecycle:
         # Verify complex configuration
         logger.info("🔍 Verifying complex automation configuration...")
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
 
         get_data = assert_mcp_success(get_result, "complex automation retrieval")
@@ -677,7 +677,7 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Cleaning up complex automation...")
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
 
         assert_mcp_success(delete_result, "complex automation deletion")
@@ -740,7 +740,7 @@ class TestAutomationLifecycle:
             # Verify mode is set correctly
             get_result = await mcp_client.call_tool(
                 "ha_config_get_automation",
-                {"identifier": automation_entity},
+                {"entity_id": automation_entity},
             )
 
             get_data = assert_mcp_success(
@@ -768,7 +768,7 @@ class TestAutomationLifecycle:
             # Cleanup immediately to avoid entity ID conflicts
             delete_result = await mcp_client.call_tool(
                 "ha_config_remove_automation",
-                {"identifier": automation_entity},
+                {"entity_id": automation_entity},
             )
 
             assert_mcp_success(delete_result, f"{mode} mode automation deletion")
@@ -934,7 +934,7 @@ async def test_automation_with_choose_block(mcp_client):
     create_result = await mcp_client.call_tool(
         "ha_config_set_automation",
         {
-            "identifier": automation_id,
+            "entity_id": automation_id,
             "config": config,
         },
     )
@@ -948,7 +948,7 @@ async def test_automation_with_choose_block(mcp_client):
     # Retrieve the automation to verify structure
     get_result = await mcp_client.call_tool(
         "ha_config_get_automation",
-        {"identifier": automation_id},
+        {"entity_id": automation_id},
     )
 
     automation_data = parse_mcp_result(get_result)
@@ -989,7 +989,7 @@ async def test_automation_with_choose_block(mcp_client):
     logger.info("🧹 Cleaning up test automation...")
     delete_result = await mcp_client.call_tool(
         "ha_config_remove_automation",
-        {"identifier": automation_id},
+        {"entity_id": automation_id},
     )
     assert_mcp_success(delete_result)
 
@@ -1065,7 +1065,7 @@ async def test_duplicate_automation_prevention(mcp_client, cleanup_tracker):
     # Clean up
     delete_result = await mcp_client.call_tool(
         "ha_config_remove_automation",
-        {"identifier": automation_entity},
+        {"entity_id": automation_entity},
     )
     assert_mcp_success(delete_result, "duplicate prevention test cleanup")
     logger.info("Duplicate automation prevention test passed")
@@ -1124,7 +1124,7 @@ async def test_automation_creation_returns_verified_entity(
     # Clean up
     delete_result = await mcp_client.call_tool(
         "ha_config_remove_automation",
-        {"identifier": entity_id},
+        {"entity_id": entity_id},
     )
     assert_mcp_success(delete_result, "verified entity test cleanup")
     logger.info("Automation creation verified entity test passed")
@@ -1183,7 +1183,7 @@ class TestConfigHashMismatch:
         # 2. GET the automation — extract the real config_hash
         await wait_for_automation(mcp_client, automation_entity)
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
         get_data = parse_mcp_result(get_result)
         real_hash = get_data.get("config_hash")
@@ -1206,7 +1206,7 @@ class TestConfigHashMismatch:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 "config_hash": stale_hash,
             },
@@ -1246,7 +1246,7 @@ class TestConfigHashMismatch:
         # 2. GET — real hash
         await wait_for_automation(mcp_client, automation_entity)
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
         get_data = parse_mcp_result(get_result)
         real_hash = get_data.get("config_hash")
@@ -1262,7 +1262,7 @@ class TestConfigHashMismatch:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 "config_hash": real_hash,
             },
@@ -1303,7 +1303,7 @@ class TestConfigHashMismatch:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 # config_hash intentionally omitted — guard must not fire
             },
@@ -1367,7 +1367,7 @@ class TestSetAutomationNegativeInputs:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": "automation.test",
+                "entity_id": "automation.test",
                 "python_transform": "config['alias'] = 'Modified'",
             },
         )
@@ -1423,7 +1423,7 @@ class TestAutomationDestructiveNegativeInputs:
         data = await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": "automation.nonexistent_a7_e2e_xyz_404"},
+            {"entity_id": "automation.nonexistent_a7_e2e_xyz_404"},
         )
 
         assert not data.get("success"), (
@@ -1477,7 +1477,7 @@ class TestAutomationDestructiveNegativeInputs:
         # First delete — must succeed
         first_delete = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": entity_id, "wait": True},
+            {"entity_id": entity_id, "wait": True},
         )
         assert_mcp_success(first_delete, "first automation deletion")
         logger.info("First delete succeeded")
@@ -1486,7 +1486,7 @@ class TestAutomationDestructiveNegativeInputs:
         second_delete = await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": entity_id},
+            {"entity_id": entity_id},
         )
         assert not second_delete.get("success"), (
             f"Second delete of {entity_id} returned success=True — "

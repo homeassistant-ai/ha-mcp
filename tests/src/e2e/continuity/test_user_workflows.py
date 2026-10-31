@@ -19,11 +19,11 @@ async def test_rejected_stale_automation_cannot_replace_or_run_the_accepted_edit
     async with public_scenario(mcp_client) as case:
         target = await case.helper("input_text", "idle")
         identifier = case.unique_name()
-        case.remove_after("ha_config_remove_automation", identifier=identifier)
+        case.remove_after("ha_config_remove_automation", entity_id=identifier)
         await case.mcp.call_tool_success(
             "ha_config_set_automation",
             {
-                "identifier": identifier,
+                "entity_id": identifier,
                 "config": {
                     "alias": identifier,
                     "triggers": [
@@ -40,18 +40,18 @@ async def test_rejected_stale_automation_cannot_replace_or_run_the_accepted_edit
             },
         )
         old = await case.mcp.call_tool_success(
-            "ha_config_get_automation", {"identifier": identifier}
+            "ha_config_get_automation", {"entity_id": identifier}
         )
         accepted = await case.mcp.call_tool_success(
             "ha_config_set_automation",
             {
-                "identifier": identifier,
+                "entity_id": identifier,
                 "config_hash": old["config_hash"],
                 "python_transform": "config['actions'][0]['data']['value'] = 'accepted'",
             },
         )
         current = await case.mcp.call_tool_success(
-            "ha_config_get_automation", {"identifier": identifier}
+            "ha_config_get_automation", {"entity_id": identifier}
         )
         assert accepted["config_hash"] == current["config_hash"]
         assert current["config_hash"] != old["config_hash"]
@@ -62,7 +62,7 @@ async def test_rejected_stale_automation_cannot_replace_or_run_the_accepted_edit
         refused = await case.mcp.call_tool_failure(
             "ha_config_set_automation",
             {
-                "identifier": identifier,
+                "entity_id": identifier,
                 "config_hash": old["config_hash"],
                 "config": stale_config,
                 "run_actions": True,
@@ -70,7 +70,7 @@ async def test_rejected_stale_automation_cannot_replace_or_run_the_accepted_edit
         )
         assert "modified since last read" in extract_error_message(refused).lower()
         after_refusal = await case.mcp.call_tool_success(
-            "ha_config_get_automation", {"identifier": identifier}
+            "ha_config_get_automation", {"entity_id": identifier}
         )
         assert after_refusal["config"] == current["config"]
         assert after_refusal["config_hash"] == current["config_hash"]
@@ -80,7 +80,7 @@ async def test_rejected_stale_automation_cannot_replace_or_run_the_accepted_edit
         assert unchanged["data"]["state"] == "idle"
 
         await case.mcp.call_tool_success(
-            "ha_config_set_automation", {"identifier": identifier, "run_actions": True}
+            "ha_config_set_automation", {"entity_id": identifier, "run_actions": True}
         )
         await case.state(target, "accepted")
 

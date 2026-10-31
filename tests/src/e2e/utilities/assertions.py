@@ -474,7 +474,7 @@ async def wait_for_automation(
         parsed = await safe_call_tool(
             mcp_client,
             "ha_config_get_automation",
-            {"identifier": automation_id},
+            {"entity_id": automation_id},
         )
 
         if parsed.get("success"):

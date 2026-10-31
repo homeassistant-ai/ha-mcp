@@ -23,10 +23,10 @@ async def test_existing_automation_alias_change_requires_read(
     # Custom-ID creation is an existing capability and must remain available.
     cleanup_tracker.track("automation", identifier)
     await mcp.call_tool_success(
-        "ha_config_set_automation", {"identifier": identifier, "config": config}
+        "ha_config_set_automation", {"entity_id": identifier, "config": config}
     )
     before = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
     replacement = {
         **config,
@@ -35,12 +35,12 @@ async def test_existing_automation_alias_change_requires_read(
     }
     blocked = await mcp.call_tool_failure(
         "ha_config_set_automation",
-        {"identifier": identifier, "config": replacement},
+        {"entity_id": identifier, "config": replacement},
         expected_error="already exists",
     )
     assert blocked["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     after = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
     assert after["config"] == before["config"]
     assert after["config_hash"] == before["config_hash"]
@@ -49,13 +49,13 @@ async def test_existing_automation_alias_change_requires_read(
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": identifier,
+            "entity_id": identifier,
             "config": replacement,
             "config_hash": after["config_hash"],
         },
     )
     renamed = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
     assert renamed["config"]["id"] == identifier
     assert renamed["config"]["alias"] == replacement["alias"]

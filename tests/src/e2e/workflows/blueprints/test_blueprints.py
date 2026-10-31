@@ -1039,7 +1039,7 @@ class TestBlueprintManagement:
                 }, "a refused delete must leave the blueprint installed"
 
                 await mcp.call_tool_success(
-                    "ha_config_remove_automation", {"identifier": automation_id}
+                    "ha_config_remove_automation", {"entity_id": automation_id}
                 )
                 automation_id = None
                 await served.delete(mcp, path)
@@ -1048,7 +1048,7 @@ class TestBlueprintManagement:
                 await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": automation_id},
+                    {"entity_id": automation_id},
                 )
             served.cleanup()
 
@@ -1126,14 +1126,14 @@ class TestBlueprintManagement:
                 took = await mcp.call_tool_success(
                     "ha_config_set_automation",
                     {
-                        "identifier": automation_id,
+                        "entity_id": automation_id,
                         "take_control_of_blueprint": True,
                     },
                 )
                 assert took["took_control_of_blueprint"] == path, took
 
                 fetched = await mcp.call_tool_success(
-                    "ha_config_get_automation", {"identifier": automation_id}
+                    "ha_config_get_automation", {"entity_id": automation_id}
                 )
                 config = fetched["config"]
                 assert "use_blueprint" not in config, (
@@ -1157,7 +1157,7 @@ class TestBlueprintManagement:
                 assert automation_id in still["data"].get("used_by", []), still
 
                 await mcp.call_tool_success(
-                    "ha_config_remove_automation", {"identifier": automation_id}
+                    "ha_config_remove_automation", {"entity_id": automation_id}
                 )
                 automation_id = None
                 await served.delete(mcp, path)
@@ -1166,7 +1166,7 @@ class TestBlueprintManagement:
                 await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": automation_id},
+                    {"entity_id": automation_id},
                 )
             served.cleanup()
 
@@ -1414,7 +1414,7 @@ async def test_blueprint_automation_lifecycle(mcp_client):
         # Step 5: Clean up
         await mcp.call_tool_success(
             "ha_config_remove_automation",
-            {"identifier": automation_id},
+            {"entity_id": automation_id},
         )
 
         logger.info("✅ Blueprint automation lifecycle test completed")
@@ -1491,7 +1491,7 @@ async def test_blueprint_automation_with_empty_arrays(mcp_client):
         # Clean up
         await mcp.call_tool_success(
             "ha_config_remove_automation",
-            {"identifier": automation_id},
+            {"entity_id": automation_id},
         )
 
         logger.info("✅ Empty arrays test completed")

@@ -103,7 +103,7 @@ async def test_deep_search_automation(mcp_client):
         # Cleanup: Delete the test automation
         await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": "automation.deep_search_test_automation"},
+            {"entity_id": "automation.deep_search_test_automation"},
         )
         logger.info("🧹 Cleaned up test automation")
 
