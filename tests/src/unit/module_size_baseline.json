@@ -77,7 +77,6 @@
   "tests/src/unit/test_ha_call_service_component_routing.py": 1167,
   "tests/src/unit/test_ha_manage_blueprints_actions.py": 1646,
   "tests/src/unit/test_ha_search_component_routing.py": 1194,
-  "tests/src/unit/test_ha_search_merge.py": 1046,
   "tests/src/unit/test_haos_supervisor_wait.py": 1676,
   "tests/src/unit/test_helper_response_shape.py": 1246,
   "tests/src/unit/test_helper_update_persistence.py": 1287,
