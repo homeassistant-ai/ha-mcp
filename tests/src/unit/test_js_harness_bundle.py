@@ -49,3 +49,9 @@ def test_module_exports_returns_named_values(tmp_path: Path) -> None:
         "items": ["a", "b"],
         "label": "Items",
     }
+
+
+def test_module_exports_with_no_names_skips_the_bundle(tmp_path: Path) -> None:
+    """Nothing to read means nothing to bundle; the bundler would otherwise
+    print code, not JSON."""
+    assert module_exports(tmp_path / "missing.ts", []) == {}

@@ -401,6 +401,8 @@ def module_exports(module_path: Path, names: list[str]) -> dict[str, Any]:
     production data (the setup wizard's ``data.ts`` arrays) instead of
     keeping a copy that drifts. Values must be JSON-serialisable.
     """
+    if not names:
+        return {}
     contents = f"import {{ {', '.join(names)} }} from './{module_path.name}';\n"
     contents += "".join(f"globalThis.{name} = {name};\n" for name in names)
     request = {

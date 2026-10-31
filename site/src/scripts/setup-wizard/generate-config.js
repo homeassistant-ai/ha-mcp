@@ -77,7 +77,7 @@ export function generateConfig() {
   if (isStdio || derivedDeployment === 'uvx' || derivedDeployment === 'docker') {
     // Docker-specific URL hint
     if (isDocker) {
-      hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> (braces and all) with <code>http://host.docker.internal:8123</code> if Home Assistant runs on your host machine</li>`);
+      hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> (braces and all) with <code>http://host.docker.internal:8123</code> if Home Assistant runs on your host machine. Docker Desktop resolves that name; on Linux Docker Engine add <code>--add-host=host.docker.internal:host-gateway</code> to the <code>docker run</code> command</li>`);
     } else {
       hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> (braces and all) with your Home Assistant URL (e.g., <code>http://homeassistant.local:8123</code>)</li>`);
     }

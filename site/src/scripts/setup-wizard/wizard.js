@@ -301,10 +301,13 @@ export function initSetupWizard() {
     });
     card.addEventListener('mouseleave', () => {
       const archSection = document.getElementById('section-architecture');
-      // Only hide if it was shown by hover (not selected)
+      // Only hide if it was shown by hover (not selected); a selected scope
+      // gets its own diagram back, since the hover swapped it.
       if (archSection.classList.contains('hover-preview')) {
         archSection.classList.add('hidden');
         archSection.classList.remove('hover-preview');
+      } else {
+        updateSections();
       }
     });
   });

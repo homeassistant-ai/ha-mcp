@@ -1,11 +1,17 @@
 import { base, state } from './state';
 import { pushUiClientSteps } from './ui-clients';
 
+// PowerShell has no `\` line continuation, so Windows gets the command on
+// one line; other shells get one argument group per line.
+function shellCommand(parts, platformId) {
+  return platformId === 'windows' ? parts.join(' ') : parts.join(' \\\n  ');
+}
+
 // The copy-pasteable client config (JSON / YAML / CLI) for the current wizard
 // state, plus any instruction blocks a client needs next to it. Returns the
 // config text; UI-driven clients return an empty string.
 export function buildClientConfig(ctx, instructions) {
-  const { isStdio, isNetwork, isZed, needsStdioBridge, isDocker, mcpUrl } = ctx;
+  const { isStdio, isNetwork, isZed, needsStdioBridge, isDocker, mcpUrl, platformId } = ctx;
   let config = '';
   // Docker config for local stdio. `--rm` discards the container after every
   // client session, so the ha-mcp-data volume is the only thing keeping tool
@@ -462,7 +468,10 @@ mcpServers:
       HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"`;
       }
     } else {
-      config = `mcpServers:
+      config = `name: Home Assistant MCP
+version: 0.0.1
+schema: v1
+mcpServers:
   - name: home-assistant
     type: streamable-http
     url: "${mcpUrl}"`;
@@ -488,17 +497,21 @@ mcpServers:
       // Gemini CLI
       if (isStdio) {
         if (isDocker) {
-          config = `gemini mcp add --scope user home-assistant docker -- \\
-  run --rm -i \\
-  -v ha-mcp-data:/home/mcpuser/.ha-mcp \\
-  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          config = shellCommand([
+            'gemini mcp add --scope user home-assistant docker --',
+            'run --rm -i',
+            '-v ha-mcp-data:/home/mcpuser/.ha-mcp',
+            '-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}',
+            '-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}',
+            'ghcr.io/homeassistant-ai/ha-mcp:latest',
+          ], platformId);
         } else {
-          config = `gemini mcp add --scope user home-assistant \\
-  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  uvx -- ha-mcp@latest`;
+          config = shellCommand([
+            'gemini mcp add --scope user home-assistant',
+            '-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}',
+            '-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}',
+            'uvx -- ha-mcp@latest',
+          ], platformId);
         }
       } else {
         config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
@@ -535,7 +548,7 @@ mcpServers:
       // Codex CLI
       if (isStdio) {
         if (isDocker) {
-          config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i -v ha-mcp-data:/home/mcpuser/.ha-mcp ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          config = `codex mcp add home-assistant -- docker run --rm -i -v ha-mcp-data:/home/mcpuser/.ha-mcp -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} ghcr.io/homeassistant-ai/ha-mcp:latest`;
         } else {
           config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
         }
@@ -572,17 +585,21 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       // Claude Code
       if (isStdio) {
         if (isDocker) {
-          config = `claude mcp add home-assistant \\
-  -- docker run --rm -i \\
-  -v ha-mcp-data:/home/mcpuser/.ha-mcp \\
-  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          config = shellCommand([
+            'claude mcp add home-assistant',
+            '-- docker run --rm -i',
+            '-v ha-mcp-data:/home/mcpuser/.ha-mcp',
+            '-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}',
+            '-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}',
+            'ghcr.io/homeassistant-ai/ha-mcp:latest',
+          ], platformId);
         } else {
-          config = `claude mcp add home-assistant \\
-  --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  -- uvx ha-mcp@latest`;
+          config = shellCommand([
+            'claude mcp add home-assistant',
+            '--env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}',
+            '--env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}',
+            '-- uvx ha-mcp@latest',
+          ], platformId);
         }
       } else {
         config = `claude mcp add --transport http home-assistant ${mcpUrl}`;

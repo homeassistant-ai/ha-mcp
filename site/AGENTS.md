@@ -40,7 +40,7 @@ that override lasts only until the next weekly or release-driven rebuild.
 2. Add a branch keyed off the new entry's `id` in the module that owns it. Match neighboring patterns: JSON clients add an `else if` in `client-configs.js`; CLI clients add a CLI command emit there; UI clients add an `instruction-block` div with click steps in `ui-clients.js`; a new server method or remote path touches `remotePathsForMethod` in `state.js`, the section logic in `wizard.js`, and the deployment / remote-path blocks in `instructions.js`. A `configFormat` shared by clients with incompatible schemas needs an `id` guard of its own — see the `hermes` branch, which would otherwise inherit Continue's YAML shape. See `cursor` / `chatgpt` / `claude-code` / `cloudflared` for examples.
 3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro`.
 
-`tests/src/unit/test_astro_setup_js_behavior.py` bundles the page's `<script>` with esbuild and drives every client through JSDOM, so a branch that stops emitting its config or instructions fails there.
+`tests/src/unit/test_astro_setup_js_behavior.py` bundles the page's `<script>` with esbuild and drives every client through JSDOM: a branch that emits neither its config nor its instructions fails there, and the per-topic tests (YAML dialects, the stdio bridge config and its Node.js install step, platform-specific stdio commands in `test_astro_setup_wizard_platforms.py`, tunnel ports, legacy OAuth gating) pin the content that matters. Shared fixtures live in `tests/src/unit/_astro_setup_wizard.py`.
 
 ## Accessibility & checks
 

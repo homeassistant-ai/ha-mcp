@@ -239,7 +239,10 @@ volumes:
 }
 
 function pushRemotePath(ctx, instructions) {
-  const { isRemote, serverPort } = ctx;
+  const { isComponent, isAddon, isRemote, serverPort } = ctx;
+  // The app and the component already have a secret path; Cloudflare forwards
+  // the request path unchanged, so the tunnel URL keeps it.
+  const hasOwnPath = isComponent || isAddon;
   // Remote-path instructions (for remote scope). builtin-webhook is covered
   // by the ha-component block above, so it emits no separate block here.
   if (isRemote && state.remotePath) {
@@ -266,8 +269,8 @@ docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.interna
           <p class="text-slate-300 mb-2">Quick tunnel (temporary URL - changes on restart):</p>
           <pre class="code-block"><code>cloudflared tunnel --url http://localhost:${serverPort}</code></pre>
           <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
-          <p class="text-sm text-brand font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/private_{{RANDOM_STRING}}</code></p>
-          <p class="text-xs text-slate-500 mt-1">Use the secret path you set in the server config above</p>
+          <p class="text-sm text-brand font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/${hasOwnPath ? '&lt;your-secret-path&gt;' : 'private_{{RANDOM_STRING}}'}</code></p>
+          <p class="text-xs text-slate-500 mt-1">${isComponent ? "Keep the path from the connect URL on the HA-MCP Server entry's Configure screen" : isAddon ? "Keep the path from the URL in the app log (the /private_... part)" : 'Use the secret path you set in the server config above'}</p>
           <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
             <p class="text-blue-300 text-sm font-medium">Want a permanent URL?</p>
             <p class="text-blue-200/80 text-xs mt-1">Create a free <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Cloudflare account</a> and set up a <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Named Tunnel</a> for a stable URL that persists across restarts.</p>
@@ -469,7 +472,7 @@ function pushGeminiNotes(ctx, instructions) {
 }
 
 export function pushSettingsHint(ctx, instructions) {
-  const { isStdio, isComponent, isAddon, isRemote, platformId } = ctx;
+  const { isStdio, isComponent, isAddon, isRemote, isDocker, platformId } = ctx;
 // ha-mcp ships a web settings page (enable/disable/pin tools, feature
 // flags, advanced/beta settings, auto-backups, tool-approval prompts).
 // Non-app HTTP/Docker users often don't know it exists or where the
@@ -481,6 +484,12 @@ export function pushSettingsHint(ctx, instructions) {
         <h3 class="instruction-title">After it's running: the HA-MCP sidebar panel</h3>
         <p class="text-slate-300 mb-2">While the in-process server runs, the component adds an admin-only <strong>HA-MCP</strong> panel to the Home Assistant sidebar where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
         <p class="text-slate-400 text-sm">Open it from the sidebar &mdash; no URL or secret needed. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+      </div>`;
+  } else if (isStdio && isDocker) {
+    settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h3 class="instruction-title">After it's running: the settings page</h3>
+        <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">With this <code class="bg-slate-800 px-1 rounded">docker run</code> command the settings server starts inside the container, bound to the container's own <code class="bg-slate-800 px-1 rounded">127.0.0.1</code>, and writes its URL into the <code class="bg-slate-800 px-1 rounded">ha-mcp-data</code> volume, so it is not reachable from this machine. To use the settings page, run ha-mcp as an HTTP server instead (the Docker server method) and append <code class="bg-slate-800 px-1 rounded">/settings</code> to its secret-path URL. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
   } else if (isStdio) {
     const uiUrlPath = platformId === 'windows' ? '%USERPROFILE%\\.ha-mcp\\ui.url' : '~/.ha-mcp/ui.url';
