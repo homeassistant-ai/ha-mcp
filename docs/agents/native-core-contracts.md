@@ -140,10 +140,13 @@ is refused before the write, naming the section Core failed on. Its
 `describe` returns Core's registered trigger or condition descriptions;
 when Core's error names an unknown trigger or condition key, the closest
 live keys and the matched description come from there, never from a
-hand-kept list. Its `lookup` returns the automation's entity registry row,
-the load failure Core recorded in its `{entity_id}_validation_*` repair
-issue, and the entities, devices, areas, floors, labels and blueprint Core
-says the automation references. Without the component the config goes to
+hand-kept list. Its `lookup` returns the automation's entity registry row
+(the row `config/entity_registry/get` sends), whether Core has loaded the
+automation (`loaded`), the load failure Core recorded in its
+`{entity_id}_validation_*` repair issue, and the entities, devices, areas,
+floors, labels and blueprint Core says the automation references. References
+are None while Core has not loaded the automation (disabled, or it failed to
+load), and the get tool's `warnings` says so. Without the component the config goes to
 Core's REST config endpoint and its 400 text leads the error; WebSocket
 `validate_config` then names the failed section, the closest keys come from
 the first event of `trigger_platforms/subscribe` or
@@ -152,11 +155,13 @@ the first event of `trigger_platforms/subscribe` or
 `repairs/list_issues`, and references are not available. On both paths the
 config reaches Core as written and Core's text is never rewritten: no root
 key is pluralised, no alias or trigger key is required or renamed by the
-tool. Core does its own renaming while it validates a write (`cv.renamed`
-turns the singular root keys plural and `service` into `action`, in place,
-and the config view stores that dict), so a body written with legacy keys
-is stored and read back in Core's form; a trigger's `platform` key stays. The stored body comes from REST `GET /api/config/automation/config/<id>`,
-which Core reads under its mutation lock; WebSocket `automation/config`
+tool. Core does its own renaming while it validates a write (Core's
+backward-compat validators: `cv.renamed` for the root keys, the service
+schema's own rename for `service`; both rename in place and the config view
+stores that dict), so a body written with legacy keys is stored and read back
+in Core's form; a trigger's `platform` key stays. The stored body comes from
+REST `GET /api/config/automation/config/<id>`, which Core reads under its
+mutation lock; WebSocket `automation/config`
 returns the entity's `raw_config`, which stays stale until the reload after
 a write completes. An `automation.x` entity_id resolves to its config id
 through the entity registry first, so a registry-disabled automation, which
@@ -164,10 +169,18 @@ has no state, still resolves; the state's `id` attribute is the fallback.
 `operation` is `created` when Core held no config under the id before the
 write and `updated` otherwise, and an `automation.x` that does not resolve
 is not found, never a create. Core's DELETE answers 400 "Resource not
-found" for a missing id, which the remove tool reports as not found. The
-reference validator also checks device, area, floor and label targets when
-the component's `reference_data` advertises `reference_data_targets`, and
-entities and services only otherwise. The tools' own checks are HA-MCP
+found" for a missing id, which the remove tool reports as not found. An
+automation the registry resolves but Core's config API answers "Resource not
+found" for is defined in YAML or a package, outside `automations.yaml`; the
+get, set and remove tools report it as CONFIG_NOT_FOUND, while a config id
+with no registry row stays not found. The reference validator also checks
+device, area, floor and label targets when the component's `reference_data`
+advertises `reference_data_targets`, and entities and services only
+otherwise, naming the target kinds it could not check in
+`validation.unchecked_target_kinds` (a failed fetch is
+`validation.references_unchecked`). With targets, `reference_data` also
+carries Core's match sentinels (`ENTITY_MATCH_NONE` / `ENTITY_MATCH_ALL` from
+`homeassistant.const`), which the validator never reports as missing. The tools' own checks are HA-MCP
 policies, not Core rules: the `config_hash` optimistic lock, the
 alias-replacement guard, the guard against a config `id` passed without an
 entity_id, the config-`id` mismatch guard, write-mode exclusivity, keeping
