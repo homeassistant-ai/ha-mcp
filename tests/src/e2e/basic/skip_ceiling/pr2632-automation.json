@@ -1,0 +1,7 @@
+{
+  "reason": "#2632 (automations) adds two requires_component_surface tests in tests/src/e2e/workflows/automation/test_native_contract.py: the reference validator's area-target warning, which needs the component's registry ids, and the automation_config bridge's validate answer. Both skip at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon) and run everywhere else.",
+  "deltas": {
+    "container_no_tools": 2,
+    "haos_inaddon_no_tools": 2
+  }
+}
