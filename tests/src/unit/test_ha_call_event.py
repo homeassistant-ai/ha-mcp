@@ -129,6 +129,7 @@ class TestHaCallEvent:
         assert result["success"] is True
         assert result["partial"] is True
         assert result["event_type"] == "my_event"
+        assert "warning" not in result, "legacy singular 'warning' key must not appear"
         warnings = result.get("warnings")
         assert isinstance(warnings, list) and warnings, (
             f"Expected non-empty warnings list, got: {result!r}"
