@@ -78,9 +78,15 @@ def test_docker_stdio_command_passes_credentials_into_the_container(
 
     # Gemini CLI spells it `docker -- run ...`, so match the run flags, not "docker run".
     assert "run --rm -i" in config, config
-    assert "ghcr.io/homeassistant-ai/ha-mcp:latest" in config, config
-    assert "-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}" in config, config
-    assert "-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}" in config, config
+    image = "ghcr.io/homeassistant-ai/ha-mcp:latest"
+    assert image in config, config
+    # Anything after the image is the container command, so both -e flags must precede it.
+    for flag in (
+        "-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}",
+        "-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}",
+    ):
+        assert flag in config, config
+        assert config.index(flag) < config.index(image), config
 
 
 def test_copilot_cli_docker_stdio_steps_use_the_docker_command(

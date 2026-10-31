@@ -256,7 +256,7 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
 
 ### mcp-proxy fails with `ImportError: cannot import name 'request_ctx'`
 
-Switch to [`mcp-remote`](https://github.com/punkpeye/mcp-remote#usage) (requires Node.js 18 or newer for `npx`, plus `--allow-http` for a trusted LAN `http://` URL). We no longer recommend `mcp-proxy` for connecting to ha-mcp.
+Switch to [`mcp-remote`](https://github.com/punkpeye/mcp-remote#usage) (requires Node.js 20.18.1 or newer for `npx`, plus `--allow-http` for a trusted LAN `http://` URL). We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
 The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates an `mcp-remote` configuration for Claude Desktop and other stdio-only clients. Replace your old server entry with the generated configuration, keep your connect URL, and fully restart the client.
 

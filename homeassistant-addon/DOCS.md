@@ -56,7 +56,7 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Claude Desktop talks to MCP servers over stdio, so it reaches the app through **mcp-remote**, run automatically via `npx`. That only needs **Node.js 18 or newer** on the computer running Claude Desktop:
+Claude Desktop talks to MCP servers over stdio, so it reaches the app through **mcp-remote**, run automatically via `npx`. That only needs **Node.js 20.18.1 or newer** on the computer running Claude Desktop:
 
 ```bash
 # macOS
@@ -66,7 +66,7 @@ brew install node
 winget install --id=OpenJS.NodeJS.LTS -e
 ```
 
-On Linux, install Node.js from [nodejs.org](https://nodejs.org/en/download) or your package manager.
+On Linux, install Node.js from [nodejs.org](https://nodejs.org/en/download): the Debian 12 and Ubuntu 24.04 packages are Node.js 18, which is too old for mcp-remote.
 
 Then add to your Claude Desktop configuration file:
 

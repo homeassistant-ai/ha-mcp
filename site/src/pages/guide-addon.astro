@@ -90,13 +90,13 @@ const withBase = (path: string) => {
           <h2 class="text-xl font-semibold text-white">Connect Claude Desktop</h2>
         </div>
         <div class="step-content">
-          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>mcp-remote</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">npx</code>). That needs <strong>Node.js 18 or newer</strong> on the computer running Claude Desktop:</p>
+          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>mcp-remote</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">npx</code>). That needs <strong>Node.js 20.18.1 or newer</strong> on the computer running Claude Desktop:</p>
           <pre class="code-block mb-4"><code># macOS
 brew install node
 
 # Windows (PowerShell)
 winget install --id=OpenJS.NodeJS.LTS -e</code></pre>
-          <p class="text-slate-400 text-sm mb-4">On Linux, install Node.js from <a href="https://nodejs.org/en/download" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">nodejs.org</a> or your package manager.</p>
+          <p class="text-slate-400 text-sm mb-4">On Linux, install Node.js from <a href="https://nodejs.org/en/download" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">nodejs.org</a>: the Debian 12 and Ubuntu 24.04 packages are Node.js 18, which is too old for mcp-remote.</p>
           <p class="text-slate-300 mb-2">Open Claude Desktop's config (<strong>Settings &rarr; Developer &rarr; Edit Config</strong>) and paste this, replacing the URL with the one from Step 3:</p>
           <pre class="code-block"><code>{`{
   "mcpServers": {

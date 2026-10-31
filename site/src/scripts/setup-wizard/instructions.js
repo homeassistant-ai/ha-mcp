@@ -45,7 +45,9 @@ function pushPlatformInstall(ctx, instructions) {
       </div>`);
   } else if (platformId && !isDockerPlatform) {
     // [tool, needed, {os: [command, note HTML]}]; an empty command shows the note alone.
-    const nodeNote = 'mcp-remote needs Node.js 18 or newer; <a href="https://nodejs.org/en/download" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">nodejs.org</a> has installers for every OS.';
+    // The Node.js floor is undici's `engines` (mcp-remote 0.15 depends on undici 7,
+    // which needs 20.18.1); it moves to 22.19 once mcp-remote takes undici 8.
+    const nodeNote = 'mcp-remote needs Node.js 20.18.1 or newer; <a href="https://nodejs.org/en/download" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">nodejs.org</a> has installers for every OS.';
     const installs = [
       ['uv', isLocal || derivedDeployment === 'uvx', {
         macos: ['brew install uv', 'Or: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code>'],
@@ -54,7 +56,7 @@ function pushPlatformInstall(ctx, instructions) {
       }],
       ['Node.js', needsStdioBridge, {
         macos: ['brew install node', nodeNote],
-        linux: ['', `${nodeNote} Distribution packages can be older, so check with <code>node --version</code>.`],
+        linux: ['', `${nodeNote} The Debian 12 and Ubuntu 24.04 packages are Node.js 18, which is too old; check with <code>node --version</code>.`],
         windows: ['winget install --id=OpenJS.NodeJS.LTS -e', nodeNote],
       }],
     ];
@@ -448,7 +450,7 @@ function pushStdioBridge(ctx, instructions) {
         <h3 class="instruction-title text-yellow-300">stdio Bridge Required</h3>
         <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-remote to connect to HTTP servers:</p>
         <pre class="code-block"><code># mcp-remote is run automatically via npx in the config below</code></pre>
-        <p class="text-xs text-slate-400 mt-2">mcp-remote needs Node.js 18 or newer on this computer.${isNetwork ? ' The <code>--allow-http</code> flag lets it reach a plain <code>http://</code> URL on your local network; drop it if your URL starts with <code>https://</code>.' : ''} If you previously used another bridge, replace the whole server entry with the config below (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">migration details</a>).</p>
+        <p class="text-xs text-slate-400 mt-2">mcp-remote needs Node.js 20.18.1 or newer on this computer.${isNetwork ? ' The <code>--allow-http</code> flag lets it reach a plain <code>http://</code> URL on your local network; drop it if your URL starts with <code>https://</code>.' : ''} If you previously used another bridge, replace the whole server entry with the config below (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">migration details</a>).</p>
       </div>`;
     instructions.push(stdioBridgeInstr);
   }
