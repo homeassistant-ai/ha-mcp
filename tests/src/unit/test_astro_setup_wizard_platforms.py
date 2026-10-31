@@ -147,9 +147,8 @@ def test_continue_http_config_is_a_standalone_block(
     assert match is not None, "config-output was not captured"
     config = match.group(1).replace("&quot;", '"').replace("&#10;", "\n")
 
-    assert config.startswith(
-        "name: Home Assistant MCP\nversion: 0.0.1\nschema: v1\n"
-    ), config
+    # name and version are free-form (so not pinned); schema v1 is Continue's.
+    assert re.match(r"name: \S.*\nversion: \S+\nschema: v1\n", config), config
 
 
 def test_scope_hover_leaving_restores_the_selected_diagram(
