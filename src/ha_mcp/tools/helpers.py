@@ -22,6 +22,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
@@ -377,8 +378,10 @@ def _classify_exception(
             # on (re)connect arrives here wrapped: classify the cause.
             return _classify_exception(error.__cause__, error_str, error_msg, context)
         case HomeAssistantConnectionError():
+            # send_websocket_message raises a command timeout as the cause.
+            timeout = isinstance(error.__cause__, HomeAssistantCommandTimeout)
             result = create_connection_error(
-                error_msg, timeout="timeout" in error_str, context=context
+                error_msg, timeout=timeout or "timeout" in error_str, context=context
             )
         case HomeAssistantAdminRequiredError():
             result = create_error_response(

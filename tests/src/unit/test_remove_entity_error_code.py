@@ -9,6 +9,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 
@@ -119,12 +120,13 @@ async def test_unsent_removal_mid_run_lists_only_the_ids_not_removed(
 
 
 async def test_timed_out_removal_is_reported_as_a_timeout() -> None:
-    """send_websocket_message wraps a command timeout in a connection error
-    with the timeout's text; the per-id error names it as a timeout."""
+    """send_websocket_message raises a connection error from the command
+    timeout; the per-id error names it as a timeout by that cause, whatever
+    the timeout's text says."""
     client = _make_client()
-    client.send_websocket_message = AsyncMock(
-        side_effect=HomeAssistantConnectionError("Command timeout")
-    )
+    timed_out = HomeAssistantConnectionError("Response deadline exceeded")
+    timed_out.__cause__ = HomeAssistantCommandTimeout("Response deadline exceeded")
+    client.send_websocket_message = AsyncMock(side_effect=timed_out)
     tool = _register(client)["ha_remove_entity"]
 
     result = await tool(entity_id=["sensor.a", "sensor.b"])
