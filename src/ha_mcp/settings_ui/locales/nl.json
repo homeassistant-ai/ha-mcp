@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "Pogingenbudget per mislukte REST-aanroep.",
     "advanced.verify_ssl.label": "TLS-certificaten verifiëren",
     "advanced.verify_ssl.help": "Verifieer het TLS-certificaat van de Home Assistant-server. Schakel dit alleen uit op een vertrouwd netwerk, voor een zelfondertekend certificaat of een hostnaamafwijking: dit verzwakt de transportbeveiliging.",
+    "advanced.ipv6_allowed_networks.label": "Extra toegestane IPv6-netwerken",
+    "advanced.ipv6_allowed_networks.help": "IPv6-clients bereiken de eigen poort van deze server alleen vanuit het lokale netwerk: loopback, link-local, unique local (fc00::/7) en de netwerken waarmee de Home Assistant-host direct is verbonden. IPv4 blijft ongewijzigd. Vermeld andere toe te staan IPv6-netwerken, gescheiden door komma's of nieuwe regels (bijvoorbeeld 2001:db8:5::/48). Het toevoegen van ::/0 staat elke IPv6-client toe, ook vanaf het internet als je router inkomend IPv6 doorlaat.",
     "advanced.fuzzy_threshold.label": "Fuzzy-zoekdrempel",
     "advanced.fuzzy_threshold.help": "Lagere waarden staan lossere entiteitsovereenkomsten toe.",
     "advanced.automation_config_time_budget.label": "Tijdsbudget voor automatiseringsconfiguratie (s)",

@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "Antal tillåtna försök per misslyckat REST-anrop.",
     "advanced.verify_ssl.label": "Verifiera TLS-certifikat",
     "advanced.verify_ssl.help": "Verifiera Home Assistant-serverns TLS-certifikat. Stäng bara av detta på ett betrott nätverk, för ett självsignerat certifikat eller om värdnamnet inte matchar: det försvagar transportsäkerheten.",
+    "advanced.ipv6_allowed_networks.label": "Extra IPv6-nätverk som tillåts",
+    "advanced.ipv6_allowed_networks.help": "IPv6-klienter når denna servers egen port endast från det lokala nätverket: loopback, link-local, unique local (fc00::/7) och de nätverk som Home Assistant-värden är direkt ansluten till. IPv4 påverkas inte. Lista andra IPv6-nätverk att tillåta, separerade med kommatecken eller nya rader (till exempel 2001:db8:5::/48). Att lägga till ::/0 tillåter alla IPv6-klienter, inklusive från internet om din router släpper igenom inkommande IPv6.",
     "advanced.fuzzy_threshold.label": "Fuzzy-sökningströskel",
     "advanced.fuzzy_threshold.help": "Lägre värden tillåter mer tillåtande entitetsmatchning.",
     "advanced.automation_config_time_budget.label": "Tidsbudget för automatiseringskonfiguration (s)",

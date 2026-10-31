@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "每個失敗 REST 呼叫的重試預算。",
     "advanced.verify_ssl.label": "驗證 TLS 憑證",
     "advanced.verify_ssl.help": "驗證 Home Assistant 伺服器的 TLS 憑證。僅在受信賴的網路、針對自簽憑證或主機名稱不符的情況下關閉此功能：這會削弱傳輸安全性。",
+    "advanced.ipv6_allowed_networks.label": "允許的額外 IPv6 網路",
+    "advanced.ipv6_allowed_networks.help": "IPv6 用戶端僅能從本機網路存取此伺服器本身的連接埠：回送（loopback）、鏈路本機（link-local）、唯一本機（fc00::/7）以及 Home Assistant 主機直接連接的網路。IPv4 不受影響。列出要允許的其他 IPv6 網路，以逗號或新行分隔（例如 2001:db8:5::/48）。新增 ::/0 將允許所有 IPv6 用戶端，若您的路由器允許入站 IPv6，也包含來自網際網路的用戶端。",
     "advanced.fuzzy_threshold.label": "模糊搜尋閾值",
     "advanced.fuzzy_threshold.help": "較低的值允許較寬鬆的實體比對。",
     "advanced.automation_config_time_budget.label": "自動化設定時間預算（秒）",

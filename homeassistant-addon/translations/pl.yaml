@@ -100,13 +100,14 @@ configuration:
       Podanie nazwy grupy opcji obejmuje każdą opcję w niej zawartą. Używane tylko
       wtedy, gdy funkcja ukrywania sekretów jest włączona. Domyślnie puste.
   ipv6_allowed_networks:
-    name: Extra IPv6 networks allowed
-    description: 'IPv6 clients reach this server''s own port only from the local network:
-      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
-      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
-      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
-      ::/0 allows every IPv6 client, including from the internet if your router lets
-      inbound IPv6 through.'
+    name: Dodatkowe dozwolone sieci IPv6
+    description: 'Klienci IPv6 mogą łączyć się z własnym portem tego serwera tylko
+      z sieci lokalnej: loopback, link-local, unique local (fc00::/7) oraz sieci,
+      z którymi host Home Assistant jest bezpośrednio połączony. Protokół IPv4 nie
+      jest tym objęty. Wymień inne sieci IPv6, które chcesz dopuścić, oddzielając
+      je przecinkami lub nowymi liniami (na przykład 2001:db8:5::/48). Dodanie ::/0
+      zezwala każdemu klientowi IPv6, w tym z internetu, jeśli Twój router przepuszcza
+      ruch przychodzący IPv6.'
   enable_mandatory_bps:
     name: Dołącz umiejętności najlepszych praktyk przy zapisach
     description: 'Główny przełącznik funkcji dostarczania treści umiejętności narzędzi

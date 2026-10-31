@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "Uğursuz REST zəngi üçün yenidən cəhd büdcəsi.",
     "advanced.verify_ssl.label": "TLS sertifikatlarını yoxlayın",
     "advanced.verify_ssl.help": "Home Assistant serverinin TLS sertifikatını yoxlayın. Bunu yalnız etibarlı şəbəkədə, özünü imzalayan sertifikat və ya host adı uyğunsuzluğu üçün söndürün: o, nəqliyyat təhlükəsizliyini zəiflədir.",
+    "advanced.ipv6_allowed_networks.label": "İcazə verilən əlavə IPv6 şəbəkələri",
+    "advanced.ipv6_allowed_networks.help": "IPv6 klientləri bu serverin öz portuna yalnız yerli şəbəkədən daxil olur: loopback, link-local, unique local (fc00::/7) və Home Assistant hostunun birbaşa qoşulduğu şəbəkələr. IPv4 təsirlənmir. İcazə vermək üçün digər IPv6 şəbəkələrini vergül və ya yeni sətirlərlə ayıraraq siyahıya daxil edin (məsələn, 2001:db8:5::/48). ::/0 əlavə etmək marşrutlaşdırıcınız daxil olan IPv6 trafikinə icazə verərsə, internetdən gələnlər də daxil olmaqla bütün IPv6 klientlərinə icazə verir.",
     "advanced.fuzzy_threshold.label": "Qeyri-səlis axtarış həddi",
     "advanced.fuzzy_threshold.help": "Aşağı qiymətlər daha sərbəst obyekt uyğunlaşmasına imkan verir.",
     "advanced.automation_config_time_budget.label": "Avtomatlaşdırma konfiqurasiyaları üçün vaxt limiti (s)",

@@ -93,13 +93,13 @@ configuration:
       täcker varje alternativ i den. Används endast när Dölj hemligheter är aktiverat.
       Tom som standard.
   ipv6_allowed_networks:
-    name: Extra IPv6 networks allowed
-    description: 'IPv6 clients reach this server''s own port only from the local network:
-      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
-      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
-      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
-      ::/0 allows every IPv6 client, including from the internet if your router lets
-      inbound IPv6 through.'
+    name: Extra IPv6-nätverk som tillåts
+    description: 'IPv6-klienter når denna servers egen port endast från det lokala
+      nätverket: loopback, link-local, unique local (fc00::/7) och de nätverk som
+      Home Assistant-värden är direkt ansluten till. IPv4 påverkas inte. Lista andra
+      IPv6-nätverk att tillåta, separerade med kommatecken eller nya rader (till exempel
+      2001:db8:5::/48). Att lägga till ::/0 tillåter alla IPv6-klienter, inklusive
+      från internet om din router släpper igenom inkommande IPv6.'
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll

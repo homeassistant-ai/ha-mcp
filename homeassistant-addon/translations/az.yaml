@@ -102,13 +102,14 @@ configuration:
       hər bir seçimi əhatə edir. Yalnız Məxfiliklərin Gizlədilməsi (Redact Secrets)
       aktiv olduqda istifadə olunur. Defolt olaraq boşdur.
   ipv6_allowed_networks:
-    name: Extra IPv6 networks allowed
-    description: 'IPv6 clients reach this server''s own port only from the local network:
-      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
-      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
-      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
-      ::/0 allows every IPv6 client, including from the internet if your router lets
-      inbound IPv6 through.'
+    name: İcazə verilən əlavə IPv6 şəbəkələri
+    description: 'IPv6 klientləri bu serverin öz portuna yalnız yerli şəbəkədən daxil
+      olur: loopback, link-local, unique local (fc00::/7) və Home Assistant hostunun
+      birbaşa qoşulduğu şəbəkələr. IPv4 təsirlənmir. İcazə vermək üçün digər IPv6
+      şəbəkələrini vergül və ya yeni sətirlərlə ayıraraq siyahıya daxil edin (məsələn,
+      2001:db8:5::/48). ::/0 əlavə etmək marşrutlaşdırıcınız daxil olan IPv6 trafikinə
+      icazə verərsə, internetdən gələnlər də daxil olmaqla bütün IPv6 klientlərinə
+      icazə verir.'
   enable_mandatory_bps:
     name: Yazma zamanı ən yaxşı təcrübələr üzrə bacarıq təlimatlarını əlavə et
     description: 'Yazma alətlərinin bacarıq məzmunu təqdim etməsi funksiyası üçün

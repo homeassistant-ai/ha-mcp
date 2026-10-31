@@ -50,13 +50,10 @@ configuration:
     description: 針對其結構描述將機密儲存為純文字（例如 backup_password）的應用程式，指定要像密碼欄位一樣進行修訂的應用程式（附加元件）選項名稱。多個名稱請用逗號或新行分隔。名稱適用於所有應用程式；若要限制為單一應用程式，請寫成
       app_slug:name。命名選項群組會涵蓋其中的所有選項。僅在啟用「修訂機密」時使用。預設為空白。
   ipv6_allowed_networks:
-    name: Extra IPv6 networks allowed
-    description: 'IPv6 clients reach this server''s own port only from the local network:
-      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
-      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
-      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
-      ::/0 allows every IPv6 client, including from the internet if your router lets
-      inbound IPv6 through.'
+    name: 允許的額外 IPv6 網路
+    description: IPv6 用戶端僅能從本機網路存取此伺服器本身的連接埠：回送（loopback）、鏈路本機（link-local）、唯一本機（fc00::/7）以及
+      Home Assistant 主機直接連接的網路。IPv4 不受影響。列出要允許的其他 IPv6 網路，以逗號或新行分隔（例如 2001:db8:5::/48）。新增
+      ::/0 將允許所有 IPv6 用戶端，若您的路由器允許入站 IPv6，也包含來自網際網路的用戶端。
   enable_mandatory_bps:
     name: 寫入時附加最佳實踐技能
     description: '寫入工具技能內容傳遞功能的主開關（issue #1182）。啟用時（預設），六個設定寫入工具（自動化、指令碼、場景、輔助程式、儀表板、原始
