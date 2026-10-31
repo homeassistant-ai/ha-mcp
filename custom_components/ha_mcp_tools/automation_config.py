@@ -87,6 +87,9 @@ def _core() -> SimpleNamespace | None:
             for name in _REFERENCES
         },
         blueprint=getattr(automation, "blueprint_in_automation", None),
+        # The placeholder Core adds for an automation that failed validation;
+        # its reference readers answer empty sets.
+        unavailable_entity=getattr(automation, "UnavailableAutomationEntity", None),
     )
 
 
@@ -152,9 +155,15 @@ def _validation(
 
 
 def _loaded(hass: HomeAssistant, core: SimpleNamespace, entity_id: str) -> bool:
-    """Whether Core's automation EntityComponent holds the automation's entity."""
+    """Whether Core's automation EntityComponent holds a working entity for it.
+
+    Core also adds an entity for an automation that failed validation, an
+    unavailable placeholder whose reference readers answer empty sets; that
+    one does not count as loaded.
+    """
     component = hass.data.get(core.component_key)
-    return component is not None and component.get_entity(entity_id) is not None
+    entity = component.get_entity(entity_id) if component is not None else None
+    return entity is not None and not isinstance(entity, core.unavailable_entity)
 
 
 def _references(
@@ -176,6 +185,7 @@ async def _lookup(
         core.statuses,
         core.component_key,
         core.blueprint,
+        core.unavailable_entity,
         *core.references.values(),
     )
     if None in needed:

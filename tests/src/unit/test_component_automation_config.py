@@ -86,6 +86,10 @@ class _Issue:
         )
 
 
+class _Unavailable:
+    """Core's placeholder entity for an automation that failed validation."""
+
+
 class _Issues:
     def __init__(self) -> None:
         self.issues: dict[tuple[str, str], _Issue] = {}
@@ -108,6 +112,7 @@ def core(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     )
     issues = _Issues()
     loaded: set[str] = set()
+    failed: set[str] = set()
     references = {
         "entities": {"light.porch", "light.hall"},
         "devices": {"d1"},
@@ -129,9 +134,11 @@ def core(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             for name, ids in references.items()
         },
         blueprint=lambda hass, entity_id: "motion_light.yaml",
+        unavailable_entity=_Unavailable,
         # test handles
         issues=issues,
         loaded=loaded,
+        failed=failed,
     )
     monkeypatch.setattr(automation_config, "_core", lambda: ns)
     monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
@@ -139,9 +146,12 @@ def core(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
 
 def _hass(core: SimpleNamespace) -> Any:
-    component = SimpleNamespace(
-        get_entity=lambda entity_id: object() if entity_id in core.loaded else None
-    )
+    def get_entity(entity_id: str) -> Any:
+        if entity_id in core.failed:
+            return _Unavailable()
+        return object() if entity_id in core.loaded else None
+
+    component = SimpleNamespace(get_entity=get_entity)
     return SimpleNamespace(data={core.component_key: component})
 
 
@@ -307,14 +317,20 @@ async def test_lookup_without_an_automation_row_is_not_found(
 async def test_lookup_reports_the_validation_issue_core_filed(
     core: SimpleNamespace,
 ) -> None:
+    """Core keeps an unavailable placeholder entity for a failed automation,
+    whose reference readers answer empty sets; it was counted as loaded, so
+    a failed blueprint automation read as one using no blueprint."""
     core.issues.issues[("automation", f"{MORNING}_validation_failed_triggers")] = (
         _Issue("Invalid trigger 'stat' specified")
     )
+    core.failed.add(MORNING)
     got = await _run(core, "lookup", entity_id=MORNING)
     assert got["validation"] == {
         "status": "failed_triggers",
         "error": "Invalid trigger 'stat' specified",
     }
+    assert got["loaded"] is False
+    assert got["references"] is None
 
 
 async def test_issue_of_an_automation_whose_id_extends_this_one_is_ignored(

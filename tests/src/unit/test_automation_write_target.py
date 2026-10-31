@@ -310,6 +310,31 @@ async def test_a_service_or_event_field_named_like_a_target_is_not_checked() -> 
     assert "unchecked_target_kinds" not in result
 
 
+async def test_an_entity_id_inside_a_data_block_is_still_checked() -> None:
+    """``entity_id`` inside a service's ``data`` still names an entity, so a
+    missing one is warned there as it always was; only the four target kinds
+    stop being read inside data blocks."""
+    reply: dict[str, Any] = {
+        "services": _LIGHT_SERVICES,
+        "entity_ids": ["light.kitchen"],
+        "device_ids": [],
+        "area_ids": [],
+        "floor_ids": [],
+        "label_ids": [],
+    }
+    config = {
+        "actions": [
+            {"action": "light.turn_on", "data": {"entity_id": "light.gone"}},
+        ]
+    }
+
+    result = await _references(reply, config)
+
+    assert [(w["path"], w["value"]) for w in result["warnings"]] == [
+        ("actions[0].data.entity_id", "light.gone")
+    ]
+
+
 # --- component refusals -------------------------------------------------------------
 
 

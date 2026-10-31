@@ -146,7 +146,9 @@ automation (`loaded`), the load failure Core recorded in its
 `{entity_id}_validation_*` repair issue, and the entities, devices, areas,
 floors, labels and blueprint Core says the automation references. References
 are None while Core has not loaded the automation (disabled, or it failed to
-load), and the get tool's `warnings` says so. Without the component the config goes to
+load), and the get tool's `warnings` says so; the unavailable placeholder
+entity Core adds for a failed automation, whose reference readers answer
+empty sets, counts as not loaded. Without the component the config goes to
 Core's REST config endpoint and its 400 text leads the error; WebSocket
 `validate_config` then names the failed section, the closest keys come from
 the first event of `trigger_platforms/subscribe` or

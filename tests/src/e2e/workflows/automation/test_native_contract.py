@@ -355,6 +355,11 @@ async def test_blueprint_change_that_breaks_an_automation_is_reported(
             )
             assert got["validation"]["status"] == "failed_blueprint", got
             assert "Missing input" in (got["validation"]["error"] or ""), got
+            # Core holds only an unavailable placeholder for it, whose
+            # reference readers answer empty sets; the read says the
+            # references are unavailable rather than listing none.
+            assert got["references"] is None, got
+            assert got["warnings"], got
         finally:
             # Home Assistant refuses to delete a blueprint an automation uses.
             await _remove(mcp_client, config_id)

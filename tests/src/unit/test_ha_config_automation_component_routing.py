@@ -315,7 +315,7 @@ _LOOKUP = {
         "disabled_by": "user",
     },
     "loaded": True,
-    "validation": {"status": "failed_actions", "error": "Unknown action"},
+    "validation": None,
     "references": {"entities": ["light.porch"], "blueprint": None},
 }
 
@@ -353,6 +353,39 @@ class TestComponentLookup:
         assert result["references"] is None
         assert len(result["warnings"]) == 1
         assert "has not loaded this automation" in result["warnings"][0]
+
+    async def test_a_failed_automation_carries_its_failure_and_no_references(
+        self,
+    ) -> None:
+        """Core holds only an unavailable placeholder for an automation that
+        failed validation, so the bridge reports it as not loaded: the read
+        carries Core's verdict, no references and the reason."""
+        client = Client(
+            {
+                "lookup": {
+                    **_LOOKUP,
+                    "loaded": False,
+                    "validation": {
+                        "status": "failed_actions",
+                        "error": "Unknown action",
+                    },
+                    "references": None,
+                }
+            }
+        )
+
+        with patch_ws(make_ws("unused", info_result=_CAPS), component_automation):
+            result = await AutomationConfigTools(client).ha_config_get_automation(
+                entity_id="automation.lights"
+            )
+
+        assert result["validation"] == {
+            "status": "failed_actions",
+            "error": "Unknown action",
+        }
+        assert result["references"] is None
+        assert len(result["warnings"]) == 1
+        assert "failed to load" in result["warnings"][0]
 
     async def test_a_disabled_automation_is_removed_by_entity_id(self) -> None:
         """A disabled automation has no state, so a state lookup reported it
