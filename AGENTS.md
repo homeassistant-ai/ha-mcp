@@ -156,7 +156,7 @@ For read/write tools, follow [native contracts](docs/agents/native-core-contract
 ## Code Conventions
 
 - Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
-- In Python, type-hint every function signature and use async/await consistently for I/O.
+- Python: type-hint every function outside `tests/`; use async/await consistently for I/O.
 - Keep modules focused. A source file over 1,000 lines (Pylint's `max-module-lines` default) spans several concerns, and `test_module_size_ratchet.py` fails when a new file crosses that limit or a listed one grows; split along responsibilities and update internal imports and test patch targets together, since internal module paths are not a public MCP tool contract.
 - Import an existing helper instead of copying it. `test_duplicate_code_ratchet.py` fails when a new Python function or class has the same code as another; the [development reference](docs/agents/development.md#code-quality) explains the baseline.
 - Never hand-edit the root `CHANGELOG.md` or its `homeassistant-addon/CHANGELOG.md` copy; semantic-release generates both. The webhook-proxy app changelogs are maintained by hand per their scoped `AGENTS.md`.
