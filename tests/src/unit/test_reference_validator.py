@@ -232,6 +232,19 @@ class TestExtractRefs:
         assert "action[1].service" in paths
         assert "action[1].target.entity_id" in paths
 
+    def test_target_ids_are_extracted_with_their_kind(self):
+        config = {
+            "triggers": [{"trigger": "device", "device_id": "dev-1"}],
+            "actions": [
+                {
+                    "action": "light.turn_on",
+                    "target": {"area_id": ["kitchen"], "label_id": "evening"},
+                }
+            ],
+        }
+        kinds = {(r["value"], r["kind"]) for r in extract_refs(config)["refs"]}
+        assert {("dev-1", "device"), ("kitchen", "area"), ("evening", "label")} <= kinds
+
     def test_non_string_service_values_ignored(self):
         """A non-string service value shouldn't crash the walker."""
         config = {"action": [{"service": 42, "data": {"entity_id": None}}]}
@@ -349,6 +362,22 @@ class TestCheckRefs:
         assert len(warnings) == 1
         assert warnings[0]["kind"] == "entity"
         assert warnings[0]["value"] == "sensor.ghost"
+
+    def test_target_ref_checked_against_its_registry(self, service_index, entity_set):
+        refs = [
+            {"path": "target.area_id", "value": "kitchen", "kind": "area"},
+            {"path": "target.floor_id", "value": "attic", "kind": "floor"},
+        ]
+        warnings = check_refs(
+            refs, service_index, entity_set, {"area": {"kitchen"}, "floor": set()}
+        )
+        assert [(w["value"], w["reason"]) for w in warnings] == [
+            ("attic", "not found in floor registry")
+        ]
+
+    def test_target_ref_unchecked_without_its_registry(self, service_index, entity_set):
+        refs = [{"path": "target.label_id", "value": "ghost", "kind": "label"}]
+        assert check_refs(refs, service_index, entity_set, {"area": set()}) == []
 
     def test_mixed_refs_partial_failure(self, service_index, entity_set):
         refs = [

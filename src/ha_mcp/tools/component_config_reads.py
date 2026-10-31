@@ -6,8 +6,7 @@ fetch to answer a single question:
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
   writes against one deadline. ``_resolve_scene_entity_id`` uses a single retry
-  before scene removal; ``_resolve_automation_entity_id`` resolves an existing
-  entity before deletion. The component's ``entity_lookup`` returns only matching
+  before scene removal. The component's ``entity_lookup`` returns only matching
   rows instead of a full registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
   performed in-process, so post-write callers must continue polling.
@@ -45,12 +44,15 @@ still completes:
   make ``validate_config_references`` hit its swallow-all fetch guard and skip
   EVERY reference warning even when REST is up.
 
-**GET-path invariant:** the automation/script/scene *config-get* tools must never
-route through the component — their in-process ``raw_config`` freshness lags the
-config file between a write and the next completed reload. The resolvers gate the
-whole component branch (caps probe included) behind ``allow_component`` for
-removals. The dedicated post-write resolver is never called from a config-get.
-``TestConfigGetSeam`` pins this.
+**GET-path invariant:** the automation/script/scene *config-get* tools never
+read the config body through the component — its in-process ``raw_config``
+freshness lags the config file between a write and the next completed reload,
+so the body always comes from Core's REST config endpoint. The script and scene
+resolvers gate the whole component branch (caps probe included) behind
+``allow_component`` for removals, and the dedicated post-write resolver is never
+called from a config-get. The automation tools resolve through
+``component_automation.automation_lookup`` instead, which reads the registry,
+never the body. ``TestConfigGetSeam`` pins this.
 """
 
 from __future__ import annotations
@@ -74,6 +76,7 @@ logger = logging.getLogger(__name__)
 
 WS_ENTITY_LOOKUP = "ha_mcp_tools/entity_lookup"
 WS_REFERENCE_DATA = "ha_mcp_tools/reference_data"
+REFERENCE_DATA_TARGETS = "reference_data_targets"
 
 
 async def fetch_entity_lookup_via_component(
@@ -140,7 +143,7 @@ async def fetch_entity_lookup_via_component(
 
 
 async def fetch_reference_data_via_component(
-    client: Any, *, include_states: bool = True
+    client: Any, *, include_states: bool = True, include_targets: bool = False
 ) -> dict[str, Any] | None:
     """One ``ha_mcp_tools/reference_data`` read; ``None`` ⇒ use the legacy path.
 
@@ -149,6 +152,9 @@ async def fetch_reference_data_via_component(
     the entity-id universe ``build_entity_set`` reduces to a set — replacing the
     reference validator's ``asyncio.gather(get_services(), get_states())``.
     ``include_states=False`` suppresses the entity-id half (services only).
+    ``include_targets`` adds the registry ids under ``device_ids``,
+    ``area_ids``, ``floor_ids`` and ``label_ids`` when the component
+    advertises ``reference_data_targets``; without it the reply has none.
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
     cached caps), command error/timeout (logged), a connection-establishment
@@ -170,6 +176,8 @@ async def fetch_reference_data_via_component(
     kwargs: dict[str, Any] = {}
     if not include_states:
         kwargs["include_states"] = False
+    if include_targets and component_supports(caps, REFERENCE_DATA_TARGETS):
+        kwargs["include_targets"] = True
     try:
         ws = await get_websocket_client(
             url=client.base_url,

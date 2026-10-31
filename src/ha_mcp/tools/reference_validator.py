@@ -13,9 +13,10 @@ Intentional limits (documented, not bugs):
 - **Blueprint automations** (``use_blueprint`` at the root) are skipped
   wholesale. Post-substitution config is not exposed by any HA API, so
   the effective refs cannot be ground-truthed.
-- **``device_id`` / ``area_id`` / ``label_id``** are NOT checked yet.
-  They require separate registry fetches and are planned for a later
-  pass; see #940.
+- **``device_id`` / ``area_id`` / ``floor_id`` / ``label_id``** are checked
+  only when the component's ``reference_data`` carries the registry ids
+  (capability ``reference_data_targets``). Without them only services and
+  entities are checked.
 
 Background: #940 (hallucinated ``notify.mobile_app_andrew_phone`` that
 ``ha_config_set_automation`` accepted silently).
@@ -37,11 +38,25 @@ logger = logging.getLogger(__name__)
 # inside automation/script action blocks.
 _SERVICE_KEYS: frozenset[str] = frozenset({"service", "action"})
 
-# Keys whose value (string or list of strings) names an entity. These
-# appear in triggers, conditions, ``target:`` blocks, and service
-# ``data:`` blocks — the walker is depth-agnostic so the location
-# doesn't matter.
-_ENTITY_KEYS: frozenset[str] = frozenset({"entity_id"})
+# Keys whose value (string or list of strings) names a registry item, by the
+# ref kind it is checked as. These appear in triggers, conditions, ``target:``
+# blocks, and service ``data:`` blocks — the walker is depth-agnostic so the
+# location doesn't matter.
+_REFERENCE_KEYS: dict[str, str] = {
+    "entity_id": "entity",
+    "device_id": "device",
+    "area_id": "area",
+    "floor_id": "floor",
+    "label_id": "label",
+}
+
+# ``reference_data`` reply key holding each target kind's registry ids.
+_TARGET_ID_KEYS: dict[str, str] = {
+    "device": "device_ids",
+    "area": "area_ids",
+    "floor": "floor_ids",
+    "label": "label_ids",
+}
 
 
 class ExtractedRef(TypedDict):
@@ -49,7 +64,7 @@ class ExtractedRef(TypedDict):
 
     path: str
     value: str
-    kind: str  # "service" | "entity"
+    kind: str  # "service" | "entity" | "device" | "area" | "floor" | "label"
 
 
 class WalkerResult(TypedDict):
@@ -82,13 +97,14 @@ def _extract_service_ref(
         refs.append({"path": sub_path, "value": value, "kind": "service"})
 
 
-def _extract_entity_refs(
+def _extract_registry_refs(
     sub_path: str,
     value: Any,
+    kind: str,
     refs: list[ExtractedRef],
     unvalidated_templates: list[int],
 ) -> bool:
-    """Record entity ref(s) from a str or list *value*; return True if handled.
+    """Record ``kind`` ref(s) from a str or list *value*; return True if handled.
 
     Returns False when *value* is neither a str nor a list so the caller can
     keep recursing into it (an ``entity_id`` mapped to a nested structure).
@@ -97,7 +113,7 @@ def _extract_entity_refs(
         if _is_template(value):
             unvalidated_templates[0] += 1
         else:
-            refs.append({"path": sub_path, "value": value, "kind": "entity"})
+            refs.append({"path": sub_path, "value": value, "kind": kind})
         return True
     if isinstance(value, list):
         for i, item in enumerate(value):
@@ -107,19 +123,13 @@ def _extract_entity_refs(
             if _is_template(item):
                 unvalidated_templates[0] += 1
             else:
-                refs.append(
-                    {
-                        "path": item_path,
-                        "value": item,
-                        "kind": "entity",
-                    }
-                )
+                refs.append({"path": item_path, "value": item, "kind": kind})
         return True
     return False
 
 
 def extract_refs(config: Any) -> WalkerResult:
-    """Pull every literal service/entity reference out of *config*.
+    """Pull every literal service and registry reference out of *config*.
 
     Pure function: no network, no mutation of the input. The caller
     decides what to do with the extracted refs.
@@ -149,8 +159,9 @@ def extract_refs(config: Any) -> WalkerResult:
                     _extract_service_ref(sub_path, value, refs, unvalidated_templates)
                     continue
 
-                if key in _ENTITY_KEYS and _extract_entity_refs(
-                    sub_path, value, refs, unvalidated_templates
+                kind = _REFERENCE_KEYS.get(key)
+                if kind and _extract_registry_refs(
+                    sub_path, value, kind, refs, unvalidated_templates
                 ):
                     continue
 
@@ -214,8 +225,14 @@ def check_refs(
     refs: list[ExtractedRef],
     service_index: dict[str, set[str]],
     entity_set: set[str],
+    target_ids: dict[str, set[str]] | None = None,
 ) -> list[ValidationWarning]:
-    """Return one warning per ref that isn't in the registry."""
+    """Return one warning per ref that isn't in the registry.
+
+    A device / area / floor / label ref is checked only when ``target_ids``
+    holds that kind's registry ids.
+    """
+    target_ids = target_ids or {}
     warnings: list[ValidationWarning] = []
     for ref in refs:
         value = ref["value"]
@@ -244,6 +261,15 @@ def check_refs(
                         "reason": "not found in entity registry",
                     }
                 )
+        elif ref["kind"] in target_ids and value not in target_ids[ref["kind"]]:
+            warnings.append(
+                {
+                    "path": ref["path"],
+                    "value": value,
+                    "kind": ref["kind"],
+                    "reason": f"not found in {ref['kind']} registry",
+                }
+            )
     return warnings
 
 
@@ -282,8 +308,16 @@ async def validate_config_references(
         # same ``services_payload`` / ``states_payload`` shapes the reducers
         # consume, so the warnings are identical (pinned by the cross-seam
         # contract test).
-        reference_data = await fetch_reference_data_via_component(client)
+        reference_data = await fetch_reference_data_via_component(
+            client, include_targets=True
+        )
+        target_ids: dict[str, set[str]] = {}
         if reference_data is not None:
+            target_ids = {
+                kind: set(reference_data[key])
+                for kind, key in _TARGET_ID_KEYS.items()
+                if isinstance(reference_data.get(key), list)
+            }
             services_payload = reference_data["services"]
             states_payload = [
                 {"entity_id": eid} for eid in reference_data["entity_ids"]
@@ -309,7 +343,7 @@ async def validate_config_references(
     # swallows registry-fetch failures only.
     service_index = build_service_index(services_payload)
     entity_set = build_entity_set(states_payload)
-    warnings = check_refs(walker_result["refs"], service_index, entity_set)
+    warnings = check_refs(walker_result["refs"], service_index, entity_set, target_ids)
 
     return {
         "warnings": warnings,
