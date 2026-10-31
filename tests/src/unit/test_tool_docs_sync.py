@@ -155,9 +155,9 @@ class TestToolDocsSync:
             "docs/FAQ.md": [f"| {count} comprehensive tools |"],
             "site/src/pages/faq.astro": [f">{count} comprehensive tools<"],
             "site/src/pages/index.astro": [f"{count} tools across 6 categories"],
-            "site/src/pages/setup.astro": [
-                f"adds {count} tools",
-                f"all {count} tools at once",
+            "site/src/scripts/setup-wizard/client-configs.js": [f"adds {count} tools"],
+            "site/src/scripts/setup-wizard/ui-clients.js": [
+                f"all {count} tools at once"
             ],
             "tests/uat/stories/TODO.md": [f"{count}-tool codebase"],
         }

@@ -23,209 +23,40 @@ Tests in this module:
   both Continue and Hermes emit valid YAML, so a client falling through to
   the other one's branch still counts as "emitted something".
 
-The harness rebuilds Astro's ``<script define:vars={...}>`` injection
-by reading the real arrays out of the page frontmatter, so changes to
-the production data show up in the test run immediately — no parallel
-fixture to drift.
+The page's ``<script>`` body is bundled with esbuild from the page's own
+directory, so the real wizard modules under ``site/src/scripts/setup-wizard/``
+and the production data in ``data.ts`` run under test — no parallel fixture
+to drift.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ._js_harness import (
-    HarnessResult,
-    astro_vars_prelude,
-    extract_astro_frontmatter_vars,
-    extract_script_body,
-    run_script,
+from ._astro_setup_wizard import (
+    WIZARD_DATA,
+    _assert_clean_init,
+    _build_wizard_dom,
+    _click,
+    _section_has_hidden_class,
+    bundle_setup_script,
+    load_wizard_vars,
 )
-
-SITE = Path(__file__).resolve().parents[3] / "site" / "src"
-SETUP_ASTRO = SITE / "pages" / "setup.astro"
-
-# Names the wizard's ``<script define:vars={...}>`` pulls in. The rework
-# replaced the old connection/deployment model with a server-method +
-# scope model, dropping ``connectionsData`` / ``deploymentData`` /
-# ``httpOnlyClients`` entirely.
-WIZARD_VAR_NAMES = [
-    "clientsData",
-    "platformsData",
-    "stdioOnlyClients",
-    "remoteOnlyClients",
-]
+from ._js_harness import module_exports, run_script
 
 
 @pytest.fixture(scope="module")
 def setup_script() -> str:
-    return extract_script_body(
-        SETUP_ASTRO.read_text(encoding="utf-8"),
-        source_label=str(SETUP_ASTRO),
-    )
+    return bundle_setup_script()
 
 
 @pytest.fixture(scope="module")
 def wizard_vars() -> dict[str, Any]:
-    return extract_astro_frontmatter_vars(SETUP_ASTRO, WIZARD_VAR_NAMES)
-
-
-@pytest.fixture(scope="module")
-def prelude(wizard_vars: dict[str, Any]) -> str:
-    # `base` is injected via define:vars from import.meta.env.BASE_URL, which
-    # frontmatter extraction cannot evaluate - define it empty here.
-    return astro_vars_prelude(wizard_vars) + "\nconst base = '';"
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    """Fail loud on script-init / transpile / jsdom errors so a
-    regression that breaks init isn't reported as "feature didn't fire"."""
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
-
-
-def _section_has_hidden_class(dom: str, section_id: str) -> bool:
-    """True iff the element with the given id has ``hidden`` in its
-    class attribute. More robust than a substring window — finds the
-    exact element and inspects its class attribute, tolerating
-    attribute-order changes and additional classes.
-    """
-    match = re.search(
-        rf'<[^>]*\bid="{re.escape(section_id)}"[^>]*\bclass="([^"]*)"',
-        dom,
-    )
-    if match is None:
-        # Class attr might come before id; try the other ordering.
-        match = re.search(
-            rf'<[^>]*\bclass="([^"]*)"[^>]*\bid="{re.escape(section_id)}"',
-            dom,
-        )
-    if match is None:
-        raise AssertionError(f"#{section_id} not found in dom")
-    return "hidden" in match.group(1).split()
-
-
-def _click(attr: str, val: str) -> str:
-    """A single JSDOM click on the tile carrying ``data-<attr>="<val>"``."""
-    return f"document.querySelector('[data-{attr}=\"{val}\"]').click();\n"
-
-
-def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
-    """Build the minimum DOM the wizard script touches.
-
-    Includes every section the script toggles, every selected-* badge
-    and step-number element it writes to, every tile ``data-*`` attribute
-    it listens for clicks on (one per hardcoded id or per array entry),
-    plus the config-output structure ``generateConfig`` writes into.
-    Client / platform tiles are built from the real var data so a new
-    client / platform gets a tile automatically; server-method, scope,
-    and remote-path ids are hardcoded in the markup so they are hardcoded
-    here too.
-    """
-    # Sections ``updateSections`` toggles. ``section-method`` (step 1) is
-    # statically visible in the real markup and never toggled, so it is
-    # emitted separately without the ``hidden`` class.
-    toggled_section_ids = [
-        "section-client",
-        "section-scope",
-        "section-architecture",
-        "section-platform",
-        "section-remote-path",
-        "section-config",
-    ]
-    arch_ids = ["arch-local", "arch-network", "arch-remote"]
-    badge_ids = [
-        "selected-method",
-        "selected-client",
-        "selected-platform-prev",
-        "selected-remotepath-prev",
-        "selected-final",
-    ]
-
-    parts = ["<!DOCTYPE html><html><body>"]
-    # Step 1 is always visible; the script only ever scrolls to it.
-    parts.append('<section id="section-method"></section>')
-    parts.extend(
-        f'<div id="{sid}" class="hidden"></div>' for sid in toggled_section_ids
-    )
-    parts.extend(f'<div id="{aid}" class="hidden"></div>' for aid in arch_ids)
-    parts.extend(f'<span id="{bid}"></span>' for bid in badge_ids)
-    parts.extend(
-        [
-            '<span id="platform-step-num"></span>',
-            '<span id="remotepath-step-num"></span>',
-            '<span id="config-step-num"></span>',
-            '<p id="platform-help"></p>',
-            # `start-over` is the one init-time getElementById the script
-            # does NOT null-guard — omitting it aborts the whole wizard.
-            '<button id="start-over"></button>',
-            '<div id="config-summary"></div>',
-            '<div id="setup-instructions"></div>',
-            # `section-config` (the whole section, toggled by
-            # updateSections) and `config-section` (the inner code block,
-            # toggled by generateConfig for UI-format clients) — similar
-            # names, distinct elements in the real page.
-            '<div id="config-section"></div>',
-            '<pre id="config-output"><code></code></pre>',
-            '<div id="replace-hints"></div>',
-            '<div id="config-notes"></div>',
-        ]
-    )
-
-    # Server-method tiles — ids hardcoded in the markup.
-    parts.extend(
-        f'<button data-server-method="{mid}">{mid}</button>'
-        for mid in ("ha-component", "ha-addon", "docker", "uvx", "stdio-local")
-    )
-    # Client tiles also carry `data-transports` (a JSON array) to mirror
-    # the real markup. The reworked script reads transports from
-    # `clientsData` (injected via define:vars) rather than this attr, but
-    # keeping it matches production and guards a future handler that
-    # parses it.
-    parts.extend(
-        "<button data-client=\"{cid}\" data-transports='{transports}'>{name}</button>".format(
-            cid=c["id"],
-            name=c["name"],
-            transports=json.dumps(c.get("transports", [])),
-        )
-        for c in wizard_vars["clientsData"]
-    )
-    # Scope tiles — ids hardcoded (local | remote). `.scope-option`
-    # carries the hover-preview listeners in the real markup. The remote
-    # tile embeds a `.complexity-badge` child (as the real markup does) so
-    # updateSections' badge relabel — Quick for ha-component, Advanced for
-    # the tunnel/proxy methods — has a target element to write into.
-    for sid in ("local", "remote"):
-        if sid == "remote":
-            parts.append(
-                f'<button data-scope="{sid}" class="scope-option">{sid}'
-                '<span class="complexity-badge" data-complexity="advanced">'
-                "Advanced</span></button>"
-            )
-        else:
-            parts.append(
-                f'<button data-scope="{sid}" class="scope-option">{sid}</button>'
-            )
-    parts.extend(
-        f'<button data-platform="{p["id"]}">{p["id"]}</button>'
-        for p in wizard_vars["platformsData"]
-    )
-    # Remote-path tiles — ids hardcoded in the markup.
-    parts.extend(
-        f'<button data-remote-path="{pid}">{pid}</button>'
-        for pid in ("builtin-webhook", "webhook-proxy", "cloudflared", "custom")
-    )
-
-    parts.append("</body></html>")
-    return "\n".join(parts)
+    return load_wizard_vars()
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +70,7 @@ class TestWizardStateMachine:
     """
 
     def test_initial_state_downstream_sections_hidden(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """Before any click, every downstream section
         (client / scope / architecture / platform / remote-path / config)
@@ -249,7 +80,6 @@ class TestWizardStateMachine:
         """
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
         )
         _assert_clean_init(result)
@@ -266,14 +96,13 @@ class TestWizardStateMachine:
             )
 
     def test_component_local_flow_reaches_config_without_platform(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """ha-component -> cursor -> local: config unhides and the platform
         step never appears (the in-HA component needs no OS-specific
         commands)."""
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-component")
@@ -290,14 +119,13 @@ class TestWizardStateMachine:
         )
 
     def test_stdio_flow_skips_scope_and_reaches_config(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """stdio-local forces scope=local and has no scope step:
         stdio-local -> claude-desktop -> macos reaches config while
         section-scope stays hidden the whole time."""
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "stdio-local")
@@ -315,7 +143,7 @@ class TestWizardStateMachine:
         )
 
     def test_remote_flow_requires_remote_path_before_config(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """Remote scope gates config behind a remote-path choice.
 
@@ -331,7 +159,6 @@ class TestWizardStateMachine:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-component")
@@ -359,7 +186,7 @@ class TestWizardStateMachine:
         )
 
     def test_http_method_stdio_only_client_requires_platform(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """An HTTP server method plus a stdio-only client forces the
         platform step for the stdio bridge.
@@ -374,7 +201,6 @@ class TestWizardStateMachine:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-addon")
@@ -407,7 +233,6 @@ class TestWizardStateMachine:
         self,
         client_id: str,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         """An HTTP server method plus a native-HTTP client needs no platform
@@ -424,7 +249,6 @@ class TestWizardStateMachine:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-addon")
@@ -453,7 +277,7 @@ def _load_client_ids() -> list[str]:
     """Real client ids, read at collection time so each lands as a
     parametrize case with a stable, readable id (the client id itself).
     """
-    vars_ = extract_astro_frontmatter_vars(SETUP_ASTRO, ["clientsData"])
+    vars_ = module_exports(WIZARD_DATA, ["clientsData"])
     return [c["id"] for c in vars_["clientsData"]]
 
 
@@ -469,7 +293,7 @@ def _load_bridge_client_ids() -> list[str]:
     JetBrains and Zed are not in the source list at all (both have native
     Streamable HTTP support), so no filtering is needed here.
     """
-    vars_ = extract_astro_frontmatter_vars(SETUP_ASTRO, ["stdioOnlyClients"])
+    vars_ = module_exports(WIZARD_DATA, ["stdioOnlyClients"])
     return list(vars_["stdioOnlyClients"])
 
 
@@ -530,7 +354,6 @@ class TestPerClientInstructionTemplate:
         self,
         client_id: str,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         # Transports come from the real clientsData, not a hardcoded list,
@@ -558,7 +381,6 @@ class TestPerClientInstructionTemplate:
 
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=invoke,
         )
@@ -625,7 +447,6 @@ class TestYamlDialects:
         client_id: str,
         stdio: bool,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         clients = {c["id"]: c for c in wizard_vars["clientsData"]}
@@ -647,7 +468,6 @@ class TestYamlDialects:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 flow + "document.body.dataset.configCode = "
@@ -673,7 +493,6 @@ class TestYamlDialects:
     def test_hermes_http_instructions_do_not_offer_sse(
         self,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         """Hermes can speak SSE; the ha-mcp endpoint cannot.
@@ -687,7 +506,6 @@ class TestYamlDialects:
         """
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-addon")
@@ -720,33 +538,38 @@ class TestYamlDialects:
 
 
 class TestStdioBridgeChoice:
-    """Stdio-only clients get exactly ``fastmcp-remote <url>`` as their bridge.
+    """Stdio-only clients get exactly ``npx -y mcp-remote <url>`` as their bridge.
 
-    Before 0.13.0, mcp-proxy imported ``request_ctx`` from
-    ``mcp.server.lowlevel.server`` and declared an unbounded ``mcp>=``
-    dependency. ``uvx mcp-proxy`` then resolved mcp 2.x and died on an
-    ImportError before it connected (#2073). From 0.13.0 it caps ``mcp``
-    below 2, so it no longer breaks that way, but it cannot use SDK 2.x.
-    The wizard emits ``fastmcp-remote``, which pins
-    ``fastmcp-slim[client,server]==<its own version>``. That package
-    bounds ``mcp`` to a range, so the SDK cannot jump to a new major
-    without a new ``fastmcp-remote`` release.
+    mcp-remote refuses plain ``http://`` beyond loopback without
+    ``--allow-http``. LAN connect URLs are ``http://``, so the local scope
+    carries the flag; every remote path ends in HTTPS, so remote must not.
 
-    The guarded behaviour is the shape of the emitted config: the bridge
-    package first, then the connect URL, with no other bridge, flag or
-    SDK pin. A different bridge or a leftover ``--with`` pin fails here
-    even though ``uv`` would still install it without error.
+    The guarded behaviour is the exact emitted config: ``-y`` so ``npx``
+    never waits on an install prompt the client cannot answer, the bridge
+    package, the connect URL, and no other bridge, flag or ``env`` block.
 
     Every stdio-only client is covered. The list comes from the real
     ``stdioOnlyClients`` data rather than being hardcoded here.
     """
 
     @pytest.mark.parametrize("client_id", BRIDGE_CLIENT_IDS, ids=BRIDGE_CLIENT_IDS)
-    def test_stdio_bridge_config_is_fastmcp_remote_with_connect_url(
+    @pytest.mark.parametrize(
+        ("scope_clicks", "expected_flags"),
+        [
+            pytest.param(_click("scope", "local"), ["--allow-http"], id="lan"),
+            pytest.param(
+                _click("scope", "remote") + _click("remote-path", "webhook-proxy"),
+                [],
+                id="remote",
+            ),
+        ],
+    )
+    def test_stdio_bridge_config_is_mcp_remote_with_connect_url(
         self,
         client_id: str,
+        scope_clicks: str,
+        expected_flags: list[str],
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         assert client_id in wizard_vars["stdioOnlyClients"], (
@@ -754,12 +577,11 @@ class TestStdioBridgeChoice:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-addon")
                 + _click("client", client_id)
-                + _click("scope", "local")
+                + scope_clicks
                 + _click("platform", "macos")
                 + "document.body.dataset.configCode = "
                 "document.querySelector('#config-output code').textContent || '';\n"
@@ -772,17 +594,11 @@ class TestStdioBridgeChoice:
         # emitted JSON comes back as `&quot;`. Parse the args out of the
         # unescaped text rather than substring-matching quoted fragments.
         config = json.loads(match.group(1).replace("&quot;", '"'))
-        args = config["mcpServers"]["home-assistant"]["args"]
-
-        # The bridge takes exactly [package, url]. The package comes first
-        # (reversed, uvx would treat the URL as the package), with no other
-        # bridge, flag or SDK pin. The URL is the `{{MCP_SERVER_URL}}`
-        # placeholder, which the setup page tells the user to replace with
-        # their connect URL, so a config without it would be unusable.
-        assert args == ["fastmcp-remote", "{{MCP_SERVER_URL}}"], (
-            f"{client_id}: expected exactly [fastmcp-remote, connect URL "
-            f"placeholder]; args={args}"
-        )
+        server = config["mcpServers"]["home-assistant"]
+        expected_args = ["-y", "mcp-remote", "{{MCP_SERVER_URL}}", *expected_flags]
+        # The URL is the `{{MCP_SERVER_URL}}` placeholder the setup page tells
+        # the user to replace, so a config without it would be unusable.
+        assert server == {"command": "npx", "args": expected_args}, client_id
 
     @pytest.mark.parametrize(
         ("client_id", "expects_panel"),
@@ -793,7 +609,6 @@ class TestStdioBridgeChoice:
         client_id: str,
         expects_panel: bool,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         """The bridge instructions must not contradict the config below them.
@@ -802,7 +617,7 @@ class TestStdioBridgeChoice:
         bridge. JetBrains and Zed both have native Streamable HTTP support
         (JetBrains via a bare-url mcpServers entry, Zed via its own
         ``context_servers`` entry) and so must show neither the "install
-        fastmcp-remote" panel nor a bridge command in the emitted config.
+        mcp-remote" panel nor a bridge command in the emitted config.
         Showing one without the other is the regression this pins.
         """
         assert (client_id in wizard_vars["stdioOnlyClients"]) is expects_panel, (
@@ -812,7 +627,6 @@ class TestStdioBridgeChoice:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-addon")
@@ -838,14 +652,20 @@ class TestStdioBridgeChoice:
         assert config_match is not None, "config-output was not captured"
         config_text = config_match.group(1).replace("&quot;", '"')
 
-        mentions_bridge = "fastmcp-remote" in instructions
+        mentions_bridge = "mcp-remote" in instructions
         assert mentions_bridge is expects_panel, (
             f"{client_id}: bridge instructions present={mentions_bridge}, "
             f"expected={expects_panel}; instructions={instructions[:400]!r}"
         )
+        # The bridge needs Node.js on the client machine; the install step
+        # travels with the bridge panel and nothing else shows it.
+        assert ("Install Node.js" in instructions) is expects_panel, (
+            f"{client_id}: Node.js install step present="
+            f"{'Install Node.js' in instructions}, expected={expects_panel}"
+        )
         # The panel and the config have to tell the same story: a client told to
         # install the bridge must get a config that runs it, and vice versa.
-        assert ("fastmcp-remote" in config_text) is expects_panel, (
+        assert ("mcp-remote" in config_text) is expects_panel, (
             f"{client_id}: config and bridge instructions disagree; "
             f"config={config_text[:400]!r}"
         )
@@ -867,7 +687,7 @@ _REMOTE_PATH_TILES = {
 
 
 def _remote_path_hidden_states(
-    setup_script: str, prelude: str, wizard_vars: dict[str, Any], method: str
+    setup_script: str, wizard_vars: dict[str, Any], method: str
 ) -> dict[str, bool]:
     """Drive ``method -> cursor -> remote`` and return ``{remote-path id: hidden}``.
 
@@ -883,7 +703,6 @@ def _remote_path_hidden_states(
     )
     result = run_script(
         setup_script,
-        prelude=prelude,
         initial_html=_build_wizard_dom(wizard_vars),
         invoke=(
             _click("server-method", method)
@@ -909,39 +728,33 @@ class TestRemotePathFiltering:
     """
 
     def test_ha_component_shows_builtin_hides_proxy(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         # ha-component's own webhook is built in; the webhook-proxy app is not
         # its path, so that tile is hidden while builtin-webhook is shown.
-        states = _remote_path_hidden_states(
-            setup_script, prelude, wizard_vars, "ha-component"
-        )
+        states = _remote_path_hidden_states(setup_script, wizard_vars, "ha-component")
         assert states["builtin-webhook"] is False
         assert states["webhook-proxy"] is True
         assert states["cloudflared"] is False
         assert states["custom"] is False
 
     def test_ha_addon_shows_proxy_hides_builtin(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         # The add-on has no built-in HA webhook; the webhook-proxy app is its
         # first-class remote path, so the two swap visibility versus component.
-        states = _remote_path_hidden_states(
-            setup_script, prelude, wizard_vars, "ha-addon"
-        )
+        states = _remote_path_hidden_states(setup_script, wizard_vars, "ha-addon")
         assert states["webhook-proxy"] is False
         assert states["builtin-webhook"] is True
         assert states["cloudflared"] is False
         assert states["custom"] is False
 
     def test_docker_hides_builtin_and_proxy(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         # A raw docker/uvx HTTP server has neither an HA webhook nor the proxy
         # app; only the generic tunnel/custom-proxy paths apply.
-        states = _remote_path_hidden_states(
-            setup_script, prelude, wizard_vars, "docker"
-        )
+        states = _remote_path_hidden_states(setup_script, wizard_vars, "docker")
         assert states["builtin-webhook"] is True
         assert states["webhook-proxy"] is True
         assert states["cloudflared"] is False
@@ -959,13 +772,12 @@ class TestTileDisableGuards:
     """
 
     def test_stdio_local_disables_transportless_client(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         # ChatGPT has no stdio transport (sse/streamable-http only); the local
         # stdio server can't serve it, so its client tile is disabled.
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "stdio-local")
@@ -977,7 +789,7 @@ class TestTileDisableGuards:
         assert 'data-chatgpt-disabled="true"' in result.dom
 
     def test_remote_only_client_disables_local_scope(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         # Claude.ai is remote-only (requires HTTPS); once chosen, the local
         # scope tile is disabled so it can't be paired with a LAN-only setup.
@@ -986,7 +798,6 @@ class TestTileDisableGuards:
         )
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-component")
@@ -1010,14 +821,13 @@ class TestUvxPlatformGating:
     """
 
     def test_uvx_local_gates_config_behind_platform(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         # uvx -> cursor -> local leaves config hidden (needsPlatform() fires on
         # the uvx method) until an OS is chosen, then it unhides. Mirrors the
         # stdio-bridge gating test: records visibility before AND after the click.
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "uvx")
@@ -1052,13 +862,12 @@ class TestUvxPlatformGating:
 
 class TestStartOver:
     def test_start_over_hides_downstream_sections(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """A full flow followed by Start Over collapses the wizard back to step
         1: client / scope / config are all hidden again."""
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-component")
@@ -1081,14 +890,13 @@ class TestStartOver:
 
 class TestRemoteScopeBadge:
     def test_badge_is_quick_for_component_advanced_for_docker(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """ha-component makes remote access the easy path (its built-in webhook),
         so the Remote scope badge reads 'Quick'; a tunnel/proxy method (docker)
         relabels it 'Advanced'."""
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", "ha-component")
@@ -1132,12 +940,10 @@ class TestTunnelPort:
         expected_port: str,
         wrong_port: str,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         result = run_script(
             setup_script,
-            prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
             invoke=(
                 _click("server-method", method)
@@ -1181,7 +987,7 @@ _COPILOT_CLIENT_ID_CALLOUT = (
 
 
 def _instructions_after(
-    setup_script: str, prelude: str, wizard_vars: dict[str, Any], flow: str
+    setup_script: str, wizard_vars: dict[str, Any], flow: str
 ) -> str:
     """Drive ``flow`` and return the rendered ``setup-instructions`` HTML.
 
@@ -1191,7 +997,6 @@ def _instructions_after(
     """
     result = run_script(
         setup_script,
-        prelude=prelude,
         initial_html=_build_wizard_dom(wizard_vars),
         invoke=(
             flow + "document.body.dataset.instructions = "
@@ -1214,7 +1019,7 @@ class TestLegacyOauthGating:
     """
 
     def test_copilot_cli_http_on_builtin_webhook_gets_client_id_steps(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """ha-component -> copilot-cli -> remote -> builtin-webhook is the
         legacy-eligible HTTP path: the HTTP form steps plus the legacy
@@ -1223,7 +1028,6 @@ class TestLegacyOauthGating:
         """
         instructions = _instructions_after(
             setup_script,
-            prelude,
             wizard_vars,
             _click("server-method", "ha-component")
             + _click("client", "copilot-cli")
@@ -1236,7 +1040,7 @@ class TestLegacyOauthGating:
         assert _LEGACY_NOTICE_HEADLINE not in instructions
 
     def test_gemini_spark_on_builtin_webhook_gets_legacy_steps(
-        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+        self, setup_script: str, wizard_vars: dict[str, Any]
     ) -> None:
         """Same eligible path for Spark renders the legacy-mode walkthrough
         (pinned via its "Why legacy OAuth mode" callout — the notice shares
@@ -1244,7 +1048,6 @@ class TestLegacyOauthGating:
         discriminate) and not the notice."""
         instructions = _instructions_after(
             setup_script,
-            prelude,
             wizard_vars,
             _click("server-method", "ha-component")
             + _click("client", "gemini-spark")
@@ -1272,12 +1075,10 @@ class TestLegacyOauthGating:
         method: str,
         working_marker: str,
         setup_script: str,
-        prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
         instructions = _instructions_after(
             setup_script,
-            prelude,
             wizard_vars,
             _click("server-method", method)
             + _click("client", client_id)

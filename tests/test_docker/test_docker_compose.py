@@ -85,7 +85,7 @@ class TestDockerCompose:
         the pin was introduced to protect.
         """
         pages = [
-            "site/src/pages/setup.astro",
+            "site/src/scripts/setup-wizard/instructions.js",
             "site/src/pages/faq.astro",
         ]
         # Keyed by page, not a running total: counting qualifying blocks would
@@ -95,7 +95,7 @@ class TestDockerCompose:
             with open(page, encoding="utf-8") as f:
                 source = f.read()
 
-            # Each fenced block is `<code>services:` ... `</code>`. Astro
+            # Each fenced block is `<code>services:` ... `</code>`. JS
             # template literals escape `$`, which YAML does not care about.
             for block in re.findall(r"<code>(services:.*?)</code>", source, re.DOTALL):
                 snippet = yaml.safe_load(block.replace("\\${", "${"))

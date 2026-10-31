@@ -79,7 +79,7 @@ pre-commit:
               - "src/ha_mcp/auth/consent_form.py"
               - "site/src/**"
               - "tests/js/harness.mjs"
-              - "tests/js/extract_astro_vars.mjs"
+              - "tests/js/bundle_script.mjs"
             # git exports GIT_DIR to hooks in a linked worktree and then takes
             # the current directory as the tree root, so the search runs from
             # the repository root. An empty list would make pytest collect
