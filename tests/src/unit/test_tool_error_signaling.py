@@ -416,6 +416,16 @@ class TestSchemaAndAuthClassification:
             result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == expected
 
+    def test_wrapped_auth_error_is_classified_by_its_own_text(self) -> None:
+        """An expired token stays expired when the wrapper's text differs."""
+        try:
+            raise HomeAssistantConnectionError("no answer") from HomeAssistantAuthError(
+                "Token expired"
+            )
+        except HomeAssistantConnectionError as exc:
+            result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "AUTH_EXPIRED"
+
     async def test_auth_rejected_on_connect_classifies_through_real_transport(
         self,
     ) -> None:

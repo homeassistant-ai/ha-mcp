@@ -375,8 +375,10 @@ def _classify_exception(
         ):
             # send_websocket_message wraps a failure to obtain a client in a
             # connection error raised from the original, so a token rejected
-            # on (re)connect arrives here wrapped: classify the cause.
-            return _classify_exception(error.__cause__, error_str, error_msg, context)
+            # on (re)connect arrives here wrapped: classify the cause by its
+            # own text.
+            cause = error.__cause__
+            return _classify_exception(cause, str(cause).lower(), error_msg, context)
         case HomeAssistantConnectionError():
             # send_websocket_message raises a command timeout as the cause.
             timeout = isinstance(error.__cause__, HomeAssistantCommandTimeout)
