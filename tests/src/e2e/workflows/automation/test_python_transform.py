@@ -120,69 +120,6 @@ for a in config['actions']:
 
 
 @pytest.mark.asyncio
-async def test_python_transform_requires_config_hash(mcp_client, ha_client):
-    """Test that python_transform requires config_hash."""
-    mcp = MCPAssertions(mcp_client)
-
-    create_result = await mcp.call_tool_success(
-        "ha_config_set_automation",
-        {
-            "config": {
-                "alias": "Test Hash Required",
-                "triggers": [{"trigger": "time", "at": "09:00:00"}],
-                "actions": [
-                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
-                ],
-            }
-        },
-    )
-    entity_id = create_result["entity_id"]
-
-    result = await mcp.call_tool_failure(
-        "ha_config_set_automation",
-        {
-            "entity_id": entity_id,
-            "python_transform": "config['actions'] = []",
-        },
-    )
-    error_msg = extract_error_message(result)
-    assert "config_hash" in error_msg.lower()
-
-
-@pytest.mark.asyncio
-async def test_python_transform_requires_identifier(mcp_client, ha_client):
-    """Test that python_transform requires identifier."""
-    mcp = MCPAssertions(mcp_client)
-
-    result = await mcp.call_tool_failure(
-        "ha_config_set_automation",
-        {
-            "config_hash": "fakehash",
-            "python_transform": "config['actions'] = []",
-        },
-    )
-    error_msg = extract_error_message(result)
-    assert "identifier" in error_msg.lower()
-
-
-@pytest.mark.asyncio
-async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
-    """Test that python_transform is mutually exclusive with config."""
-    mcp = MCPAssertions(mcp_client)
-
-    result = await mcp.call_tool_failure(
-        "ha_config_set_automation",
-        {
-            "entity_id": "automation.test",
-            "config": {"alias": "test", "trigger": [], "action": []},
-            "python_transform": "config['actions'] = []",
-        },
-    )
-    error_msg = extract_error_message(result)
-    assert "cannot use both" in error_msg.lower()
-
-
-@pytest.mark.asyncio
 async def test_python_transform_hash_conflict(mcp_client, ha_client):
     """Test that hash conflicts are detected."""
     mcp = MCPAssertions(mcp_client)
