@@ -61,7 +61,7 @@ _GATED_TOOL_CALLS: dict[str, dict[str, Any]] = {
 # tools carry ``@with_auto_backup(mandatory=True)``, whose pre-write snapshot
 # reads the file through the same missing services and so fails first — the
 # decorator unwraps that specific cause back to the component error
-# (``_component_not_installed_cause`` in ``src/ha_mcp/tools/auto_backup.py``)
+# (``_component_refusal_cause`` in ``src/ha_mcp/tools/auto_backup.py``)
 # instead of burying it inside BACKUP_CAPTURE_FAILED, so the caller always
 # sees "add the entry" as the primary error (#2292).
 _EXPECTED_ERROR_CODE = "COMPONENT_NOT_INSTALLED"

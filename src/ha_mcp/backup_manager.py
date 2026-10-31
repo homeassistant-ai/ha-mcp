@@ -2760,6 +2760,7 @@ async def _fetch_file(client: Any, entity_id: str) -> Any:
     skips it instead of blocking the write or delete. Other read failures
     raise so the capture pipeline logs them at WARNING.
     """
+    from .tools.auto_backup import PathNotAllowedError
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
 
@@ -2771,12 +2772,11 @@ async def _fetch_file(client: Any, entity_id: str) -> Any:
         content = result.get("content")
         return content if isinstance(content, str) else None
     error = str(result.get("error", ""))
-    if (
-        "does not exist" in error
-        or "not a file" in error
-        or "Cannot read binary file" in error
-    ):
+    skips = ("does not exist", "not a file", "Cannot read binary file")
+    if any(marker in error for marker in skips):
         return None
+    if error.startswith("Path not allowed"):
+        raise PathNotAllowedError(entity_id, error)
     raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
 
 
