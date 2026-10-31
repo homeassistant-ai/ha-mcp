@@ -18,13 +18,16 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_call_event_no_data(mcp_client):
     """Publish a custom event without event data."""
+    event_type = f"test_mcp_event_no_data_{uuid.uuid4().hex[:8]}"
     result = await mcp_client.call_tool(
         "ha_call_event",
-        {"event_type": "test_mcp_event_no_data"},
+        {"event_type": event_type},
     )
     data = assert_mcp_success(result, "call event without data")
     assert data["success"] is True
-    assert data["event_type"] == "test_mcp_event_no_data"
+    assert data["event_type"] == event_type
+    assert data["listener_count"] == 0
+    assert "wildcard_listener_count" in data
     assert "message" in data
     logger.info("Called event without data: %s", data)
 
@@ -128,6 +131,10 @@ async def test_call_event_delivery_verified(mcp_client):
         data = assert_mcp_success(event_result, "fire custom event")
         assert data["success"] is True
         assert data["event_type"] == event_type
+        assert data["listener_count"] >= 1, (
+            "The automation's event trigger must register a listener for "
+            f"{event_type!r}; got {data.get('listener_count')!r}"
+        )
         logger.info("Fired event %r: %s", event_type, data)
 
         # 5. Wait for flag to flip 'on' — proves event reached the bus
