@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "실패한 REST 호출당 재시도 예산.",
     "advanced.verify_ssl.label": "TLS 인증서 확인",
     "advanced.verify_ssl.help": "Home Assistant 서버의 TLS 인증서를 확인합니다. 자체 서명된 인증서나 호스트 이름 불일치의 경우에만 신뢰할 수 있는 네트워크에서 이 기능을 끄십시오. 전송 보안이 약화됩니다.",
+    "advanced.ipv6_allowed_networks.label": "허용할 추가 IPv6 네트워크",
+    "advanced.ipv6_allowed_networks.help": "IPv6 클라이언트는 루프백, 링크 로컬, 고유 로컬(fc00::/7) 및 Home Assistant 호스트가 직접 연결된 네트워크와 같은 로컬 네트워크에서만 이 서버의 자체 포트에 접근할 수 있습니다. IPv4는 영향을 받지 않습니다. 쉼표나 줄바꿈으로 구분하여 허용할 다른 IPv6 네트워크를 나열하세요(예: 2001:db8:5::/48). ::/0을 추가하면 라우터가 인바운드 IPv6를 허용하는 경우 인터넷을 포함한 모든 IPv6 클라이언트가 허용됩니다.",
     "advanced.fuzzy_threshold.label": "유사 검색 임계값",
     "advanced.fuzzy_threshold.help": "낮은 값을 설정할수록 더 느슨한 엔티티 일치가 허용됩니다.",
     "advanced.automation_config_time_budget.label": "자동화 설정 조회 시간 예산(초)",

@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "Presupuesto de reintentos por cada llamada REST fallida.",
     "advanced.verify_ssl.label": "Verificar certificados TLS",
     "advanced.verify_ssl.help": "Verificar el certificado TLS del servidor de Home Assistant. Desactiva esto solo en una red de confianza, para un certificado autofirmado o un desajuste de nombre de host: esto debilita la seguridad del transporte.",
+    "advanced.ipv6_allowed_networks.label": "Redes IPv6 adicionales permitidas",
+    "advanced.ipv6_allowed_networks.help": "Los clientes IPv6 llegan al puerto propio de este servidor solo desde la red local: bucle local (loopback), enlace local (link-local), locales únicas (fc00::/7) y las redes a las que el host de Home Assistant está conectado directamente. IPv4 no se ve afectado. Lista otras redes IPv6 para permitir, separadas por comas o saltos de línea (por ejemplo, 2001:db8:5::/48). Agregar ::/0 permite a cualquier cliente IPv6, incluso desde internet si tu router permite tráfico IPv6 entrante.",
     "advanced.fuzzy_threshold.label": "Umbral de la búsqueda difusa",
     "advanced.fuzzy_threshold.help": "Los valores más bajos permiten una coincidencia de entidades más flexible.",
     "advanced.automation_config_time_budget.label": "Presupuesto de tiempo para la configuración de automatizaciones (s)",

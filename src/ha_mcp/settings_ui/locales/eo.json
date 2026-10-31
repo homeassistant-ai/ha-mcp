@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "Buĝeto de reprovoj po malsukcesa REST-voko.",
     "advanced.verify_ssl.label": "Konfirmi TLS-atestilojn",
     "advanced.verify_ssl.help": "Konfirmi la TLS-atestilon de la servilo de Home Assistant. Malŝaltu ĉi tion nur ĉe fidinda reto, por memsubskribita atestilo aŭ mita gastnomo: ĝi malfortigas transportan sekurecon.",
+    "advanced.ipv6_allowed_networks.label": "Kromaj permesitaj retoj IPv6",
+    "advanced.ipv6_allowed_networks.help": "Klientoj IPv6 atingas la propran pordon de ĉi tiu servilo nur el la loka reto: loka buko, liglokala, unika loka (fc00::/7) kaj la retoj al kiuj la gastiganto de Home Assistant estas rekte konektita. IPv4 ne estas tuŝita. Listigu aliajn retojn IPv6 por permesi, apartigite per komoj aŭ novaj linioj (ekzemple 2001:db8:5::/48). Aldono de ::/0 permesas ĉiun klienton IPv6, inkluzive de tiu el la interreto se via enkursigilo tralasas envenantajn IPv6.",
     "advanced.fuzzy_threshold.label": "Sojlo de neklara serĉo",
     "advanced.fuzzy_threshold.help": "Pli malaltaj valoroj permesas pli malstriktan entan kongruon.",
     "advanced.automation_config_time_budget.label": "Tempa buĝeto por aŭtomatiga agordo (s)",

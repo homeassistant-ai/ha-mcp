@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "Rozpočet na opakování pro každé selhání volání REST.",
     "advanced.verify_ssl.label": "Ověřit certifikáty TLS",
     "advanced.verify_ssl.help": "Ověřit certifikát TLS serveru Home Assistant. Vypněte tuto možnost pouze v důvěryhodné síti pro autorsky podepsaný certifikát nebo neshodu názvů hostitelů: oslabuje to zabezpečení přenosu.",
+    "advanced.ipv6_allowed_networks.label": "Další povolené sítě IPv6",
+    "advanced.ipv6_allowed_networks.help": "Klienti IPv6 přistupují k vlastnímu portu tohoto serveru pouze z lokální sítě: loopback, link-local, unique local (fc00::/7) a sítí, ke kterým je hostitel Home Assistant přímo připojen. IPv4 to neovlivňuje. Uveďte další sítě IPv6, které chcete povolit, oddělené čárkami nebo novými řádky (například 2001:db8:5::/48). Přidáním ::/0 povolíte všechny klienty IPv6, včetně přístupu z internetu, pokud váš router propouští příchozí provoz IPv6.",
     "advanced.fuzzy_threshold.label": "Prahová hodnota fuzzy vyhledávání",
     "advanced.fuzzy_threshold.help": "Nižší hodnoty umožňují volnější shodu entit.",
     "advanced.automation_config_time_budget.label": "Časový rozpočet konfigurace automatizace (s)",

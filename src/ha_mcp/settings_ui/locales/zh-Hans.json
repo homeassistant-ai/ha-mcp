@@ -458,6 +458,8 @@
     "advanced.max_retries.help": "每次失败的 REST 调用的重试预算。",
     "advanced.verify_ssl.label": "验证 TLS 证书",
     "advanced.verify_ssl.help": "验证 Home Assistant 服务器的 TLS 证书。仅在受信任的网络上、针对自签名证书或主机名不匹配的情况关闭此选项：这会削弱传输安全性。",
+    "advanced.ipv6_allowed_networks.label": "允许的额外 IPv6 网络",
+    "advanced.ipv6_allowed_networks.help": "IPv6 客户端仅能从本地网络访问该服务器自身的端口：回环、链路本地、唯一本地（fc00::/7）以及 Home Assistant 主机直接连接的网络。IPv4 不受影响。请列出需要允许的其他 IPv6 网络，以逗号或换行符分隔（例如 2001:db8:5::/48）。添加 ::/0 将允许所有 IPv6 客户端，如果您的路由器允许入站 IPv6 流量，则也包括来自互联网的客户端。",
     "advanced.fuzzy_threshold.label": "模糊搜索阈值",
     "advanced.fuzzy_threshold.help": "较低的值允许更宽松的实体匹配。",
     "advanced.automation_config_time_budget.label": "自动化配置时间预算（秒）",

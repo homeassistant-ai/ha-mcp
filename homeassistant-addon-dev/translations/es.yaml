@@ -114,13 +114,14 @@ configuration:
       las opciones que contiene. Se usa solo mientras la opción Redactar secretos
       esté activada. Vacío por defecto.
   ipv6_allowed_networks:
-    name: Extra IPv6 networks allowed
-    description: 'IPv6 clients reach this server''s own port only from the local network:
-      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
-      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
-      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
-      ::/0 allows every IPv6 client, including from the internet if your router lets
-      inbound IPv6 through.'
+    name: Redes IPv6 adicionales permitidas
+    description: 'Los clientes IPv6 llegan al puerto propio de este servidor solo
+      desde la red local: bucle local (loopback), enlace local (link-local), locales
+      únicas (fc00::/7) y las redes a las que el host de Home Assistant está conectado
+      directamente. IPv4 no se ve afectado. Lista otras redes IPv6 para permitir,
+      separadas por comas o saltos de línea (por ejemplo, 2001:db8:5::/48). Agregar
+      ::/0 permite a cualquier cliente IPv6, incluso desde internet si tu router permite
+      tráfico IPv6 entrante.'
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las

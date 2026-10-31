@@ -63,13 +63,11 @@ configuration:
       형식으로 작성하세요. 옵션 그룹 이름을 지정하면 그 안의 모든 옵션이 포함됩니다. ''민감한 정보 숨기기''가 켜져 있는 동안에만 사용됩니다.
       기본값은 비어 있음입니다.'
   ipv6_allowed_networks:
-    name: Extra IPv6 networks allowed
-    description: 'IPv6 clients reach this server''s own port only from the local network:
-      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
-      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
-      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
-      ::/0 allows every IPv6 client, including from the internet if your router lets
-      inbound IPv6 through.'
+    name: 허용할 추가 IPv6 네트워크
+    description: 'IPv6 클라이언트는 루프백, 링크 로컬, 고유 로컬(fc00::/7) 및 Home Assistant 호스트가 직접
+      연결된 네트워크와 같은 로컬 네트워크에서만 이 서버의 자체 포트에 접근할 수 있습니다. IPv4는 영향을 받지 않습니다. 쉼표나 줄바꿈으로
+      구분하여 허용할 다른 IPv6 네트워크를 나열하세요(예: 2001:db8:5::/48). ::/0을 추가하면 라우터가 인바운드 IPv6를
+      허용하는 경우 인터넷을 포함한 모든 IPv6 클라이언트가 허용됩니다.'
   enable_mandatory_bps:
     name: 쓰기 시 모범 사례 스킬 첨부
     description: '쓰기 도구 스킬 콘텐츠 전달 기능(이슈 #1182)의 마스터 스위치입니다. 켜져 있으면(기본값) 여섯 개의 설정 쓰기
