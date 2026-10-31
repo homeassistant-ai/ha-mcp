@@ -15,8 +15,8 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Python Transform",
-                "trigger": [{"platform": "time", "at": "07:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "07:00:00"}],
+                "actions": [
                     {
                         "alias": "Turn on light",
                         "action": "light.turn_on",
@@ -64,8 +64,8 @@ async def test_python_transform_pattern_update(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Pattern Transform",
-                "trigger": [{"platform": "time", "at": "08:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "08:00:00"}],
+                "actions": [
                     {
                         "alias": "Step A",
                         "action": "light.turn_on",
@@ -129,8 +129,8 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Hash Required",
-                "trigger": [{"platform": "time", "at": "09:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "09:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -192,8 +192,8 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Conflict",
-                "trigger": [{"platform": "time", "at": "10:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "10:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -213,8 +213,8 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "config_hash": config_hash,
             "config": {
                 "alias": "Test Conflict Modified",
-                "trigger": [{"platform": "time", "at": "11:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "11:00:00"}],
+                "actions": [
                     {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
                 ],
             },
@@ -243,8 +243,8 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Security",
-                "trigger": [{"platform": "time", "at": "12:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "12:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -279,8 +279,8 @@ async def test_chained_transforms(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Chain",
-                "trigger": [{"platform": "time", "at": "13:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "13:00:00"}],
+                "actions": [
                     {
                         "action": "light.turn_on",
                         "target": {"entity_id": "light.test"},
@@ -329,8 +329,8 @@ async def test_returned_hash_matches_next_get(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Hash Match",
-                "trigger": [{"platform": "time", "at": "14:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "14:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -368,8 +368,8 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Invalid Transform",
-                "trigger": [{"platform": "time", "at": "15:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "15:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -404,8 +404,8 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Hash Stability",
-                "trigger": [{"platform": "time", "at": "16:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "16:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}},
                     {"delay": {"seconds": 1}},
                     {"action": "light.turn_off", "target": {"entity_id": "light.test"}},
@@ -427,12 +427,13 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_plural_key_hash_stability(mcp_client, ha_client):
-    """Test that plural-key input doesn't cause hash instability.
+async def test_singular_root_keys_read_back_as_stored(mcp_client, ha_client):
+    """A config written with singular root keys reads back with them.
 
-    The tool canonicalizes automation configs to HA's 2024.10+ plural root
-    keys. The normalized (plural) shape — and therefore the hash — must be
-    stable across reads.
+    The tools return the body Core stores, so the hash is stable across reads
+    and python_transform edits the keys the automation actually has. A read
+    that rewrote the body (plural keys, a dropped ``platform``) would hand the
+    transform a config that differs from the stored one.
     """
     mcp = MCPAssertions(mcp_client)
 
@@ -440,9 +441,9 @@ async def test_plural_key_hash_stability(mcp_client, ha_client):
         "ha_config_set_automation",
         {
             "config": {
-                "alias": "Test Plural Keys",
-                "triggers": [{"platform": "time", "at": "17:00:00"}],
-                "actions": [
+                "alias": "Test Singular Keys",
+                "trigger": [{"platform": "time", "at": "17:00:00"}],
+                "action": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -456,19 +457,24 @@ async def test_plural_key_hash_stability(mcp_client, ha_client):
     read2 = await mcp.call_tool_success(
         "ha_config_get_automation", {"entity_id": entity_id}
     )
-
-    assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]
+    stored = read1["config"]
+    assert stored["trigger"] == [{"platform": "time", "at": "17:00:00"}], stored
+    assert "triggers" not in stored and "actions" not in stored, stored
 
-    # Transform using the hash should succeed
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
             "entity_id": entity_id,
             "config_hash": read1["config_hash"],
-            "python_transform": "config['alias'] = 'Plural Keys Updated'",
+            "python_transform": "config['action'][0]['data'] = {'brightness': 10}",
         },
     )
+    verify = await mcp.call_tool_success(
+        "ha_config_get_automation", {"entity_id": entity_id}
+    )
+    assert verify["config"]["action"][0]["data"] == {"brightness": 10}, verify
+    assert "actions" not in verify["config"], verify
 
 
 @pytest.mark.asyncio
@@ -481,8 +487,8 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Full Hash",
-                "trigger": [{"platform": "time", "at": "18:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "18:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -502,8 +508,8 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "config_hash": get_result["config_hash"],
             "config": {
                 "alias": "Full Hash Updated",
-                "trigger": [{"platform": "time", "at": "18:30:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "18:30:00"}],
+                "actions": [
                     {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
                 ],
             },
@@ -521,8 +527,8 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
         {
             "config": {
                 "alias": "Test Full Stale",
-                "trigger": [{"platform": "time", "at": "19:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "19:00:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
@@ -543,8 +549,8 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             "config_hash": old_hash,
             "config": {
                 "alias": "Modified",
-                "trigger": [{"platform": "time", "at": "19:30:00"}],
-                "action": [{"delay": {"seconds": 1}}],
+                "triggers": [{"trigger": "time", "at": "19:30:00"}],
+                "actions": [{"delay": {"seconds": 1}}],
             },
         },
     )
@@ -557,8 +563,8 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             "config_hash": old_hash,
             "config": {
                 "alias": "Should Fail",
-                "trigger": [{"platform": "time", "at": "20:00:00"}],
-                "action": [{"delay": {"seconds": 2}}],
+                "triggers": [{"trigger": "time", "at": "20:00:00"}],
+                "actions": [{"delay": {"seconds": 2}}],
             },
         },
     )
@@ -590,8 +596,8 @@ async def test_categorized_automation_transform_preserves_category(
         {
             "config": {
                 "alias": "Test Categorized Transform",
-                "trigger": [{"platform": "time", "at": "21:00:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "21:00:00"}],
+                "actions": [
                     {
                         "action": "light.turn_on",
                         "target": {"entity_id": "light.test"},
