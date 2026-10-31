@@ -243,9 +243,10 @@ def _apply_registry_check(
     if fail_closed and not ok:
         if exc is not None:
             # The transport wrap re-raises acquisition failures as
-            # HomeAssistantConnectionError ``from`` the original exception
-            # (phase-before-type, pinned by
-            # test_failure_to_acquire_a_client_raises), so an auth rejection
+            # HomeAssistantCommandNotSent (a plain HomeAssistantConnectionError
+            # once an earlier attempt obtained a client) ``from`` the original
+            # exception (phase-before-type, pinned by
+            # test_failure_to_acquire_a_client_is_not_sent), so an auth rejection
             # during connect survives only in the ``__cause__`` chain —
             # discriminate on it the same way the envelope branch below
             # discriminates on ``error_code``.

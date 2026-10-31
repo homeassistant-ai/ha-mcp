@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -28,6 +29,7 @@ from ha_mcp.tools.component_api import (
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
+    probe_token_rejection,
 )
 
 _INFO_OK = {
@@ -289,6 +291,79 @@ async def test_invalidate_caps_forces_reprobe() -> None:
         await get_component_caps(client)
 
     assert ws.send_command.await_count == 2
+
+
+def _rejecting_connect() -> AsyncMock:
+    return AsyncMock(
+        side_effect=HomeAssistantAuthError("WebSocket authentication failed")
+    )
+
+
+@pytest.mark.asyncio
+async def test_token_rejected_on_the_probe_is_kept_until_the_next_probe(
+    monkeypatch,
+) -> None:
+    """The connect's auth error is a transient negative whose text stays
+    readable until the next probe or invalidate_caps."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    with patch.object(component_api, "get_websocket_client", _rejecting_connect()):
+        assert await get_component_caps(client) is None
+    assert probe_token_rejection(client) == "WebSocket authentication failed"
+    with pytest.raises(component_api.ComponentDiscoveryError):
+        await get_component_caps(client, strict=True)
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    with _patch_ws(_make_ws(info_result=_INFO_OK)):
+        assert await get_component_caps(client) is not None
+    assert probe_token_rejection(client) is None
+
+    invalidate_caps(client)
+    with patch.object(component_api, "get_websocket_client", _rejecting_connect()):
+        await get_component_caps(client)
+    assert probe_token_rejection(client) is not None
+    invalidate_caps(client)
+    assert probe_token_rejection(client) is None
+
+
+@pytest.mark.asyncio
+async def test_other_probe_failures_keep_no_token_rejection(monkeypatch) -> None:
+    """A connection failure or an unexpected error on a later probe clears the
+    kept rejection."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    with patch.object(component_api, "get_websocket_client", _rejecting_connect()):
+        await get_component_caps(client)
+    assert probe_token_rejection(client) is not None
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    with _patch_ws(_make_ws(info_exc=HomeAssistantConnectionError("ws down"))):
+        await get_component_caps(client)
+    assert probe_token_rejection(client) is None
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    with patch.object(component_api, "get_websocket_client", _rejecting_connect()):
+        await get_component_caps(client)
+    assert probe_token_rejection(client) is not None
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    boom = _make_ws(info_exc=RuntimeError("boom"))
+    with _patch_ws(boom):
+        await get_component_caps(client)
+    assert boom.send_command.await_count == 1
+    assert probe_token_rejection(client) is None
+
+
+@pytest.mark.asyncio
+async def test_token_rejection_is_scoped_to_the_rejected_token() -> None:
+    """An OAuth proxy client is one cache key for every user's token."""
+    client = _client()
+    with patch.object(component_api, "get_websocket_client", _rejecting_connect()):
+        await get_component_caps(client)
+    client.token = "another user's token"
+    assert probe_token_rejection(client) is None
+    client.token = "tok"
+    assert probe_token_rejection(client) == "WebSocket authentication failed"
 
 
 @pytest.mark.asyncio

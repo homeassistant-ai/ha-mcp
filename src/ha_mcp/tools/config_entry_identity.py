@@ -319,12 +319,12 @@ async def _registry_rows(
             type(err).__name__,
             err,
         )
-        raise (
-            err
-            if isinstance(err, HomeAssistantConnectionError)
-            else HomeAssistantConnectionError(
-                f"{method_name} transport unavailable for {entry_id}"
-            )
+        if isinstance(err, HomeAssistantConnectionError):
+            # Re-raised as is: chaining it to itself would drop its cause, such
+            # as the auth error behind a token rejected on reconnect.
+            raise
+        raise HomeAssistantConnectionError(
+            f"{method_name} transport unavailable for {entry_id}"
         ) from err
     if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
         raise HomeAssistantAPIError(

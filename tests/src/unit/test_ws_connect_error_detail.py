@@ -249,6 +249,7 @@ class TestHelperSurfacesReason:
 
         assert ws_client is None
         assert error is not None
+        assert error["error"]["code"] == "CONNECTION_FAILED"
         # Robust to the exact key the reason lands under in the error dict.
         assert "Did not receive auth_required" in json.dumps(error)
 
@@ -270,3 +271,56 @@ class TestHelperSurfacesReason:
         blob = json.dumps(error)
         assert "WebSocket connection could not be established" in blob
         assert "MagicMock" not in blob
+
+    @pytest.mark.asyncio
+    async def test_helper_reports_a_rejected_token_as_auth(self) -> None:
+        """A connect that failed on a rejected token is an auth error, not
+        a connection error, and still carries the reason."""
+        from ha_mcp.client.rest_client import HomeAssistantAuthError
+        from ha_mcp.tools import helpers
+
+        fake = MagicMock()
+        fake.connect = AsyncMock(return_value=False)
+        fake.last_connect_error = "HomeAssistantAuthError: Invalid token"
+        fake.last_connect_exception = HomeAssistantAuthError("Invalid token")
+
+        with patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake):
+            ws_client, error = await helpers.get_connected_ws_client(
+                "http://supervisor/core", "t"
+            )
+
+        assert ws_client is None
+        assert error is not None
+        assert error["error"]["code"] == "AUTH_INVALID_TOKEN"
+        assert "Invalid token" in json.dumps(error)
+
+
+class TestBackupCaptureConnect:
+    """The backup capture's ``_ws_send`` keeps a rejected token an auth error."""
+
+    @pytest.mark.parametrize("auth", [True, False], ids=["rejected_token", "refused"])
+    @pytest.mark.asyncio
+    async def test_failed_connect_raises_by_its_code(self, auth: bool) -> None:
+        from ha_mcp import backup_manager
+        from ha_mcp.client.rest_client import (
+            HomeAssistantAuthError,
+            HomeAssistantConnectionError,
+        )
+        from ha_mcp.tools import helpers
+
+        fake = MagicMock()
+        fake.connect = AsyncMock(return_value=False)
+        fake.last_connect_error = "Invalid token" if auth else "Connection refused"
+        fake.last_connect_exception = (
+            HomeAssistantAuthError("Invalid token") if auth else None
+        )
+        client = MagicMock(base_url="http://supervisor/core", token="t")
+        expected = HomeAssistantAuthError if auth else HomeAssistantConnectionError
+
+        with (
+            patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake),
+            pytest.raises(expected),
+        ):
+            await backup_manager._ws_send(
+                client, {"type": "config/entity_registry/list"}
+            )

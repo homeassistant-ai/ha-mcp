@@ -9,16 +9,23 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import json
 import sys
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandNotSent, HomeAssistantError
-from ha_mcp.tools import component_todo
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
+from ha_mcp.tools import component_api, component_todo
 from ha_mcp.tools.component_api import ComponentCaps
 
 # The sibling module installs the homeassistant.* stubs the component needs, so
@@ -470,6 +477,13 @@ class _Client:
         return self.result
 
 
+class _CredentialedClient(_Client):
+    """A client the capability probe connects for."""
+
+    base_url = "http://ha.local:8123"
+    token = "tok"
+
+
 @pytest.fixture
 def caps(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     served = ComponentCaps(1, "2.2.2", frozenset({component_todo.CAPABILITY}), {})
@@ -514,6 +528,73 @@ class TestClient:
     async def test_not_sent_falls_back(self, caps: MagicMock) -> None:
         client = _Client(raise_=HomeAssistantCommandNotSent("down"))
         assert await component_todo.todo_item(client, LIST, "add") is None
+
+    async def test_rejected_token_does_not_fall_back(self, caps: MagicMock) -> None:
+        # The shape send_websocket_message raises when a rejected token
+        # stopped it from obtaining a client (test_rest_client_ws_transport_failure).
+        unsent = HomeAssistantCommandNotSent("rejected")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        with pytest.raises(HomeAssistantCommandNotSent) as exc_info:
+            await component_todo.todo_item(_Client(raise_=unsent), LIST, "add")
+        assert exc_info.value is unsent
+
+    async def test_rejected_token_is_an_auth_error_not_an_unknown_outcome(
+        self, caps: MagicMock
+    ) -> None:
+        unsent = HomeAssistantCommandNotSent("rejected")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        with pytest.raises(ToolError) as exc_info:
+            await component_todo.todo_call(_Client(raise_=unsent), LIST, "add")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "AUTH_INVALID_TOKEN"
+        assert "write_outcome_unknown" not in json.dumps(body)
+
+    async def test_token_rejected_on_the_probe_does_not_fall_back(self) -> None:
+        # get_component_caps unmocked: the probe's connect rejects the token.
+        client = _CredentialedClient()
+        connect = AsyncMock(side_effect=HomeAssistantAuthError("Token expired"))
+        with patch.object(component_api, "get_websocket_client", connect):
+            for _ in range(2):  # the second call is served from the cache
+                with pytest.raises(HomeAssistantCommandNotSent) as exc_info:
+                    await component_todo.todo_item(client, LIST, "add")
+                assert isinstance(exc_info.value.__cause__, HomeAssistantAuthError)
+        assert connect.await_count == 1
+        assert client.sent == []
+
+    async def test_token_rejected_on_the_probe_is_an_auth_error(self) -> None:
+        connect = AsyncMock(side_effect=HomeAssistantAuthError("Token expired"))
+        with (
+            patch.object(component_api, "get_websocket_client", connect),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await component_todo.todo_call(_CredentialedClient(), LIST, "add")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "AUTH_EXPIRED"
+        assert "Token expired" in body["error"]["message"]
+        assert "write_outcome_unknown" not in json.dumps(body)
+
+    async def test_another_tokens_probe_rejection_still_falls_back(self) -> None:
+        # One OAuth proxy client serves every user's token.
+        client = _CredentialedClient()
+        connect = AsyncMock(side_effect=HomeAssistantAuthError("Token expired"))
+        with patch.object(component_api, "get_websocket_client", connect):
+            with pytest.raises(HomeAssistantCommandNotSent):
+                await component_todo.todo_item(client, LIST, "add")
+            client.token = "another user's token"
+            assert await component_todo.todo_item(client, LIST, "add") is None
+        assert client.sent == []
+
+    async def test_rejection_after_a_sent_attempt_is_an_unknown_outcome(
+        self, caps: MagicMock
+    ) -> None:
+        # Raised when an earlier attempt may have sent the command.
+        dropped = HomeAssistantConnectionError("rejected")
+        dropped.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        with pytest.raises(ToolError) as exc_info:
+            await component_todo.todo_call(_Client(raise_=dropped), LIST, "add")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["write_outcome_unknown"] is True
 
     async def test_unknown_command_falls_back(self, caps: MagicMock) -> None:
         result = {"success": False, "error": "x", "error_code": "unknown_command"}

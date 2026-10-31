@@ -24,13 +24,15 @@ change while the client lives (the bug report's component version and webhook
 auth mode); routing and gating keep using the snapshot.
 
 This mirrors the caller-token cache in ``tools_filesystem.py``: weak-keyed by
-client so multi-client / OAuth setups each negotiate independently and the
-entry self-evicts when a client is garbage-collected.
+client so each client negotiates independently and the entry self-evicts when
+a client is garbage-collected. The OAuth proxy client is one client for every
+user's token, so its users share one entry.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 import weakref
@@ -38,6 +40,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -150,6 +153,12 @@ _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
 _PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+# The sha256 of the token the last probe's connect rejected, with the auth
+# error's text, so a caller can keep a fallback from resending that token. The
+# digest scopes it to that token: the OAuth proxy client serves every user's.
+_PROBE_TOKEN_REJECTIONS: weakref.WeakKeyDictionary[Any, tuple[str, str]] = (
+    weakref.WeakKeyDictionary()
+)
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
@@ -212,6 +221,7 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
     transient-negative stamp so a client never carries both negative kinds.
     """
     _PROBE_FAILURES.pop(client, None)
+    _PROBE_TOKEN_REJECTIONS.pop(client, None)
     _CAPS_CACHE[client] = caps
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
     if caps is None:
@@ -229,6 +239,7 @@ def _store_transient_negative(client: Any, caps: ComponentCaps | None = None) ->
     while expiring them on the same short timer as failed probes. Clear any
     prior absent-negative stamp so a client never carries both cache windows.
     """
+    _PROBE_TOKEN_REJECTIONS.pop(client, None)
     _CAPS_CACHE[client] = caps
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS[client] = _monotonic()
@@ -290,9 +301,10 @@ async def get_component_caps(
     Cache-on-failure semantics follow the error taxonomy:
 
     - ``HomeAssistantCommandError`` with ``unknown_command`` (old or absent
-      component): cache ``None`` with an expiry. The negative is re-probed after ``_NEGATIVE_CACHE_TTL_S`` so a component
-      installed / upgraded mid-session (the REST client — the cache key — is not
-      recreated on an HA restart) is eventually adopted instead of pinned absent.
+      component): cache ``None`` with an expiry. The negative is re-probed
+      after ``_NEGATIVE_CACHE_TTL_S`` so a component installed / upgraded
+      mid-session (the REST client — the cache key — is not recreated on an HA
+      restart) is eventually adopted instead of pinned absent.
     - ``HomeAssistantConnectionError`` / ``HomeAssistantCommandTimeout`` (WS
       down or slow, including the failed-connect raise from
       ``WebSocketManager``): cache a SHORT transient
@@ -300,6 +312,9 @@ async def get_component_caps(
       WS-broken install skip the slow connect and go straight to legacy, then
       re-probe once the window lapses (self-healing). The consuming tool's legacy
       path serves read requests meanwhile; strict writers refuse the edit.
+    - ``HomeAssistantAuthError`` (token rejected on connect): handled like the
+      unexpected exceptions below, and its text is kept for
+      ``probe_token_rejection`` with the rejected token's digest.
     - No credentials on the client (a bare test double with no ``base_url`` /
       ``token``): nothing to probe; return ``None`` without caching.
     - Other command errors, malformed replies, or unexpected exceptions: cache
@@ -352,12 +367,13 @@ async def get_component_caps(
                 f"{INFO_COMMAND} probe could not reach Home Assistant"
             )
             return _checked_caps(client, None, strict)
-        except Exception:
+        except Exception as exc:
             # Read callers retain best-effort fallback; strict write callers
             # must not confuse an unexpected fault with capability absence.
             logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
             _store_transient_negative(client)
             _PROBE_FAILURES[client] = f"{INFO_COMMAND} probe failed unexpectedly"
+            _note_token_rejection(client, token, exc)
             return _checked_caps(client, None, strict)
 
         caps = _parse_caps(response)
@@ -409,9 +425,34 @@ def invalidate_caps(client: Any) -> None:
     stale positive doesn't keep routing to a dead command.
     """
     _PROBE_FAILURES.pop(client, None)
+    _PROBE_TOKEN_REJECTIONS.pop(client, None)
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
+
+
+def _token_digest(token: Any) -> str:
+    """sha256 of ``token``, so no raw token is kept in module state."""
+    return hashlib.sha256(str(token).encode()).hexdigest()
+
+
+def _note_token_rejection(client: Any, token: str, exc: Exception) -> None:
+    """Keep the text of an auth error that rejected ``token`` on connect."""
+    if isinstance(exc, HomeAssistantAuthError):
+        _PROBE_TOKEN_REJECTIONS[client] = (_token_digest(token), str(exc))
+
+
+def probe_token_rejection(client: Any) -> str | None:
+    """The text of the auth error that rejected ``client``'s current token on
+    the last ``ha_mcp_tools/info`` probe, or None. Kept until the next probe or
+    ``invalidate_caps``."""
+    rejection = _PROBE_TOKEN_REJECTIONS.get(client)
+    if rejection is None:
+        return None
+    digest, text = rejection
+    if digest != _token_digest(getattr(client, "token", None)):
+        return None
+    return text
 
 
 async def read_info(client: Any) -> InfoResult | None:

@@ -764,8 +764,8 @@ class HomeAssistantWebSocketClient:
             Response from Home Assistant
         """
         if not self._state.is_ready:
-            # PRE-SEND and the ONLY provably-never-sent site: nothing is transmitted at
-            # this entry guard. Raise the never-sent subtype so an at-most-once write
+            # PRE-SEND and send_command's only provably-never-sent site: nothing is
+            # transmitted here. Raise the never-sent subtype so an at-most-once write
             # consumer can fall back to legacy safely (a subclass of
             # HomeAssistantConnectionError, so every existing broad handler is
             # unaffected). A later send() failure is NOT never-sent (see below).

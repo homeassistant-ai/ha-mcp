@@ -24,6 +24,7 @@ from typing import Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -299,9 +300,10 @@ class LogbookLogSourceMixin:
 
         ``None`` means the component is absent, downgraded (``unknown_command``
         drops the cached capability) or the transport failed before Home
-        Assistant saw the request. Core's own rejections surface unchanged, and
-        a timeout surfaces instead of falling back — the recorder query is
-        still running inside Home Assistant.
+        Assistant saw the request. Core's own rejections surface unchanged; a
+        timeout (the recorder query still runs inside Home Assistant) surfaces
+        instead of falling back, and so does a token rejected on the command
+        itself. A token already rejected on the capability probe falls back.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
@@ -314,6 +316,9 @@ class LogbookLogSourceMixin:
         except HomeAssistantConnectionError as exc:
             if _wrapped_timeout(exc):
                 self._raise_logbook_timeout(command["start_time"], command["end_time"])
+            if isinstance(exc.__cause__, HomeAssistantAuthError):
+                # The fallbacks would resend the rejected token.
+                exception_to_structured_error(exc)
             return None
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):
@@ -346,7 +351,12 @@ class LogbookLogSourceMixin:
         except HomeAssistantConnectionError as exc:
             if _wrapped_timeout(exc):
                 self._raise_logbook_timeout(command["start_time"], command["end_time"])
-            self._raise_logbook_ws_required(command.get("device_ids"))
+            if isinstance(exc.__cause__, HomeAssistantAuthError):
+                # A token rejected on connect is not a WebSocket outage.
+                exception_to_structured_error(
+                    exc, context={"device_ids": command.get("device_ids")}
+                )
+            self._raise_logbook_ws_required(command.get("device_ids"), reason=str(exc))
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):
                 raise
