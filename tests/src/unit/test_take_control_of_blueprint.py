@@ -55,6 +55,7 @@ def mock_client():
     client.base_url = None
     client.token = None
     client.get_automation_config = AsyncMock(return_value=dict(_BLUEPRINT_CONFIG))
+    client._resolve_automation_id = AsyncMock(return_value="abc123unique")
     client.get_states = AsyncMock(
         return_value=[{"entity_id": _ID, "attributes": {"id": "abc123unique"}}]
     )
@@ -93,7 +94,7 @@ def _written(mock_client) -> dict[str, Any]:
 async def test_replaces_the_blueprint_link_with_the_rendered_config(tools, mock_client):
     """The saved config is the blueprint's output, no longer a reference to it."""
     result = await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
+        entity_id=_ID, take_control_of_blueprint=True, wait=False
     )
 
     assert result["success"] is True
@@ -110,7 +111,7 @@ async def test_identity_and_labels_survive_the_conversion(tools, mock_client):
     to the blueprint's default, which is what the frontend guards against.
     """
     await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
+        entity_id=_ID, take_control_of_blueprint=True, wait=False
     )
 
     written = _written(mock_client)
@@ -122,7 +123,7 @@ async def test_identity_and_labels_survive_the_conversion(tools, mock_client):
 async def test_mode_comes_from_the_blueprint_not_the_original(tools, mock_client):
     """Everything except identity is the rendering's to decide."""
     await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
+        entity_id=_ID, take_control_of_blueprint=True, wait=False
     )
 
     assert _written(mock_client)["mode"] == "restart"
@@ -131,7 +132,7 @@ async def test_mode_comes_from_the_blueprint_not_the_original(tools, mock_client
 async def test_substitute_is_asked_for_the_automations_own_inputs(tools, mock_client):
     """Take control renders with what the automation is configured with today."""
     await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
+        entity_id=_ID, take_control_of_blueprint=True, wait=False
     )
 
     frames = [
@@ -148,7 +149,7 @@ async def test_substitute_is_asked_for_the_automations_own_inputs(tools, mock_cl
 async def test_response_names_the_blueprint_it_detached_from(tools):
     """The caller is told what the automation is no longer linked to."""
     result = await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
+        entity_id=_ID, take_control_of_blueprint=True, wait=False
     )
 
     assert result["took_control_of_blueprint"] == _PATH
@@ -167,14 +168,14 @@ async def test_refuses_an_automation_that_uses_no_blueprint(tools, mock_client):
 
     with pytest.raises(ToolError) as exc:
         await tools.ha_config_set_automation(
-            identifier=_ID, take_control_of_blueprint=True, wait=False
+            entity_id=_ID, take_control_of_blueprint=True, wait=False
         )
 
     assert _error(exc.value)["code"] == "VALIDATION_INVALID_PARAMETER"
     mock_client.upsert_automation_config.assert_not_called()
 
 
-async def test_requires_an_identifier(tools, mock_client):
+async def test_requires_an_entity_id(tools, mock_client):
     """There is no automation to convert without one."""
     with pytest.raises(ToolError) as exc:
         await tools.ha_config_set_automation(take_control_of_blueprint=True)
@@ -195,7 +196,7 @@ async def test_refuses_to_combine_with_another_write_mode(tools, mock_client, ex
     """Take control replaces the whole config, so pairing it is a caller mistake."""
     with pytest.raises(ToolError) as exc:
         await tools.ha_config_set_automation(
-            identifier=_ID, take_control_of_blueprint=True, **extra
+            entity_id=_ID, take_control_of_blueprint=True, **extra
         )
 
     assert _error(exc.value)["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -214,7 +215,7 @@ async def test_a_missing_input_is_reported_as_a_validation_failure(tools, mock_c
 
     with pytest.raises(ToolError) as exc:
         await tools.ha_config_set_automation(
-            identifier=_ID, take_control_of_blueprint=True, wait=False
+            entity_id=_ID, take_control_of_blueprint=True, wait=False
         )
 
     assert _error(exc.value)["code"] == "VALIDATION_FAILED"
@@ -225,11 +226,11 @@ def test_the_pre_conversion_config_is_what_gets_snapshotted():
     """Take control is one-way, so the backup must hold the blueprint version.
 
     ``config`` is None on this path, so the target can only come from
-    ``identifier`` -- a regression to config-only resolution would silently
+    ``entity_id`` -- a regression to config-only resolution would silently
     skip the capture and leave the conversion unrecoverable.
     """
     target = automation_backup_target(
-        {"identifier": _ID, "config": None, "take_control_of_blueprint": True}
+        {"entity_id": _ID, "config": None, "take_control_of_blueprint": True}
     )
 
     assert target == _ID
@@ -253,7 +254,7 @@ async def test_take_control_does_not_pretend_to_free_the_blueprint(
     # would have lived.
     monkeypatch.setattr(tools_config_automations, "wait_for_entity_registered", _ok)
 
-    await tools.ha_config_set_automation(identifier=_ID, take_control_of_blueprint=True)
+    await tools.ha_config_set_automation(entity_id=_ID, take_control_of_blueprint=True)
 
     assert not [
         c
@@ -275,7 +276,7 @@ async def test_a_concurrent_edit_between_read_and_write_is_caught(tools, mock_cl
     reads = {"n": 0}
     changed = dict(_BLUEPRINT_CONFIG) | {"alias": "renamed by someone else"}
 
-    async def shifting(_identifier: str) -> dict[str, Any]:
+    async def shifting(_config_id: str) -> dict[str, Any]:
         reads["n"] += 1
         return dict(_BLUEPRINT_CONFIG) if reads["n"] == 1 else changed
 
@@ -283,7 +284,7 @@ async def test_a_concurrent_edit_between_read_and_write_is_caught(tools, mock_cl
 
     with pytest.raises(ToolError):
         await tools.ha_config_set_automation(
-            identifier=_ID, take_control_of_blueprint=True, wait=False
+            entity_id=_ID, take_control_of_blueprint=True, wait=False
         )
 
     mock_client.upsert_automation_config.assert_not_called()
@@ -292,7 +293,7 @@ async def test_a_concurrent_edit_between_read_and_write_is_caught(tools, mock_cl
 async def test_an_unchanged_automation_still_converts(tools, mock_client):
     """The lock must not block the ordinary case where nothing moved."""
     result = await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
+        entity_id=_ID, take_control_of_blueprint=True, wait=False
     )
 
     assert result["success"] is True
@@ -303,7 +304,7 @@ async def test_an_explicit_caller_hash_still_wins(tools, mock_client):
     """A caller locking against a config THEY read keeps that guarantee."""
     with pytest.raises(ToolError):
         await tools.ha_config_set_automation(
-            identifier=_ID,
+            entity_id=_ID,
             take_control_of_blueprint=True,
             config_hash="a-hash-that-does-not-match",
             wait=False,

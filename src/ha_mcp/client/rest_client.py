@@ -9,7 +9,7 @@ import os
 import ssl
 import time
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 import httpx
 
@@ -1376,40 +1376,44 @@ class HomeAssistantClient:
     # Automation Configuration Management
 
     async def _resolve_automation_id(self, identifier: str) -> str:
-        """Convert entity_id to unique_id if needed, or return unique_id as-is.
+        """Return the config id of ``identifier`` (an entity_id or a config id).
 
-        Args:
-            identifier: Either entity_id (automation.xxx) or unique_id
-
-        Returns:
-            The unique_id for configuration API
+        An entity_id resolves through the entity registry first, so a disabled
+        automation (no state) resolves too; the state's ``id`` attribute is the
+        fallback when the registry does not answer with a ``unique_id``.
 
         Raises:
             HomeAssistantAPIError: 404 if not found; other read failures propagate
         """
-        if identifier.startswith("automation."):
-            try:
-                state = await self.get_entity_state(identifier)
-                unique_id = state.get("attributes", {}).get("id")
-                if not unique_id:
-                    raise HomeAssistantAPIError(
-                        f"Automation {identifier} has no unique_id attribute",
-                        status_code=404,
-                    )
-                logger.debug(
-                    f"Converted entity_id {identifier} to unique_id {unique_id}"
-                )
-                return str(unique_id)
-            except HomeAssistantAPIError as e:
-                if e.status_code != 404:  # a failed read is not a missing one
-                    raise
-                raise HomeAssistantAPIError(
-                    f"Failed to resolve automation {identifier}: {str(e)}",
-                    status_code=404,
-                ) from e
-        else:
-            # Assume it's already a unique_id
+        if not identifier.startswith("automation."):
             return identifier
+        try:
+            entry = await self.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": identifier}
+            )
+        except HomeAssistantConnectionError as e:
+            logger.debug(f"Registry lookup for {identifier} failed: {e}")
+            entry = {}
+        if entry.get("success"):
+            unique_id = (entry.get("result") or {}).get("unique_id")
+            if unique_id:
+                return str(unique_id)
+        try:
+            state = await self.get_entity_state(identifier)
+        except HomeAssistantAPIError as e:
+            if e.status_code != 404:  # a failed read is not a missing one
+                raise
+            raise HomeAssistantAPIError(
+                f"Failed to resolve automation {identifier}: {str(e)}",
+                status_code=404,
+            ) from e
+        unique_id = state.get("attributes", {}).get("id")
+        if not unique_id:
+            raise HomeAssistantAPIError(
+                f"Automation {identifier} has no unique_id attribute",
+                status_code=404,
+            )
+        return str(unique_id)
 
     async def get_automation_config(self, identifier: str) -> dict[str, Any]:
         """Get automation configuration by unique_id or entity_id.
@@ -1445,19 +1449,20 @@ class HomeAssistantClient:
         identifier: str | None = None,
         *,
         _resolved: bool = False,
+        operation: Literal["created", "updated"] | None = None,
     ) -> dict[str, Any]:
         """
         Create new automation or update existing one.
 
         Args:
-            config: Automation configuration dictionary
-            identifier: Optional automation entity_id or unique_id (None = create new)
-            _resolved: When True, ``identifier`` is already the resolved unique_id
-                (the caller ran ``_resolve_automation_id``), so the redundant
-                entity_id→unique_id lookup is skipped. Ignored on the create path
-                (``identifier is None``). The #1404 config-id mismatch guard below
-                is unaffected — it still compares ``config['id']`` to the resolved
-                unique_id.
+            config: Automation configuration dictionary, sent as given
+            identifier: Optional automation entity_id or config id (None = create new)
+            _resolved: When True, ``identifier`` is already the config id (the
+                caller resolved it), so the entity_id lookup is skipped. The
+                #1404 config-id mismatch guard below still applies.
+            operation: Whether the write creates or updates, as the caller
+                established by reading the target first; a generated id is
+                always a creation. A creation waits for the new entity.
 
         Returns:
             Result with automation unique_id and status
@@ -1465,19 +1470,15 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAPIError: If configuration invalid or API error
         """
-        # Generate unique_id for new automation if not provided
         if identifier is None:
             unique_id = str(int(time.time() * 1000))
             operation = "created"
-            logger.debug(f"Creating new automation with unique_id: {unique_id}")
         else:
             unique_id = (
                 identifier
                 if _resolved
                 else await self._resolve_automation_id(identifier)
             )
-            operation = "updated"
-            logger.debug(f"Updating automation with unique_id: {unique_id}")
 
         # Reject mismatch between resolved storage key and inner ``config["id"]``.
         # HA stores by the inner id field even though the URL carries one too —
@@ -1490,13 +1491,13 @@ class HomeAssistantClient:
                     "Cannot create automation with explicit config['id']="
                     f"{config_id!r}: Home Assistant stores by the inner id, "
                     "which would silently overwrite an existing automation. "
-                    "Omit 'id' from config to auto-generate, or pass identifier "
+                    "Omit 'id' from config to auto-generate, or pass entity_id "
                     "to update an existing automation.",
                     status_code=400,
                 )
             raise HomeAssistantAPIError(
-                f"Mismatched automation id: identifier={identifier!r} resolves "
-                f"to unique_id={unique_id!r}, but config['id']={config_id!r}. "
+                f"Mismatched automation id: the target's config id is "
+                f"{unique_id!r}, but config['id']={config_id!r}. "
                 "Refusing to write to prevent overwriting the wrong automation. "
                 f"Remove 'id' from config or set it to the resolved unique_id "
                 f"({unique_id!r}).",
@@ -1524,7 +1525,7 @@ class HomeAssistantClient:
                 "unique_id": unique_id,
                 "entity_id": actual_entity_id,
                 "result": response.get("result", "ok"),
-                "operation": operation,
+                **({"operation": operation} if operation else {}),
             }
             if entity_not_verified:
                 result["entity_not_verified"] = True
@@ -1532,7 +1533,9 @@ class HomeAssistantClient:
         except HomeAssistantAPIError as e:
             if e.status_code == 400:
                 raise HomeAssistantAPIError(
-                    f"Invalid automation configuration: {str(e)}", status_code=400
+                    f"Invalid automation configuration: {str(e)}",
+                    status_code=400,
+                    response_data=e.response_data,
                 ) from e
             raise
 
@@ -1609,7 +1612,11 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            # Core's DELETE answers a missing id with 400, not 404.
+            if (
+                e.status_code == 400
+                and (e.response_data or {}).get("message") == "Resource not found"
+            ):
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -1626,13 +1633,6 @@ class HomeAssistantClient:
                     f"(e.g., 'DELETE_{identifier}') so you can identify and manually delete it later "
                     f"via the Home Assistant UI (Settings > Automations & Scenes).",
                     status_code=405,
-                ) from e
-            raise
-        except Exception as e:
-            if "404" in str(e):
-                raise HomeAssistantAPIError(
-                    f"Automation not found: {identifier} (unique_id: {unique_id})",
-                    status_code=404,
                 ) from e
             raise
 

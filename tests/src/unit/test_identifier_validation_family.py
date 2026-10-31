@@ -537,56 +537,56 @@ class TestAutomationsIdentifierValidation:
     def tools(self, mock_ws_client):
         from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
+        mock_ws_client.base_url = mock_ws_client.token = None  # no component probe
+        mock_ws_client.get_automation_config = AsyncMock(return_value={})
         return AutomationConfigTools(mock_ws_client)
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_remove_rejects_empty_identifier(self, tools, bad):
-        # Empty/whitespace identifier would propagate to delete_automation_config
+    async def test_remove_rejects_empty_entity_id(self, tools, bad):
+        # Empty/whitespace entity_id would propagate to delete_automation_config
         # and surface as a misleading HA delete-failure.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_config_remove_automation(identifier=bad)
+            await tools.ha_config_remove_automation(entity_id=bad)
         _assert_invalid_param(excinfo)
         tools._client.delete_automation_config.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_get_rejects_empty_identifier(self, tools, bad):
-        # Empty/whitespace identifier would propagate to
+    async def test_get_rejects_empty_entity_id(self, tools, bad):
+        # Empty/whitespace entity_id would propagate to
         # ``_get_automation_config_internal`` and surface as misleading
         # ``RESOURCE_NOT_FOUND``. #1313 extension.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_config_get_automation(identifier=bad)
+            await tools.ha_config_get_automation(entity_id=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "identifier"' in str(excinfo.value), str(excinfo.value)
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
         # Also no REST GET on the automation config.
         tools._client.get_automation_config.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_set_rejects_empty_identifier_on_update(self, tools, bad):
-        # ``identifier`` is optional on set_automation: None → create,
+    async def test_set_rejects_empty_entity_id_on_update(self, tools, bad):
+        # ``entity_id`` is optional on set_automation: None → create,
         # non-None → update. Empty/whitespace would slip past the
-        # ``if not identifier`` python_transform-mode guard for the
-        # config-update path. New guard rejects empty/whitespace whenever
-        # identifier is non-None, regardless of mode.
+        # ``if not entity_id`` python_transform-mode guard for the
+        # config-update path. The guard rejects empty/whitespace whenever
+        # entity_id is non-None, regardless of mode.
         tools._client.upsert_automation_config = AsyncMock()
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_set_automation(
                 config={"alias": "x", "trigger": [], "action": []},
-                identifier=bad,
+                entity_id=bad,
             )
         _assert_invalid_param(excinfo)
-        assert '"parameter": "identifier"' in str(excinfo.value), str(excinfo.value)
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(excinfo.value)
         # Guard fires before any upsert / WS round-trip.
         tools._client.upsert_automation_config.assert_not_called()
 
-    async def test_set_with_none_identifier_routes_to_create(self, tools):
-        # Control: ``identifier=None`` is the documented "create-new" sentinel
-        # and must NOT trip the conditional guard. Mirrors the labels (L158),
-        # categories (L202), and areas (L279) None-routing controls; without
-        # this, a regression tightening ``if identifier is not None:`` to
-        # ``if identifier is None or not identifier.strip():`` would silently
-        # break the documented create-mode and no test in the file would
-        # catch it.
+    async def test_set_with_none_entity_id_routes_to_create(self, tools):
+        # Control: ``entity_id=None`` is the documented "create-new" sentinel
+        # and must NOT trip the conditional guard. Mirrors the labels,
+        # categories and areas None-routing controls; a regression tightening
+        # ``if entity_id is not None:`` would otherwise break create-mode
+        # silently.
         tools._client.upsert_automation_config = AsyncMock(
             return_value={"success": True, "entity_id": "automation.new_one"}
         )
@@ -595,12 +595,11 @@ class TestAutomationsIdentifierValidation:
             wait=False,
         )
         assert result["success"] is True
-        # Positive proof: upsert was called with identifier=None
-        # (signature: upsert_automation_config(config_dict, identifier)).
+        # Positive proof: upsert was called without a target.
         tools._client.upsert_automation_config.assert_called_once()
         call_args = tools._client.upsert_automation_config.call_args
         assert call_args[0][1] is None, (
-            f"identifier should be None for create routing, got {call_args[0][1]!r}"
+            f"target should be None for create routing, got {call_args[0][1]!r}"
         )
 
 

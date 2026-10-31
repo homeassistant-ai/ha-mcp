@@ -2071,29 +2071,17 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
-    """Fetch an automation through the same path the get tool uses.
-
-    Applies ``_normalize_config_for_roundtrip`` so the snapshot matches
-    what ``ha_config_get_automation`` returns and round-trips cleanly
-    back through ``ha_config_set_automation`` on restore. Imported lazily
-    to keep the manager import-cycle-free.
-    """
-    # Lazy import to avoid backup_manager → tools → backup_manager cycle.
-    from .tools.tools_config_automations import _normalize_config_for_roundtrip
-
+    """Fetch an automation's stored body, verbatim, as the get tool returns it."""
     try:
-        raw = await client.get_automation_config(entity_id)
+        return await client.get_automation_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
-    if not isinstance(raw, dict):
-        return raw
-    return _normalize_config_for_roundtrip(raw)
 
 
 async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
-    return await client.upsert_automation_config(config, identifier=entity_id)
+    return await client.upsert_automation_config(config, entity_id)
 
 
 async def _fetch_script(client: Any, entity_id: str) -> Any:

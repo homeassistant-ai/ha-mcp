@@ -1,53 +1,57 @@
-"""Unit tests for Automation configuration tools.
+"""Unit tests for the automation config tools on the component-absent path.
 
-Validates the `automation_id` typed-id key across the automation config
-tool lifecycle:
-
-- `ha_config_get_automation` (issues #1299 + #1334, PR #1329)
-- `ha_config_set_automation` python_transform + full-config branches (issue #1333)
-- `ha_config_remove_automation` (issue #1333, response-shape parity)
-
-Gives sibling parity with `ha_config_get_script` (`script_id`),
-`ha_config_get_scene` (`scene_id`), and `ha_config_get_dashboard`
-(`url_path`). The value is the resolved entity_id when registry lookup
-succeeds, falling back to the raw input otherwise — same
-canonical-with-fallback semantic as scenes/dashboards.
+Core stores and returns the automation body as written, so these pin that the
+tools pass it through untouched: ``ha_config_get_automation`` returns the
+stored body verbatim and hashes it, ``python_transform`` edits that body, and
+writes reach Core as given. They also pin the `automation_id` typed-id key
+across get / set / remove (issues #1299, #1333, #1334) and the HA-MCP
+safeguards around a write (alias-replacement guard, category gate). The
+component routes are in ``test_ha_config_automation_component_routing.py``.
 """
 
+import copy
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import tools_config_automations as automations_module
 from ha_mcp.tools.tools_config_automations import (
     NOT_VERIFIED_WARNING_PREFIX,
     AutomationConfigTools,
     _strip_redundant_identifier_echo,
 )
+from ha_mcp.utils.config_hash import compute_config_hash
+
+# Singular root keys and a legacy 'platform' trigger, as an older automation
+# sits in automations.yaml: Core accepts and stores it like this.
+STORED: dict[str, Any] = {
+    "id": "abc123unique",
+    "alias": "Morning Routine",
+    "trigger": [{"platform": "time", "at": "07:00:00"}],
+    "action": [{"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}],
+}
+STORED_HASH = compute_config_hash(STORED)
+
+
+def _config(**changes: Any) -> dict[str, Any]:
+    config = {k: v for k, v in copy.deepcopy(STORED).items() if k != "id"}
+    config.update(changes)
+    return config
 
 
 @pytest.fixture
 def mock_client():
-    """Mock client satisfying read, transform, and delete paths."""
+    """Component-absent client satisfying read, write and delete paths."""
     client = MagicMock()
-    # Credential-less so the entity_lookup component gate short-circuits
-    # (get_component_caps returns None): these tests pin the legacy
-    # get_states-scan resolver, not the component route.
+    # Credential-less, so get_component_caps answers None: the fallback path.
     client.base_url = None
     client.token = None
-    client.get_automation_config = AsyncMock(
-        return_value={
-            "id": "abc123unique",
-            "alias": "Morning Routine",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
-            ],
-        }
-    )
-    # Default: registry returns the canonical entity_id for unique_id "abc123unique".
+    client.get_automation_config = AsyncMock(return_value=copy.deepcopy(STORED))
+    client._resolve_automation_id = AsyncMock(return_value="abc123unique")
     # Individual tests override .get_states for the no-match case.
     client.get_states = AsyncMock(
         return_value=[
@@ -59,12 +63,10 @@ def mock_client():
     )
     # Required by ``validate_config_references`` (asyncio.gather with get_states).
     client.get_services = AsyncMock(return_value={})
-    # fetch_entity_category path — empty success result keeps category injection off.
+    # Registry reads answer an entry without categories.
     client.send_websocket_message = AsyncMock(
         return_value={"success": True, "result": {"categories": {}}}
     )
-    # Transform path: upsert returns canonical entity_id by default; tests
-    # override to exercise the None-entity_id fallback branches.
     client.upsert_automation_config = AsyncMock(
         return_value={
             "unique_id": "abc123unique",
@@ -73,7 +75,7 @@ def mock_client():
             "operation": "updated",
         }
     )
-    # Delete path: HA returns identifier echo + resolved unique_id.
+    # Delete path: the REST client echoes its input and the config id.
     client.delete_automation_config = AsyncMock(
         return_value={
             "identifier": "abc123unique",
@@ -90,155 +92,165 @@ def tools(mock_client):
     return AutomationConfigTools(mock_client)
 
 
-class TestGetAutomationIdKey:
-    """`automation_id` canonical key on `ha_config_get_automation` (issues #1299, #1334)."""
+class TestGetAutomation:
+    """`automation_id` canonical key and the stored body on `ha_config_get_automation`."""
 
-    async def test_returns_resolved_entity_id_when_input_is_unique_id(self, tools):
-        """unique_id input → automation_id = resolved entity_id."""
-        result = await tools.ha_config_get_automation(identifier="abc123unique")
+    async def test_returns_resolved_entity_id_when_input_is_config_id(self, tools):
+        result = await tools.ha_config_get_automation(entity_id="abc123unique")
 
         assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
 
     async def test_returns_input_when_input_is_entity_id(self, tools):
-        """entity_id input → automation_id == caller input (resolver short-circuits)."""
         result = await tools.ha_config_get_automation(
-            identifier="automation.morning_routine"
+            entity_id="automation.morning_routine"
         )
 
-        assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
 
-    async def test_falls_back_to_identifier_when_registry_lookup_misses(
+    async def test_falls_back_to_input_when_registry_lookup_misses(
         self, tools, mock_client
     ):
-        """unique_id with no registry match → automation_id falls back to raw input."""
         mock_client.get_states = AsyncMock(return_value=[])
 
-        result = await tools.ha_config_get_automation(identifier="orphaned_unique_id")
+        result = await tools.ha_config_get_automation(entity_id="orphaned_unique_id")
 
-        assert result["success"] is True
         assert result["automation_id"] == "orphaned_unique_id"
+        assert result["entity"] is None
 
     async def test_identifier_key_no_longer_in_response(self, tools):
-        """Issue #1334: redundant `identifier` echo key dropped from response.
+        """Issue #1334: one canonical typed-id key, no raw input echo."""
+        result = await tools.ha_config_get_automation(entity_id="abc123unique")
 
-        Family-level convergence — every `ha_config_get_*` tool surfaces one
-        canonical-with-fallback typed-id key. For automations that's
-        `automation_id`; the legacy `identifier` echo was the last
-        leftover of the pre-#1329 shape.
-        """
-        result = await tools.ha_config_get_automation(identifier="abc123unique")
+        assert "identifier" not in result
 
-        assert "identifier" not in result, (
-            f"`identifier` key must not be present in response, got: {result}"
+    async def test_config_is_the_body_core_stores(self, tools):
+        """Rewriting root keys and 'platform' showed a config Core never
+        stored, and a transform written against it edited keys that were not
+        there."""
+        result = await tools.ha_config_get_automation(entity_id="abc123unique")
+
+        assert result["config"] == STORED
+        assert result["config_hash"] == STORED_HASH
+
+    async def test_without_the_component_core_supplies_entity_and_validation(
+        self, tools, mock_client
+    ):
+        """The registry row and Core's repair issue stand in for the
+        component's lookup; references need the component and say so."""
+        row = {"entity_id": "automation.morning_routine", "labels": ["kitchen"]}
+        issues = [
+            {
+                "domain": "automation",
+                "issue_id": "automation.other_validation_failed_schema",
+                "translation_placeholders": {"error": "not this one"},
+            },
+            {
+                "domain": "automation",
+                "issue_id": "automation.morning_routine_validation_failed_triggers",
+                "translation_placeholders": {"error": "Invalid trigger 'x' specified"},
+            },
+        ]
+
+        async def ws(msg: dict[str, Any]) -> dict[str, Any]:
+            if msg["type"] == "repairs/list_issues":
+                return {"success": True, "result": {"issues": issues}}
+            return {"success": True, "result": row}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws)
+
+        result = await tools.ha_config_get_automation(
+            entity_id="automation.morning_routine"
         )
 
-
-@pytest.fixture
-def transform_tools(tools):
-    """Tools instance with hash/refetch internals stubbed for python_transform tests.
-
-    `_fetch_and_verify_hash` and `_get_automation_config_internal` are
-    bypassed so tests don't have to compute matching `compute_config_hash`
-    values — the parity key under test depends only on the post-upsert
-    `entity_id` resolution, not on the hash arithmetic.
-
-    `_fetch_and_verify_hash` returns ``(config, resolved_id)`` since #1813
-    Phase 0 — the second element is the already-resolved storage key the tool
-    threads into the upsert.
-    """
-    canonical_config = {
-        "alias": "Morning Routine",
-        "trigger": [{"platform": "time", "at": "07:00:00"}],
-        "action": [
-            {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
-        ],
-    }
-    tools._fetch_and_verify_hash = AsyncMock(
-        return_value=(dict(canonical_config), "abc123unique")
-    )
-    tools._get_automation_config_internal = AsyncMock(
-        return_value=(dict(canonical_config), "post_transform_hash")
-    )
-    return tools
+        assert result["entity"] == row
+        assert result["validation"] == {
+            "status": "failed_triggers",
+            "error": "Invalid trigger 'x' specified",
+        }
+        assert result["references"] is None
+        assert len(result["warnings"]) == 1
+        assert "references" in result["warnings"][0]
 
 
-class TestPythonTransformAutomationIdKey:
-    """`automation_id` parity on `ha_config_set_automation` python_transform (issue #1333)."""
+class TestPythonTransform:
+    """`ha_config_set_automation` python_transform on the stored body."""
 
-    async def test_uses_upsert_entity_id_when_returned(self, transform_tools):
-        """upsert returns canonical entity_id → automation_id mirrors it."""
-        result = await transform_tools.ha_config_set_automation(
-            identifier="abc123unique",
+    async def test_uses_upsert_entity_id_when_returned(self, tools):
+        result = await tools.ha_config_set_automation(
+            entity_id="abc123unique",
             python_transform="config['mode'] = 'single'",
-            config_hash="prior_hash",
+            config_hash=STORED_HASH,
         )
 
-        assert result["success"] is True
         assert result["action"] == "python_transform"
         assert "identifier" not in result
         assert result["automation_id"] == "automation.morning_routine"
 
     async def test_falls_back_to_entity_id_input_when_upsert_omits_it(
-        self, transform_tools, mock_client
+        self, tools, mock_client
     ):
-        """upsert returns no entity_id but identifier is entity_id → fallback to identifier."""
-        mock_client.upsert_automation_config = AsyncMock(
-            return_value={
-                "unique_id": "abc123unique",
-                "entity_id": None,
-                "result": "ok",
-                "operation": "updated",
-            }
-        )
+        mock_client.upsert_automation_config.return_value = {
+            "unique_id": "abc123unique",
+            "entity_id": None,
+            "result": "ok",
+        }
 
-        result = await transform_tools.ha_config_set_automation(
-            identifier="automation.morning_routine",
+        result = await tools.ha_config_set_automation(
+            entity_id="automation.morning_routine",
             python_transform="config['mode'] = 'single'",
-            config_hash="prior_hash",
+            config_hash=STORED_HASH,
         )
 
-        assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
 
-    async def test_falls_back_to_unique_id_input_when_unresolvable(
-        self, transform_tools, mock_client
+    async def test_falls_back_to_config_id_input_when_unresolvable(
+        self, tools, mock_client
     ):
-        """upsert returns no entity_id AND identifier is unique_id → fallback to raw input."""
-        mock_client.upsert_automation_config = AsyncMock(
-            return_value={
-                "unique_id": "orphaned_unique_id",
-                "entity_id": None,
-                "result": "ok",
-                "operation": "updated",
-            }
-        )
+        mock_client.get_states = AsyncMock(return_value=[])
+        mock_client.upsert_automation_config.return_value = {
+            "unique_id": "orphaned_unique_id",
+            "entity_id": None,
+            "result": "ok",
+        }
 
-        result = await transform_tools.ha_config_set_automation(
-            identifier="orphaned_unique_id",
+        result = await tools.ha_config_set_automation(
+            entity_id="orphaned_unique_id",
             python_transform="config['mode'] = 'single'",
-            config_hash="prior_hash",
+            config_hash=STORED_HASH,
         )
 
-        assert result["success"] is True
         assert result["automation_id"] == "orphaned_unique_id"
 
+    async def test_the_transform_edits_the_body_as_stored(self, tools, mock_client):
+        """The expression addresses the keys ha_config_get_automation showed;
+        the result reaches Core without its root keys being rewritten."""
+        await tools.ha_config_set_automation(
+            entity_id="abc123unique",
+            python_transform="config['trigger'][0]['at'] = '08:00:00'",
+            config_hash=STORED_HASH,
+        )
+
+        written = mock_client.upsert_automation_config.call_args.args[0]
+        assert written["trigger"] == [{"platform": "time", "at": "08:00:00"}]
+        assert "triggers" not in written
+
     async def test_a_failed_read_back_does_not_report_the_saved_write_as_failed(
-        self, transform_tools: AutomationConfigTools
+        self, tools: AutomationConfigTools, mock_client
     ) -> None:
         """The transform is saved; failing the call would invite a retry that
         then meets a stale config_hash."""
-        from ha_mcp.client.rest_client import HomeAssistantAPIError
-
-        transform_tools._get_automation_config_internal = AsyncMock(
-            side_effect=HomeAssistantAPIError("GET reply is not JSON")
+        mock_client.get_automation_config = AsyncMock(
+            side_effect=[
+                copy.deepcopy(STORED),
+                HomeAssistantAPIError("GET reply is not JSON"),
+            ]
         )
 
-        result = await transform_tools.ha_config_set_automation(
-            identifier="abc123unique",
+        result = await tools.ha_config_set_automation(
+            entity_id="abc123unique",
             python_transform="config['mode'] = 'single'",
-            config_hash="prior_hash",
+            config_hash=STORED_HASH,
         )
 
         assert result["success"] is True
@@ -247,84 +259,49 @@ class TestPythonTransformAutomationIdKey:
 
 
 class TestFullConfigSetAutomationIdKey:
-    """`automation_id` parity on `ha_config_set_automation` full-config branch.
+    """`automation_id` parity on the full-config branch, create and update."""
 
-    Covers both the create case (identifier=None → fresh insert, automation_id
-    derived from upsert's returned entity_id / generated unique_id) and the
-    update case (identifier provided → upsert replaces existing config).
-    """
+    async def test_create_uses_upsert_entity_id_as_automation_id(self, tools):
+        result = await tools.ha_config_set_automation(config=_config(), wait=False)
 
-    @pytest.fixture
-    def canonical_config(self):
-        return {
-            "alias": "Morning Routine",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
-            ],
-        }
-
-    async def test_create_uses_upsert_entity_id_as_automation_id(
-        self, tools, canonical_config
-    ):
-        """identifier omitted → automation_id mirrors upsert-returned entity_id."""
-        result = await tools.ha_config_set_automation(
-            config=canonical_config, wait=False
-        )
-
-        assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
         assert "identifier" not in result
         # unique_id retained — it's HA's internal identifier, distinct from entity_id.
         assert result.get("unique_id") == "abc123unique"
 
-    async def test_update_uses_upsert_entity_id_as_automation_id(
-        self, tools, canonical_config
-    ):
-        """identifier provided → automation_id from entity_id (update path)."""
+    async def test_update_uses_upsert_entity_id_as_automation_id(self, tools):
         result = await tools.ha_config_set_automation(
-            identifier="automation.morning_routine",
-            config=canonical_config,
-            wait=False,
+            entity_id="automation.morning_routine", config=_config(), wait=False
         )
 
-        assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
         assert "identifier" not in result
 
     async def test_create_falls_back_to_unique_id_when_entity_id_missing(
-        self, tools, mock_client, canonical_config
+        self, tools, mock_client
     ):
-        """upsert returns no entity_id, identifier=None → automation_id falls back to unique_id."""
-        mock_client.upsert_automation_config = AsyncMock(
-            return_value={
-                "unique_id": "generated_unique_id_xyz",
-                "entity_id": None,
-                "result": "ok",
-                "operation": "created",
-            }
-        )
+        mock_client.upsert_automation_config.return_value = {
+            "unique_id": "generated_unique_id_xyz",
+            "entity_id": None,
+            "result": "ok",
+            "operation": "created",
+        }
 
-        result = await tools.ha_config_set_automation(
-            config=canonical_config, wait=False
-        )
+        result = await tools.ha_config_set_automation(config=_config(), wait=False)
 
-        assert result["success"] is True
         assert result["automation_id"] == "generated_unique_id_xyz"
 
     async def test_create_uses_successful_unique_id_fallback_without_stale_warning(
-        self, tools, mock_client, canonical_config, monkeypatch
+        self, tools, mock_client, monkeypatch
     ):
         """A recovered entity must clear the creation poll's soft-failure state."""
-        mock_client.upsert_automation_config = AsyncMock(
-            return_value={
-                "unique_id": "generated_unique_id_xyz",
-                "entity_id": None,
-                "entity_not_verified": True,
-                "result": "ok",
-                "operation": "created",
-            }
-        )
+        mock_client.upsert_automation_config.return_value = {
+            "unique_id": "generated_unique_id_xyz",
+            "entity_id": None,
+            "entity_not_verified": True,
+            "result": "ok",
+            "operation": "created",
+        }
         monkeypatch.setattr(
             automations_module,
             "wait_for_automation_entity_by_unique_id",
@@ -336,11 +313,8 @@ class TestFullConfigSetAutomationIdKey:
             AsyncMock(return_value=True),
         )
 
-        result = await tools.ha_config_set_automation(
-            config=canonical_config, wait=True
-        )
+        result = await tools.ha_config_set_automation(config=_config(), wait=True)
 
-        assert result["success"] is True
         assert result["automation_id"] == "automation.generated"
         assert result["entity_id"] == "automation.generated"
         assert all(
@@ -349,189 +323,134 @@ class TestFullConfigSetAutomationIdKey:
         )
 
     async def test_create_omits_automation_id_when_all_fallbacks_falsy(
-        self, tools, mock_client, canonical_config
+        self, tools, mock_client
     ):
-        """upsert returns no entity_id AND no unique_id, identifier=None →
-        automation_id key omitted entirely rather than surfacing as None.
+        """Defensive contract: never surface `automation_id: None`."""
+        mock_client.upsert_automation_config.return_value = {
+            "unique_id": None,
+            "entity_id": None,
+            "result": "ok",
+            "operation": "created",
+        }
 
-        Defensive contract: HA's upsert API makes this branch unreachable in
-        practice, but pinning the shape prevents a future upsert regression
-        from silently producing `automation_id: None` and lying about
-        resolvability.
-        """
-        mock_client.upsert_automation_config = AsyncMock(
-            return_value={
-                "unique_id": None,
-                "entity_id": None,
-                "result": "ok",
-                "operation": "created",
-            }
-        )
-
-        result = await tools.ha_config_set_automation(
-            config=canonical_config, wait=False
-        )
+        result = await tools.ha_config_set_automation(config=_config(), wait=False)
 
         assert result["success"] is True
         assert "automation_id" not in result
 
+    async def test_returned_hash_locks_the_next_write(self, tools, mock_client):
+        """The hash is of the body Core stored, so it matches the next read."""
+        result = await tools.ha_config_set_automation(
+            entity_id="abc123unique", config=_config(), wait=False
+        )
+        read = await tools.ha_config_get_automation(entity_id="abc123unique")
+
+        assert result["config_hash"] == read["config_hash"]
+
 
 class TestAutomationUpsertResolvedThreading:
-    """Issue #1813 Phase 0 item #6: when the tool pre-resolves the identifier
-    (its hash-verify or alias-guard fetch resolved the storage key), it threads
-    ``_resolved=True`` and the resolved unique_id into
-    ``upsert_automation_config`` so the REST client skips the redundant second
-    resolve. Creation and fetched configs without an id stay unthreaded.
-    """
+    """The tool resolves the target once and hands the REST client its config
+    id with ``_resolved=True`` and the operation it found (issue #1813)."""
 
-    @pytest.fixture
-    def canonical_config(self):
-        return {
-            "alias": "Morning Routine",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
-            ],
-        }
-
-    async def test_python_transform_threads_resolved_id(
-        self, transform_tools, mock_client
-    ):
-        """python_transform always hash-verifies first → upsert gets the resolved
-        id with ``_resolved=True``."""
-        result = await transform_tools.ha_config_set_automation(
-            identifier="automation.morning_routine",
+    async def test_python_transform_threads_resolved_id(self, tools, mock_client):
+        await tools.ha_config_set_automation(
+            entity_id="automation.morning_routine",
             python_transform="config['mode'] = 'single'",
-            config_hash="prior_hash",
+            config_hash=STORED_HASH,
         )
 
-        assert result["success"] is True
         args, kwargs = mock_client.upsert_automation_config.call_args
-        assert kwargs.get("_resolved") is True
-        # ``_fetch_and_verify_hash`` (stubbed) resolved to "abc123unique".
         assert args[1] == "abc123unique"
+        assert kwargs["_resolved"] is True
+        assert kwargs["operation"] == "updated"
 
-    async def test_full_config_with_hash_threads_resolved_id(
-        self, tools, mock_client, canonical_config
-    ):
-        """A full-config update that supplies ``config_hash`` pre-resolves via the
-        hash-verify fetch (config['id']), so the upsert is threaded."""
-        import copy
-
-        from ha_mcp.tools.tools_config_automations import (
-            _normalize_config_for_roundtrip,
-        )
-        from ha_mcp.utils.config_hash import compute_config_hash
-
-        # The hash-verify fetch normalizes the stub's returned config; the caller
-        # hash must match that to clear the optimistic-locking gate. Deep-copy
-        # before normalizing so the shared mock return_value the tool re-reads
-        # stays pristine.
-        fetched = await mock_client.get_automation_config("automation.morning_routine")
-        seed_hash = compute_config_hash(
-            _normalize_config_for_roundtrip(copy.deepcopy(fetched))
+    async def test_full_config_update_threads_resolved_id(self, tools, mock_client):
+        await tools.ha_config_set_automation(
+            entity_id="automation.morning_routine", config=_config(), wait=False
         )
 
-        result = await tools.ha_config_set_automation(
-            identifier="automation.morning_routine",
-            config=canonical_config,
-            config_hash=seed_hash,
-            wait=False,
-        )
-
-        assert result["success"] is True
         args, kwargs = mock_client.upsert_automation_config.call_args
-        assert kwargs.get("_resolved") is True
         assert args[1] == "abc123unique"
-
-    @pytest.mark.parametrize("stored_id", ["abc123unique", 123, None])
-    async def test_full_config_without_hash_reuses_guard_id_when_available(
-        self, tools, mock_client, canonical_config, stored_id
-    ):
-        """Reuse the guard's storage key, with the existing no-id fallback."""
-        if stored_id is None:
-            mock_client.get_automation_config.return_value.pop("id")
-        else:
-            mock_client.get_automation_config.return_value["id"] = stored_id
-        result = await tools.ha_config_set_automation(
-            identifier="automation.morning_routine",
-            config=canonical_config,
-            wait=False,
-        )
-
-        assert result["success"] is True
-        mock_client.get_automation_config.assert_awaited_once_with(
+        assert kwargs["operation"] == "updated"
+        mock_client._resolve_automation_id.assert_awaited_once_with(
             "automation.morning_routine"
         )
-        args, kwargs = mock_client.upsert_automation_config.call_args
-        assert kwargs.get("_resolved", False) is (stored_id is not None)
-        assert args[1] == (
-            str(stored_id) if stored_id is not None else "automation.morning_routine"
-        )
 
-    async def test_create_is_not_threaded(self, tools, mock_client, canonical_config):
-        """Create (identifier omitted) never pre-resolves — upsert gets
-        identifier=None with no ``_resolved`` flag."""
-        result = await tools.ha_config_set_automation(
-            config=canonical_config, wait=False
-        )
+    async def test_create_has_no_target(self, tools, mock_client):
+        await tools.ha_config_set_automation(config=_config(), wait=False)
 
-        assert result["success"] is True
         args, kwargs = mock_client.upsert_automation_config.call_args
-        assert kwargs.get("_resolved", False) is False
         assert args[1] is None
+        assert kwargs["operation"] == "created"
 
 
-class TestDeleteAutomationIdKey:
-    """`automation_id` parity on `ha_config_remove_automation` (issue #1333).
+class TestDeleteAutomation:
+    """`automation_id` parity and not-found on `ha_config_remove_automation`."""
 
-    `wait=False` skips `wait_for_entity_removed` so the tests don't have to
-    mock the polling helper — `automation_id` is set from
-    `_resolve_automation_entity_id` regardless of the wait branch.
-    """
-
-    async def test_returns_resolved_entity_id_when_input_is_unique_id(self, tools):
-        """unique_id input → automation_id = resolved entity_id from registry.
-
-        Also pins the "single canonical typed-id key" shape — the spread of
-        the underlying ``delete_automation_config`` result must not leak the
-        redundant ``identifier`` echo into the response. ``unique_id`` is
-        intentionally retained (distinct from entity_id; callers track it).
-        """
+    async def test_returns_resolved_entity_id_when_input_is_config_id(
+        self, tools, mock_client
+    ):
+        """The delete result's raw input echo must not leak into the response;
+        ``unique_id`` is retained (callers track it)."""
         result = await tools.ha_config_remove_automation(
-            identifier="abc123unique", wait=False
+            entity_id="abc123unique", wait=False
         )
 
-        assert result["success"] is True
         assert result["action"] == "delete"
         assert result["automation_id"] == "automation.morning_routine"
         assert "identifier" not in result
-        # unique_id retained — distinct from entity_id; callers track it.
         assert result.get("unique_id") == "abc123unique"
+        mock_client.delete_automation_config.assert_awaited_once_with("abc123unique")
 
-    async def test_returns_input_when_input_is_entity_id(self, tools):
-        """entity_id input → automation_id == identifier (resolver short-circuit)."""
+    async def test_entity_id_input_deletes_its_config_id(self, tools, mock_client):
         result = await tools.ha_config_remove_automation(
-            identifier="automation.morning_routine", wait=False
+            entity_id="automation.morning_routine", wait=False
         )
 
-        assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
-        assert result.get("unique_id") == "abc123unique"
+        mock_client.delete_automation_config.assert_awaited_once_with("abc123unique")
 
-    async def test_falls_back_to_identifier_when_registry_lookup_misses(
+    async def test_falls_back_to_input_when_registry_lookup_misses(
         self, tools, mock_client
     ):
-        """unique_id with no registry match → automation_id falls back to raw input."""
         mock_client.get_states = AsyncMock(return_value=[])
 
         result = await tools.ha_config_remove_automation(
-            identifier="orphaned_unique_id", wait=False
+            entity_id="orphaned_unique_id", wait=False
         )
 
-        assert result["success"] is True
         assert result["automation_id"] == "orphaned_unique_id"
-        assert result.get("unique_id") == "abc123unique"
+
+    async def test_removing_a_missing_config_id_is_resource_not_found(
+        self, tools, mock_client
+    ):
+        """Core's DELETE answers a missing id with 400; reported as a failed
+        validation the caller would retry or rewrite the request."""
+        mock_client.delete_automation_config = AsyncMock(
+            side_effect=HomeAssistantAPIError("Automation not found", status_code=404)
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await tools.ha_config_remove_automation(entity_id="gone", wait=False)
+
+        body = json.loads(str(exc.value))
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "available_automation_ids" in body
+
+    async def test_an_unresolvable_entity_id_is_not_found_before_deleting(
+        self, tools, mock_client
+    ):
+        mock_client._resolve_automation_id = AsyncMock(
+            side_effect=HomeAssistantAPIError("missing", status_code=404)
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await tools.ha_config_remove_automation(
+                entity_id="automation.gone", wait=False
+            )
+
+        assert json.loads(str(exc.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
+        mock_client.delete_automation_config.assert_not_awaited()
 
 
 class TestAutomationReplacementGuard:
@@ -546,14 +465,14 @@ class TestAutomationReplacementGuard:
         }
 
     @pytest.mark.parametrize(
-        "identifier", ["new", "custom_id", "automation.morning_routine"]
+        "entity_id", ["new", "custom_id", "automation.morning_routine"]
     )
     async def test_alias_change_without_hash_does_not_write(
-        self, tools, mock_client, replacement, identifier
+        self, tools, mock_client, replacement, entity_id
     ):
         with pytest.raises(ToolError) as exc:
             await tools.ha_config_set_automation(
-                identifier=identifier, config=replacement, wait=False
+                entity_id=entity_id, config=replacement, wait=False
             )
 
         error = json.loads(str(exc.value))
@@ -561,95 +480,96 @@ class TestAutomationReplacementGuard:
         assert "Morning Routine" in str(exc.value)
         assert "Bathroom lights" in str(exc.value)
         assert "config_hash" in str(exc.value)
-        assert "ha_config_get_automation" in str(exc.value)
-        assert "Omit identifier" in str(exc.value)
+        assert "Omit entity_id" in str(exc.value)
+        mock_client.upsert_automation_config.assert_not_awaited()
+
+    async def test_dropping_the_alias_counts_as_a_change(self, tools, mock_client):
+        """Core accepts an automation without an alias, renaming it; that is a
+        replacement like any other alias change."""
+        config = _config()
+        del config["alias"]
+
+        with pytest.raises(ToolError):
+            await tools.ha_config_set_automation(
+                entity_id="abc123unique", config=config, wait=False
+            )
         mock_client.upsert_automation_config.assert_not_awaited()
 
     async def test_intentional_rename_with_fresh_hash_succeeds(
         self, tools, mock_client, replacement
     ):
-        before = await tools.ha_config_get_automation(identifier="abc123unique")
-        result = await tools.ha_config_set_automation(
-            identifier="abc123unique",
+        before = await tools.ha_config_get_automation(entity_id="abc123unique")
+        await tools.ha_config_set_automation(
+            entity_id="abc123unique",
             config=replacement,
             config_hash=before["config_hash"],
             wait=False,
         )
-        assert result["success"] is True
-        assert (
-            mock_client.upsert_automation_config.call_args.args[0]["alias"]
-            == "Bathroom lights"
-        )
+        written = mock_client.upsert_automation_config.call_args.args[0]
+        assert written["alias"] == "Bathroom lights"
 
-    @pytest.mark.parametrize("identifier", [None, "chosen_custom_id"])
+    @pytest.mark.parametrize("entity_id", [None, "chosen_custom_id"])
     async def test_creation_remains_available(
-        self, tools, mock_client, replacement, identifier
+        self, tools, mock_client, replacement, entity_id
     ):
-        from ha_mcp.client.rest_client import HomeAssistantAPIError
-
-        mock_client.get_automation_config.side_effect = HomeAssistantAPIError(
-            "Not found", status_code=404
-        )
+        mock_client.get_automation_config.side_effect = [
+            HomeAssistantAPIError("Not found", status_code=404),
+            copy.deepcopy(STORED),
+        ]
         result = await tools.ha_config_set_automation(
-            identifier=identifier, config=replacement, wait=False
+            entity_id=entity_id, config=replacement, wait=False
         )
-        assert result["success"] is True
-        mock_client.upsert_automation_config.assert_awaited_once()
-        assert mock_client.upsert_automation_config.call_args.args[1] == identifier
+        assert result["operation"] == "created"
+        args, kwargs = mock_client.upsert_automation_config.call_args
+        assert args[1] == entity_id
+        assert kwargs["operation"] == "created"
 
     @pytest.mark.parametrize("status", [401, 500])
     async def test_failed_lookup_does_not_allow_overwrite(
         self, tools, mock_client, replacement, status
     ):
-        from ha_mcp.client.rest_client import HomeAssistantAPIError
-
         mock_client.get_automation_config.side_effect = HomeAssistantAPIError(
             "Lookup failed", status_code=status
         )
         with pytest.raises(ToolError):
             await tools.ha_config_set_automation(
-                identifier="new", config=replacement, wait=False
+                entity_id="new", config=replacement, wait=False
             )
         mock_client.upsert_automation_config.assert_not_awaited()
 
     async def test_entity_lookup_failure_cannot_be_retried_as_creation(
         self, tools, mock_client, replacement
     ):
-        from ha_mcp.client.rest_client import (
-            HomeAssistantAPIError,
-            HomeAssistantClient,
-        )
+        """An entity_id nothing resolves is not found; a second lookup that
+        recovered would write over an automation the guard never checked."""
+        from ha_mcp.client.rest_client import HomeAssistantClient
 
-        # Exercise the actual client resolver: it maps a state 404 to not found.
-        # A second lookup would recover and target the existing automation.
-        for name in (
-            "get_entity_state",
-            "_resolve_automation_id",
-            "get_automation_config",
-            "upsert_automation_config",
-        ):
+        for name in ("get_entity_state", "_resolve_automation_id"):
             setattr(
                 mock_client,
                 name,
                 getattr(HomeAssistantClient, name).__get__(mock_client),
             )
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "not found"}
+        )
         mock_client._request = AsyncMock(
             side_effect=[
                 HomeAssistantAPIError("Not found", status_code=404),
                 {"attributes": {"id": "abc123unique"}},
-                {"result": "ok"},
             ]
         )
 
         with pytest.raises(ToolError) as exc:
             await tools.ha_config_set_automation(
-                identifier="automation.morning_routine", config=replacement, wait=False
+                entity_id="automation.morning_routine", config=replacement, wait=False
             )
 
         assert json.loads(str(exc.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
         mock_client._request.assert_awaited_once_with(
             "GET", "/states/automation.morning_routine"
         )
+        mock_client.upsert_automation_config.assert_not_awaited()
 
 
 class TestStripRedundantIdentifierEcho:
@@ -687,13 +607,7 @@ class TestSetAutomationCategoryValidation:
 
     @pytest.fixture
     def canonical_config(self):
-        return {
-            "alias": "Morning Routine",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
-            ],
-        }
+        return _config()
 
     @staticmethod
     def _ws_handler(*category_ids):
@@ -741,16 +655,16 @@ class TestSetAutomationCategoryValidation:
         mock_client.upsert_automation_config.assert_not_called()
 
     async def test_unknown_category_rejected_on_python_transform(
-        self, transform_tools, mock_client
+        self, tools, mock_client
     ):
         """The transform path applies a category too — and must gate it too."""
         mock_client.send_websocket_message.side_effect = self._ws_handler("lighting")
 
         with pytest.raises(ToolError) as exc_info:
-            await transform_tools.ha_config_set_automation(
-                identifier="abc123unique",
+            await tools.ha_config_set_automation(
+                entity_id="abc123unique",
                 python_transform="config['mode'] = 'single'",
-                config_hash="prior_hash",
+                config_hash=STORED_HASH,
                 category="ghost_category",
             )
 

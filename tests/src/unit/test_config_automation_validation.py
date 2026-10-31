@@ -1,13 +1,9 @@
-"""Unit tests for AutomationConfigTools validation helpers.
+"""Unit tests for the input guards ha_config_set_automation applies itself.
 
-Covers:
-- _validate_required_fields: missing-field errors and the ha_config_set_script hint
-- _parse_and_validate_config: VALIDATION_INVALID_JSON error message and suggestions
-- _validate_required_fields: sun trigger event pre-validation
-
-The validators run on *normalized* configs (post ``_normalize_automation_config``),
-so the inputs here use HA's canonical plural root list keys
-('triggers'/'actions'/'conditions').
+Core validates the automation (required keys, root forms, trigger and
+condition keys); these are HA-MCP's own checks that run before any read or
+write: the script misroute hint, the runtime-only ``enabled`` key, the
+scene.create misroute, the duplicate-id guard and the JSON parse error.
 """
 
 from __future__ import annotations
@@ -44,146 +40,64 @@ class TestParseAndValidateConfig:
         assert "dict" in json.dumps(error)
 
 
-class TestValidateRequiredFields:
-    """Tests for the static _validate_required_fields helper."""
+class TestInputGuards:
+    """Tests for the static _check_input_guards helper."""
 
-    def test_valid_automation_passes(self) -> None:
-        """Complete automation config raises nothing."""
-        AutomationConfigTools._validate_required_fields(
-            {"alias": "x", "triggers": [], "actions": []},
-            identifier=None,
+    def test_config_core_accepts_passes_without_an_alias(self) -> None:
+        """Core names an automation without an alias itself; refusing it here
+        rejected a config Home Assistant accepts."""
+        AutomationConfigTools._check_input_guards(
+            {"triggers": [], "actions": []}, entity_id=None
         )
 
-    def test_missing_trigger_without_sequence_names_missing_field(self) -> None:
-        """Missing fields without a 'sequence' key name the missing field and
-        suggest adding it inside config."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                {"alias": "x", "actions": []},
-                identifier=None,
-            )
-        body = _body_from_tool_error(exc_info.value)
-        assert body["missing_fields"] == ["triggers"]
-        error = body["error"]
-        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
-        # The generic suggestion should NOT mention ha_config_set_script.
-        all_text = json.dumps(error)
-        assert "ha_config_set_script" not in all_text
-
     def test_sequence_in_config_hints_at_set_script(self) -> None:
-        """A config with 'sequence' and missing triggers/actions hints at ha_config_set_script."""
+        """A config with 'sequence' and no actions hints at ha_config_set_script."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {"alias": "Goodnight", "sequence": [{"action": "light.turn_off"}]},
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
         # Primary suggestion must name the correct tool.
         assert "ha_config_set_script" in error.get("suggestion", "")
-        # And the mention of 'sequence' should appear in either details or suggestion list.
         all_text = json.dumps(error)
         assert "sequence" in all_text
+        assert "add 'triggers'" in all_text
 
     def test_sequence_in_config_with_trigger_but_no_action_still_hints(self) -> None:
         """Sequence + triggers but no actions still triggers the script hint."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": "x",
                     "triggers": [],
                     "sequence": [{"action": "light.turn_off"}],
                 },
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert "ha_config_set_script" in error.get("suggestion", "")
+        assert "add 'triggers'" not in json.dumps(error)
 
-    def test_sequence_hint_also_places_alias_when_missing(self) -> None:
-        """Sequence-shaped config missing alias too: the automation correction
-        must name alias placement and show the config shape, or following the
-        suggestion leaves the next call invalid."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                {"sequence": [{"action": "light.turn_off"}]},
-                identifier=None,
-            )
-        error = _error_from_tool_error(exc_info.value)
-        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
-        all_text = json.dumps(error)
-        assert "alias" in all_text
-        assert "config={'alias':" in all_text
-
-    def test_missing_alias_says_it_belongs_inside_config(self) -> None:
-        """Missing 'alias' names the config body and shows the expected shape
-        in one line (issue #2649 section 2)."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                {
-                    "triggers": [{"trigger": "state"}],
-                    "actions": [{"action": "light.turn_on"}],
-                },
-                identifier=None,
-            )
-        body = _body_from_tool_error(exc_info.value)
-        assert body["missing_fields"] == ["alias"]
-        error = body["error"]
-        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
-        assert "`config`" in error["message"]
-        # Expected shape in one line with copy-pasteable quoted keys.
-        assert "config={'alias': 'My Automation'" in error["message"]
-
-    def test_missing_alias_on_blueprint_shows_blueprint_shape(self) -> None:
-        """A blueprint config missing 'alias' shows the blueprint shape, not
-        triggers/actions (which the blueprint branch strips)."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                {"use_blueprint": {"path": "light.yaml", "input": {}}},
-                identifier=None,
-            )
-        body = _body_from_tool_error(exc_info.value)
-        assert body["missing_fields"] == ["alias"]
-        error = body["error"]
-        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
-        assert "use_blueprint" in error["message"]
-        assert "'triggers'" not in error["message"]
-
-    def test_enabled_in_config_and_missing_alias_report_together(self) -> None:
-        """Issue #2649 section 3: a missing field and a misplaced runtime-only
-        'enabled' key surface in ONE rejection instead of one round trip each."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                {"enabled": False, "triggers": [], "actions": []},
-                identifier=None,
-            )
-        body = _body_from_tool_error(exc_info.value)
-        assert body["missing_fields"] == ["alias"]
-        assert body["invalid_key"] == "enabled"
-        error = body["error"]
-        all_text = json.dumps(error)
-        assert "runtime-only" in all_text
-        # The combined rejection also says where alias goes.
-        assert "`config`" in error["message"]
-        # The combined rejection keeps the standalone enabled suggestions
-        # instead of the generic fallback.
-        suggestions = error.get("suggestions", [])
-        assert any("Remove 'enabled' from config" in s for s in suggestions)
-        assert (
-            "Use enabled=None to leave the current runtime state unchanged"
-            in suggestions
+    @pytest.mark.parametrize("actions_key", ["actions", "action"])
+    def test_sequence_beside_actions_is_left_to_core(self, actions_key: str) -> None:
+        """With actions present the config is not script-shaped; Core judges
+        the stray 'sequence' key."""
+        AutomationConfigTools._check_input_guards(
+            {"sequence": [], actions_key: [{"action": "light.turn_off"}]},
+            entity_id=None,
         )
-        assert "Check documentation for required fields" not in all_text
 
     def test_sequence_and_enabled_report_together(self) -> None:
         """A script-shaped config that also misplaces 'enabled' reports both
         violations in one rejection."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {"sequence": [{"action": "light.turn_on"}], "enabled": True},
-                identifier=None,
+                entity_id=None,
             )
         body = _body_from_tool_error(exc_info.value)
-        assert body["missing_fields"] == ["alias", "triggers", "actions"]
         assert body["invalid_key"] == "enabled"
         error = body["error"]
         all_text = json.dumps(error)
@@ -191,8 +105,6 @@ class TestValidateRequiredFields:
         assert "runtime-only" in all_text
         # The two guidance sentences are separated, not run together.
         assert ". 'enabled'" in error["message"]
-        # The sequence branch folds in the enabled suggestions the same way
-        # the other combined rejection does.
         suggestions = error.get("suggestions", [])
         assert any("Remove 'enabled' from config" in s for s in suggestions)
         assert (
@@ -200,117 +112,41 @@ class TestValidateRequiredFields:
             in suggestions
         )
 
-    def test_missing_alias_on_transform_points_at_transform(self) -> None:
-        """A transform that drops 'alias' is told to set it in the transform
-        expression, not to send config={...} (which write modes would reject)."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                {"triggers": [], "actions": []},
-                identifier="automation.x",
-                source="python_transform",
-            )
-        body = _body_from_tool_error(exc_info.value)
-        assert body["missing_fields"] == ["alias"]
-        error = body["error"]
-        assert "config['alias']" in error["message"]
-        assert "config={" not in error["message"]
-
     def test_sequence_misroute_on_transform_points_at_transform(self) -> None:
         """A transform producing 'sequence' gets transform-expression guidance,
         not config={...} (which write modes would reject)."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {"sequence": [{"action": "light.turn_off"}]},
-                identifier="automation.x",
+                entity_id="automation.x",
                 source="python_transform",
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
         all_text = json.dumps(error)
         assert "python_transform expression" in all_text
-        assert "config['alias']" in all_text
         assert "config={" not in all_text
 
     def test_enabled_in_config_alone_still_rejected(self) -> None:
-        """The standalone runtime-only rejection is unchanged when it is the
-        only problem."""
+        """The runtime-only key is a tool parameter, not config."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {"alias": "x", "triggers": [], "actions": [], "enabled": True},
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "runtime-only" in error["message"]
-        assert "Missing required fields" not in error["message"]
 
-
-class TestValidateConditionBlocks:
-    """Pre-validation of condition blocks for platform vs condition confusion.
-
-    Triggers use 'trigger' (legacy 'platform'); conditions use 'condition'.
-    Models familiar with trigger syntax often write {'platform': 'state', ...}
-    in condition lists, which HA accepts without a 400 but then crashes with an
-    unhelpful 500.
-    """
-
-    def _base_config(self, conditions: object) -> dict:
-        return {"alias": "x", "triggers": [], "actions": [], "conditions": conditions}
-
-    def test_valid_state_condition_passes(self) -> None:
-        AutomationConfigTools._validate_required_fields(
-            self._base_config(
-                [{"condition": "state", "entity_id": "input_boolean.x", "state": "on"}]
-            ),
-            identifier=None,
-        )
-
-    def test_valid_sun_condition_passes(self) -> None:
-        AutomationConfigTools._validate_required_fields(
-            self._base_config([{"condition": "sun", "after": "sunset"}]),
-            identifier=None,
-        )
-
-    def test_platform_key_without_condition_key_raises(self) -> None:
-        """{'platform': 'state'} in a condition list triggers the helpful error."""
+    def test_config_id_without_entity_id_is_refused_as_a_duplicate(self) -> None:
+        """Creating with another automation's id would write a second one."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                self._base_config(
-                    [{"platform": "state", "entity_id": "input_boolean.x"}]
-                ),
-                identifier=None,
+            AutomationConfigTools._check_input_guards(
+                {"id": "1700000000000", "triggers": [], "actions": []},
+                entity_id=None,
             )
-        error = _error_from_tool_error(exc_info.value)
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        blob = json.dumps(error)
-        assert "condition" in blob
-        assert "platform" in blob
-
-    def test_single_condition_dict_also_checked(self) -> None:
-        """Non-list condition (single dict) is also validated."""
-        with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
-                self._base_config(
-                    {"platform": "state", "entity_id": "input_boolean.x"}
-                ),
-                identifier=None,
-            )
-        error = _error_from_tool_error(exc_info.value)
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    def test_platform_with_condition_key_not_flagged(self) -> None:
-        """Item that has both 'platform' and 'condition' is left for HA to validate."""
-        AutomationConfigTools._validate_required_fields(
-            self._base_config(
-                [
-                    {
-                        "condition": "state",
-                        "platform": "extra",
-                        "entity_id": "x",
-                        "state": "on",
-                    }
-                ]
-            ),
-            identifier=None,
+        assert "entity_id='1700000000000'" in json.dumps(
+            _error_from_tool_error(exc_info.value)
         )
 
 
@@ -319,7 +155,7 @@ class TestEmptyTriggerSceneCreateDefense:
 
     def test_empty_trigger_with_scene_create_service_key_rejected(self) -> None:
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": "Movie Snapshot",
                     "triggers": [],
@@ -333,7 +169,7 @@ class TestEmptyTriggerSceneCreateDefense:
                         }
                     ],
                 },
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -349,7 +185,7 @@ class TestEmptyTriggerSceneCreateDefense:
 
     def test_empty_trigger_with_scene_create_action_key_rejected(self) -> None:
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": "Movie Snapshot",
                     "triggers": [],
@@ -360,26 +196,36 @@ class TestEmptyTriggerSceneCreateDefense:
                         }
                     ],
                 },
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         suggestions_blob = " ".join(error.get("suggestions") or [])
         assert "ha_config_set_scene" in suggestions_blob
 
-    def test_trigger_none_with_scene_create_rejected(self) -> None:
-        """R1 blocker 1: ``triggers: null`` reaches the gate. The
-        missing-fields check uses ``not in config_dict`` so present-but-null
-        slips through to here, where the gate normalises both ``[]`` and
-        ``None`` as empty-trigger."""
+    def test_singular_root_keys_reach_the_gate(self) -> None:
+        """The config is no longer pluralised before the guards run, so a
+        singular-key misroute must be caught as written."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
+                {"trigger": [], "action": [{"action": "scene.create"}]},
+                entity_id=None,
+            )
+        assert _error_from_tool_error(exc_info.value)["code"] == (
+            "VALIDATION_INVALID_PARAMETER"
+        )
+
+    def test_trigger_none_with_scene_create_rejected(self) -> None:
+        """R1 blocker 1: ``triggers: null`` counts as an empty trigger, like
+        ``[]``."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": "Movie",
                     "triggers": None,
                     "actions": [{"service": "scene.create", "data": {"scene_id": "x"}}],
                 },
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -447,13 +293,13 @@ class TestEmptyTriggerSceneCreateDefense:
         default`` / ``if`` ``then``+``else``) is caught alongside the
         top-level case."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": f"Nested-{case_name}",
                     "triggers": [],
                     "actions": [wrapper_action],
                 },
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -466,14 +312,14 @@ class TestEmptyTriggerSceneCreateDefense:
         this shape so a regression that drops the coerce wouldn't silently
         re-open the gate."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": "Single dict action",
                     "triggers": [],
                     # NB: dict, not list-of-dict
                     "actions": {"service": "scene.create", "data": {"scene_id": "x"}},
                 },
-                identifier=None,
+                entity_id=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -482,7 +328,7 @@ class TestEmptyTriggerSceneCreateDefense:
         """Draft preservation: empty trigger paired with a non-scene.create
         action passes through unchanged. Some users save automations as
         drafts and add triggers later; this is not the misroute pattern."""
-        AutomationConfigTools._validate_required_fields(
+        AutomationConfigTools._check_input_guards(
             {
                 "alias": "Draft",
                 "triggers": [],
@@ -490,13 +336,13 @@ class TestEmptyTriggerSceneCreateDefense:
                     {"action": "light.turn_on", "target": {"entity_id": "light.x"}}
                 ],
             },
-            identifier=None,
+            entity_id=None,
         )
 
     def test_non_empty_trigger_with_scene_create_passes(self) -> None:
         """Legitimate use case: a trigger-driven scene snapshot (capture the
         current state when an event fires). Not the misroute pattern."""
-        AutomationConfigTools._validate_required_fields(
+        AutomationConfigTools._check_input_guards(
             {
                 "alias": "Snapshot on guest mode",
                 "triggers": [
@@ -513,37 +359,36 @@ class TestEmptyTriggerSceneCreateDefense:
                     }
                 ],
             },
-            identifier=None,
+            entity_id=None,
         )
 
-    def test_use_blueprint_empty_trigger_strip_preserved(self) -> None:
-        """Backwards-compat: ``use_blueprint`` configs that pass empty
-        ``triggers: []`` have those stripped before validation (the
-        blueprint provides the trigger). The misroute gate must not
-        break that path."""
-        AutomationConfigTools._validate_required_fields(
-            {
-                "alias": "Motion Light",
-                "use_blueprint": {
-                    "path": "homeassistant/motion_light.yaml",
-                    "input": {
-                        "motion_entity": "binary_sensor.motion",
-                        "light_target": {"entity_id": "light.kitchen"},
-                    },
+    def test_use_blueprint_empty_lists_are_stripped(self) -> None:
+        """Core merges a blueprint instance's keys over the rendered blueprint,
+        so an empty list sent with ``use_blueprint`` would erase the
+        blueprint's own triggers or actions. Either root form is stripped,
+        and the misroute gate must not break that path."""
+        config = {
+            "alias": "Motion Light",
+            "use_blueprint": {
+                "path": "homeassistant/motion_light.yaml",
+                "input": {
+                    "motion_entity": "binary_sensor.motion",
+                    "light_target": {"entity_id": "light.kitchen"},
                 },
-                # These should be stripped by the use_blueprint pre-pass and
-                # never reach the misroute gate.
-                "triggers": [],
-                "actions": [],
             },
-            identifier=None,
-        )
+            "triggers": [],
+            "action": [],
+        }
+        AutomationConfigTools._check_input_guards(config, entity_id=None)
+
+        assert "triggers" not in config
+        assert "action" not in config
 
     def test_empty_trigger_scene_create_indices_in_context(self) -> None:
         """Multi-action lists surface the indices of the scene.create
         actions in the error context for the LLM to pinpoint."""
         with pytest.raises(ToolError) as exc_info:
-            AutomationConfigTools._validate_required_fields(
+            AutomationConfigTools._check_input_guards(
                 {
                     "alias": "Multi",
                     "triggers": [],
@@ -553,7 +398,7 @@ class TestEmptyTriggerSceneCreateDefense:
                         {"action": "scene.create", "data": {"scene_id": "b"}},
                     ],
                 },
-                identifier=None,
+                entity_id=None,
             )
         body = _body_from_tool_error(exc_info.value)
         assert body.get("scene_create_action_indices") == [1, 2]

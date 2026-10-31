@@ -4,19 +4,12 @@ Like the other ``test_component_*_contract`` files, these wire the REAL componen
 handlers (``_do_entity_lookup`` / ``_do_reference_data``, driven against fake hass
 objects) underneath the mocked WS transport and then invoke the REAL server
 consumers — so a vocabulary/shape drift on either side fails here rather than at
-runtime. The two seams verified:
+runtime. The seams verified:
 
 - ``_do_entity_lookup`` under ``ConfigSceneTools._resolve_scene_entity_id`` (the
   set/remove/post-write path). A multi-platform ``unique_id`` collision fixture —
   a scene and a light sharing one ``unique_id`` — pins that the resolver's
   ``domain="scene"`` narrowing picks the SCENE entity, not the colliding light.
-- ``_do_entity_lookup`` under ``AutomationConfigTools._resolve_automation_entity_id``
-  exercises the load-bearing premise the automation routing relies on: an
-  automation's registry ``unique_id`` IS its config ``id`` (the same value the
-  legacy ``get_states()`` scan matches against ``attributes["id"]``). That
-  equivalence is an HA-core behaviour the test pins BY CONSTRUCTION rather than
-  derives; given it, the component path and the legacy path resolve the SAME
-  entity_id.
 - ``_do_reference_data`` under ``validate_config_references`` pins that the
   component-served service index + entity universe produce warnings BYTE-IDENTICAL
   to the legacy ``get_services()`` + ``get_states()`` path over the same fixture.
@@ -34,7 +27,6 @@ import pytest
 
 from ha_mcp.tools import component_api, component_config_reads
 from ha_mcp.tools.reference_validator import validate_config_references
-from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from .test_component_ws_search import (
@@ -181,60 +173,6 @@ class TestSceneResolverContract:
                 "night_light_led_desk_strip", allow_component=True
             )
         assert entity_id == "scene.led_desk_strip_night_light"
-
-
-# =============================================================================
-# entity_lookup — automation resolver: unique_id == config id equivalence
-# =============================================================================
-class TestAutomationResolverContract:
-    @pytest.mark.asyncio
-    async def test_unique_id_equals_config_id_component_and_legacy_agree(
-        self, monkeypatch
-    ) -> None:
-        """Both resolvers agree GIVEN the automation routing's load-bearing
-        premise — that an automation's registry ``unique_id`` IS its config
-        ``id``. That equivalence is an HA-core behaviour, NOT something this test
-        derives: the fixture pins it BY CONSTRUCTION (``unique_id`` on the
-        registry entry and ``attributes["id"]`` on the state are both set to
-        ``config_id``). Given that, this confirms the component path (matching
-        ``unique_id``) and the legacy ``get_states()`` scan (matching
-        ``attributes["id"]``) resolve the SAME entity_id. If the invariant ever
-        broke in real HA, the two paths would diverge in the field, not here."""
-        config_id = "1699000000000"
-        # Registry entry: unique_id == config id (the component's match key).
-        view = make_view(
-            entity={
-                "automation.morning": FakeRegEntry(
-                    "automation.morning",
-                    unique_id=config_id,
-                    platform="automation",
-                ),
-            }
-        )
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
-        # State: attributes["id"] == config id (the legacy scan's match key).
-        legacy_states = [
-            {"entity_id": "automation.morning", "attributes": {"id": config_id}}
-        ]
-
-        # Component path.
-        component_client = _CredClient(states=legacy_states)
-        ws = _real_ws(FakeHass())
-        with _routed(ws):
-            component_id = await AutomationConfigTools(
-                component_client
-            )._resolve_automation_entity_id(config_id, allow_component=True)
-
-        # Legacy path (allow_component omitted → legacy get_states scan).
-        legacy_client = _CredClient(states=legacy_states)
-        legacy_id = await AutomationConfigTools(
-            legacy_client
-        )._resolve_automation_entity_id(config_id)
-
-        assert component_id == legacy_id == "automation.morning"
-        # The component path did not scan states; the legacy path did.
-        assert component_client.get_states.await_count == 0
-        assert legacy_client.get_states.await_count == 1
 
 
 # =============================================================================

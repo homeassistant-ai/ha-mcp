@@ -149,7 +149,7 @@ async def take_control_config(
     # The two set tools name their target differently; a suggestion naming the
     # wrong one cannot be run as written, which is exactly when the caller
     # needs it.
-    id_param = "identifier" if domain == "automation" else f"{domain}_id"
+    id_param = "entity_id" if domain == "automation" else f"{domain}_id"
     reference = _blueprint_reference(current_config)
     if reference is None:
         raise_tool_error(
@@ -197,7 +197,7 @@ def validate_write_modes(
     Lives here because take control is what made the automation and script
     tools' validation identical: both gained the same third mode, with the
     same reason it cannot be paired with either of the other two. ``id_param``
-    is the caller-facing name of the target ("identifier" for automations,
+    is the caller-facing name of the target ("entity_id" for automations,
     "script_id" for scripts) so the error names the argument the caller
     actually passed.
     """

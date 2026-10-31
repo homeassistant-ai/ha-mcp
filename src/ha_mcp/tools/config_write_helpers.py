@@ -29,6 +29,58 @@ from .ws_waiters import _get_waiter_ws_client, _ws_cleanup, _ws_subscribe_all
 logger = logging.getLogger(__name__)
 
 
+async def fetch_registry_entry(
+    client: Any,
+    entity_id: str,
+    warnings: list[str] | None = None,
+    *,
+    purpose: str = "registry entry",
+) -> dict[str, Any] | None:
+    """Fetch an entity's registry entry (``config/entity_registry/get``).
+
+    ``None`` is also what a failed lookup returns - a caller that passes
+    ``warnings`` gets a line naming the failure and ``purpose`` (what the
+    entry was read for) instead, so a failed read is distinguishable from an
+    entity without the field it wanted (#1947).
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+        if isinstance(result, dict) and result.get("success"):
+            entry = result.get("result")
+            # The registry entry is a dict; anything else (a list, None) is a
+            # malformed read rather than an entry without the field.
+            return entry if isinstance(entry, dict) else None
+        # Shape-guarded rather than relying on a broad except: a non-dict
+        # payload is a malformed read, not a missing field.
+        reason = (
+            (result.get("error") or "request failed")
+            if isinstance(result, dict)
+            else f"unexpected response type: {type(result).__name__}"
+        )
+        if warnings is not None:
+            warnings.append(f"{purpose} unavailable for {entity_id}: {reason}")
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as e:
+        logger.warning(f"Failed to fetch {purpose} for {entity_id}: {e}")
+        if warnings is not None:
+            warnings.append(f"{purpose} unavailable for {entity_id}: {e}")
+    return None
+
+
+def entry_category(entry: dict[str, Any] | None, scope: str) -> str | None:
+    """The category a registry entry assigns in ``scope``."""
+    categories = (entry or {}).get("categories") or {}
+    cat_id = categories.get(scope) if isinstance(categories, dict) else None
+    return str(cat_id) if cat_id is not None else None
+
+
 async def fetch_entity_category(
     client: Any, entity_id: str, scope: str, warnings: list[str] | None = None
 ) -> str | None:
@@ -40,45 +92,11 @@ async def fetch_entity_category(
         scope: Category scope (e.g., 'automation', 'script', 'helpers')
 
     Returns:
-        Category ID string if set, None otherwise
-
-    ``None`` is also what a failed lookup returns, which reads as "no category
-    assigned" - a caller that passes ``warnings`` gets a line naming the
-    failure instead, so the two are distinguishable (#1947).
+        Category ID string if set, None otherwise (see ``fetch_registry_entry``
+        for how a failed lookup is reported)
     """
-    try:
-        result = await client.send_websocket_message(
-            {"type": "config/entity_registry/get", "entity_id": entity_id}
-        )
-        if isinstance(result, dict) and result.get("success"):
-            entry = result.get("result")
-            # The registry entry is a dict; anything else (a list, None) is a
-            # malformed read rather than an entry without categories.
-            if isinstance(entry, dict):
-                categories = entry.get("categories") or {}
-                cat_id = categories.get(scope) if isinstance(categories, dict) else None
-                return str(cat_id) if cat_id is not None else None
-            return None
-        # Shape-guarded rather than relying on a broad except: a non-dict
-        # payload is a malformed read, not "no category assigned".
-        reason = (
-            (result.get("error") or "request failed")
-            if isinstance(result, dict)
-            else f"unexpected response type: {type(result).__name__}"
-        )
-        if warnings is not None:
-            warnings.append(f"category unavailable for {entity_id}: {reason}")
-    except (
-        HomeAssistantConnectionError,
-        HomeAssistantAPIError,
-        HomeAssistantAuthError,
-        TimeoutError,
-        OSError,
-    ) as e:
-        logger.warning(f"Failed to fetch category for {entity_id}: {e}")
-        if warnings is not None:
-            warnings.append(f"category unavailable for {entity_id}: {e}")
-    return None
+    entry = await fetch_registry_entry(client, entity_id, warnings, purpose="category")
+    return entry_category(entry, scope)
 
 
 async def apply_entity_category(

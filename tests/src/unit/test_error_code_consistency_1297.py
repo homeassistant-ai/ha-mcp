@@ -452,8 +452,8 @@ class TestGetAutomationMissingSurfacesAvailableIds:
     Pre-#1397-D4 the 404 surfaced as ``RESOURCE_NOT_FOUND`` via the generic
     ``_classify_api_status`` route (``helpers.py:199-205``), but without
     ``available_automation_ids`` or the list-tool suggestion that sibling
-    sites populate. The fix adds the payload + suggestion at the central
-    not-found raise inside ``_get_automation_config_internal``.
+    sites populate. The payload + suggestion come from the central
+    not-found raise ``_raise_automation_not_found``.
     """
 
     @pytest.fixture
@@ -461,6 +461,9 @@ class TestGetAutomationMissingSurfacesAvailableIds:
         from ha_mcp.client.rest_client import HomeAssistantAPIError
 
         client = MagicMock()
+        # Credential-less: no component probe, Core's REST/WS is the path.
+        client.base_url = client.token = None
+        client._resolve_automation_id = AsyncMock(return_value="missing_id")
         client.get_automation_config = AsyncMock(
             side_effect=HomeAssistantAPIError(
                 "Automation not found: automation.missing",
@@ -494,7 +497,7 @@ class TestGetAutomationMissingSurfacesAvailableIds:
         self, tools, mock_client
     ):
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_automation(identifier="automation.missing")
+            await tools.ha_config_get_automation(entity_id="automation.missing")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
@@ -521,7 +524,7 @@ class TestGetAutomationMissingSurfacesAvailableIds:
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_automation(identifier="automation.missing")
+            await tools.ha_config_get_automation(entity_id="automation.missing")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
@@ -536,9 +539,8 @@ class TestGetScriptMissingSurfacesAvailableIds:
     Behavioral parity with ``ha_config_get_automation`` — both tools accept
     either the bare storage key (``foo``) or the entity_id form
     (``script.foo`` / ``automation.foo``). The mechanism differs: automations
-    resolve via state lookup (``_resolve_automation_entity_id``); scripts
-    strip a leading ``script.`` prefix at the function head before the REST
-    call.
+    resolve through the entity registry; scripts strip a leading ``script.``
+    prefix at the function head before the REST call.
     """
 
     @pytest.fixture
@@ -847,27 +849,20 @@ def _api_404(message: str) -> Any:
 
 
 class TestSetAutomationMissingSurfacesAvailableIds:
-    """Update path: ``ha_config_set_automation(identifier=..., config=...)``
-    with a 404 from the REST upsert (identifier resolves to a no-longer-
-    existing automation) must surface ``RESOURCE_NOT_FOUND`` with
-    ``available_automation_ids``. The create branch (identifier=None) is
-    guarded by the ``identifier and`` check so it falls through to the
-    generic exception_to_structured_error route untouched.
+    """Update path: ``ha_config_set_automation(entity_id=..., config=...)``
+    naming an automation nothing resolves must surface ``RESOURCE_NOT_FOUND``
+    with ``available_automation_ids`` before anything is written, never a
+    creation under that name.
     """
 
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
-        # Resolve path (best-effort) — keep it silent for this test.
-        client.get_states = AsyncMock(return_value=[])
-        # Reference validator (validate_config_references) hits get_services
-        # + get_states — both empty is fine.
-        client.get_services = AsyncMock(return_value={})
-        # The actual upsert raises 404 — the audit-family failure mode.
-        client.get_automation_config = AsyncMock(return_value={"alias": "X"})
-        client.upsert_automation_config = AsyncMock(
-            side_effect=_api_404("Automation not found: automation.missing")
+        client.base_url = client.token = None
+        client._resolve_automation_id = AsyncMock(
+            side_effect=_api_404("Failed to resolve automation automation.missing")
         )
+        client.upsert_automation_config = AsyncMock()
         # Entity registry list for available_automation_ids payload.
         client.send_websocket_message = AsyncMock(
             return_value={
@@ -886,12 +881,12 @@ class TestSetAutomationMissingSurfacesAvailableIds:
 
         return AutomationConfigTools(mock_client)
 
-    async def test_update_with_missing_identifier_surfaces_available_ids(
+    async def test_update_with_missing_entity_id_surfaces_available_ids(
         self, tools, mock_client
     ):
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_automation(
-                identifier="automation.missing",
+                entity_id="automation.missing",
                 config={
                     "alias": "X",
                     "trigger": [{"platform": "time", "at": "07:00:00"}],
@@ -910,17 +905,21 @@ class TestSetAutomationMissingSurfacesAvailableIds:
             "ha_search(domain_filter='automation')" in s
             for s in _all_suggestions(error_data["error"])
         )
+        mock_client.upsert_automation_config.assert_not_called()
 
 
 class TestRemoveAutomationMissingSurfacesAvailableIds:
-    """Delete path: ``ha_config_remove_automation(identifier=...)`` against a
+    """Delete path: ``ha_config_remove_automation(entity_id=...)`` against a
     no-longer-existing automation must surface ``RESOURCE_NOT_FOUND`` with
-    ``available_automation_ids``.
+    ``available_automation_ids`` (the REST client maps Core's 400 "Resource
+    not found" to a 404).
     """
 
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
+        client.base_url = client.token = None
+        client._resolve_automation_id = AsyncMock(return_value="missing_id")
         client.get_states = AsyncMock(return_value=[])
         client.delete_automation_config = AsyncMock(
             side_effect=_api_404("Automation not found: automation.missing")
@@ -942,11 +941,11 @@ class TestRemoveAutomationMissingSurfacesAvailableIds:
 
         return AutomationConfigTools(mock_client)
 
-    async def test_remove_with_missing_identifier_surfaces_available_ids(
+    async def test_remove_with_missing_entity_id_surfaces_available_ids(
         self, tools, mock_client
     ):
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_automation(identifier="automation.missing")
+            await tools.ha_config_remove_automation(entity_id="automation.missing")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"

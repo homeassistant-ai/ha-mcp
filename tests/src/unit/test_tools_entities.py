@@ -1689,14 +1689,14 @@ class TestHaSetEntityRegistryDisableGuardrail:
         error_text = str(exc_info.value)
         assert "automation" in error_text.lower()
         assert (
-            "ha_config_set_automation(identifier='automation.test', enabled=False)"
+            "ha_config_set_automation(entity_id='automation.test', enabled=False)"
             in error_text
         )
         assert "ha_call_service('automation', 'turn_off'" not in error_text
         error_data = json.loads(error_text)
         suggestions = error_data["error"].get("suggestions", [])
         assert any(
-            "ha_config_set_automation(identifier=..., enabled=...)" in item
+            "ha_config_set_automation(entity_id=..., enabled=...)" in item
             for item in suggestions
         )
         assert not any("automation.turn_off" in item for item in suggestions)
@@ -1738,7 +1738,7 @@ class TestHaSetEntityRegistryDisableGuardrail:
         error_text = str(exc_info.value)
         assert "automation" in error_text.lower()
         assert (
-            "ha_config_set_automation(identifier='automation.test', enabled=False)"
+            "ha_config_set_automation(entity_id='automation.test', enabled=False)"
             in error_text
         )
         assert "ha_call_service('automation', 'turn_off'" not in error_text
