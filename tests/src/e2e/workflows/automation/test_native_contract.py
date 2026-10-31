@@ -38,6 +38,30 @@ async def _remove(mcp_client: Any, entity_id: str) -> None:
     )
 
 
+async def _registry_disable(ha_client: Any, entity_id: str) -> None:
+    """Registry-disable an automation and wait for Home Assistant to unload it.
+
+    ha_set_entity refuses to registry-disable an automation, so this goes
+    through Core's registry command directly.
+    """
+    reply = await ha_client.send_websocket_message(
+        {
+            "type": "config/entity_registry/update",
+            "entity_id": entity_id,
+            "disabled_by": "user",
+        }
+    )
+    assert reply.get("success") is True, reply
+
+    async def _state_gone() -> bool:
+        states = await ha_client.get_states()
+        return all(state.get("entity_id") != entity_id for state in states)
+
+    assert await wait_for_condition(
+        _state_gone, timeout=20, condition_name=f"{entity_id} state removed"
+    )
+
+
 async def test_automation_without_alias_is_created(mcp_client) -> None:
     """Core accepts an automation with no alias and names it itself, so the
     tool must not refuse it for a missing alias."""
@@ -129,11 +153,6 @@ async def test_registry_disabled_automation_is_removed_by_entity_id(
     must find it there."""
     tag = _tag()
     config_id = f"e2e_disabled_{tag}"
-
-    async def _state_gone() -> bool:
-        states = await ha_client.get_states()
-        return all(state.get("entity_id") != entity_id for state in states)
-
     async with MCPAssertions(mcp_client) as mcp:
         try:
             created = await mcp.call_tool_success(
@@ -141,19 +160,7 @@ async def test_registry_disabled_automation_is_removed_by_entity_id(
                 {"entity_id": config_id, "config": _config(tag)},
             )
             entity_id = created["entity_id"]
-            # ha_set_entity refuses to registry-disable an automation, so the
-            # test disables it through Core's registry command directly.
-            reply = await ha_client.send_websocket_message(
-                {
-                    "type": "config/entity_registry/update",
-                    "entity_id": entity_id,
-                    "disabled_by": "user",
-                }
-            )
-            assert reply.get("success") is True, reply
-            assert await wait_for_condition(
-                _state_gone, timeout=20, condition_name=f"{entity_id} state removed"
-            )
+            await _registry_disable(ha_client, entity_id)
 
             await mcp.call_tool_success(
                 "ha_config_remove_automation", {"entity_id": entity_id}
@@ -247,3 +254,212 @@ async def test_component_validates_with_cores_own_validator(ha_client) -> None:
     assert reply.get("success") is True, reply
     assert reply["result"]["status"] == "failed_triggers", reply
     assert "Invalid trigger 'battery.low' specified" in reply["result"]["error"], reply
+
+
+async def test_get_entity_row_is_cores_registry_row(mcp_client, ha_client) -> None:
+    """The component's row once lacked fields Core's own registry read carries
+    (aliases, capabilities), so the same automation read back differently
+    depending on whether the component answered."""
+    tag = _tag()
+    config_id = f"e2e_entity_shape_{tag}"
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation",
+                {"entity_id": config_id, "config": _config(tag)},
+            )
+            entity_id = created["entity_id"]
+            got = await mcp.call_tool_success(
+                "ha_config_get_automation", {"entity_id": entity_id}
+            )
+            core = await ha_client.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": entity_id}
+            )
+            assert core.get("success") is True, core
+            assert set(got["entity"]) == set(core["result"]), (got, core)
+            assert {"aliases", "capabilities"} <= set(got["entity"]), got
+        finally:
+            await _remove(mcp_client, config_id)
+
+
+async def test_blueprint_change_that_breaks_an_automation_is_reported(
+    mcp_client,
+) -> None:
+    """When a blueprint edit drops an input an automation passes, Home
+    Assistant fails to load the automation; the read reports that failure
+    and Core's reason, on every lane."""
+    tag = _tag()
+    path = f"{uuid.uuid4().hex}/x.yaml"
+    config_id = f"e2e_bp_broken_{tag}"
+
+    def _blueprint(input_name: str) -> str:
+        return (
+            "blueprint:\n"
+            f"  name: E2E native contract {tag}\n"
+            "  domain: automation\n"
+            "  input:\n"
+            f"    {input_name}:\n"
+            "      name: Event\n"
+            "triggers:\n"
+            "  - trigger: event\n"
+            f"    event_type: !input {input_name}\n"
+            "actions:\n"
+            "  - delay:\n"
+            "      seconds: 1\n"
+        )
+
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            await mcp.call_tool_success(
+                "ha_manage_blueprints",
+                {
+                    "action": "save",
+                    "domain": "automation",
+                    "path": path,
+                    "yaml": _blueprint("event_name"),
+                },
+            )
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation",
+                {
+                    "entity_id": config_id,
+                    "config": {
+                        "alias": f"E2E native contract {tag}",
+                        "use_blueprint": {
+                            "path": path,
+                            "input": {"event_name": f"e2e_native_{tag}"},
+                        },
+                    },
+                },
+            )
+            entity_id = created["entity_id"]
+            # Saving over the blueprint reloads the automations that use it.
+            await mcp.call_tool_success(
+                "ha_manage_blueprints",
+                {
+                    "action": "save",
+                    "domain": "automation",
+                    "path": path,
+                    "yaml": _blueprint("other_event"),
+                    "overwrite": True,
+                },
+            )
+
+            got = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_config_get_automation",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: d.get("validation") is not None,
+                timeout=30,
+                description="automation read reports the blueprint failure",
+            )
+            assert got["validation"]["status"] == "failed_blueprint", got
+            assert "Missing input" in (got["validation"]["error"] or ""), got
+        finally:
+            # Home Assistant refuses to delete a blueprint an automation uses.
+            await _remove(mcp_client, config_id)
+            await safe_call_tool(
+                mcp_client,
+                "ha_manage_blueprints",
+                {
+                    "action": "delete",
+                    "domain": "automation",
+                    "path": path,
+                    "confirm": True,
+                },
+            )
+
+
+@pytest.mark.requires_component_surface
+async def test_get_reports_the_entities_core_says_it_uses(mcp_client) -> None:
+    """The read lists what Core finds the automation using, so a caller can
+    see its targets without parsing the config, and adds no warning about
+    references it could not read."""
+    tag = _tag()
+    config_id = f"e2e_references_{tag}"
+    config = _config(
+        tag,
+        actions=[
+            {"action": "light.turn_on", "target": {"entity_id": "light.bed_light"}}
+        ],
+    )
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation", {"entity_id": config_id, "config": config}
+            )
+            got = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_config_get_automation",
+                arguments={"entity_id": created["entity_id"]},
+                predicate=lambda d: (
+                    "light.bed_light"
+                    in ((d.get("references") or {}).get("entities") or [])
+                ),
+                description="automation read lists the light it targets",
+            )
+            assert got["references"]["blueprint"] is None, got
+            assert not any(
+                "references" in warning for warning in got.get("warnings") or []
+            ), got
+        finally:
+            await _remove(mcp_client, config_id)
+
+
+@pytest.mark.requires_component_surface
+async def test_get_of_an_unloaded_automation_says_why_references_are_missing(
+    mcp_client, ha_client
+) -> None:
+    """A registry-disabled automation is not loaded, so Core has no
+    references for it; the read said nothing and looked like an automation
+    that uses nothing."""
+    tag = _tag()
+    config_id = f"e2e_unloaded_{tag}"
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation",
+                {"entity_id": config_id, "config": _config(tag)},
+            )
+            entity_id = created["entity_id"]
+            await _registry_disable(ha_client, entity_id)
+
+            got = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_config_get_automation",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: d.get("references") is None,
+                description="automation read has no references once unloaded",
+            )
+            assert any(
+                "has not loaded this automation" in warning
+                for warning in got.get("warnings") or []
+            ), got
+        finally:
+            await _remove(mcp_client, config_id)
+
+
+@pytest.mark.requires_component_surface
+async def test_none_and_all_targets_are_not_warned(mcp_client) -> None:
+    """Core accepts ``none`` and ``all`` as an entity or area target; the
+    reference validator warned them as registry items that do not exist."""
+    tag = _tag()
+    config_id = f"e2e_match_sentinels_{tag}"
+    config = _config(
+        tag,
+        actions=[
+            {
+                "action": "light.turn_on",
+                "target": {"entity_id": "none", "area_id": "all"},
+            }
+        ],
+    )
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation", {"entity_id": config_id, "config": config}
+            )
+            warnings = (created.get("validation") or {}).get("warnings") or []
+            assert not any(w.get("value") in ("none", "all") for w in warnings), created
+        finally:
+            await _remove(mcp_client, config_id)
