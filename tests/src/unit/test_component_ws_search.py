@@ -245,6 +245,20 @@ class FakeRegEntry:
             "unique_id": self.unique_id,
         }
 
+    @property
+    def extended_dict(self):
+        # Mirrors core ``RegistryEntry.extended_dict`` (the
+        # ``config/entity_registry/get`` reply): the partial row plus aliases,
+        # capabilities and the device-class/icon fields the list row omits.
+        return {
+            **self.as_partial_dict,
+            "aliases": sorted(self.aliases),
+            "capabilities": None,
+            "device_class": None,
+            "original_device_class": None,
+            "original_icon": None,
+        }
+
 
 class FakeEntityReg:
     def __init__(self, entries):

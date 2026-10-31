@@ -65,8 +65,10 @@ class _Validator:
         self.raise_: Exception | None = None
         self.calls: list[tuple[Any, ...]] = []
 
-    async def __call__(self, hass: Any, config: dict[str, Any], *args: Any) -> Any:
-        self.calls.append(args)
+    async def __call__(
+        self, hass: Any, config: dict[str, Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        self.calls.append((*args, *kwargs.items()))
         # Core's backward-compat schema renames keys in the dict it is given.
         if "trigger" in config:
             config["triggers"] = config.pop("trigger")
@@ -184,7 +186,9 @@ async def test_a_proposal_is_not_raised_or_logged_as_a_broken_automation(
     core: SimpleNamespace,
 ) -> None:
     await _run(core, "validate", config={})
-    assert core.validate.calls == [(False, False)]
+    assert core.validate.calls == [
+        (("raise_on_errors", False), ("warn_on_errors", False))
+    ]
 
 
 async def test_config_core_cannot_even_name_is_a_schema_failure(
@@ -267,8 +271,11 @@ async def test_core_without_descriptions_is_unavailable(core: SimpleNamespace) -
 async def test_lookup_by_entity_id_returns_cores_registry_row(
     core: SimpleNamespace,
 ) -> None:
+    """The list row lacked the aliases and capabilities the fallback's
+    config/entity_registry/get row carries, so the field changed shape with
+    the route."""
     got = await _run(core, "lookup", entity_id=MORNING)
-    row = core.entity_registry(None).async_get(MORNING).as_partial_dict
+    row = core.entity_registry(None).async_get(MORNING).extended_dict
     assert got["found"] is True
     assert got["entity"] == row
 
@@ -290,6 +297,7 @@ async def test_lookup_without_an_automation_row_is_not_found(
     assert got == {
         "found": False,
         "entity": None,
+        "loaded": False,
         "validation": None,
         "references": None,
     }
@@ -329,6 +337,7 @@ async def test_stored_issue_from_an_earlier_run_is_ignored(
 async def test_lookup_carries_the_references_core_reads(core: SimpleNamespace) -> None:
     core.loaded.add(MORNING)
     got = await _run(core, "lookup", entity_id=MORNING)
+    assert got["loaded"] is True
     assert got["references"] == {
         "entities": ["light.hall", "light.porch"],
         "devices": ["d1"],
@@ -342,8 +351,11 @@ async def test_lookup_carries_the_references_core_reads(core: SimpleNamespace) -
 async def test_references_are_absent_while_the_automation_is_not_loaded(
     core: SimpleNamespace,
 ) -> None:
+    """The server could not tell a disabled automation from one that
+    references nothing; ``loaded`` lets it say why."""
     got = await _run(core, "lookup", entity_id=MORNING)
     assert got["found"] is True
+    assert got["loaded"] is False
     assert got["references"] is None
 
 

@@ -32,7 +32,12 @@ WS_AUTOMATION_CONFIG = "ha_mcp_tools/automation_config"
 # fall back to Core's automation REST API and WebSocket commands.
 CAPABILITY = "automation_config"
 _DOMAIN = "automation"
-_ACTIONS = ("validate", "describe", "lookup")
+# The field each action reads; lookup takes either key.
+_NEEDS: dict[str, tuple[str, ...]] = {
+    "validate": ("config",),
+    "describe": ("kind",),
+    "lookup": ("entity_id", "unique_id"),
+}
 _KINDS = ("trigger", "condition")
 _REFERENCES = ("entities", "devices", "areas", "floors", "labels")
 
@@ -62,6 +67,8 @@ def _core() -> SimpleNamespace | None:
         validate=getattr(config, "_async_validate_config_item", None),
         validate_or_raise=getattr(config, "async_validate_config_item", None),
         invalid=(
+            # Core reports a bad config as Invalid or HomeAssistantError; a
+            # ValueError is an unexpected failure, answered unavailable.
             *(e for e in _INVALID_ERRORS if e is not ValueError),
             HomeAssistantError,
         ),
@@ -88,7 +95,9 @@ async def _validate(
     proposed = copy.deepcopy(msg["config"])
     try:
         if core.validate is not None:
-            checked = await core.validate(hass, proposed, False, False)
+            checked = await core.validate(
+                hass, proposed, raise_on_errors=False, warn_on_errors=False
+            )
         elif core.validate_or_raise is not None:
             checked = await core.validate_or_raise(hass, "", proposed)
         else:
@@ -113,11 +122,14 @@ async def _describe(
 
 
 def _registry_entry(registry: Any, msg: dict[str, Any]) -> Any:
-    entry = registry.async_get(msg["entity_id"]) if msg.get("entity_id") else None
-    if (entry is None or entry.platform != _DOMAIN) and msg.get("unique_id"):
-        entity_id = registry.async_get_entity_id(_DOMAIN, _DOMAIN, msg["unique_id"])
-        entry = registry.async_get(entity_id) if entity_id else None
-    return entry if entry is not None and entry.platform == _DOMAIN else None
+    if msg.get("entity_id"):
+        entry = registry.async_get(msg["entity_id"])
+        if entry is not None and entry.platform == _DOMAIN:
+            return entry
+    if not msg.get("unique_id"):
+        return None
+    entity_id = registry.async_get_entity_id(_DOMAIN, _DOMAIN, msg["unique_id"])
+    return registry.async_get(entity_id) if entity_id else None
 
 
 def _validation(
@@ -137,12 +149,15 @@ def _validation(
     return None
 
 
+def _loaded(hass: HomeAssistant, core: SimpleNamespace, entity_id: str) -> bool:
+    """Whether Core's automation EntityComponent holds the automation's entity."""
+    component = hass.data.get(core.component_key)
+    return component is not None and component.get_entity(entity_id) is not None
+
+
 def _references(
     hass: HomeAssistant, core: SimpleNamespace, entity_id: str
-) -> dict[str, Any] | None:
-    component = hass.data.get(core.component_key)
-    if component is None or component.get_entity(entity_id) is None:
-        return None
+) -> dict[str, Any]:
     found: dict[str, Any] = {
         name: sorted(read(hass, entity_id)) for name, read in core.references.items()
     }
@@ -165,13 +180,22 @@ async def _lookup(
         return _unavailable("This Home Assistant lacks part of the automation lookup")
     entry = _registry_entry(core.entity_registry(hass), msg)
     if entry is None:
-        return {"found": False, "entity": None, "validation": None, "references": None}
+        return {
+            "found": False,
+            "entity": None,
+            "loaded": False,
+            "validation": None,
+            "references": None,
+        }
+    loaded = _loaded(hass, core, entry.entity_id)
     return {
         "found": True,
-        # The config/entity_registry/list row, as Core builds it.
-        "entity": entry.as_partial_dict,
+        # The row Core's config/entity_registry/get sends.
+        "entity": entry.extended_dict,
+        "loaded": loaded,
         "validation": _validation(hass, core, entry.entity_id),
-        "references": _references(hass, core, entry.entity_id),
+        # Core's helpers read the loaded entity; without it they find nothing.
+        "references": _references(hass, core, entry.entity_id) if loaded else None,
     }
 
 
@@ -182,9 +206,7 @@ def _require(msg: dict[str, Any]) -> None:
     """Refuse a request without the field its action reads, as registry_lookup
     does, rather than answer a result the caller could take for "not found"."""
     action = msg["action"]
-    needs = {"validate": ("config",), "describe": ("kind",)}.get(
-        action, ("entity_id", "unique_id")
-    )
+    needs = _NEEDS[action]
     if all(msg.get(field) is None for field in needs):
         from homeassistant.exceptions import HomeAssistantError
 
@@ -226,7 +248,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
         (
             {
                 vol.Required("type"): WS_AUTOMATION_CONFIG,
-                vol.Required("action"): vol.In(_ACTIONS),
+                vol.Required("action"): vol.In(tuple(_NEEDS)),
                 vol.Optional("config"): dict,
                 vol.Optional("kind"): vol.In(_KINDS),
                 vol.Optional("entity_id"): str,
