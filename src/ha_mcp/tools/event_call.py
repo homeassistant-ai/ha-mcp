@@ -5,6 +5,7 @@ ratchet line) into this mixin so that module shrinks rather than grows.
 ``ServiceTools`` composes it alongside its other responsibilities.
 """
 
+import asyncio
 from typing import Annotated, Any
 
 import httpx
@@ -13,6 +14,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..client.event_listeners import get_event_listeners
 from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
@@ -28,6 +30,13 @@ from .helpers import (
     raise_tool_error,
 )
 from .tool_hints import write_hints
+
+# Characters that would break the ``POST /api/events/{event_type}`` path.
+_EVENT_TYPE_SEPARATORS = ("/", "\\", "?", "#")
+
+# Upper bound for the optional listener-count lookup, including its retries: a
+# stalled GET /api/events must not hold back the fire.
+EVENT_LISTENER_LOOKUP_BUDGET_SECONDS = 5.0
 
 
 def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | None:
@@ -84,8 +93,9 @@ class EventCallMixin:
         any of them acted. listener_count covers the exact event type;
         wildcard_listener_count covers match-all listeners.
         """
-        # Validate event_type before hitting the wire — empty strings or path separators
-        # produce malformed URLs at POST /api/events/{event_type}.
+        # Validate event_type before hitting the wire — empty strings, path
+        # separators, or URL delimiters produce malformed URLs at
+        # POST /api/events/{event_type}.
         if not event_type or not event_type.strip():
             raise_tool_error(
                 create_validation_error(
@@ -93,10 +103,10 @@ class EventCallMixin:
                     parameter="event_type",
                 )
             )
-        if "/" in event_type or "\\" in event_type:
+        if any(separator in event_type for separator in _EVENT_TYPE_SEPARATORS):
             raise_tool_error(
                 create_validation_error(
-                    "event_type cannot contain path separators",
+                    "event_type cannot contain path separators or URL delimiters",
                     parameter="event_type",
                     details=f"Received: {event_type!r}",
                 )
@@ -106,8 +116,9 @@ class EventCallMixin:
 
         listener_counts: dict[str, int] | None = None
         try:
-            listener_counts = await self._client.get_event_listeners()
-        except HomeAssistantError:
+            async with asyncio.timeout(EVENT_LISTENER_LOOKUP_BUDGET_SECONDS):
+                listener_counts = await get_event_listeners(self._client)
+        except (HomeAssistantError, TimeoutError):
             # Counts are optional enrichment; never block the fire on them.
             pass
 

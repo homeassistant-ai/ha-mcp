@@ -1,5 +1,7 @@
 """Unit tests for ha_call_event tool."""
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -10,6 +12,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools import event_call
 from ha_mcp.tools.tools_service import ServiceTools
 
 
@@ -22,10 +25,17 @@ def _make_tools(
         client.fire_event = AsyncMock(side_effect=fire_event_return)
     else:
         client.fire_event = AsyncMock(return_value=fire_event_return)
+    # The listener lookup reads GET /api/events through the client's own
+    # request helper, so seeding rows here exercises the real mapping.
     if isinstance(listener_counts, Exception):
-        client.get_event_listeners = AsyncMock(side_effect=listener_counts)
+        client._request = AsyncMock(side_effect=listener_counts)
     else:
-        client.get_event_listeners = AsyncMock(return_value=listener_counts or {})
+        client._request = AsyncMock(
+            return_value=[
+                {"event": name, "listener_count": count}
+                for name, count in (listener_counts or {}).items()
+            ]
+        )
     tools = ServiceTools.__new__(ServiceTools)
     tools._client = client
     tools._device_tools = MagicMock()
@@ -175,3 +185,43 @@ class TestHaCallEvent:
         assert "listener_count" not in result
         assert "wildcard_listener_count" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    @pytest.mark.parametrize("event_type", ["bad?event", "bad#event"])
+    async def test_rejects_event_type_with_url_delimiters(self, event_type):
+        """'?' and '#' would truncate the fired event type in the request URL."""
+        tools = _make_tools({"message": "ok"})
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event(event_type)
+
+        tools._client.fire_event.assert_not_awaited()
+
+    async def test_slow_listener_lookup_does_not_delay_the_fire(self, monkeypatch):
+        """A stalled GET /api/events must not hold back the event dispatch."""
+        tools = _make_tools({"message": "ok"})
+
+        async def _stalled(*args: object, **kwargs: object) -> list[object]:
+            await asyncio.sleep(0.5)
+            return []
+
+        tools._client._request = AsyncMock(side_effect=_stalled)
+        monkeypatch.setattr(event_call, "EVENT_LISTENER_LOOKUP_BUDGET_SECONDS", 0.05)
+
+        started = time.monotonic()
+        result = await tools.ha_call_event("my_event")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.4, f"listener lookup delayed the fire by {elapsed:.2f}s"
+        assert result["success"] is True
+        assert "listener_count" not in result
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_zero_listener_warning_does_not_claim_delivery(self):
+        """A pre-dispatch count cannot establish whether the event was delivered."""
+        tools = _make_tools({"message": "ok"}, {})
+
+        result = await tools.ha_call_event("my_event")
+
+        warning = " ".join(result["warnings"]).lower()
+        assert "no event listeners" in warning
+        assert "received" not in warning

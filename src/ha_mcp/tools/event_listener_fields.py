@@ -1,10 +1,12 @@
 """Listener-count enrichment for the ``ha_call_event`` response.
 
-The lookup itself is optional enrichment: when ``GET /api/events`` failed the
-caller passes ``None`` and this returns no fields, so a failed lookup can never
-report zero listeners. When the mapping is present, the response carries the
-exact event-type count, the match-all bucket count, and — only when both are
-zero — a warning that no subscriber received the event.
+The lookup itself is optional enrichment: when ``GET /api/events`` could not be
+read (or failed) the caller passes ``None`` and this returns no fields, so an
+unknown count can never be reported as zero listeners. When the mapping is
+present, the response carries the exact event-type count, the match-all bucket
+count, and — only when both are zero — a warning that nothing was listening.
+The count is taken before dispatch, so the warning states registration, not
+delivery.
 """
 
 from typing import Any
@@ -28,7 +30,7 @@ def event_listener_fields(
     }
     if exact + wildcard == 0:
         fields["warnings"] = [
-            f"No event listeners are registered for {event_type!r}; "
-            "the event was fired but no subscriber received it."
+            f"No event listeners were registered for {event_type!r} when the "
+            "listener count was checked; the event was still fired."
         ]
     return fields

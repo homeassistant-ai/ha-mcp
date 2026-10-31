@@ -1,9 +1,10 @@
-"""Unit tests for HomeAssistantClient.get_event_listeners."""
+"""Unit tests for the event-listener count lookup."""
 
 from unittest.mock import AsyncMock
 
 import pytest
 
+from ha_mcp.client.event_listeners import get_event_listeners
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 
 
@@ -17,16 +18,17 @@ class TestGetEventListeners:
             ]
         )
 
-        counts = await mock_client.get_event_listeners()
+        counts = await get_event_listeners(mock_client)
 
         assert counts == {"my_event": 2, "*": 5}
         mock_client._request.assert_called_once_with("GET", "/events")
 
     @pytest.mark.asyncio
-    async def test_returns_empty_mapping_for_unexpected_reply_shape(self, mock_client):
+    async def test_unreadable_reply_reports_unknown_not_zero(self, mock_client):
+        """A non-list reply must not be reported as 'no listeners registered'."""
         mock_client._request = AsyncMock(return_value={"unexpected": True})
 
-        assert await mock_client.get_event_listeners() == {}
+        assert await get_event_listeners(mock_client) is None
 
     @pytest.mark.asyncio
     async def test_skips_rows_without_a_string_event_and_integer_count(
@@ -41,11 +43,26 @@ class TestGetEventListeners:
             ]
         )
 
-        assert await mock_client.get_event_listeners() == {"good": 1}
+        assert await get_event_listeners(mock_client) == {"good": 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_count", [True, False, -1])
+    async def test_rejects_counts_that_cannot_be_listener_counts(
+        self, mock_client, bad_count
+    ):
+        """Booleans are ints and negatives are impossible; neither is a count."""
+        mock_client._request = AsyncMock(
+            return_value=[
+                {"event": "bad", "listener_count": bad_count},
+                {"event": "good", "listener_count": 0},
+            ]
+        )
+
+        assert await get_event_listeners(mock_client) == {"good": 0}
 
     @pytest.mark.asyncio
     async def test_propagates_lookup_failure_to_the_caller(self, mock_client):
         mock_client._request = AsyncMock(side_effect=HomeAssistantAPIError("boom"))
 
         with pytest.raises(HomeAssistantAPIError):
-            await mock_client.get_event_listeners()
+            await get_event_listeners(mock_client)
