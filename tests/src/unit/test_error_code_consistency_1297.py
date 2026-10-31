@@ -449,11 +449,8 @@ class TestGetAutomationMissingSurfacesAvailableIds:
     """Regression: ``ha_config_get_automation`` for an automation nothing
     resolves must surface ``RESOURCE_NOT_FOUND`` + ``available_automation_ids``
     (first-10 from the entity registry, filtered by ``automation.`` prefix).
-    Pre-#1397-D4 the 404 surfaced as ``RESOURCE_NOT_FOUND`` via the generic
-    ``_classify_api_status`` route (``helpers.py:199-205``), but without
-    ``available_automation_ids`` or the list-tool suggestion that sibling
-    sites populate. The payload + suggestion come from the central
-    not-found raise ``_raise_automation_not_found``.
+    Pre-#1397-D4 the 404 surfaced without that payload or the list-tool
+    suggestion; both now come from ``_raise_automation_not_found``.
     """
 
     @pytest.fixture
@@ -461,10 +458,9 @@ class TestGetAutomationMissingSurfacesAvailableIds:
         from ha_mcp.client.rest_client import HomeAssistantAPIError
 
         client = MagicMock()
-        # Credential-less: no component probe, Core's REST/WS is the path.
-        client.base_url = client.token = None
-        # Neither the registry nor a state knows it. (A registry hit whose
-        # config GET answers 404 is a YAML-defined automation instead.)
+        client.base_url = client.token = None  # no component probe
+        # Neither the registry nor a state knows it (a registry hit with a
+        # 404 config GET is a YAML-defined automation, CONFIG_NOT_FOUND).
         client._resolve_automation_id = AsyncMock(
             side_effect=HomeAssistantAPIError(
                 "Failed to resolve automation automation.missing",

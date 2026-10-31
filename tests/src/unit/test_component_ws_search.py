@@ -217,10 +217,7 @@ class FakeRegEntry:
 
     @property
     def as_partial_dict(self):
-        # Mirrors core ``RegistryEntry.as_partial_dict`` (one
-        # ``config/entity_registry/list`` element): the shape device_get's
-        # include_entities join returns VERBATIM. Sets rendered to lists as core
-        # does; timestamps fixed floats (value irrelevant to the consumers).
+        # Core's ``config/entity_registry/list`` row; sets as lists, fixed floats.
         return {
             "area_id": self.area_id,
             "categories": dict(self.categories),
@@ -246,18 +243,17 @@ class FakeRegEntry:
         }
 
     @property
-    def extended_dict(self):
-        # Mirrors core ``RegistryEntry.extended_dict`` (the
-        # ``config/entity_registry/get`` reply): the partial row plus aliases,
-        # capabilities and the device-class/icon fields the list row omits.
+    def extended_dict(self):  # Core's ``config/entity_registry/get`` row
+        extra = (
+            "capabilities",
+            "device_class",
+            "original_device_class",
+            "original_icon",
+        )
         return {
             **self.as_partial_dict,
             "aliases": sorted(self.aliases),
-            "capabilities": None,
-            "device_class": None,
-            "original_device_class": None,
-            "original_icon": None,
-        }
+        } | dict.fromkeys(extra)
 
 
 class FakeEntityReg:
