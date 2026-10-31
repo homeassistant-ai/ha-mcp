@@ -36,6 +36,7 @@ from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
     _TaggedScalar,
     make_yaml,
     yaml_dumps,
+    yaml_jsonify,
 )
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,21 @@ class TestEnvVarTag:
         ry, data = _load("token: !env_var MY_TOKEN\n")
         out = yaml_dumps(ry, data)
         assert "!env_var MY_TOKEN" in out
+
+
+class TestInputTag:
+    """Blueprint ``!input`` markers survive parsing and JSON projection."""
+
+    def test_input_tag_preserved(self):
+        ry, data = _load("target: !input target_entity\n")
+        assert isinstance(data["target"], _TaggedScalar)
+        assert data["target"].tag == "!input"
+        out = yaml_dumps(ry, data)
+        assert "!input target_entity" in out
+
+    def test_input_tag_jsonifies_in_source_form(self):
+        _ry, data = _load("target: !input target_entity\n")
+        assert yaml_jsonify(data) == {"target": "!input target_entity"}
 
 
 # ---------------------------------------------------------------------------
