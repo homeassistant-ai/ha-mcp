@@ -52,7 +52,10 @@ from ..utils.python_sandbox import (
     format_sandbox_error,
     safe_execute_expression,
 )
-from .addon_connection_hints import addon_connection_failure_suggestions
+from .addon_connection_hints import (
+    add_supervisor_error_suggestions,
+    addon_connection_failure_suggestions,
+)
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
@@ -70,9 +73,6 @@ _MAX_RESPONSE_SIZE = 50 * 1024
 # Supervisor is local to the app network, so connection acquisition should
 # remain short even when an app operation needs a multi-minute response budget.
 _SUPERVISOR_ACQUIRE_TIMEOUT = 10.0
-_SUPERVISOR_AVAILABILITY_SUGGESTION = (
-    "Check Home Assistant connection and Supervisor availability"
-)
 _SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX = (
     f"\n[Supervisor response truncated to {_MAX_RESPONSE_SIZE // 1024} KiB]"
 )
@@ -453,13 +453,13 @@ async def _supervisor_api_call_via_core(
             }
         )
     except HomeAssistantCommandNotSent:
-        # Nothing was sent (a token rejected on connect, say): keep the error.
+        # Nothing was sent (no client obtained, or the socket was not ready).
         raise
-    except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as exc:
+    except HomeAssistantConnectionError as exc:
         if verb in {"GET", "HEAD"}:
             raise
         # send_websocket_message re-raises a command timeout as the cause.
-        timed_out = HomeAssistantCommandTimeout in {type(exc), type(exc.__cause__)}
+        timed_out = isinstance(exc.__cause__, HomeAssistantCommandTimeout)
         code = ErrorCode.TIMEOUT_OPERATION if timed_out else ErrorCode.CONNECTION_FAILED
         _raise_supervisor_write_outcome_unknown(
             code,
@@ -787,14 +787,7 @@ async def _supervisor_api_call(
             },
             raise_error=False,
         )
-        error_details = error_response["error"]
-        if error_details.get("code") == ErrorCode.RESOURCE_NOT_FOUND.value:
-            error_details["suggestion"] = _SUPERVISOR_AVAILABILITY_SUGGESTION
-            error_details["suggestions"] = [_SUPERVISOR_AVAILABILITY_SUGGESTION]
-        error_details["suggestions"] = [
-            *error_details.get("suggestions", []),
-            "Check that this installation supports apps (add-ons).",
-        ]
+        add_supervisor_error_suggestions(error_response["error"])
         raise_tool_error(error_response)
         return None  # unreachable: raise_tool_error always raises
 
