@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -209,21 +210,49 @@ def _wait_for_hacs_lock_release(lock_dir: Path) -> None:
     wait_start = time.monotonic()
     while lock_dir.exists():
         if time.monotonic() - wait_start >= 180:
-            # Warn-and-continue (not ``pytest.fail``): a stuck HACS
-            # download only breaks HACS-dependent tests, while the
-            # rest of the session still produces useful signal.
-            # Clear the stale lock so a subsequent session does not
-            # also hit the 180s wait when the winner truly crashed.
-            logger.warning(
-                f"Timeout waiting for HACS frontend lock release at "
-                f"{lock_dir}; proceeding without verification."
+            # The owner may still be publishing, even if both sentinels exist.
+            raise RuntimeError(
+                f"Timeout waiting for HACS frontend lock release at {lock_dir}"
             )
-            try:
-                lock_dir.rmdir()
-            except OSError as exc:
-                logger.warning(f"Could not clear stale HACS lock dir: {exc}")
-            return
         time.sleep(2)
+
+
+def _is_valid_hacs_frontend(path: Path) -> bool:
+    """Require both the imported Python package and its browser entry point."""
+    return all((path / name).is_file() for name in ("__init__.py", "entrypoint.js"))
+
+
+class _HacsMetadataRedirectRefused(urllib.request.HTTPRedirectHandler):
+    """Keep metadata credentials on the fixed GitHub API endpoint."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        raise urllib.error.HTTPError(
+            req.full_url, code, "HACS release metadata redirect refused", headers, fp
+        )
+
+
+def _hacs_frontend_release_tag() -> str:
+    request = urllib.request.Request(
+        "https://api.github.com/repos/hacs/frontend/releases/latest",
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    token = os.environ.get("HACS_FRONTEND_GITHUB_TOKEN") or os.environ.get(
+        "GITHUB_TOKEN"
+    )
+    if token:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    opener = urllib.request.build_opener(_HacsMetadataRedirectRefused())
+    with opener.open(request, timeout=30) as response:
+        tag_name: str = json.loads(response.read())["tag_name"]
+    return tag_name
 
 
 def _download_hacs_frontend(frontend_dir: Path) -> None:
@@ -231,10 +260,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
     import tarfile
 
     if frontend_dir.exists():
-        # Partial/corrupt directory from a prior interrupted
-        # session. Clear it so ``shutil.move`` below replaces it
-        # cleanly — moving onto an existing directory nests the
-        # fresh ``hacs_frontend/`` inside the stale one.
+        # Discard an incomplete frontend before publishing a replacement.
         logger.warning(
             f"HACS frontend at {frontend_dir} is partial or corrupt; "
             f"removing before re-download."
@@ -243,11 +269,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
     logger.info("HACS frontend not found, downloading...")
 
     try:
-        # Get the latest frontend version from GitHub API
-        api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-        with urllib.request.urlopen(api_url, timeout=30) as response:
-            release_data = json.loads(response.read())
-            tag_name = release_data["tag_name"]
+        tag_name = _hacs_frontend_release_tag()
 
         # Download and extract the frontend
         tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
@@ -256,10 +278,10 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
         with (
             urllib.request.urlopen(tarball_url, timeout=120) as response,
             tarfile.open(fileobj=response, mode="r:gz") as tar,
-            tempfile.TemporaryDirectory() as temp_dir_str,
+            tempfile.TemporaryDirectory(dir=frontend_dir.parent) as temp_dir_str,
         ):
-            # Extract to temp location first; the context manager
-            # cleans up even if extractall or shutil.move raises.
+            # Stage on the destination filesystem so publication cannot fall
+            # back to a partial copy. Failed extraction/rename is cleaned up.
             temp_extract = Path(temp_dir_str)
             tar.extractall(temp_extract, filter="data")
 
@@ -267,13 +289,13 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
             extracted_frontend = (
                 temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
             )
-            if extracted_frontend.exists():
-                shutil.move(str(extracted_frontend), str(frontend_dir))
-                logger.info(f"HACS frontend installed at {frontend_dir}")
-            else:
-                logger.warning(
-                    f"Could not find hacs_frontend in downloaded archive for {tag_name}"
+            if not _is_valid_hacs_frontend(extracted_frontend):
+                raise RuntimeError(
+                    f"Incomplete HACS frontend archive for {tag_name}: "
+                    "missing __init__.py or entrypoint.js"
                 )
+            extracted_frontend.rename(frontend_dir)
+            logger.info(f"HACS frontend installed at {frontend_dir}")
 
     except (
         urllib.error.URLError,
@@ -282,13 +304,8 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
         tarfile.TarError,
         OSError,
     ):
-        # Narrow catch + ``logger.exception`` so the full
-        # traceback surfaces in CI logs, not just the exception
-        # type — KP13's "don't green-pass a failed download"
-        # principle. HACS-dependent tests will fail at first
-        # HACS call; other tests can still run.
         logger.exception("Failed to download HACS frontend")
-        logger.warning("HACS tests may be skipped without the frontend")
+        raise
 
 
 def _ensure_hacs_frontend(initial_state_path: Path) -> None:
@@ -298,22 +315,10 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     This is not committed to git to keep the repo size manageable.
 
     Uses a directory-based atomic lock so concurrent xdist workers don't race
-    on ``shutil.move`` into the shared ``initial_test_state`` path. One worker
+    when publishing into the shared ``initial_test_state`` path. One worker
     wins ``mkdir(exist_ok=False)`` and performs the download; the losers poll
     on the lock and exit when the winner releases it.
     """
-
-    def _is_valid_frontend(path: Path) -> bool:
-        """Best-effort check that ``path`` holds a complete HACS frontend.
-
-        A SIGKILL or partial-failure during ``tar.extractall`` →
-        ``shutil.move`` can leave a populated but incomplete ``frontend_dir``
-        from a prior session. ``entrypoint.js`` is a top-level file in every
-        release tarball published at https://github.com/hacs/frontend/releases,
-        so its absence flags an interrupted prior session and forces a clean
-        re-download instead of letting HACS boot against a broken frontend.
-        """
-        return (path / "entrypoint.js").is_file()
 
     hacs_dir = initial_state_path / "custom_components" / "hacs"
     frontend_dir = hacs_dir / "hacs_frontend"
@@ -321,17 +326,10 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
 
     _clear_stale_hacs_lock(lock_dir)
 
-    # Fast path: HACS not installed (nothing to do), or frontend present
-    # AND no lock held. The lock-held check rules out the window where
-    # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
-    # exists then but its contents are partial. On the success path the
-    # move commits in the inner ``try`` before the winner's ``finally``
-    # runs ``rmdir`` — waiters observing lock-gone-and-frontend-present
-    # see a complete frontend. On any failure path the finally still
-    # releases with ``frontend_dir`` absent; waiters re-enter the slow
-    # path and the download except-branch handles the skip.
+    # The lock still belongs to the publisher even when sentinels exist.
+    # Accept publication only after release; a failed owner leaves no frontend.
     if not hacs_dir.exists() or (
-        _is_valid_frontend(frontend_dir) and not lock_dir.exists()
+        _is_valid_hacs_frontend(frontend_dir) and not lock_dir.exists()
     ):
         return
 
@@ -345,17 +343,21 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
         lock_dir.mkdir(exist_ok=False)
     except FileExistsError:
         _wait_for_hacs_lock_release(lock_dir)
+        if not _is_valid_hacs_frontend(frontend_dir):
+            raise RuntimeError(
+                "HACS frontend unavailable after bootstrap lock release"
+            ) from None
         return
 
     # We own the lock. Outer try/finally guarantees release even when the
     # download block is skipped (e.g. hacs_dir missing) or raises.
     try:
         # Check if HACS is installed and frontend is missing or invalid.
-        if hacs_dir.exists() and not _is_valid_frontend(frontend_dir):
+        if hacs_dir.exists() and not _is_valid_hacs_frontend(frontend_dir):
             _download_hacs_frontend(frontend_dir)
     finally:
         # Release the lock so waiting workers can proceed. A
-        # ``FileNotFoundError`` here means a timed-out waiter cleared
+        # ``FileNotFoundError`` can mean startup stale-lock cleanup removed
         # the lock first — invariant broke but the session can
         # continue; log so it's diagnosable. Other ``OSError`` classes
         # (PermissionError, Errno-39 "Directory not empty" from a
@@ -366,7 +368,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
         except FileNotFoundError:
             logger.warning(
                 f"HACS frontend lock dir {lock_dir} vanished before "
-                f"release — concurrent timeout-clear?"
+                f"release — concurrent stale-lock cleanup?"
             )
 
 
