@@ -51,11 +51,10 @@ class _Invalid(Exception):
     pass
 
 
-class _Checked(dict):
-    """Core's AutomationConfig: the validated dict plus the outcome."""
+class _Checked:
+    """Core's AutomationConfig as the bridge reads it: the outcome attributes."""
 
     def __init__(self, status: _Status, error: str | None = None) -> None:
-        super().__init__()
         self.validation_status = status
         self.validation_error = error
 
