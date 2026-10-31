@@ -72,7 +72,6 @@ def mock_client():
             "unique_id": "abc123unique",
             "entity_id": "automation.morning_routine",
             "result": "ok",
-            "operation": "updated",
         }
     )
     # Delete path: the REST client echoes its input and the config id.
@@ -284,7 +283,6 @@ class TestFullConfigSetAutomationIdKey:
             "unique_id": "generated_unique_id_xyz",
             "entity_id": None,
             "result": "ok",
-            "operation": "created",
         }
 
         result = await tools.ha_config_set_automation(config=_config(), wait=False)
@@ -300,7 +298,6 @@ class TestFullConfigSetAutomationIdKey:
             "entity_id": None,
             "entity_not_verified": True,
             "result": "ok",
-            "operation": "created",
         }
         monkeypatch.setattr(
             automations_module,
@@ -330,7 +327,6 @@ class TestFullConfigSetAutomationIdKey:
             "unique_id": None,
             "entity_id": None,
             "result": "ok",
-            "operation": "created",
         }
 
         result = await tools.ha_config_set_automation(config=_config(), wait=False)
@@ -350,10 +346,11 @@ class TestFullConfigSetAutomationIdKey:
 
 class TestAutomationUpsertResolvedThreading:
     """The tool resolves the target once and hands the REST client its config
-    id with ``_resolved=True`` and the operation it found (issue #1813)."""
+    id with ``_resolved=True`` (issue #1813); it alone reports ``operation``
+    and asks the client to wait for an entity only on a creation."""
 
     async def test_python_transform_threads_resolved_id(self, tools, mock_client):
-        await tools.ha_config_set_automation(
+        result = await tools.ha_config_set_automation(
             entity_id="automation.morning_routine",
             python_transform="config['mode'] = 'single'",
             config_hash=STORED_HASH,
@@ -362,26 +359,29 @@ class TestAutomationUpsertResolvedThreading:
         args, kwargs = mock_client.upsert_automation_config.call_args
         assert args[1] == "abc123unique"
         assert kwargs["_resolved"] is True
-        assert kwargs["operation"] == "updated"
+        assert kwargs["wait_for_entity"] is False
+        assert result["operation"] == "updated"
 
     async def test_full_config_update_threads_resolved_id(self, tools, mock_client):
-        await tools.ha_config_set_automation(
+        result = await tools.ha_config_set_automation(
             entity_id="automation.morning_routine", config=_config(), wait=False
         )
 
         args, kwargs = mock_client.upsert_automation_config.call_args
         assert args[1] == "abc123unique"
-        assert kwargs["operation"] == "updated"
+        assert kwargs["wait_for_entity"] is False
+        assert result["operation"] == "updated"
         mock_client._resolve_automation_id.assert_awaited_once_with(
             "automation.morning_routine"
         )
 
     async def test_create_has_no_target(self, tools, mock_client):
-        await tools.ha_config_set_automation(config=_config(), wait=False)
+        result = await tools.ha_config_set_automation(config=_config(), wait=False)
 
         args, kwargs = mock_client.upsert_automation_config.call_args
         assert args[1] is None
-        assert kwargs["operation"] == "created"
+        assert kwargs["wait_for_entity"] is True
+        assert result["operation"] == "created"
 
 
 class TestDeleteAutomation:
@@ -522,7 +522,7 @@ class TestAutomationReplacementGuard:
         assert result["operation"] == "created"
         args, kwargs = mock_client.upsert_automation_config.call_args
         assert args[1] == entity_id
-        assert kwargs["operation"] == "created"
+        assert kwargs["wait_for_entity"] is True
 
     @pytest.mark.parametrize("status", [401, 500])
     async def test_failed_lookup_does_not_allow_overwrite(
@@ -683,3 +683,25 @@ class TestSetAutomationCategoryValidation:
 
         assert result["success"] is True
         mock_client.upsert_automation_config.assert_called_once()
+
+
+class TestReferenceValidationMeta:
+    """What the reference validator could not check reaches the response."""
+
+    async def test_an_unchecked_target_kind_is_named(self, tools):
+        """Without the component's registry ids an area target went unchecked
+        and the response read as if every reference had been checked."""
+        config = _config(
+            action=[{"action": "light.turn_on", "target": {"area_id": "kitchen"}}]
+        )
+
+        result = await tools.ha_config_set_automation(config=config, wait=False)
+
+        assert result["validation"]["unchecked_target_kinds"] == ["area"]
+
+    async def test_a_failed_reference_fetch_is_reported(self, tools, mock_client):
+        mock_client.get_services = AsyncMock(side_effect=RuntimeError("down"))
+
+        result = await tools.ha_config_set_automation(config=_config(), wait=False)
+
+        assert result["validation"]["references_unchecked"] == "down"

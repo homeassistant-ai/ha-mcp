@@ -446,8 +446,8 @@ class TestDeleteDashboardNotFoundSurfacesAvailableIds:
 
 
 class TestGetAutomationMissingSurfacesAvailableIds:
-    """Regression: ``ha_config_get_automation`` with a 404 from the REST
-    client must surface ``RESOURCE_NOT_FOUND`` + ``available_automation_ids``
+    """Regression: ``ha_config_get_automation`` for an automation nothing
+    resolves must surface ``RESOURCE_NOT_FOUND`` + ``available_automation_ids``
     (first-10 from the entity registry, filtered by ``automation.`` prefix).
     Pre-#1397-D4 the 404 surfaced as ``RESOURCE_NOT_FOUND`` via the generic
     ``_classify_api_status`` route (``helpers.py:199-205``), but without
@@ -463,13 +463,15 @@ class TestGetAutomationMissingSurfacesAvailableIds:
         client = MagicMock()
         # Credential-less: no component probe, Core's REST/WS is the path.
         client.base_url = client.token = None
-        client._resolve_automation_id = AsyncMock(return_value="missing_id")
-        client.get_automation_config = AsyncMock(
+        # Neither the registry nor a state knows it. (A registry hit whose
+        # config GET answers 404 is a YAML-defined automation instead.)
+        client._resolve_automation_id = AsyncMock(
             side_effect=HomeAssistantAPIError(
-                "Automation not found: automation.missing",
+                "Failed to resolve automation automation.missing",
                 status_code=404,
             )
         )
+        client.get_automation_config = AsyncMock()
         # Entity registry list returns both automation and non-automation
         # entries; the helper must filter by domain prefix.
         client.send_websocket_message = AsyncMock(
@@ -911,15 +913,16 @@ class TestSetAutomationMissingSurfacesAvailableIds:
 class TestRemoveAutomationMissingSurfacesAvailableIds:
     """Delete path: ``ha_config_remove_automation(entity_id=...)`` against a
     no-longer-existing automation must surface ``RESOURCE_NOT_FOUND`` with
-    ``available_automation_ids`` (the REST client maps Core's 400 "Resource
-    not found" to a 404).
+    ``available_automation_ids``, before any delete is sent.
     """
 
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
         client.base_url = client.token = None
-        client._resolve_automation_id = AsyncMock(return_value="missing_id")
+        client._resolve_automation_id = AsyncMock(
+            side_effect=_api_404("Failed to resolve automation automation.missing")
+        )
         client.get_states = AsyncMock(return_value=[])
         client.delete_automation_config = AsyncMock(
             side_effect=_api_404("Automation not found: automation.missing")
@@ -954,6 +957,7 @@ class TestRemoveAutomationMissingSurfacesAvailableIds:
             "automation.morning_routine",
             "automation.evening_routine",
         ]
+        mock_client.delete_automation_config.assert_not_awaited()
 
 
 class TestSetScriptMissingSurfacesAvailableIds:

@@ -9,7 +9,7 @@ import os
 import ssl
 import time
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn
+from typing import Any, NoReturn
 
 import httpx
 
@@ -1449,7 +1449,7 @@ class HomeAssistantClient:
         identifier: str | None = None,
         *,
         _resolved: bool = False,
-        operation: Literal["created", "updated"] | None = None,
+        wait_for_entity: bool = False,
     ) -> dict[str, Any]:
         """
         Create new automation or update existing one.
@@ -1460,9 +1460,8 @@ class HomeAssistantClient:
             _resolved: When True, ``identifier`` is already the config id (the
                 caller resolved it), so the entity_id lookup is skipped. The
                 #1404 config-id mismatch guard below still applies.
-            operation: Whether the write creates or updates, as the caller
-                established by reading the target first; a generated id is
-                always a creation. A creation waits for the new entity.
+            wait_for_entity: Poll for the entity the write registers, as a
+                creation does, and report it as ``entity_id``.
 
         Returns:
             Result with automation unique_id and status
@@ -1472,7 +1471,6 @@ class HomeAssistantClient:
         """
         if identifier is None:
             unique_id = str(int(time.time() * 1000))
-            operation = "created"
         else:
             unique_id = (
                 identifier
@@ -1499,12 +1497,12 @@ class HomeAssistantClient:
                 f"Mismatched automation id: the target's config id is "
                 f"{unique_id!r}, but config['id']={config_id!r}. "
                 "Refusing to write to prevent overwriting the wrong automation. "
-                f"Remove 'id' from config or set it to the resolved unique_id "
+                f"Remove 'id' from config or set it to the target's config id "
                 f"({unique_id!r}).",
                 status_code=400,
             )
 
-        # Add unique_id to config for updates
+        # Core stores by the body's id, so it carries the target's.
         if unique_id and "id" not in config:
             config = {**config, "id": unique_id}
 
@@ -1513,10 +1511,9 @@ class HomeAssistantClient:
                 "POST", f"/config/automation/config/{unique_id}", json=config
             )
 
-            # For new automations, query Home Assistant to get the actual entity_id that was assigned
             actual_entity_id = None
             entity_not_verified = False
-            if operation == "created":
+            if wait_for_entity:
                 actual_entity_id = await self._poll_for_automation_entity(unique_id)
                 if not actual_entity_id:
                     entity_not_verified = True
@@ -1525,7 +1522,6 @@ class HomeAssistantClient:
                 "unique_id": unique_id,
                 "entity_id": actual_entity_id,
                 "result": response.get("result", "ok"),
-                **({"operation": operation} if operation else {}),
             }
             if entity_not_verified:
                 result["entity_not_verified"] = True

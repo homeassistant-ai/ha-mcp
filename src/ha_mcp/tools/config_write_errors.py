@@ -1,8 +1,10 @@
 """Input-validation rejections for config writes (issue #2649).
 
-Kept out of tools_config_automations.py so that file stays under its
-module-size baseline. The helpers raise through ``raise_tool_error`` and
-carry no client or Home Assistant dependency.
+These are HA-MCP's own checks, not Core rules. The tools send each config as
+written; Core validates it and stores it in its own form, which the get tool
+returns verbatim. Kept out of tools_config_automations.py so that file stays
+under its module-size baseline. The helpers raise through ``raise_tool_error``
+and carry no client or Home Assistant dependency.
 """
 
 from __future__ import annotations
@@ -49,11 +51,12 @@ def reject_sequence_misroute(
     if entity_id:
         context["entity_id"] = entity_id
     message = "Config has 'sequence' and no 'actions'"
-    automation_fix = "For an automation, replace 'sequence' with 'actions'"
     if source == "python_transform":
         automation_fix = (
             "In the python_transform expression, replace 'sequence' with 'actions'"
         )
+    else:
+        automation_fix = "For an automation, replace 'sequence' with 'actions'"
     if not {"triggers", "trigger"} & config_dict.keys():
         automation_fix += " and add 'triggers'"
     suggestions = [

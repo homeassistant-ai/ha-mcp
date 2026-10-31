@@ -52,7 +52,7 @@ resolvers gate the whole component branch (caps probe included) behind
 ``allow_component`` for removals, and the dedicated post-write resolver is never
 called from a config-get. The automation tools resolve through
 ``component_automation.automation_lookup`` instead, which reads the registry,
-never the body. ``TestConfigGetSeam`` pins this.
+never the body.
 """
 
 from __future__ import annotations

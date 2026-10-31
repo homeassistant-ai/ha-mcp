@@ -282,9 +282,7 @@ class TestOperationFromExistence:
         )
 
         assert result["operation"] == "created"
-        assert (
-            client.upsert_automation_config.call_args.kwargs["operation"] == "created"
-        )
+        assert client.upsert_automation_config.call_args.kwargs["wait_for_entity"]
 
     async def test_an_existing_id_is_reported_updated(self) -> None:
         client = Client()
@@ -316,6 +314,7 @@ _LOOKUP = {
         "categories": {"automation": "lighting"},
         "disabled_by": "user",
     },
+    "loaded": True,
     "validation": {"status": "failed_actions", "error": "Unknown action"},
     "references": {"entities": ["light.porch"], "blueprint": None},
 }
@@ -338,6 +337,22 @@ class TestComponentLookup:
         # The body still comes from Core's REST read, never the component.
         client.get_automation_config.assert_awaited_once_with("1700000000000")
         assert client.types() == ["ha_mcp_tools/automation_config"]
+
+    async def test_an_unloaded_automation_says_why_it_has_no_references(
+        self,
+    ) -> None:
+        """A disabled automation came back with references None and no reason,
+        which read as an automation that references nothing."""
+        client = Client({"lookup": {**_LOOKUP, "loaded": False, "references": None}})
+
+        with patch_ws(make_ws("unused", info_result=_CAPS), component_automation):
+            result = await AutomationConfigTools(client).ha_config_get_automation(
+                entity_id="automation.lights"
+            )
+
+        assert result["references"] is None
+        assert len(result["warnings"]) == 1
+        assert "has not loaded this automation" in result["warnings"][0]
 
     async def test_a_disabled_automation_is_removed_by_entity_id(self) -> None:
         """A disabled automation has no state, so a state lookup reported it

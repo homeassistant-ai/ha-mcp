@@ -2071,7 +2071,7 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
-    """Fetch an automation's stored body, verbatim, as the get tool returns it."""
+    """Fetch the stored body verbatim."""
     try:
         return await client.get_automation_config(entity_id)
     except HomeAssistantError as err:
@@ -2081,7 +2081,7 @@ async def _fetch_automation(client: Any, entity_id: str) -> Any:
 
 
 async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
-    return await client.upsert_automation_config(config, entity_id)
+    return await client.upsert_automation_config(config, identifier=entity_id)
 
 
 async def _fetch_script(client: Any, entity_id: str) -> Any:

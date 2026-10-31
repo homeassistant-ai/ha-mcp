@@ -29,7 +29,6 @@ class TestAutomationWaitParameter:
                 "unique_id": "12345",
                 "entity_id": "automation.test",
                 "result": "ok",
-                "operation": "created",
             }
         )
         client.delete_automation_config = AsyncMock(

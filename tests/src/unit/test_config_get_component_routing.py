@@ -252,8 +252,8 @@ class TestAutomationConfigGetAlwaysLegacy:
         assert "ha_mcp_tools/config_get" not in sent
 
     async def test_not_found_raises_resource_not_found_on_legacy(self) -> None:
-        """A missing automation raises the exact legacy RESOURCE_NOT_FOUND, with
-        ``config_get`` advertised but never sent."""
+        """A config id nothing knows raises the exact legacy RESOURCE_NOT_FOUND,
+        with ``config_get`` advertised but never sent."""
         client = RoutingClient(
             automation_config_exc=HomeAssistantAPIError(
                 "Automation not found", status_code=404
@@ -267,11 +267,11 @@ class TestAutomationConfigGetAlwaysLegacy:
             pytest.raises(ToolError) as exc_info,
         ):
             await AutomationConfigTools(client).ha_config_get_automation(
-                entity_id="automation.ghost"
+                entity_id="ghost"
             )
         err = _error_payload(exc_info.value)
         assert err["code"] == "RESOURCE_NOT_FOUND"
-        assert err["message"] == "Automation not found: automation.ghost"
+        assert err["message"] == "Automation not found: ghost"
         sent = [c.args[0] for c in ws.send_command.call_args_list]
         assert "ha_mcp_tools/config_get" not in sent
 

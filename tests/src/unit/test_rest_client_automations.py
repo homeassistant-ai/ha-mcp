@@ -216,11 +216,9 @@ class TestUpsertAutomationConfigIdMismatch:
         result = await mock_client.upsert_automation_config(
             {"id": "AAA", "alias": "x", "trigger": [], "action": []},
             identifier="automation.foo",
-            operation="updated",
         )
 
         assert result["unique_id"] == "AAA"
-        assert result["operation"] == "updated"
         mock_client._request.assert_called_once()
         method, url = mock_client._request.call_args.args
         assert method == "POST"
@@ -308,9 +306,10 @@ class TestUpsertAutomationConfigIdMismatch:
         result = await mock_client.upsert_automation_config(
             {"alias": "x", "trigger": [], "action": []},
             identifier=None,
+            wait_for_entity=True,
         )
 
-        assert result["operation"] == "created"
+        assert result["unique_id"].isdigit()
         assert result["entity_id"] == "automation.new"
 
 
@@ -407,12 +406,13 @@ class TestUpsertAutomationResolvedShortCircuit:
             _resolved=True,
         )
 
-        assert result["operation"] == "created"
+        assert result["unique_id"].isdigit()
         mock_client._resolve_automation_id.assert_not_called()
 
 
-class TestUpsertAutomationOperation:
-    """The caller says whether a write creates or updates (#2903)."""
+class TestUpsertAutomationEntityWait:
+    """The caller decides whether a write waits for a new entity, and the tool
+    alone reports the operation (#2903)."""
 
     @pytest.fixture
     def mock_client(self):
@@ -425,25 +425,25 @@ class TestUpsertAutomationOperation:
             return client
 
     @pytest.mark.asyncio
-    async def test_a_fresh_explicit_id_is_reported_created_and_its_entity_found(
+    async def test_a_fresh_explicit_id_has_its_entity_found_when_asked(
         self, mock_client
     ):
-        """Guessing from the id reported a new automation as updated and
-        never looked for its entity."""
+        """Guessing from the id never looked for a new automation's entity."""
         result = await mock_client.upsert_automation_config(
-            {"alias": "x"}, "fresh_id", _resolved=True, operation="created"
+            {"alias": "x"}, "fresh_id", _resolved=True, wait_for_entity=True
         )
 
-        assert result["operation"] == "created"
         assert result["entity_id"] == "automation.fresh"
         mock_client._poll_for_automation_entity.assert_awaited_once_with("fresh_id")
 
     @pytest.mark.asyncio
-    async def test_without_an_operation_none_is_reported(self, mock_client):
-        """A caller that did not read the target (a backup restore) gets no
-        guessed operation."""
+    async def test_a_write_guesses_no_operation_and_waits_only_when_asked(
+        self, mock_client
+    ):
+        """A second owner of ``operation`` reported a guess the tool's own
+        reading could contradict; a backup restore waits for nothing."""
         result = await mock_client.upsert_automation_config(
-            {"alias": "x"}, "some_id", _resolved=True
+            {"alias": "x"}, identifier="some_id"
         )
 
         assert "operation" not in result
@@ -461,7 +461,7 @@ class TestUpsertAutomationOperation:
 
         with pytest.raises(HomeAssistantAPIError) as exc_info:
             await mock_client.upsert_automation_config(
-                {"alias": "x"}, "some_id", _resolved=True, operation="updated"
+                {"alias": "x"}, "some_id", _resolved=True
             )
 
         assert exc_info.value.status_code == 400

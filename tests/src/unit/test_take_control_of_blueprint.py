@@ -65,7 +65,6 @@ def mock_client():
             "unique_id": "abc123unique",
             "entity_id": _ID,
             "result": "ok",
-            "operation": "updated",
         }
     )
 
