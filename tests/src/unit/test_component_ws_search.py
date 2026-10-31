@@ -1978,8 +1978,8 @@ class TestRegistrationAndAdminGate:
             "ha_mcp_tools/statistics_units",
             wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
             wsapi.todo_items.WS_TODO_ITEM,  # test_component_todo_items.py
+            wsapi.automation_config.WS_AUTOMATION_CONFIG,
         }
-        # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
 
     @pytest.mark.parametrize("command", _ALL_COMMANDS)
