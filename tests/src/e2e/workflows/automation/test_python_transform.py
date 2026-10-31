@@ -364,13 +364,15 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_singular_root_keys_read_back_as_stored(mcp_client, ha_client):
-    """A config written with singular root keys reads back with them.
+async def test_legacy_keys_read_back_as_core_stores_them(mcp_client, ha_client):
+    """A config written with legacy keys reads back as Core stored it.
 
-    The tools return the body Core stores, so the hash is stable across reads
-    and python_transform edits the keys the automation actually has. A read
-    that rewrote the body (plural keys, a dropped ``platform``) would hand the
-    transform a config that differs from the stored one.
+    The tools no longer rewrite the body on either side. Core itself renames
+    the singular root keys and ``service`` while it validates the write (its
+    ``cv.renamed`` validators rename in place and the config view stores that
+    dict), but leaves a trigger's ``platform`` key alone. So the read shows
+    plural root keys, ``action`` and ``platform``; the hash is stable across
+    reads; and python_transform edits the body the automation actually has.
     """
     mcp = MCPAssertions(mcp_client)
 
@@ -378,10 +380,10 @@ async def test_singular_root_keys_read_back_as_stored(mcp_client, ha_client):
         "ha_config_set_automation",
         {
             "config": {
-                "alias": "Test Singular Keys",
+                "alias": "Test Legacy Keys",
                 "trigger": [{"platform": "time", "at": "17:00:00"}],
                 "action": [
-                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                    {"service": "light.turn_on", "target": {"entity_id": "light.test"}}
                 ],
             }
         },
@@ -396,22 +398,24 @@ async def test_singular_root_keys_read_back_as_stored(mcp_client, ha_client):
     )
     assert read1["config_hash"] == read2["config_hash"]
     stored = read1["config"]
-    assert stored["trigger"] == [{"platform": "time", "at": "17:00:00"}], stored
-    assert "triggers" not in stored and "actions" not in stored, stored
+    assert "trigger" not in stored and "action" not in stored, stored
+    assert stored["triggers"] == [{"platform": "time", "at": "17:00:00"}], stored
+    assert stored["actions"][0]["action"] == "light.turn_on", stored
+    assert "service" not in stored["actions"][0], stored
 
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
             "entity_id": entity_id,
             "config_hash": read1["config_hash"],
-            "python_transform": "config['action'][0]['data'] = {'brightness': 10}",
+            "python_transform": "config['actions'][0]['data'] = {'brightness': 10}",
         },
     )
     verify = await mcp.call_tool_success(
         "ha_config_get_automation", {"entity_id": entity_id}
     )
-    assert verify["config"]["action"][0]["data"] == {"brightness": 10}, verify
-    assert "actions" not in verify["config"], verify
+    assert verify["config"]["actions"][0]["data"] == {"brightness": 10}, verify
+    assert verify["config"]["triggers"][0]["platform"] == "time", verify
 
 
 @pytest.mark.asyncio

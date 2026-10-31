@@ -191,7 +191,7 @@ await mcp.call_tool("ha_config_get_script", {})
 await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 ```
 
-**Automation configs come back as Core stores them:** the automation tools send the config to Core as written and `ha_config_get_automation` returns Core's stored body verbatim, so a config written with singular `trigger`/`action` reads back singular and `python_transform` operates on that body. Core refuses a config that holds both forms of one key, so override `test_data_factory.automation_config`'s singular `trigger`/`action` defaults with the same singular keys, never the plural ones.
+**Automation configs come back as Core stores them:** the automation tools send the config to Core as written and `ha_config_get_automation` returns Core's stored body verbatim, so `python_transform` operates on that body. Core itself renames the singular root keys `trigger`/`condition`/`action` to the plural forms and `service` to `action` while validating a write (its `cv.renamed` validators rename in place and the config view stores that dict), and refuses a config holding both forms of one key; a trigger's `platform` key is kept. So a config written with singular keys reads back plural, and `test_data_factory.automation_config`'s singular `trigger`/`action` defaults must be overridden with the same singular keys, never the plural ones.
 
 **Poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
 ```python

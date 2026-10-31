@@ -25,6 +25,9 @@ from ha_mcp.tools.automation_errors import REJECTION_PREFIX
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
 from ._component_routing_helpers import make_ws, patch_ws
+from .test_ha_call_service_component_routing import (
+    _clear_caps_cache,  # noqa: F401 - autouse fixture shared across routing tests
+)
 
 _CAPS = {
     "schema_version": 1,
@@ -75,15 +78,6 @@ class Client:
         if msg["type"] == "validate_config":
             return {"success": True, "result": self.validate_config}
         return {"success": True, "result": []}
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
 
 
 async def _set(client: Client, caps: dict[str, Any], **kwargs: Any) -> dict[str, Any]:

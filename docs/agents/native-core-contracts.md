@@ -152,7 +152,10 @@ the first event of `trigger_platforms/subscribe` or
 `repairs/list_issues`, and references are not available. On both paths the
 config reaches Core as written and Core's text is never rewritten: no root
 key is pluralised, no alias or trigger key is required or renamed by the
-tool. The stored body comes from REST `GET /api/config/automation/config/<id>`,
+tool. Core does its own renaming while it validates a write (`cv.renamed`
+turns the singular root keys plural and `service` into `action`, in place,
+and the config view stores that dict), so a body written with legacy keys
+is stored and read back in Core's form; a trigger's `platform` key stays. The stored body comes from REST `GET /api/config/automation/config/<id>`,
 which Core reads under its mutation lock; WebSocket `automation/config`
 returns the entity's `raw_config`, which stays stale until the reload after
 a write completes. An `automation.x` entity_id resolves to its config id

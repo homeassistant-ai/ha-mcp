@@ -645,8 +645,8 @@ class TestAutomationLifecycle:
                 f"No configuration returned for complex automation {automation_entity}"
             )
 
-        # The stored body comes back as written: this config uses the
-        # singular root keys.
+        # Core stores the plural root keys even when the factory wrote the
+        # singular ones; read either form.
         triggers = config.get("triggers") or config.get("trigger", [])
         conditions = config.get("conditions") or config.get("condition", [])
         actions = config.get("actions") or config.get("action", [])
