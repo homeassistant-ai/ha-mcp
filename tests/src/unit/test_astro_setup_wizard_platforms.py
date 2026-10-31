@@ -76,7 +76,9 @@ def test_docker_stdio_command_passes_credentials_into_the_container(
     set on the client side stays with the docker CLI process."""
     config, _ = _stdio_output(setup_script, wizard_vars, client_id, "docker")
 
-    assert "docker run" in config, config
+    # Gemini CLI spells it `docker -- run ...`, so match the run flags, not "docker run".
+    assert "run --rm -i" in config, config
+    assert "ghcr.io/homeassistant-ai/ha-mcp:latest" in config, config
     assert "-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}" in config, config
     assert "-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}" in config, config
 
