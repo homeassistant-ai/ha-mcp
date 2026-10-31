@@ -25,6 +25,7 @@ runtime. The two seams verified:
 from __future__ import annotations
 
 import contextlib
+import sys
 from collections import Counter
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -37,10 +38,16 @@ from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from .test_component_ws_search import (
+    FakeArea,
+    FakeDevice,
+    FakeFloor,
     FakeHass,
+    FakeLabel,
     FakeRegEntry,
     FakeServices,
     FakeState,
+    _exceptions_stub,
+    _StubHomeAssistantError,
     make_view,
     wsapi,
 )
@@ -286,3 +293,40 @@ class TestReferenceDataContract:
         # The component path took no legacy REST fetch.
         assert component_client.get_services.await_count == 0
         assert component_client.get_states.await_count == 0
+
+    def test_targets_are_the_live_registry_ids(self, monkeypatch) -> None:
+        """Without them the validator could not tell a typo'd device, area,
+        floor or label id in a target from a real one."""
+        view = make_view(
+            areas=[FakeArea("kitchen", "Kitchen")],
+            floors=[FakeFloor("ground", "Ground")],
+            labels=[FakeLabel("night", "Night")],
+            devices=[FakeDevice("d1")],
+            child_devices=[FakeDevice("d1-hub-port")],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        got = wsapi._do_reference_data(self._hass(), {"include_targets": True})
+        assert {key: sorted(got[key]) for key in got if key.endswith("_ids")} == {
+            "entity_ids": ["light.a", "sensor.b"],
+            "device_ids": ["d1", "d1-hub-port"],
+            "area_ids": ["kitchen"],
+            "floor_ids": ["ground"],
+            "label_ids": ["night"],
+        }
+
+    def test_reply_keeps_its_shape_unless_targets_are_asked_for(self) -> None:
+        got = wsapi._do_reference_data(self._hass(), {})
+        assert set(got) == {"services", "entity_ids"}
+
+    def test_missing_target_registry_raises_instead_of_flagging_every_target(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
+        view = make_view()
+        view.floor = None
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_reference_data(self._hass(), {"include_targets": True})
+
+    def test_targets_are_advertised(self) -> None:
+        assert "reference_data_targets" in wsapi.CAPABILITIES
