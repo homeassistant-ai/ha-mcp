@@ -8,8 +8,9 @@ issue and the references Core's automation helpers find. Each helper returns
 ``None`` when the component did not answer, and the caller uses Core's
 REST/WebSocket API instead: the capability is absent, the command was not sent
 or got no answer, Core answered ``unknown_command``, the component failed, or
-it reported ``unavailable`` (a Core without the validator it calls). None of
-the three writes anything, so a lost answer falls back rather than raising.
+it reported ``unavailable`` (a Core import or part it needs is missing, or Core
+raised unexpectedly). None of the three writes anything, so a lost answer
+falls back rather than raising.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ CAPABILITY = "automation_config"
 async def _automation_config(
     client: Any, action: str, **fields: Any
 ) -> dict[str, Any] | None:
-    """The component's reply to one action; None when it gave none."""
+    """The component's reply to one action; None when it gave no usable one."""
     if not component_supports(await get_component_caps(client), CAPABILITY):
         return None
     try:
@@ -48,7 +49,9 @@ async def _automation_config(
             )
         return None
     reply = result.get("result")
-    return reply if isinstance(reply, dict) else None
+    if not isinstance(reply, dict) or reply.get("status") == "unavailable":
+        return None
+    return reply
 
 
 async def automation_validate(
@@ -56,9 +59,7 @@ async def automation_validate(
 ) -> dict[str, Any] | None:
     """Core's verdict on ``config`` as ``{status, error}``."""
     reply = await _automation_config(client, "validate", config=config)
-    if reply is None or reply.get("status") in (None, "unavailable"):
-        return None
-    return reply
+    return reply if reply is not None and reply.get("status") else None
 
 
 async def automation_describe(
