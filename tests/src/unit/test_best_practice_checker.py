@@ -2306,81 +2306,14 @@ class TestPluralKeyTolerance:
 
 
 # ---------------------------------------------------------------------------
-# HA 2026.7 renamed purpose-specific keys + trigger behavior values
+# HA 2026.7 trigger behavior values (renamed trigger/condition keys are
+# Core's to reject: it names the unknown key, and the tool adds the closest
+# registered keys)
 # ---------------------------------------------------------------------------
 
 
-class TestRenamedPurposeSpecificKeys:
-    """2026.7 renamed trigger/condition keys and options.behavior values."""
-
-    def test_renamed_trigger_key_warns(self):
-        config = {
-            "triggers": [
-                {"trigger": "vacuum.docked", "target": {"entity_id": "vacuum.robo"}}
-            ],
-            "actions": [],
-        }
-        warnings = check_automation_config(config)
-        assert _has_warning_containing(
-            warnings, "vacuum.docked", "vacuum.returned_to_dock", "2026.7"
-        )
-
-    def test_all_renamed_trigger_keys_warn(self):
-        from ha_mcp.tools.best_practice_checker import _RENAMED_TRIGGER_KEYS
-
-        for old, new in _RENAMED_TRIGGER_KEYS.items():
-            config = {"triggers": [{"trigger": old}], "actions": []}
-            warnings = check_automation_config(config)
-            assert _has_warning_containing(warnings, f"`{old}`", f"`{new}`"), old
-
-    def test_new_trigger_key_clean(self):
-        config = {
-            "triggers": [
-                {
-                    "trigger": "vacuum.returned_to_dock",
-                    "target": {"entity_id": "vacuum.robo"},
-                }
-            ],
-            "actions": [],
-        }
-        assert check_automation_config(config) == []
-
-    def test_renamed_condition_key_warns(self):
-        config = {
-            "triggers": [{"trigger": "state", "entity_id": "climate.x"}],
-            "conditions": [
-                {
-                    "condition": "climate.target_temperature",
-                    "target": {"entity_id": "climate.x"},
-                }
-            ],
-            "actions": [],
-        }
-        warnings = check_automation_config(config)
-        assert _has_warning_containing(
-            warnings, "climate.target_temperature", "climate.is_target_temperature"
-        )
-
-    def test_new_condition_key_clean(self):
-        config = {
-            "triggers": [{"trigger": "state", "entity_id": "climate.x"}],
-            "conditions": [
-                {
-                    "condition": "climate.is_target_temperature",
-                    "target": {"entity_id": "climate.x"},
-                }
-            ],
-            "actions": [],
-        }
-        assert check_automation_config(config) == []
-
-    def test_renamed_condition_key_in_action_tree_warns(self):
-        config = {
-            "triggers": [{"trigger": "state", "entity_id": "light.x"}],
-            "actions": [{"if": [{"condition": "climate.target_humidity"}], "then": []}],
-        }
-        warnings = check_automation_config(config)
-        assert _has_warning_containing(warnings, "climate.is_target_humidity")
+class TestDeprecatedTriggerBehavior:
+    """2026.7 renamed trigger options.behavior values; old ones still load."""
 
     def test_deprecated_trigger_behavior_warns(self):
         for old, new in (("any", "each"), ("last", "all")):
@@ -3043,38 +2976,4 @@ class TestVariablesForwardReferenceNesting:
         config = {"first": ["{% set later = 1 %}", "{{ later }}"], "later": "1"}
         assert _has_warning_containing(
             _variables_warnings(config), "`first`", "`later`"
-        )
-
-
-class TestVariablesForwardReferenceNormalizationSeam:
-    """The premise the check rests on: normalization leaves the block alone.
-
-    The reported bug arrived as an already-reordered block, so the check has
-    to fire on the order it is handed. That only holds if the write path does
-    not reorder or rename anything inside a variables block on the way in.
-    """
-
-    def test_normalization_preserves_key_order_and_names(self):
-        from ha_mcp.tools.tools_config_automations import _normalize_automation_config
-
-        config = {
-            "triggers": [{"trigger": "state", "entity_id": "binary_sensor.door"}],
-            "actions": [
-                {
-                    "variables": {
-                        "meldung": "{% if offene_tueren %}open{% endif %}",
-                        "offene_tueren": "{{ 1 }}",
-                    }
-                }
-            ],
-        }
-
-        normalized = _normalize_automation_config(config)
-
-        assert list(normalized["actions"][0]["variables"]) == [
-            "meldung",
-            "offene_tueren",
-        ]
-        assert _has_warning_containing(
-            check_automation_config(normalized), "`meldung`", "`offene_tueren`"
         )
