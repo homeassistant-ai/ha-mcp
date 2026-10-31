@@ -10,6 +10,7 @@ Kept out of ``test_backup_manager.py``, which is at its module-size baseline.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -18,13 +19,12 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import MandatoryBackupError
+from ha_mcp.tools import auto_backup
 from ha_mcp.tools.auto_backup import PathNotAllowedError, with_auto_backup
 from ha_mcp.tools.backup import _edits_diff, _edits_restore
 from ha_mcp.tools.backup_on_demand import capture_on_demand
 
 from .test_backup_manager import _StubClient, _StubSettings
-
-pytestmark = pytest.mark.asyncio
 
 READ_REFUSAL = "Path not allowed. Allowed paths: www/**, blueprints/**"
 
@@ -71,6 +71,7 @@ async def test_refused_path_write_reports_the_refusal(
     ("path", "offers_custom_path"),
     [
         ("pyscript/x.py", True),
+        ("/share/notes.md", True),
         ("/backup/x.txt", False),
         (".storage/auth", False),
     ],
@@ -80,7 +81,7 @@ async def test_custom_path_is_suggested_only_where_it_can_be_added(
 ) -> None:
     error = json.loads(str(PathNotAllowedError(path, READ_REFUSAL)))["error"]
 
-    assert ("Add it" in json.dumps(error)) is offers_custom_path
+    assert ("add it" in json.dumps(error)) is offers_custom_path
 
 
 class _StubManager:
@@ -126,6 +127,8 @@ async def test_snapshot_of_a_refused_path_says_the_live_file_is_unreadable(
     assert message.startswith(f"Cannot {action} 'file-x': its live file")
     assert payload["backup_name"] == "file-x"
     assert payload["path"] == "/backup/x.txt"
+    if action == "restore":
+        assert payload["data"]["apply_status"] == "not_applied"
 
 
 async def test_on_demand_capture_of_a_refused_path_reports_the_refusal() -> None:
@@ -137,3 +140,16 @@ async def test_on_demand_capture_of_a_refused_path_reports_the_refusal() -> None
     payload = _payload(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert payload["path"] == "/backup/x.txt"
+
+
+def test_suggestion_rules_match_the_component_allowlist() -> None:
+    # Loaded by file path: importing the package would need the HA stubs.
+    const_py = Path(__file__).parents[3] / "custom_components/ha_mcp_tools/const.py"
+    spec = importlib.util.spec_from_file_location("_component_const", const_py)
+    assert spec is not None and spec.loader is not None
+    const = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(const)
+
+    assert auto_backup._VOLUME_ROOTS == const.ALLOWED_VOLUME_ROOTS
+    assert auto_backup._DENY_SEGMENTS == const.DENY_PATH_SEGMENTS
+    assert auto_backup._DENY_BASENAMES == const.DENY_READ_BASENAMES

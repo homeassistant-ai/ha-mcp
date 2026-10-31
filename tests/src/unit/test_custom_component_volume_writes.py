@@ -9,6 +9,7 @@ sees. Kept out of ``test_custom_component_filesystem.py``, which is at its
 module-size baseline.
 """
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -45,11 +46,16 @@ def volume_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def mounts(monkeypatch: pytest.MonkeyPatch) -> set[Path]:
-    """The paths os.path.ismount reports as mount points; empty to start."""
-    mounted: set[Path] = set()
-    monkeypatch.setattr(volume_mounts.os.path, "ismount", lambda p: Path(p) in mounted)
+def mounts(monkeypatch: pytest.MonkeyPatch) -> set[str]:
+    """Mount points as /proc/self/mountinfo lists them, inside a container."""
+    mounted: set[str] = set()
+    monkeypatch.setattr(volume_mounts, "_in_container", lambda: True)
+    monkeypatch.setattr(volume_mounts, "_mount_points", lambda: mounted)
     return mounted
+
+
+def _mount(mounted: set[str], path: Path) -> None:
+    mounted.add(os.path.realpath(path))
 
 
 def _write(target: Path, tmp_path: Path) -> dict:
@@ -59,7 +65,7 @@ def _write(target: Path, tmp_path: Path) -> dict:
 
 
 def test_write_to_missing_volume_is_refused_not_faked(
-    volume_root: Path, mounts: set[Path], tmp_path: Path
+    volume_root: Path, mounts: set[str], tmp_path: Path
 ) -> None:
     result = _write(volume_root / "probe" / "x.txt", tmp_path)
 
@@ -68,7 +74,7 @@ def test_write_to_missing_volume_is_refused_not_faked(
 
 
 def test_write_to_unmounted_existing_volume_is_refused_not_faked(
-    volume_root: Path, mounts: set[Path], tmp_path: Path
+    volume_root: Path, mounts: set[str], tmp_path: Path
 ) -> None:
     # Container's /media is a plain directory in the image, not a mount.
     volume_root.mkdir()
@@ -80,10 +86,10 @@ def test_write_to_unmounted_existing_volume_is_refused_not_faked(
 
 
 def test_write_below_mounted_volume_still_creates_directories(
-    volume_root: Path, mounts: set[Path], tmp_path: Path
+    volume_root: Path, mounts: set[str], tmp_path: Path
 ) -> None:
     volume_root.mkdir()
-    mounts.add(volume_root)
+    _mount(mounts, volume_root)
     target = volume_root / "probe" / "x.txt"
 
     result = _write(target, tmp_path)
@@ -93,13 +99,43 @@ def test_write_below_mounted_volume_still_creates_directories(
 
 
 def test_write_into_a_bind_mount_below_the_volume_is_allowed(
-    volume_root: Path, mounts: set[Path], tmp_path: Path
+    volume_root: Path, mounts: set[str], tmp_path: Path
 ) -> None:
     # A user bind-mounts /media/music on Container; /media itself is not mounted.
     music = volume_root / "music"
     music.mkdir(parents=True)
-    mounts.add(music)
+    _mount(mounts, music)
     target = music / "x.txt"
+
+    result = _write(target, tmp_path)
+
+    assert result["is_new"] is True
+    assert target.read_text() == "x"
+
+
+def test_symlink_from_a_mount_into_an_unmounted_folder_is_refused(
+    volume_root: Path, mounts: set[str], tmp_path: Path
+) -> None:
+    # /media/music is mounted; /media/music/link -> /media/stale is not.
+    music, stale = volume_root / "music", volume_root / "stale"
+    music.mkdir(parents=True)
+    stale.mkdir()
+    _mount(mounts, music)
+    (music / "link").symlink_to(stale)
+
+    result = _write(music / "link" / "x.txt", tmp_path)
+
+    assert result == {"_error": "not_mounted", "parent": str(volume_root)}
+    assert list(stale.iterdir()) == []
+
+
+def test_core_install_writes_to_an_existing_plain_volume(
+    volume_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # No container: /share on a Core (venv) install is the host's own folder.
+    monkeypatch.setattr(volume_mounts, "_in_container", lambda: False)
+    volume_root.mkdir()
+    target = volume_root / "x.txt"
 
     result = _write(target, tmp_path)
 

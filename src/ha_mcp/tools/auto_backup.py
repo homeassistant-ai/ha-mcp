@@ -95,19 +95,29 @@ class PathNotAllowedError(ToolError):
         )
 
 
+# The component's volume roots and deny floor, which it doesn't publish to the
+# server on a refusal (custom_components/ha_mcp_tools/const.py: ALLOWED_VOLUME_
+# ROOTS, DENY_PATH_SEGMENTS, DENY_READ_BASENAMES). A unit test pins the copies.
+_VOLUME_ROOTS = ("/share", "/media", "/ssl")
+_DENY_SEGMENTS = frozenset({".storage"})
+_DENY_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
+
+
 def _custom_path_suggestions(path: str) -> list[str]:
     """Suggest a custom path only where the settings UI can accept one."""
     parts = path.lower().split("/")
-    if ".storage" in parts or parts[-1] in ("secrets.yaml", "approval_pin.json"):
+    if _DENY_SEGMENTS.intersection(parts) or parts[-1] in _DENY_BASENAMES:
         return ["This path is never available to the file tools"]
-    if path.startswith("/"):
+    if path.startswith("/") and not any(
+        path == root or path.startswith(root + "/") for root in _VOLUME_ROOTS
+    ):
         return [
-            "Custom filesystem paths accept absolute paths only under /share, "
-            "/media and /ssl; other absolute paths cannot be allowed"
+            "Custom filesystem paths accept absolute paths only under "
+            f"{', '.join(_VOLUME_ROOTS)}; this one cannot be allowed"
         ]
     return [
-        "Add it, or a folder above it, under Custom filesystem paths in the "
-        "ha-mcp settings UI"
+        "If it isn't listed already, add it or a folder above it under "
+        "Custom filesystem paths in the ha-mcp settings UI"
     ]
 
 
@@ -120,13 +130,16 @@ def path_refusal(err: BaseException) -> PathNotAllowedError | None:
 
 
 def raise_if_snapshot_path_refused(
-    err: BaseException, action: str, backup_name: str
+    err: BaseException, action: str, backup_name: str, data: Any = None
 ) -> None:
-    """Re-frame a refused live-file read during diff/restore/create of a snapshot.
+    """Re-frame a refused live-file read during a diff or restore of a snapshot.
 
     A snapshot of a path that is no longer allowed (a removed custom path, or
     any ``/backup`` path after #2875) can't be compared with or written back to
-    its live file. Say that, instead of the write-oriented path refusal.
+    its live file. Say that, instead of the write-oriented path refusal. A
+    restore passes its outcome as ``data``, so callers still see that nothing
+    was applied. (On-demand create has no snapshot yet and reports the plain
+    refusal.)
     """
     refusal = path_refusal(err)
     if refusal is None:
@@ -143,7 +156,11 @@ def raise_if_snapshot_path_refused(
             f"action='view', backup_name={backup_name!r}) to recover its content",
             *_custom_path_suggestions(refusal.path),
         ],
-        context={"backup_name": backup_name, "action": action},
+        context={
+            "backup_name": backup_name,
+            "action": action,
+            **({"data": data} if data is not None else {}),
+        },
     ) from None
 
 

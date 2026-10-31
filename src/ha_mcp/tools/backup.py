@@ -647,33 +647,32 @@ async def _edits_restore(
             )
         )
     except MandatoryBackupError as err:
-        # Its live file's path is no longer allowed: retrying can't help.
-        raise_if_snapshot_path_refused(err, "restore", bname)
         # A restore's mandatory pre-restore safety snapshot genuinely
         # failed — the overwrite was blocked, nothing changed. Same
         # fail-closed contract + error code as the @with_auto_backup write
         # path (#1579), so callers see one consistent failure mode.
+        not_applied = {
+            "restored_from": bname,
+            "safety_backup": None,
+            "apply_status": "not_applied",
+            "verification_status": "not_run",
+        }
+        # Its live file's path is no longer allowed: retrying can't help.
+        raise_if_snapshot_path_refused(err, "restore", bname, not_applied)
         logger.warning("Restore of %s blocked: %s", bname, err.safe_cause)
         raise_tool_error(
             create_error_response(
                 ErrorCode.BACKUP_CAPTURE_FAILED,
                 "Restore blocked: the pre-restore safety snapshot could not be "
                 f"captured ({err.safe_cause}). Nothing was changed.",
-                context={
-                    "backup_name": bname,
-                    "data": {
-                        "restored_from": bname,
-                        "safety_backup": None,
-                        "apply_status": "not_applied",
-                        "verification_status": "not_run",
-                    },
-                },
+                context={"backup_name": bname, "data": not_applied},
                 suggestions=err.suggestions
                 or ["Retry once the underlying issue is resolved"],
             )
         )
     except ToolError as err:
-        raise_if_snapshot_path_refused(err, "restore", bname)
+        outcome = getattr(err, "restore_outcome", None)
+        raise_if_snapshot_path_refused(err, "restore", bname, outcome)
         raise
     except Exception as err:  # noqa: BLE001
         # ``handler.restore`` is domain-specific and can surface HA-side

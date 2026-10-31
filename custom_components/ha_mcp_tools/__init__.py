@@ -1423,13 +1423,13 @@ def _write_file_sync(
     config_dir: Path,
 ) -> dict[str, Any]:
     """Bundle write_file blocking I/O for a single executor offload."""
-    exists = target_file.exists()
-    if exists and not overwrite:
-        return {"_error": "exists_no_overwrite"}
     # Never write into an unmounted volume (volume_mounts.py, #2875).
     root = _volume_root_for(posixpath.normpath(str(target_file)))
     if root is not None and not on_mounted_volume(target_file, root):
         return {"_error": "not_mounted", "parent": root}
+    exists = target_file.exists()
+    if exists and not overwrite:
+        return {"_error": "exists_no_overwrite"}
     if create_dirs:
         target_file.parent.mkdir(parents=True, exist_ok=True)
     elif not target_file.parent.exists():
