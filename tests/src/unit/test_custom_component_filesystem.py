@@ -1375,16 +1375,16 @@ class TestLoadAllowedPaths:
         return await comp._load_allowed_paths(hass)
 
     async def test_revalidates_and_drops_invalid_stored_entries(
-        self, monkeypatch, tmp_path
+        self, monkeypatch, tmp_path, caplog
     ):
-        # Traversal, deny-floor, non-string, and a duplicate are all dropped;
-        # the one valid entry survives (deduped).
-        result = await self._load(
-            monkeypatch,
-            tmp_path,
-            load_return={"paths": ["pyscript", "../etc", ".storage", "pyscript", 123]},
-        )
+        # Invalid, duplicate and pre-#2875 /backup entries: dropped and logged.
+        paths = ["pyscript", "../etc", ".storage", "pyscript", 123, "/backup/x"]
+        with caplog.at_level("WARNING"):
+            result = await self._load(
+                monkeypatch, tmp_path, load_return={"paths": paths}
+            )
         assert result == ["pyscript"]
+        assert "'/backup/x'" in caplog.text
 
     async def test_corrupt_store_load_fails_safe(self, monkeypatch, tmp_path):
         # A raising async_load (corrupt blob) must not propagate — fall back to [].
