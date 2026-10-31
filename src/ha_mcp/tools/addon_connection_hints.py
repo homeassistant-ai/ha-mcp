@@ -1,7 +1,29 @@
-"""Connection-failure guidance shared by app HTTP and WebSocket proxies."""
+"""Failure guidance for Supervisor calls and the app HTTP and WebSocket proxies."""
+
+from typing import Any
 
 from .._version import is_running_in_addon
 from ..client.rest_client import HomeAssistantClient
+from ..errors import ErrorCode
+
+_SUPERVISOR_AVAILABILITY_SUGGESTION = (
+    "Check Home Assistant connection and Supervisor availability"
+)
+_APP_SUPPORT_SUGGESTION = "Check that this installation supports apps (add-ons)."
+
+
+def add_supervisor_error_suggestions(error_details: dict[str, Any]) -> None:
+    """Add Supervisor guidance to a failed call's error; a refused token says
+    nothing about app support, so it gets none."""
+    code = str(error_details.get("code", ""))
+    if code == ErrorCode.RESOURCE_NOT_FOUND.value:
+        error_details["suggestion"] = _SUPERVISOR_AVAILABILITY_SUGGESTION
+        error_details["suggestions"] = [_SUPERVISOR_AVAILABILITY_SUGGESTION]
+    if not code.startswith("AUTH_"):
+        error_details["suggestions"] = [
+            *error_details.get("suggestions", []),
+            _APP_SUPPORT_SUGGESTION,
+        ]
 
 
 def addon_connection_failure_suggestions(

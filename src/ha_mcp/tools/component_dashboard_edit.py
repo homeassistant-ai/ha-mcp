@@ -14,7 +14,10 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .dashboard_edit_errors import raise_dashboard_edit_error
+from .dashboard_edit_errors import (
+    raise_dashboard_edit_error,
+    raise_dashboard_edit_unsent,
+)
 
 WS_DASHBOARD_EDIT = "ha_mcp_tools/dashboard_edit"
 _LOGGER = logging.getLogger(__name__)
@@ -148,7 +151,7 @@ async def edit_dashboard_via_component(
         _LOGGER.warning(
             "Unable to prepare the dashboard edit connection", exc_info=True
         )
-        raise_dashboard_edit_error(url_path, "load_failed", str(exc), False, action)
+        raise_dashboard_edit_unsent(exc, url_path, action, "load_failed")
 
     kwargs: dict[str, Any] = {"url_path": url_path}
     if expected_hash is not None:

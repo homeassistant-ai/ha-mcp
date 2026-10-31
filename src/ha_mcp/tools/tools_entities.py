@@ -2087,9 +2087,9 @@ class EntityTools:
         clearing the restored=true orphans an integration leaves behind after
         its filters change. Removals run sequentially and return:
           {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
-        where skipped = ids already absent (not-found is idempotent, not an
-        error). A lost connection stops the run; not_attempted lists the ids
-        left, safe to retry. Only single-id removal is auto-backed-up.
+        where skipped = ids already absent (not-found is idempotent). A lost connection
+        stops the run; not_attempted lists the ids never sent (the failing one too if
+        it never left), safe to retry. Only single-id removal is auto-backed-up.
 
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
