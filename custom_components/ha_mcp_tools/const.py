@@ -105,11 +105,12 @@ DENY_READ_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
 # read-only (supervisor/docker/homeassistant.py). /backup is not mounted into
 # Core; a write there would create the directory inside the container and
 # report success for a file that never reaches backup storage (issue #2875).
-# Container installs mount none of these, so writes refuse a root that does
-# not exist rather than create it. As with the config-relative list, a
-# configured volume grants BOTH read and write in this allowlist (on HAOS and
-# Supervised the OS still refuses writes under /ssl), and the non-overridable
-# deny floor (.storage / secrets.yaml) still applies.
+# A Container install has no Supervisor, so a root is there only if the user
+# bind-mounts it; writes require a mount point (volume_mounts.py). As with
+# the config-relative list, a configured volume grants BOTH read and write in
+# this allowlist (on HAOS and Supervised the OS still refuses writes under
+# /ssl), and the non-overridable deny floor (.storage / secrets.yaml) still
+# applies.
 ALLOWED_VOLUME_ROOTS = ("/share", "/media", "/ssl")
 
 # Files allowed for managed YAML editing

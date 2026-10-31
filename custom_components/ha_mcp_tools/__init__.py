@@ -62,6 +62,7 @@ from .const import (
 )
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
+from .volume_mounts import PARENT_ERRORS, on_mounted_volume
 from .websocket_api import async_register_commands
 from .yaml_rt import (
     apply_seq_indent,
@@ -756,8 +757,7 @@ def _normalize_volume_dir(entry: str) -> str | None:
     Returns the cleaned absolute path, or ``None`` if it is not at/under a known
     volume root or hits the deny floor. POSIX-normalized regardless of host OS
     (the roots are inherently POSIX and the component only runs on HA Core).
-    Existence is NOT required; a write refuses an unmounted root (/ssl, /share on
-    Container) rather than create it in the container layer (issue #2875).
+    Existence is NOT required; _write_file_sync checks the mount (issue #2875).
     """
     normalized = posixpath.normpath(entry)
     root = _volume_root_for(normalized)
@@ -1426,10 +1426,10 @@ def _write_file_sync(
     exists = target_file.exists()
     if exists and not overwrite:
         return {"_error": "exists_no_overwrite"}
-    # Never create a missing volume root (see _normalize_volume_dir, #2875).
+    # Never write into an unmounted volume (volume_mounts.py, #2875).
     root = _volume_root_for(posixpath.normpath(str(target_file)))
-    if root is not None and not os.path.isdir(root):
-        return {"_error": "no_parent", "parent": root}
+    if root is not None and not on_mounted_volume(target_file, root):
+        return {"_error": "not_mounted", "parent": root}
     if create_dirs:
         target_file.parent.mkdir(parents=True, exist_ok=True)
     elif not target_file.parent.exists():
@@ -3021,10 +3021,10 @@ def _build_write_file_handler(
                 "success": False,
                 "error": f"File already exists: {rel_path}. Set overwrite=true to replace.",
             }
-        if err_kind == "no_parent":
+        if err_kind in PARENT_ERRORS:
             return {
                 "success": False,
-                "error": f"Parent directory does not exist: {result['parent']}",
+                "error": PARENT_ERRORS[err_kind].format(result["parent"]),
             }
 
         size = result["size"]
