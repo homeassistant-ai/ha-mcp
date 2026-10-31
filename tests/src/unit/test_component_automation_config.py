@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import importlib
 import sys
+import types
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any
@@ -408,3 +409,40 @@ def test_command_is_admin_gated(
     connection = _FakeConnection()
     handler(FakeHass(), connection, msg)
     assert connection.results[1] == {"status": "ok", "error": None}
+
+
+def test_component_key_is_read_from_the_package_on_older_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core 2026.10 defines DATA_COMPONENT in the automation package and only
+    2026.11 moves it to automation.const; reading const alone left the lookup
+    "unavailable" on every 2026.10 install."""
+    components = types.ModuleType("homeassistant.components")
+    automation = types.ModuleType("homeassistant.components.automation")
+    automation.DATA_COMPONENT = "automation_component_key"
+    for name in ("entities", "devices", "areas", "floors", "labels"):
+        setattr(automation, f"{name}_in_automation", lambda hass, eid: set())
+    automation.blueprint_in_automation = lambda hass, eid: None
+    config = types.ModuleType("homeassistant.components.automation.config")
+    const = types.ModuleType("homeassistant.components.automation.const")
+    components.automation = automation
+    automation.config, automation.const = config, const
+    helpers = types.ModuleType("homeassistant.helpers")
+    for name in ("condition", "trigger", "entity_registry", "issue_registry"):
+        mod = types.ModuleType(f"homeassistant.helpers.{name}")
+        setattr(helpers, name, mod)
+        monkeypatch.setitem(sys.modules, f"homeassistant.helpers.{name}", mod)
+    for name, mod in {
+        "homeassistant.components": components,
+        "homeassistant.components.automation": automation,
+        "homeassistant.components.automation.config": config,
+        "homeassistant.components.automation.const": const,
+        "homeassistant.helpers": helpers,
+        "homeassistant.exceptions": _exceptions_stub,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    core = automation_config._core()
+
+    assert core is not None
+    assert core.component_key == "automation_component_key"
