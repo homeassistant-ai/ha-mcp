@@ -30,7 +30,7 @@ Single-file Astro page that drives the on-site setup flow. Both the metadata (wh
 const clientsData = [...]     // 21 supported AI clients
 const platformsData = [...]   // macOS / Linux / Windows / Docker
 const scopeData = [...]       // local / remote
-const stdioOnlyClients = [..] // need the fastmcp-remote bridge for HTTP
+const stdioOnlyClients = [..] // need the mcp-remote bridge for HTTP
 const remoteOnlyClients = [..]// cannot use a local endpoint, need public HTTPS
 ```
 

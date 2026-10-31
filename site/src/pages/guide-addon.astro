@@ -90,25 +90,28 @@ const withBase = (path: string) => {
           <h2 class="text-xl font-semibold text-white">Connect Claude Desktop</h2>
         </div>
         <div class="step-content">
-          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>fastmcp-remote</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">uvx</code>). That needs <strong>uv</strong> on the computer running Claude Desktop:</p>
-          <pre class="code-block mb-4"><code># macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>mcp-remote</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">npx</code>). That needs <strong>Node.js 18 or newer</strong> on the computer running Claude Desktop:</p>
+          <pre class="code-block mb-4"><code># macOS
+brew install node
 
 # Windows (PowerShell)
-winget install --id=astral-sh.uv -e</code></pre>
+winget install --id=OpenJS.NodeJS.LTS -e</code></pre>
+          <p class="text-slate-400 text-sm mb-4">On Linux, install Node.js from <a href="https://nodejs.org/en/download" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">nodejs.org</a> or your package manager.</p>
           <p class="text-slate-300 mb-2">Open Claude Desktop's config (<strong>Settings &rarr; Developer &rarr; Edit Config</strong>) and paste this, replacing the URL with the one from Step 3:</p>
           <pre class="code-block"><code>{`{
   "mcpServers": {
     "home-assistant": {
-      "command": "uvx",
+      "command": "npx",
       "args": [
-        "fastmcp-remote",
-        "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"
+        "-y",
+        "mcp-remote",
+        "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+        "--allow-http"
       ]
     }
   }
 }`}</code></pre>
-          <p class="text-slate-400 text-sm mt-3">Migrating from <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>? Switch to <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> using the configuration above, or follow the <a href="https://github.com/punkpeye/mcp-remote#usage" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">mcp-remote setup instructions</a>. For <code class="bg-slate-800 px-1 rounded">mcp-remote</code>, install Node.js and set <code class="bg-slate-800 px-1 rounded">"command": "npx"</code> with <code class="bg-slate-800 px-1 rounded">"args": ["-y", "mcp-remote", "YOUR_CONNECT_URL", "--allow-http"]</code> for a trusted LAN HTTP URL. We no longer recommend <code class="bg-slate-800 px-1 rounded">mcp-proxy</code> for connecting to ha-mcp.</p>
+          <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">--allow-http</code> lets mcp-remote reach a plain <code class="bg-slate-800 px-1 rounded">http://</code> URL on your local network; drop it if your URL starts with <code class="bg-slate-800 px-1 rounded">https://</code>. Migrating from <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>? Replace the whole server entry with the configuration above. We no longer recommend <code class="bg-slate-800 px-1 rounded">mcp-proxy</code> for connecting to ha-mcp.</p>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
             <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No token goes here.</strong> The app already handles authentication behind the secret path in the URL. Do <strong>not</strong> add <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>, <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>, or an <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; that is the local/stdio config, and pasting it alongside the app is a known cause of connection hangs.</p>
           </div>

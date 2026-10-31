@@ -720,31 +720,37 @@ class TestYamlDialects:
 
 
 class TestStdioBridgeChoice:
-    """Stdio-only clients get exactly ``fastmcp-remote <url>`` as their bridge.
+    """Stdio-only clients get exactly ``npx -y mcp-remote <url>`` as their bridge.
 
-    Before 0.13.0, mcp-proxy imported ``request_ctx`` from
-    ``mcp.server.lowlevel.server`` and declared an unbounded ``mcp>=``
-    dependency. ``uvx mcp-proxy`` then resolved mcp 2.x and died on an
-    ImportError before it connected (#2073). From 0.13.0 it caps ``mcp``
-    below 2, so it no longer breaks that way, but it cannot use SDK 2.x.
-    The wizard emits ``fastmcp-remote``, which pins
-    ``fastmcp-slim[client,server]==<its own version>``. That package
-    bounds ``mcp`` to a range, so the SDK cannot jump to a new major
-    without a new ``fastmcp-remote`` release.
+    mcp-remote refuses plain ``http://`` beyond loopback without
+    ``--allow-http``. LAN connect URLs are ``http://``, so the local scope
+    carries the flag; every remote path ends in HTTPS, so remote must not.
 
-    The guarded behaviour is the shape of the emitted config: the bridge
-    package first, then the connect URL, with no other bridge, flag or
-    SDK pin. A different bridge or a leftover ``--with`` pin fails here
-    even though ``uv`` would still install it without error.
+    The guarded behaviour is the exact emitted config: ``-y`` so ``npx``
+    never waits on an install prompt the client cannot answer, the bridge
+    package, the connect URL, and no other bridge, flag or ``env`` block.
 
     Every stdio-only client is covered. The list comes from the real
     ``stdioOnlyClients`` data rather than being hardcoded here.
     """
 
     @pytest.mark.parametrize("client_id", BRIDGE_CLIENT_IDS, ids=BRIDGE_CLIENT_IDS)
-    def test_stdio_bridge_config_is_fastmcp_remote_with_connect_url(
+    @pytest.mark.parametrize(
+        ("scope_clicks", "expected_flags"),
+        [
+            pytest.param(_click("scope", "local"), ["--allow-http"], id="lan"),
+            pytest.param(
+                _click("scope", "remote") + _click("remote-path", "webhook-proxy"),
+                [],
+                id="remote",
+            ),
+        ],
+    )
+    def test_stdio_bridge_config_is_mcp_remote_with_connect_url(
         self,
         client_id: str,
+        scope_clicks: str,
+        expected_flags: list[str],
         setup_script: str,
         prelude: str,
         wizard_vars: dict[str, Any],
@@ -759,7 +765,7 @@ class TestStdioBridgeChoice:
             invoke=(
                 _click("server-method", "ha-addon")
                 + _click("client", client_id)
-                + _click("scope", "local")
+                + scope_clicks
                 + _click("platform", "macos")
                 + "document.body.dataset.configCode = "
                 "document.querySelector('#config-output code').textContent || '';\n"
@@ -772,17 +778,11 @@ class TestStdioBridgeChoice:
         # emitted JSON comes back as `&quot;`. Parse the args out of the
         # unescaped text rather than substring-matching quoted fragments.
         config = json.loads(match.group(1).replace("&quot;", '"'))
-        args = config["mcpServers"]["home-assistant"]["args"]
-
-        # The bridge takes exactly [package, url]. The package comes first
-        # (reversed, uvx would treat the URL as the package), with no other
-        # bridge, flag or SDK pin. The URL is the `{{MCP_SERVER_URL}}`
-        # placeholder, which the setup page tells the user to replace with
-        # their connect URL, so a config without it would be unusable.
-        assert args == ["fastmcp-remote", "{{MCP_SERVER_URL}}"], (
-            f"{client_id}: expected exactly [fastmcp-remote, connect URL "
-            f"placeholder]; args={args}"
-        )
+        server = config["mcpServers"]["home-assistant"]
+        expected_args = ["-y", "mcp-remote", "{{MCP_SERVER_URL}}", *expected_flags]
+        # The URL is the `{{MCP_SERVER_URL}}` placeholder the setup page tells
+        # the user to replace, so a config without it would be unusable.
+        assert server == {"command": "npx", "args": expected_args}, client_id
 
     @pytest.mark.parametrize(
         ("client_id", "expects_panel"),
@@ -802,7 +802,7 @@ class TestStdioBridgeChoice:
         bridge. JetBrains and Zed both have native Streamable HTTP support
         (JetBrains via a bare-url mcpServers entry, Zed via its own
         ``context_servers`` entry) and so must show neither the "install
-        fastmcp-remote" panel nor a bridge command in the emitted config.
+        mcp-remote" panel nor a bridge command in the emitted config.
         Showing one without the other is the regression this pins.
         """
         assert (client_id in wizard_vars["stdioOnlyClients"]) is expects_panel, (
@@ -838,14 +838,14 @@ class TestStdioBridgeChoice:
         assert config_match is not None, "config-output was not captured"
         config_text = config_match.group(1).replace("&quot;", '"')
 
-        mentions_bridge = "fastmcp-remote" in instructions
+        mentions_bridge = "mcp-remote" in instructions
         assert mentions_bridge is expects_panel, (
             f"{client_id}: bridge instructions present={mentions_bridge}, "
             f"expected={expects_panel}; instructions={instructions[:400]!r}"
         )
         # The panel and the config have to tell the same story: a client told to
         # install the bridge must get a config that runs it, and vice versa.
-        assert ("fastmcp-remote" in config_text) is expects_panel, (
+        assert ("mcp-remote" in config_text) is expects_panel, (
             f"{client_id}: config and bridge instructions disagree; "
             f"config={config_text[:400]!r}"
         )

@@ -28,7 +28,7 @@ const clientsData = [
     "configLocation": "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\nWindows (traditional installer): %APPDATA%\\Claude\\claude_desktop_config.json\nWindows (Microsoft Store): path varies by package — see the Windows setup guide for a detection snippet\n",
     "accuracy": 5,
     "order": 1,
-    "httpNote": "Use fastmcp-remote for HTTP connections (see Network/Remote setup)",
+    "httpNote": "Use mcp-remote for HTTP connections (see Network/Remote setup)",
   },
   {
     "id": "claude-code",
@@ -274,7 +274,7 @@ const scopeData: { id: string; name: string; description: string; icon: IconName
 
 // Client transport capabilities for filtering
 // stdio-only: clients that genuinely cannot speak HTTP directly and need the
-// fastmcp-remote bridge for HTTP connections. JetBrains and Zed both added
+// mcp-remote bridge for HTTP connections. JetBrains and Zed both added
 // native Streamable HTTP support (confirmed against jetbrains.com/help and
 // zed.dev/docs; #1470 fixed the same class of stale classification for
 // Codex) and so are handled by their own JSON-native branches below instead.
@@ -1055,7 +1055,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
 
   // The platform step only appears when OS-specific commands are needed:
   // stdio-local (always), the uvx server host OS, or an HTTP method whose
-  // client is stdio-only (uv install on the client machine for the bridge).
+  // client is stdio-only (Node.js install on the client machine for the bridge).
   function needsPlatform() {
     if (state.method === 'stdio-local') return true;
     if (state.method === 'uvx') return true;
@@ -1069,7 +1069,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
   }
 
   // Helper to check if client cannot speak HTTP directly and needs the
-  // fastmcp-remote bridge for HTTP connections.
+  // mcp-remote bridge for HTTP connections.
   function isStdioOnly(clientId) {
     return stdioOnlyClients.includes(clientId);
   }
@@ -1463,39 +1463,39 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
       }
     }
 
-    // Platform instructions (uvx installation or Docker) - shown only when the
+    // Platform instructions (uv, Node.js or Docker) - shown only when the
     // platform step ran (stdio run OS, uvx server OS, or bridge client OS).
     const platformId = derivedPlatform;
     const isDockerPlatform = platformId === 'docker';
 
     if (isDockerPlatform && isLocal) {
-      // Docker platform instructions
       instructions.push(`<div class="instruction-block">
         <h3 class="instruction-title">Docker Required</h3>
         <p class="text-slate-300">Make sure Docker or Docker Desktop is installed and running.</p>
       </div>`);
-    } else if (platformId && !isDockerPlatform && (isLocal || derivedDeployment === 'uvx' || needsStdioBridge)) {
-      let uvInstall = '';
-      if (platformId === 'macos') {
-        uvInstall = `<div class="instruction-block">
-          <h3 class="instruction-title">Install uv (macOS)</h3>
-          <pre class="code-block"><code>brew install uv</code></pre>
-          <p class="text-xs text-slate-400 mt-2">Or: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></p>
-        </div>`;
-      } else if (platformId === 'linux') {
-        uvInstall = `<div class="instruction-block">
-          <h3 class="instruction-title">Install uv (Linux)</h3>
-          <pre class="code-block"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
-          <p class="text-xs text-slate-400 mt-2">Or via your package manager: <code>pacman -S uv</code> (Arch), <code>apk add uv</code> (Alpine)</p>
-        </div>`;
-      } else if (platformId === 'windows') {
-        uvInstall = `<div class="instruction-block">
-          <h3 class="instruction-title">Install uv (Windows)</h3>
-          <pre class="code-block"><code>winget install --id=astral-sh.uv -e</code></pre>
-        </div>`;
-      }
-      if (uvInstall) {
-        instructions.push(uvInstall);
+    } else if (platformId && !isDockerPlatform) {
+      // [tool, needed, {os: [command, note HTML]}]; an empty command shows the note alone.
+      const nodeNote = 'mcp-remote needs Node.js 18 or newer; <a href="https://nodejs.org/en/download" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">nodejs.org</a> has installers for every OS.';
+      const installs = [
+        ['uv', isLocal || derivedDeployment === 'uvx', {
+          macos: ['brew install uv', 'Or: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code>'],
+          linux: ['curl -LsSf https://astral.sh/uv/install.sh | sh', 'Or via your package manager: <code>pacman -S uv</code> (Arch), <code>apk add uv</code> (Alpine)'],
+          windows: ['winget install --id=astral-sh.uv -e', ''],
+        }],
+        ['Node.js', needsStdioBridge, {
+          macos: ['brew install node', nodeNote],
+          linux: ['', `${nodeNote} Distribution packages can be older, so check with <code>node --version</code>.`],
+          windows: ['winget install --id=OpenJS.NodeJS.LTS -e', nodeNote],
+        }],
+      ];
+      for (const [tool, needed, byOs] of installs) {
+        const [cmd, note] = byOs[platformId] || [];
+        if (!needed || cmd === undefined) continue;
+        instructions.push(`<div class="instruction-block">
+          <h3 class="instruction-title">Install ${tool} (${state.platform.name})</h3>
+          ${cmd ? `<pre class="code-block"><code>${cmd}</code></pre>` : ''}
+          ${note ? `<p class="text-xs text-slate-400 mt-2">${note}</p>` : ''}
+        </div>`);
       }
     }
 
@@ -1861,9 +1861,9 @@ ingress:
     if (needsStdioBridge) {
       const stdioBridgeInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
         <h3 class="instruction-title text-yellow-300">stdio Bridge Required</h3>
-        <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use fastmcp-remote to connect to HTTP servers:</p>
-        <pre class="code-block"><code># fastmcp-remote is run automatically via uvx in the config below</code></pre>
-        <p class="text-xs text-slate-400 mt-2">fastmcp-remote is the stdio bridge published by the FastMCP project. If you previously used mcp-proxy, replace the whole server entry with the config below (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">migration details</a>).</p>
+        <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-remote to connect to HTTP servers:</p>
+        <pre class="code-block"><code># mcp-remote is run automatically via npx in the config below</code></pre>
+        <p class="text-xs text-slate-400 mt-2">mcp-remote needs Node.js 18 or newer on this computer.${isNetwork ? ' The <code>--allow-http</code> flag lets it reach a plain <code>http://</code> URL on your local network; drop it if your URL starts with <code>https://</code>.' : ''} If you previously used another bridge, replace the whole server entry with the config below (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">migration details</a>).</p>
       </div>`;
       instructions.push(stdioBridgeInstr);
     }
@@ -2008,14 +2008,14 @@ ingress:
           }, null, 2);
         }
       } else if (needsStdioBridge) {
-        // Match upstream's `uvx fastmcp-remote <url>` example. The bridge
-        // defaults to Streamable HTTP and manages its own dependencies;
-        // do not carry over SDK pins or transport flags from older bridges.
+        // mcp-remote refuses plain HTTP to anything but loopback unless
+        // --allow-http is passed. LAN endpoints are http://; every remote
+        // path ends in an HTTPS front-end, so the flag stays off there.
         config = JSON.stringify({
           mcpServers: {
             "home-assistant": {
-              command: "uvx",
-              args: ["fastmcp-remote", mcpUrl]
+              command: "npx",
+              args: ["-y", "mcp-remote", mcpUrl, ...(isNetwork ? ["--allow-http"] : [])]
             }
           }
         }, null, 2);
@@ -2224,7 +2224,7 @@ ingress:
               <li>Click <strong>Manage MCP Servers</strong> at the top</li>
               <li>Click <strong>View raw config</strong> to edit <code class="bg-slate-800 px-1 rounded">mcp_config.json</code></li>
             </ol>
-            ${!isStdio ? `<p class="mt-2 text-amber-400"><strong>Note:</strong> Antigravity's built-in HTTP client can fail with <code class="bg-slate-800 px-1 rounded">sending "subscriptions/listen": … session not found</code>, "connection closed", or "SSE stream failed to reconnect" errors — if you hit those, connect through the <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> stdio bridge instead (<a href="${base}/faq#antigravity-troubleshooting" class="text-blue-400 hover:underline">details</a>).</p>` : ''}
+            ${!isStdio ? `<p class="mt-2 text-amber-400"><strong>Note:</strong> Antigravity's built-in HTTP client can fail with <code class="bg-slate-800 px-1 rounded">sending "subscriptions/listen": … session not found</code>, "connection closed", or "SSE stream failed to reconnect" errors — if you hit those, connect through the <code class="bg-slate-800 px-1 rounded">mcp-remote</code> stdio bridge instead (<a href="${base}/faq#antigravity-troubleshooting" class="text-blue-400 hover:underline">details</a>).</p>` : ''}
           </div>
         </div>`);
       }
