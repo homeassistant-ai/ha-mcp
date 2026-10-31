@@ -5,11 +5,10 @@ todo services and reads the stored rows back from the list entity.
 ``todo_item`` returns ``None`` when the component did not run the action, so
 the caller uses Core's WebSocket commands instead: the capability is absent,
 the command was not sent, Core answered ``unknown_command``, or the component
-lacks Core's todo parts. A token rejected on the capability probe or on the
-command raises instead, since those commands would resend the token. A
-reply with ``success: False`` is the component's refusal: a check before the
-write, or Core's schema or validation error after which the list's rows were
-unchanged.
+lacks Core's todo parts. A command not sent because the token was rejected
+raises instead, since those commands would resend the token. A reply with
+``success: False`` is the component's refusal: a check before the write, or
+Core's schema or validation error after which the list's rows were unchanged.
 The one exception is ``move_failed``: the update was applied and the move
 after it failed, as its message says.
 """
@@ -28,7 +27,6 @@ from .component_api import (
     component_supports,
     get_component_caps,
     invalidate_caps,
-    probe_token_rejection,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 
@@ -52,15 +50,9 @@ async def todo_item(
     """The component's reply to one action on ``entity_id``; None when it did
     not run it. A sent command that got no answer, or that the component
     failed to answer, raises ``HomeAssistantError``: a write's outcome is then
-    unknown. A command not sent because the token was rejected, on the
-    capability probe or on the command, raises ``HomeAssistantCommandNotSent``."""
-    caps = await get_component_caps(client)
-    if (rejection := probe_token_rejection(client)) is not None:
-        # Core's WebSocket commands would resend the rejected token.
-        raise HomeAssistantCommandNotSent(rejection) from HomeAssistantAuthError(
-            rejection
-        )
-    if not component_supports(caps, CAPABILITY):
+    unknown. A command not sent because the token was rejected raises
+    ``HomeAssistantCommandNotSent``."""
+    if not component_supports(await get_component_caps(client), CAPABILITY):
         return None
     try:
         result = await client.send_websocket_message(
