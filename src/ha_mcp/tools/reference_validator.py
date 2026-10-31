@@ -16,7 +16,10 @@ Intentional limits (documented, not bugs):
 - **``device_id`` / ``area_id`` / ``floor_id`` / ``label_id``** are checked
   only when the component's ``reference_data`` carries the registry ids
   (capability ``reference_data_targets``). Without them only services and
-  entities are checked.
+  entities are checked, and the kinds left unchecked are reported as
+  ``unchecked_target_kinds``.
+- **Match sentinels** (Core's ``none`` / ``all`` in place of an id) are
+  skipped when the component's ``reference_data`` names them.
 
 Background: #940 (hallucinated ``notify.mobile_app_andrew_phone`` that
 ``ha_config_set_automation`` accepted silently).
@@ -26,11 +29,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from .component_config_reads import fetch_reference_data_via_component
 
 logger = logging.getLogger(__name__)
+
+RefKind = Literal["service", "entity", "device", "area", "floor", "label"]
 
 # Keys whose value (literal string) names a Home Assistant service in
 # the form ``<domain>.<service_name>``. Both legacy (``service:``) and
@@ -42,7 +47,7 @@ _SERVICE_KEYS: frozenset[str] = frozenset({"service", "action"})
 # ref kind it is checked as. These appear in triggers, conditions, ``target:``
 # blocks, and service ``data:`` blocks — the walker is depth-agnostic so the
 # location doesn't matter.
-_REFERENCE_KEYS: dict[str, str] = {
+_REFERENCE_KEYS: dict[str, RefKind] = {
     "entity_id": "entity",
     "device_id": "device",
     "area_id": "area",
@@ -51,7 +56,7 @@ _REFERENCE_KEYS: dict[str, str] = {
 }
 
 # ``reference_data`` reply key holding each target kind's registry ids.
-_TARGET_ID_KEYS: dict[str, str] = {
+_TARGET_ID_KEYS: dict[RefKind, str] = {
     "device": "device_ids",
     "area": "area_ids",
     "floor": "floor_ids",
@@ -64,7 +69,7 @@ class ExtractedRef(TypedDict):
 
     path: str
     value: str
-    kind: str  # "service" | "entity" | "device" | "area" | "floor" | "label"
+    kind: RefKind
 
 
 class WalkerResult(TypedDict):
@@ -80,7 +85,7 @@ class ValidationWarning(TypedDict):
 
     path: str
     value: str
-    kind: str
+    kind: RefKind
     reason: str
 
 
@@ -100,7 +105,7 @@ def _extract_service_ref(
 def _extract_registry_refs(
     sub_path: str,
     value: Any,
-    kind: str,
+    kind: RefKind,
     refs: list[ExtractedRef],
     unvalidated_templates: list[int],
 ) -> bool:
@@ -225,17 +230,21 @@ def check_refs(
     refs: list[ExtractedRef],
     service_index: dict[str, set[str]],
     entity_set: set[str],
-    target_ids: dict[str, set[str]] | None = None,
+    target_ids: dict[RefKind, set[str]] | None = None,
+    sentinels: frozenset[str] = frozenset(),
 ) -> list[ValidationWarning]:
     """Return one warning per ref that isn't in the registry.
 
     A device / area / floor / label ref is checked only when ``target_ids``
-    holds that kind's registry ids.
+    holds that kind's registry ids. A ref whose value is one of Core's match
+    ``sentinels`` is never a missing item.
     """
     target_ids = target_ids or {}
     warnings: list[ValidationWarning] = []
     for ref in refs:
         value = ref["value"]
+        if value in sentinels:
+            continue
         if ref["kind"] == "service":
             domain, _, service_name = value.partition(".")
             if (
@@ -289,6 +298,10 @@ async def validate_config_references(
       walker
     - ``blueprint_skipped`` - bool, True iff the root config uses
       ``use_blueprint``
+
+    plus ``unchecked_target_kinds`` (sorted kinds the config references but
+    no registry ids were available for) when there are any, and
+    ``references_unchecked`` (the fetch error) when the fetch failed.
     """
     walker_result = extract_refs(config)
 
@@ -311,13 +324,16 @@ async def validate_config_references(
         reference_data = await fetch_reference_data_via_component(
             client, include_targets=True
         )
-        target_ids: dict[str, set[str]] = {}
+        target_ids: dict[RefKind, set[str]] = {}
+        sentinels: frozenset[str] = frozenset()
         if reference_data is not None:
             target_ids = {
                 kind: set(reference_data[key])
                 for kind, key in _TARGET_ID_KEYS.items()
                 if isinstance(reference_data.get(key), list)
             }
+            if isinstance(reference_data.get("match_sentinels"), list):
+                sentinels = frozenset(reference_data["match_sentinels"])
             services_payload = reference_data["services"]
             states_payload = [
                 {"entity_id": eid} for eid in reference_data["entity_ids"]
@@ -327,7 +343,7 @@ async def validate_config_references(
                 client.get_services(),
                 client.get_states(),
             )
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Reference validator: failed to fetch service/entity registries; "
             "skipping validation for this call"
@@ -336,6 +352,7 @@ async def validate_config_references(
             "warnings": [],
             "unvalidated_templates": walker_result["unvalidated_templates"],
             "blueprint_skipped": False,
+            "references_unchecked": str(exc) or type(exc).__name__,
         }
 
     # Index-building stays OUTSIDE the fetch try so a builder exception
@@ -343,10 +360,22 @@ async def validate_config_references(
     # swallows registry-fetch failures only.
     service_index = build_service_index(services_payload)
     entity_set = build_entity_set(states_payload)
-    warnings = check_refs(walker_result["refs"], service_index, entity_set, target_ids)
+    warnings = check_refs(
+        walker_result["refs"], service_index, entity_set, target_ids, sentinels
+    )
 
-    return {
+    result: dict[str, Any] = {
         "warnings": warnings,
         "unvalidated_templates": walker_result["unvalidated_templates"],
         "blueprint_skipped": False,
     }
+    unchecked = sorted(
+        {
+            ref["kind"]
+            for ref in walker_result["refs"]
+            if ref["kind"] in _TARGET_ID_KEYS and ref["kind"] not in target_ids
+        }
+    )
+    if unchecked:
+        result["unchecked_target_kinds"] = unchecked
+    return result

@@ -183,8 +183,9 @@ def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str,
     present) substrate still returns its empty result.
 
     ``include_targets`` adds ``device_ids`` / ``area_ids`` / ``floor_ids`` /
-    ``label_ids``, the ids a ``target`` may name; a missing registry raises
-    for the same reason.
+    ``label_ids``, the ids a ``target`` may name, and ``match_sentinels``, the
+    values Core accepts there in place of an id; a missing registry raises for
+    the same reason.
     """
     include_states = params.get("include_states", True)
     if not isinstance(
@@ -210,6 +211,8 @@ def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str,
 
 
 def _target_ids(hass: HomeAssistant) -> dict[str, list[str]]:
+    from homeassistant.const import ENTITY_MATCH_ALL, ENTITY_MATCH_NONE
+
     view = _resolve_registries(hass)
     for name in ("device", "area", "floor", "label"):
         if getattr(view, name) is None:
@@ -220,7 +223,9 @@ def _target_ids(hass: HomeAssistant) -> dict[str, list[str]]:
         "floor_ids": (_all_floor_entries, "floor_id"),
         "label_ids": (_all_label_entries, "label_id"),
     }
-    return {
+    ids = {
         key: [ident for entry in read(view) if (ident := getattr(entry, attr, None))]
         for key, (read, attr) in readers.items()
     }
+    ids["match_sentinels"] = [ENTITY_MATCH_NONE, ENTITY_MATCH_ALL]
+    return ids

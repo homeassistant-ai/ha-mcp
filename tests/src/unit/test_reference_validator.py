@@ -478,7 +478,8 @@ class TestValidateConfigReferences:
 
     @pytest.mark.anyio
     async def test_registry_fetch_failure_is_swallowed(self, caplog):
-        """A broken client must never break the automation write path."""
+        """A broken client must never break the automation write path, and an
+        empty warning list must not read as every reference checked."""
         config = {"action": [{"service": "light.turn_on"}]}
         client = AsyncMock()
         # Credential-less → legacy gather path (the broken get_services below).
@@ -489,6 +490,7 @@ class TestValidateConfigReferences:
         with caplog.at_level("ERROR"):
             result = await validate_config_references(client, config)
         assert result["warnings"] == []
+        assert result["references_unchecked"] == "boom"
         assert any("validator" in rec.message.lower() for rec in caplog.records)
 
     @pytest.mark.anyio

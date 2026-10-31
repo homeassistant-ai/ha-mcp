@@ -252,6 +252,16 @@ class TestReferenceDataContract:
             "label_ids": ["night"],
         }
 
+    def test_targets_carry_cores_match_sentinels(self, monkeypatch) -> None:
+        """Core accepts ``none`` / ``all`` in a target, and the validator warned
+        that no area "none" exists; the values come from Core, not a copy."""
+        const = sys.modules["homeassistant.const"]
+        monkeypatch.setattr(const, "ENTITY_MATCH_NONE", "core-none", raising=False)
+        monkeypatch.setattr(const, "ENTITY_MATCH_ALL", "core-all", raising=False)
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        got = wsapi._do_reference_data(self._hass(), {"include_targets": True})
+        assert got["match_sentinels"] == ["core-none", "core-all"]
+
     def test_reply_keeps_its_shape_unless_targets_are_asked_for(self) -> None:
         got = wsapi._do_reference_data(self._hass(), {})
         assert set(got) == {"services", "entity_ids"}
