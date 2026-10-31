@@ -21,6 +21,7 @@ enabled here only to SEED a package file to then discover.
 Tests are designed for the Docker Home Assistant test environment.
 """
 
+import json
 import logging
 import os
 from typing import Any
@@ -200,6 +201,28 @@ class TestYamlReadTagPreservation:
         match = data["matches"][0]
         assert "!include automations.yaml" in match["content"]
         assert match["parsed"] == "!include automations.yaml"
+
+    async def test_input_tag_not_resolved(self, mcp_client):
+        """Blueprint ``!input`` markers survive into the parsed view.
+
+        The staged motion-light blueprint uses ``!input motion_entity``. A
+        tag the component's loader did not register reached ``yaml_jsonify``
+        as ruamel's generic scalar and came back as a bare value, dropping
+        the tag from ``include_parsed`` results.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "actions",
+                    "file": ("blueprints/automation/homeassistant/motion_light.yaml"),
+                    "include_parsed": True,
+                },
+            )
+
+        match = data["matches"][0]
+        assert "!input motion_entity" in match["content"]
+        assert "!input motion_entity" in json.dumps(match["parsed"])
 
 
 @pytest.mark.filesystem
