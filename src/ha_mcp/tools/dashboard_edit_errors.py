@@ -115,14 +115,14 @@ def raise_dashboard_edit_unsent(
     exc: Exception, url_path: str | None, action: str, reason: str
 ) -> NoReturn:
     """Raise for an edit that failed before anything was sent; a token rejected
-    on connect (the error itself or its ``__cause__``) reports its AUTH_* code
-    instead of the code ``reason`` maps to. A failed capability probe arrives as
-    a ``ComponentDiscoveryError`` without a cause and keeps ``reason``'s code."""
-    if isinstance(exc, HomeAssistantAuthError) or isinstance(
-        exc.__cause__, HomeAssistantAuthError
-    ):
+    on connect (the error itself or its ``__cause__``) is reported as that auth
+    error instead of under the code ``reason`` maps to. That includes a token
+    rejected on this call's capability probe; a probe failure cached by an
+    earlier call arrives without a cause and keeps ``reason``'s code."""
+    auth = exc if isinstance(exc, HomeAssistantAuthError) else exc.__cause__
+    if isinstance(auth, HomeAssistantAuthError):
         exception_to_structured_error(
-            exc,
+            auth,
             context={
                 "action": action,
                 "url_path": url_path,
