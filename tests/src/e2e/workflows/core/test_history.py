@@ -95,9 +95,15 @@ class TestGetHistory:
         """Test various relative time formats."""
         logger.info("Testing ha_get_history relative time formats")
 
-        time_formats = ["1h", "2h", "12h", "1d", "7d"]
+        time_formats = {
+            "1h": timedelta(hours=1),
+            "2h": timedelta(hours=2),
+            "12h": timedelta(hours=12),
+            "1d": timedelta(days=1),
+            "7d": timedelta(days=7),
+        }
 
-        for time_format in time_formats:
+        for time_format, window in time_formats.items():
             result = await mcp_client.call_tool(
                 "ha_get_history",
                 {
@@ -108,8 +114,12 @@ class TestGetHistory:
             )
 
             data = assert_mcp_success(result, f"History for start_time={time_format}")
-            entities = data.get("data", data)["entities"]
-            assert [e["entity_id"] for e in entities] == ["sun.sun"]
+            inner_data = data.get("data", data)
+            assert [e["entity_id"] for e in inner_data["entities"]] == ["sun.sun"]
+            # Without end_time the window ends at the same "now" it starts from.
+            period = inner_data["period"]
+            start = datetime.fromisoformat(period["start"])
+            assert datetime.fromisoformat(period["end"]) - start == window
 
     async def test_get_history_multiple_entities(self, mcp_client):
         """Test retrieving history for multiple entities."""
