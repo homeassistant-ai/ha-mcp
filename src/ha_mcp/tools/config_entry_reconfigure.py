@@ -26,11 +26,8 @@ from .config_entry_flow import (
     _reject_redaction_sentinels,
     refuse_component_entry,
 )
-from .config_entry_flow_walker import (
-    POST_COMMIT_STATUSES,
-    ReconfigureStatus,
-    _handle_flow_steps,
-)
+from .config_entry_flow_errors import ReconfigureStatus
+from .config_entry_flow_walker import POST_COMMIT_STATUSES, _handle_flow_steps
 from .config_entry_identity import (
     ReconfigureIdentity,
     _classify_related_entries,

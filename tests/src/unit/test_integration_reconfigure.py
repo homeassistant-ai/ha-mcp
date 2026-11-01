@@ -22,10 +22,8 @@ from ha_mcp.tools import (
 )
 from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
 from ha_mcp.tools.config_entry_flow import set_config_subentry
-from ha_mcp.tools.config_entry_flow_walker import (
-    ReconfigureStatus,
-    _handle_config_subentry_flow_steps,
-)
+from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
+from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
 from ha_mcp.tools.config_entry_identity import (
     ReconfigureIdentity,
     _classify_related_entries,

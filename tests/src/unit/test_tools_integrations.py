@@ -15,7 +15,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow_walker import ReconfigureStatus
+from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
 from ha_mcp.tools.config_entry_identity import ReconfigureIdentity
 from ha_mcp.tools.config_entry_reconfigure import PreparedReconfigure
 from ha_mcp.tools.integration_reconfigure import ReconfigureRunner

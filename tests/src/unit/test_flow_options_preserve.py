@@ -26,6 +26,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET
 from ha_mcp.tools.config_entry_flow import update_config_entry_options
+from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
 from ha_mcp.tools.config_entry_flow_form import (
     _handle_form_step,
     _ignored_keys_warnings,
@@ -33,7 +34,6 @@ from ha_mcp.tools.config_entry_flow_form import (
     validate_step_values,
 )
 from ha_mcp.tools.config_entry_flow_walker import (
-    ReconfigureStatus,
     _handle_config_subentry_flow_steps,
     _handle_flow_steps,
 )

@@ -25,8 +25,8 @@ imported in one direction only (menu <- form <- walker <- here):
 
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
-- ``config_entry_flow_walker``: step submission, HA error translation, flow
-  introspection, and the two flow walkers
+- ``config_entry_flow_walker``: step submission and the two flow walkers,
+  which report HA's errors through ``config_entry_flow_errors``
 """
 
 import asyncio

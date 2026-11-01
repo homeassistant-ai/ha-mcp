@@ -762,13 +762,13 @@ class TestWriteFlowErrorSchemaRedaction:
         self, redact_on, monkeypatch
     ):
         from ha_mcp.client.rest_client import HomeAssistantAPIError
-        from ha_mcp.tools import config_entry_flow_walker as walker
+        from ha_mcp.tools import config_entry_flow_errors as flow_errors
 
         monkeypatch.setattr(
-            walker, "fetch_helper_flow_info", AsyncMock(return_value={})
+            flow_errors, "fetch_helper_flow_info", AsyncMock(return_value={})
         )
         with pytest.raises(ToolError) as exc_info:
-            await walker._raise_flow_api_error(
+            await flow_errors._raise_flow_api_error(
                 HomeAssistantAPIError("bad value", status_code=400),
                 client=MagicMock(),
                 flow_id="f1",
