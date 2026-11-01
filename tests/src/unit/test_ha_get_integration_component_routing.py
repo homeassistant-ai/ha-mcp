@@ -110,6 +110,7 @@ class RoutingClient:
         single_entry: dict[str, Any] | None = None,
         options_flow: dict[str, Any] | None = None,
         subentries: list[dict[str, Any]] | None = None,
+        integration_types: dict[str, str] | None = None,
     ) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
@@ -118,6 +119,8 @@ class RoutingClient:
         self._single_entry = single_entry
         self._options_flow = options_flow
         self._subentries = list(subentries or [])
+        # domain -> the manifest's integration_type, for Core's ``?type=`` filter.
+        self._integration_types = dict(integration_types or {})
         self.rest_list_calls = 0
         self.rest_list_params: dict[str, Any] | None = None
         self.get_config_entry_calls = 0
@@ -126,11 +129,20 @@ class RoutingClient:
         self.list_config_subentries_calls = 0
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        # Legacy entry-list REST fetch; Core filters ``?domain=`` itself.
+        # Entry-list REST fetch; Core filters ``?domain=`` and ``?type=`` itself.
         self.rest_list_calls += 1
         self.rest_list_params = kwargs.get("params")
-        domain = (self.rest_list_params or {}).get("domain")
-        return [e for e in self._rest_entries if not domain or e["domain"] == domain]
+        params = self.rest_list_params or {}
+        domain = params.get("domain")
+        return [
+            e
+            for e in self._rest_entries
+            if (not domain or e["domain"] == domain)
+            and (
+                "type" not in params
+                or self._integration_types.get(e["domain"]) == params["type"]
+            )
+        ]
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         # Legacy single-entry read (lists all + filters client-side in real life).
@@ -782,3 +794,102 @@ async def test_blank_domain_is_rejected_before_any_read(
     assert not _ce_calls(ws)
     assert client.rest_list_calls == 0
     assert client.start_options_flow_calls == 0
+
+
+# --- integration_type (Core's REST ``?type=`` filter) --------------------------
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain", "params"),
+    [(None, {"type": "service"}), ("sun", {"domain": "sun", "type": "service"})],
+)
+async def test_legacy_list_passes_integration_type_to_core(
+    domain: str | None, params: dict[str, str]
+) -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(
+        rest_entries=[
+            _rest_entry("m1", "mqtt", supports_options=False),
+            _rest_entry("s1", "sun", supports_options=False),
+        ],
+        integration_types={"mqtt": "hub", "sun": "service"},
+    )
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(domain=domain, integration_type="service")
+
+    assert client.rest_list_params == params
+    assert [e["entry_id"] for e in resp["entries"]] == ["s1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain", "params"),
+    [(None, {"type": "service"}), ("sun", {"domain": "sun", "type": "service"})],
+)
+async def test_component_list_keeps_rows_core_matches_for_integration_type(
+    domain: str | None, params: dict[str, str]
+) -> None:
+    # The component command has no type filter, so Core's REST answer decides
+    # which component rows stay; the rows themselves (options) still come from
+    # the component.
+    rows = [_row("m1", "mqtt"), _row("s1", "sun", options={"elevation": 1})]
+    if domain:
+        rows = [r for r in rows if r["domain"] == domain]
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": rows},
+    )
+    client = RoutingClient(
+        rest_entries=[_rest_entry("m1", "mqtt"), _rest_entry("s1", "sun")],
+        integration_types={"mqtt": "hub", "sun": "service"},
+    )
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(
+            domain=domain, integration_type="service", include_options=True
+        )
+
+    assert client.rest_list_params == params
+    assert [e["entry_id"] for e in resp["entries"]] == ["s1"]
+    assert resp["entries"][0]["options"] == {"elevation": 1}
+    assert resp["total_count"] == 1
+    assert client.start_options_flow_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_component_list_without_integration_type_makes_no_rest_call() -> None:
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("m1", "mqtt")]},
+    )
+    client = RoutingClient()
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, component_config_entries):
+        await get_integration()
+
+    assert client.rest_list_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("component", [True, False], ids=["component", "legacy"])
+async def test_integration_type_is_ignored_with_a_warning_for_one_entry(
+    component: bool,
+) -> None:
+    info = (
+        {"info_result": _CAPS_CONFIG_ENTRIES} if component else {"info_exc": _CAPSLESS}
+    )
+    ws = make_ws(WS_CONFIG_ENTRIES, cmd_result={"entries": [_row("cfg1")]}, **info)
+    client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(entry_id="cfg1", integration_type="service")
+
+    assert resp["entry_id"] == "cfg1"
+    assert client.rest_list_calls == 0
+    assert any("integration_type" in w for w in resp.get("warnings", []))

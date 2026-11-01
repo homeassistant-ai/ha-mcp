@@ -299,6 +299,18 @@ class IntegrationTools:
                 default=None,
             ),
         ] = None,
+        integration_type: Annotated[
+            str | None,
+            Field(
+                description="When listing, keep only entries whose integration "
+                "has this type, matched by Home Assistant itself (the manifest's "
+                "integration_type, e.g. 'device', 'hub', 'service', 'helper'). "
+                "Home Assistant does not reject an unknown type: for any type but "
+                "'helper' it also keeps entries whose integration it cannot load, "
+                "so an unknown type returns only those.",
+                default=None,
+            ),
+        ] = None,
         include_options: Annotated[
             bool,
             Field(
@@ -547,6 +559,7 @@ class IntegrationTools:
         - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; add menu_choice="<option>" to describe that form
         - Fields a new integration asks for when added: ha_get_integration(domain="group", include_schema=True, menu_choice="light")
         - List template entries with their options: ha_get_integration(domain="template")
+        - Only service integrations: ha_get_integration(integration_type="service")
 
         OPTIONS: ``options`` reflect the entry's persisted values. Values that
         match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. Use
@@ -610,7 +623,7 @@ class IntegrationTools:
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:
-                return await self._get_entry_detail_response(
+                resp = await self._get_entry_detail_response(
                     entry_id,
                     include_schema=include_schema_bool,
                     include_subentries=include_subentries_bool,
@@ -628,10 +641,22 @@ class IntegrationTools:
                     data_offset_int=data_offset_int,
                     data_limit_int=data_limit_int,
                 )
+                if integration_type is not None:
+                    resp.setdefault("warnings", []).append(
+                        "integration_type was ignored: it filters the list "
+                        "(no entry_id)"
+                    )
+                return resp
 
             # List mode - get all config entries
             result = await self._list_entries(
-                domain, query, include_opts, exact_match_bool, limit_int, offset_int
+                domain,
+                query,
+                include_opts,
+                exact_match_bool,
+                limit_int,
+                offset_int,
+                integration_type=integration_type,
             )
             ignored_detail_params = self._ignored_diagnostics_detail_params(
                 include_diagnostics=include_diagnostics_bool,
@@ -1134,6 +1159,7 @@ class IntegrationTools:
         exact_match: bool | None,
         limit_int: int,
         offset_int: int,
+        integration_type: str | None = None,
     ) -> dict[str, Any]:
         """List config entries with optional domain/query filtering and pagination."""
         # Component fast path: one in-process read (domain filtered server-side,
@@ -1141,10 +1167,24 @@ class IntegrationTools:
         # OptionsFlow probes. Normalize the domain to HA's canonical lowercase:
         # both the component and Core's REST list filter by exact match.
         domain_norm = domain.strip().lower() if domain else None
+        params: dict[str, str] = {}
+        if domain_norm:
+            params["domain"] = domain_norm
+        if integration_type is not None:
+            params["type"] = integration_type
         read = await fetch_config_entries(self._client, domain=domain_norm)
         if read is not None:
+            rows = read.rows
+            if integration_type is not None:
+                # The component command has no type filter, so Core's REST list
+                # decides which entries match the type.
+                matching = {
+                    entry.get("entry_id")
+                    for entry in await self._fetch_rest_entries(params)
+                }
+                rows = [row for row in rows if row.get("entry_id") in matching]
             return await self._list_entries_from_component(
-                read.rows,
+                rows,
                 domain,
                 query,
                 include_opts,
@@ -1153,20 +1193,7 @@ class IntegrationTools:
                 offset_int,
             )
 
-        response = await self._client._request(
-            "GET",
-            "/config/config_entries/entry",
-            params={"domain": domain_norm} if domain_norm else None,
-        )
-
-        if not isinstance(response, list):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Unexpected response format from Home Assistant",
-                    context={"response_type": type(response).__name__},
-                )
-            )
+        response = await self._fetch_rest_entries(params)
 
         # Fetch current logger levels once; enrich each entry with its effective level.
         level_warnings: list[str] = []
@@ -1214,6 +1241,21 @@ class IntegrationTools:
             probe_failures,
             level_warnings,
         )
+
+    async def _fetch_rest_entries(self, params: dict[str, str]) -> list[Any]:
+        """Core's REST entry list, filtered by Core with ``params``."""
+        response = await self._client._request(
+            "GET", "/config/config_entries/entry", params=params or None
+        )
+        if not isinstance(response, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from Home Assistant",
+                    context={"response_type": type(response).__name__},
+                )
+            )
+        return response
 
     async def _list_entries_from_component(
         self,

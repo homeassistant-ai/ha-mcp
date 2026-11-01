@@ -355,6 +355,30 @@ class TestIntegrationFiltering:
         assert not data.get("success"), f"blank domain listed entries: {data}"
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
+    @pytest.mark.parametrize("integration_type", ["service", "not_a_type"])
+    async def test_integration_type_matches_core(
+        self, mcp_client, ha_client, integration_type
+    ):
+        """integration_type returns the entries Core's own ?type= filter returns.
+
+        Core does not reject an unknown type, so that case must match Core's
+        answer too rather than fail.
+        """
+        core = await ha_client._request(
+            "GET", "/config/config_entries/entry", params={"type": integration_type}
+        )
+        expected = {e["entry_id"] for e in core}
+        if integration_type == "service":
+            assert expected, "the test instance has service entries (sun, ...)"
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"integration_type": integration_type, "limit": 200}
+        )
+        data = assert_mcp_success(result, f"list integration_type={integration_type}")
+
+        assert data["total_count"] == len(expected)
+        assert {e["entry_id"] for e in data["entries"]} == expected
+
     async def test_include_options_flag(self, mcp_client, ha_client):
         """
         Test: include_options=True returns ACTUAL option values (not {}).
