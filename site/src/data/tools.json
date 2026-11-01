@@ -926,7 +926,7 @@
   {
     "name": "ha_config_delete_dashboard",
     "title": "Delete Dashboard",
-    "description": "Delete a storage-mode dashboard completely.\n\nWARNING: This permanently deletes the dashboard and all its configuration.\nCannot be undone. YAML-mode dashboards are defined in configuration.yaml\nand cannot be deleted through the API.\n\nHA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves\neither form to the actual registry ID before deletion. 'default' is an\nalias for 'lovelace'.\n\nEXAMPLES:\n- Delete dashboard: ha_config_delete_dashboard(\"mobile-dashboard\")",
+    "description": "Delete a storage-mode dashboard completely.\n\nWARNING: This deletes the dashboard and all its configuration; with auto-backup\non, ha_manage_backup(scope='edits', action='restore') re-creates it. YAML-mode\ndashboards are defined in configuration.yaml and cannot be deleted via the API.\n\nHA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves\neither form to the actual registry ID before deletion. 'default' is an\nalias for 'lovelace'.\n\nEXAMPLES:\n- Delete dashboard: ha_config_delete_dashboard(\"mobile-dashboard\")",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -1117,7 +1117,7 @@
         },
         "title": {
           "type": "str | None",
-          "description": "Dashboard display name shown in sidebar",
+          "description": "Sidebar name; required when creating a dashboard",
           "default": null
         },
         "icon": {
