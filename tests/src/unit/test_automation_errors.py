@@ -20,6 +20,7 @@ from ha_mcp.tools import automation_errors, component_automation
 from ha_mcp.tools.automation_errors import (
     REJECTION_PREFIX,
     _text_suggestions,
+    closest_matches,
     failed_section_from_core,
     raise_core_rejection,
     section_from_status,
@@ -156,6 +157,50 @@ async def test_unreachable_platforms_still_raise_cores_rejection() -> None:
     assert body["error"]["code"] == "VALIDATION_FAILED"
     assert body["error"]["message"] == f"{REJECTION_PREFIX}{_UNKNOWN_TRIGGER}"
     assert "closest_matches" not in body
+
+
+# --- closest keys: the domain first -------------------------------------------------
+
+_SCHEDULE_AND_LOOKALIKES = [
+    "climate.turned_on",
+    "schedule.block_ended",
+    "schedule.block_started",
+    "siren.turned_on",
+    "switch.turned_on",
+]
+
+
+@pytest.mark.parametrize(
+    ("key", "candidates", "expected"),
+    [
+        # The 2026.7 rename: lookalikes from other domains outscored the
+        # replacement, which shares only the domain with the old key.
+        (
+            "schedule.turned_on",
+            _SCHEDULE_AND_LOOKALIKES,
+            ["schedule.block_started", "schedule.block_ended"],
+        ),
+        # A near miss inside a registered domain ranks by similarity.
+        (
+            "battery.low",
+            ["battery.became_low", "battery.level_changed", "gate.closed"],
+            ["battery.became_low", "battery.level_changed"],
+        ),
+        # A misspelt domain registers nothing, so every domain is searched.
+        (
+            "batery.low",
+            ["battery.became_low", "switch.turned_on"],
+            ["battery.became_low"],
+        ),
+        # A key without a domain is searched across every key.
+        ("stat", ["state", "tag", "zone"], ["state", "tag"]),
+    ],
+    ids=["renamed-in-domain", "near-miss-in-domain", "misspelt-domain", "no-domain"],
+)
+def test_closest_keys_come_from_the_keys_domain_first(
+    key: str, candidates: list[str], expected: list[str]
+) -> None:
+    assert closest_matches(key, candidates) == expected
 
 
 # --- hints from Core's text -----------------------------------------------------

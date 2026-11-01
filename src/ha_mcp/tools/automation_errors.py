@@ -117,12 +117,18 @@ async def platform_descriptions(
 
 
 def closest_matches(key: str, candidates: list[str]) -> list[str]:
-    """Registered keys nearest to ``key``, else the keys of its domain."""
-    matches = difflib.get_close_matches(key, candidates, n=3, cutoff=0.5)
+    """Registered keys nearest to ``key``.
+
+    Searched within the key's domain when Core registers one: the domain is
+    the part a caller has right, and a renamed key's replacement lives there
+    (``schedule.turned_on`` is now ``schedule.block_started``, which no
+    lookalike from another domain would surface). Across every domain
+    otherwise, which also serves a misspelt domain.
+    """
     domain, dot, _ = key.partition(".")
-    if not matches and dot:
-        matches = sorted(c for c in candidates if c.startswith(f"{domain}."))[:5]
-    return matches
+    if dot and (same := sorted(c for c in candidates if c.startswith(f"{domain}."))):
+        return difflib.get_close_matches(key, same, n=3, cutoff=0.5) or same[:5]
+    return difflib.get_close_matches(key, candidates, n=3, cutoff=0.5)
 
 
 def _platform_condition(config: dict[str, Any]) -> bool:
