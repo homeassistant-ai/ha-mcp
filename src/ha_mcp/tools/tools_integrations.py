@@ -723,8 +723,10 @@ class IntegrationTools:
                         context={"parameter": "diagnostics_data_path"},
                     )
                 )
-            # Auto-enable options when domain filter is set
+            # Auto-enable options when domain filter is set. A blank domain is no
+            # filter to Core, so it would list and probe every entry.
             if domain is not None:
+                validate_identifier_not_empty(domain, "domain")
                 include_opts = True
 
             # If entry_id provided, get specific config entry

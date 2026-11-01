@@ -348,6 +348,13 @@ class TestIntegrationFiltering:
         assert data["total_count"] == 0, "Should have 0 results for nonexistent domain"
         assert len(data["entries"]) == 0
 
+    async def test_blank_domain_is_rejected(self, mcp_client):
+        """A blank domain is no filter to Core, so the tool refuses it."""
+        data = await safe_call_tool(mcp_client, "ha_get_integration", {"domain": " "})
+
+        assert not data.get("success"), f"blank domain listed entries: {data}"
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
     async def test_include_options_flag(self, mcp_client, ha_client):
         """
         Test: include_options=True returns ACTUAL option values (not {}).

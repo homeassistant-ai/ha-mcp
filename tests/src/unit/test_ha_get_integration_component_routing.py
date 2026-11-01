@@ -756,3 +756,26 @@ async def test_legacy_list_keeps_core_fields() -> None:
         resp = await get_integration()
 
     assert resp["entries"][0]["num_subentries"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("domain", ["", "   "])
+@pytest.mark.parametrize("component", [True, False], ids=["component", "legacy"])
+async def test_blank_domain_is_rejected_before_any_read(
+    domain: str, component: bool
+) -> None:
+    # A blank domain is no filter to Core, so it would list and probe every entry.
+    info = (
+        {"info_result": _CAPS_CONFIG_ENTRIES} if component else {"info_exc": _CAPSLESS}
+    )
+    ws = make_ws(WS_CONFIG_ENTRIES, cmd_result={"entries": [_row()]}, **info)
+    client = RoutingClient(rest_entries=[_rest_entry("m1", "mqtt")])
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations), pytest.raises(ToolError) as exc:
+        await get_integration(domain=domain)
+
+    assert "VALIDATION_INVALID_PARAMETER" in str(exc.value)
+    assert not _ce_calls(ws)
+    assert client.rest_list_calls == 0
+    assert client.start_options_flow_calls == 0
