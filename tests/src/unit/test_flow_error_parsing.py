@@ -24,6 +24,7 @@ Tests in this module:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -37,7 +38,10 @@ from ha_mcp.tools.config_entry_flow import (
     set_config_subentry,
     update_config_entry_options,
 )
-from ha_mcp.tools.config_entry_flow_errors import _parse_flow_api_error
+from ha_mcp.tools.config_entry_flow_errors import (
+    _parse_flow_api_error,
+    raise_form_errors,
+)
 from ha_mcp.tools.config_entry_flow_walker import _handle_flow_steps
 from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_flow
 
@@ -528,3 +532,34 @@ class TestFlowTextFromCore:
         body = _parse_tool_error(exc_info.value)
         assert body["reason_text"] == "Wrong device."
         assert body["status"] == "apply_failed"
+
+
+@pytest.mark.asyncio
+async def test_form_errors_redact_the_schemas_password_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A reconfigure form arrives with the stored values in suggested_value;
+    # under redact_secrets a password field's value must not ride into the
+    # error's data_schema.
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    step = {
+        "type": "form",
+        "step_id": "reconfigure",
+        "errors": {"base": "cannot_connect"},
+        "data_schema": [
+            {
+                "name": "api_key",
+                "selector": {"text": {"type": "password"}},
+                "description": {"suggested_value": "sk-LIVE"},
+            }
+        ],
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await raise_form_errors(AsyncMock(), None, "f1", step)
+
+    assert "sk-LIVE" not in str(exc_info.value)
+    assert json.loads(str(exc_info.value))["data_schema"][0]["name"] == "api_key"

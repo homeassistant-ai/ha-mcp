@@ -11,6 +11,7 @@ reason text.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -185,3 +186,25 @@ async def test_only_the_preview_leg_reads_the_form(
     with pytest.raises(ToolError):
         await runner.run("e1", config=prepared.flow_config, confirm_token="stale")
     client.start_reconfigure_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_password_fields_live_value_does_not_leak_into_the_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    api_key = {
+        "name": "api_key",
+        "required": True,
+        "selector": {"text": {"type": "password"}},
+        "description": {"suggested_value": "sk-LIVE"},
+    }
+    client = _client({**_form(), "data_schema": [_HOST, api_key]})
+
+    form, _ = await _read(client, {"host": "10.0.0.5"})
+
+    assert "sk-LIVE" not in json.dumps(form)
+    assert any(f["name"] == "api_key" for f in form["fields"])

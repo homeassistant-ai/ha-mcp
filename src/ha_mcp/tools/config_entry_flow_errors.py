@@ -311,11 +311,15 @@ async def raise_form_errors(
 ) -> NoReturn:
     """Raise for a form HA returned with ``errors``, with Core's text for each."""
     errors = current_step["errors"]
+    schema = current_step.get("data_schema")
+    if isinstance(schema, list) and redaction_enabled():
+        # The form carries the stored values in suggested_value (#2157).
+        schema = redact_flow_schema(schema)
     context: dict[str, Any] = {
         "flow_id": flow_id,
         "step_id": current_step.get("step_id"),
         "errors": errors,
-        "data_schema": current_step.get("data_schema"),
+        "data_schema": schema,
     }
     if isinstance(errors, dict):
         if texts := await _flow_texts(client, flow, current_step, "error", errors):
