@@ -92,11 +92,12 @@ class EventCallMixin:
         Use this to publish custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.
 
-        Caveats: Events are fire-and-forget; a dispatch confirms the bus accepted
-        the event and reports how many listeners were registered for it, not that
-        any of them acted. listener_count covers the exact event type;
-        wildcard_listener_count covers match-all listeners. Both counts are
-        returned only when the optional listener lookup succeeds.
+        Caveats: Events are fire-and-forget; a successful dispatch reports the
+        bus accepted the event and how many listeners were registered for it,
+        not that any of them acted. A timeout means dispatch is unconfirmed.
+        listener_count covers the exact event type; wildcard_listener_count
+        covers match-all listeners. Both counts are returned only when the
+        optional listener lookup succeeds.
         """
         # Validate event_type before hitting the wire — empty strings, path
         # separators, or URL delimiters produce malformed URLs at
@@ -135,15 +136,15 @@ class EventCallMixin:
             if isinstance(error.__cause__, httpx.ReadTimeout):
                 warnings = list(listener_fields.get("warnings", ()))
                 warnings.append(
-                    "Response timed out. The event was dispatched and may still "
-                    "have been delivered to subscribers."
+                    "Response timed out. The event may have been dispatched; "
+                    "delivery to subscribers is unconfirmed."
                 )
                 return {
                     "success": True,
                     "partial": True,
                     "event_type": event_type,
                     "message": (
-                        f"Event {event_type} was dispatched but Home Assistant "
+                        f"Event {event_type} may have been dispatched, but Home Assistant "
                         "did not respond within the timeout period."
                     ),
                     **{

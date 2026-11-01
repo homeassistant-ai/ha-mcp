@@ -3834,7 +3834,7 @@
   {
     "name": "ha_call_event",
     "title": "Call Event",
-    "description": "Execute a custom event on the Home Assistant event bus.\n\nWhen NOT to use: for controlling entities (lights, switches, climate) — use\nha_call_service instead. To run an automation now, use\nha_config_set_automation(identifier=..., run_actions=True).\n\nUse this to publish custom event types consumed by event-triggered automations,\nNode-RED flows, or custom integrations that subscribe to specific event types.\n\nCaveats: Events are fire-and-forget; a dispatch confirms the bus accepted\nthe event and reports how many listeners were registered for it, not that\nany of them acted. listener_count covers the exact event type;\nwildcard_listener_count covers match-all listeners. Both counts are\nreturned only when the optional listener lookup succeeds.",
+    "description": "Execute a custom event on the Home Assistant event bus.\n\nWhen NOT to use: for controlling entities (lights, switches, climate) — use\nha_call_service instead. To run an automation now, use\nha_config_set_automation(identifier=..., run_actions=True).\n\nUse this to publish custom event types consumed by event-triggered automations,\nNode-RED flows, or custom integrations that subscribe to specific event types.\n\nCaveats: Events are fire-and-forget; a successful dispatch reports the\nbus accepted the event and how many listeners were registered for it,\nnot that any of them acted. A timeout means dispatch is unconfirmed.\nlistener_count covers the exact event type; wildcard_listener_count\ncovers match-all listeners. Both counts are returned only when the\noptional listener lookup succeeds.",
     "inputSchema": {
       "properties": {
         "event_type": {
