@@ -1,0 +1,9 @@
+{
+  "reason": "#2926 adds one requires_tools_entry test (tests/src/e2e/workflows/filesystem/test_yaml_read.py::TestYamlReadTagPreservation::test_input_tag_not_resolved): blueprint !input preservation needs the File & YAML Tools entry, so it skips at collection on each of the four no-tools lanes and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}
