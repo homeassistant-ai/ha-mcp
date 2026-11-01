@@ -68,13 +68,14 @@ def test_git_in_a_temporary_repository_stays_there(
 
 
 def test_git_reads_no_config_from_the_hook_or_the_contributor(
-    hook_environment: Path, tmp_path: Path
+    hook_environment: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init(tmp_path)
+    # Stands in for /etc/gitconfig. Set after _unit_test_env, which would strip
+    # it from a fixture; GIT_CONFIG_NOSYSTEM alone keeps git from reading it.
+    system_config = tmp_path / "system.gitconfig"
+    system_config.write_text("[tag]\n\tgpgsign = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system_config))
     # Exit 1 is git's "key not set"; any other failure fails the test too.
-    for key in ("user.name", "user.email", "commit.gpgsign"):
+    for key in ("user.name", "user.email", "commit.gpgsign", "tag.gpgsign"):
         assert _git(tmp_path, "config", "--get", key).returncode == 1, key
-    # git var prints the system config path, whether or not the file exists,
-    # unless GIT_CONFIG_NOSYSTEM is set (git 2.42+). Older git does not know
-    # the variable and prints nothing either way, so there this check is vacuous.
-    assert _git(tmp_path, "var", "GIT_CONFIG_SYSTEM").stdout == ""
