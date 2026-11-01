@@ -5,9 +5,6 @@ from __future__ import annotations
 import errno
 import importlib.util
 import io
-import json
-import logging
-import os
 import tarfile
 import urllib.error
 import urllib.request
@@ -17,7 +14,6 @@ from http.client import HTTPMessage
 from pathlib import Path
 from types import ModuleType
 from typing import Any, NoReturn
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -51,7 +47,7 @@ def _archive(files: dict[str, bytes]) -> bytes:
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as archive:
         for name, payload in files.items():
-            member = tarfile.TarInfo(f"hacs_frontend-1.0.0/{name}")
+            member = tarfile.TarInfo(f"hacs_frontend-20250128065759/{name}")
             member.size = len(payload)
             archive.addfile(member, io.BytesIO(payload))
     return stream.getvalue()
@@ -103,7 +99,7 @@ def _stub_http(
 def _serve_archive(
     seed: ModuleType, monkeypatch: pytest.MonkeyPatch, payload: bytes
 ) -> None:
-    responses = iter([json.dumps({"tag_name": "1.0.0"}).encode(), payload])
+    responses = iter([payload])
     _stub_http(
         seed,
         monkeypatch,
@@ -129,8 +125,14 @@ def test_download_failure_aborts_bootstrap_and_releases_lock(
         (b"not a gzip archive", tarfile.TarError),
         (_archive({"other.txt": b"unrelated"}), RuntimeError),
         (_archive({"hacs_frontend/entrypoint.js": b"export {};"}), RuntimeError),
+        (_archive({"hacs_frontend/__init__.py": b""}), RuntimeError),
     ],
-    ids=["corrupt-archive", "missing-package", "missing-python-module"],
+    ids=[
+        "corrupt-archive",
+        "missing-package",
+        "missing-python-module",
+        "missing-browser-entry",
+    ],
 )
 def test_unusable_archive_aborts_bootstrap(
     seed: ModuleType,
@@ -153,12 +155,17 @@ def test_existing_javascript_without_python_module_is_repaired(
     frontend.mkdir()
     (frontend / "entrypoint.js").write_text("export {};", encoding="utf-8")
 
-    def download(target: Path) -> None:
-        (target / "__init__.py").write_text("VERSION = 'fixture'", encoding="utf-8")
-
-    monkeypatch.setattr(seed, "_download_hacs_frontend", download)
+    (frontend / "obsolete.js").write_text("old", encoding="utf-8")
+    _serve_archive(
+        seed,
+        monkeypatch,
+        _archive(
+            {"hacs_frontend/__init__.py": b"", "hacs_frontend/entrypoint.js": b""}
+        ),
+    )
     seed._ensure_hacs_frontend(state)
     assert (frontend / "__init__.py").is_file()
+    assert not (frontend / "obsolete.js").exists()
 
 
 def test_waiter_refuses_missing_frontend_after_owner_releases_lock(
@@ -195,6 +202,7 @@ def test_complete_archive_provides_importable_frontend_and_releases_lock(
     assert module.VERSION == "fixture"
     assert not (state / ".hacs_frontend.lock").exists()
     assert list(_frontend(state).parent.iterdir()) == [_frontend(state)]
+    assert not list(state.glob(".hacs_frontend-staging-*"))
 
 
 def test_absent_hacs_component_needs_no_frontend(
@@ -290,9 +298,6 @@ def test_failed_cross_filesystem_publication_leaves_no_frontend_to_accept(
     )
     _serve_archive(seed, monkeypatch, payload)
     real_rename = seed.os.rename
-    real_scandir = seed.os.scandir
-    real_copyfile = seed.shutil.copyfile
-    real_move = seed.shutil.move
 
     def cross_filesystem(src: Any, dst: Any) -> None:
         if Path(dst) == frontend:
@@ -300,35 +305,15 @@ def test_failed_cross_filesystem_publication_leaves_no_frontend_to_accept(
             raise OSError(errno.EXDEV, "fixture cross-filesystem rename")
         real_rename(src, dst)
 
-    def ordered_scandir(path: Any) -> MagicMock:
-        with real_scandir(path) as entries:
-            ordered = iter(sorted(entries, key=lambda entry: entry.name))
-        scan = MagicMock()
-        scan.__enter__.return_value = ordered
-        scan.__iter__.side_effect = lambda: ordered
-        scan.__next__.side_effect = ordered.__next__
-        return scan
-
-    def copy_asset(src: Any, dst: Any) -> str:
-        if Path(src).name == "z-asset.js":
-            assert (frontend / "__init__.py").is_file()
-            assert (frontend / "entrypoint.js").is_file()
-            raise OSError("fixture asset copy failed")
-        return str(real_copyfile(src, dst))
-
-    def move(src: str, dst: str) -> str:
-        return str(real_move(src, dst, copy_function=copy_asset))
-
     with monkeypatch.context() as publication:
         publication.setattr(seed.os, "rename", cross_filesystem)
-        publication.setattr(seed.os, "scandir", ordered_scandir)
-        publication.setattr(seed.shutil, "move", move)
         with pytest.raises(OSError):
             seed._ensure_hacs_frontend(state)
 
     assert not frontend.exists()
     assert not (state / ".hacs_frontend.lock").exists()
     assert list(frontend.parent.iterdir()) == []
+    assert not list(state.glob(".hacs_frontend-staging-*"))
     _serve_archive(seed, monkeypatch, payload)
     seed._ensure_hacs_frontend(state)
     assert (frontend / "z-asset.js").read_bytes() == b"export {};"
@@ -364,162 +349,90 @@ def test_failed_rename_preserves_concurrent_destination_and_cleans_staging(
     assert (frontend / "other-owner.txt").read_text(encoding="utf-8") == "preserve me"
     assert list(frontend.iterdir()) == [frontend / "other-owner.txt"]
     assert list(frontend.parent.iterdir()) == [frontend]
+    assert not list(state.glob(".hacs_frontend-staging-*"))
     assert not (state / ".hacs_frontend.lock").exists()
 
 
-@pytest.mark.parametrize(
-    ("credential", "github_fallback"),
-    [
-        ("GITHUB_TOKEN", False),
-        ("HACS_FRONTEND_GITHUB_TOKEN", False),
-        ("HACS_FRONTEND_GITHUB_TOKEN", True),
-    ],
-    ids=["job-token", "metadata-alias-only", "metadata-alias-priority"],
-)
-def test_token_authenticates_only_fixed_metadata_request(
-    seed: ModuleType,
-    state: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    credential: str,
-    github_fallback: bool,
+@pytest.mark.parametrize("version", ["2026.11.0b0", "2026.11.0", "2027.1.0"])
+def test_marketplace_core_never_downloads_legacy_hacs(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch, version: str
 ) -> None:
-    token = "fixture-metadata-token"
-    caplog.set_level(logging.DEBUG, logger=seed.__name__)
-    if github_fallback:
-        monkeypatch.setenv("GITHUB_TOKEN", "fixture-fallback-token")
-    monkeypatch.setenv(credential, token)
-    github_token_before = os.environ.get("GITHUB_TOKEN")
-    metadata_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-    asset_url = "https://github.com/hacs/frontend/releases/download/1.0.0/hacs_frontend-1.0.0.tar.gz"
-    download_url = (
-        "https://release-assets.githubusercontent.com/fixture/frontend.tar.gz"
+    def unexpected(target: Path) -> NoReturn:
+        pytest.fail("Core blocks legacy HACS; no frontend download is needed")
+
+    monkeypatch.setattr(seed, "_download_hacs_frontend", unexpected)
+    seed._ensure_hacs_frontend(state, core_version=version)
+    assert not (state / ".hacs_frontend.lock").exists()
+
+
+def test_stale_owner_recovers_and_sweeps_abandoned_staging(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = state / ".hacs_frontend.lock"
+    lock.mkdir()
+    created = lock.stat().st_mtime
+    monkeypatch.setattr(seed.time, "time", lambda: created + 301)
+    abandoned = state / ".hacs_frontend-staging-orphan"
+    abandoned.mkdir()
+    (abandoned / "partial").write_text("incomplete", encoding="utf-8")
+    unrelated = state / "keep-me"
+    unrelated.mkdir()
+    _serve_archive(
+        seed,
+        monkeypatch,
+        _archive(
+            {"hacs_frontend/__init__.py": b"", "hacs_frontend/entrypoint.js": b""}
+        ),
     )
+    seed._ensure_hacs_frontend(state)
+    assert not abandoned.exists()
+    assert unrelated.is_dir()
+    assert not lock.exists()
+    assert (_frontend(state) / "entrypoint.js").is_file()
+
+
+def test_slow_healthy_owner_within_stale_budget_is_accepted(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = state / ".hacs_frontend.lock"
+    lock.mkdir()
+    elapsed = 0.0
+    created = lock.stat().st_mtime
+
+    def advance(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+        if elapsed >= 240:
+            frontend = _frontend(state)
+            frontend.mkdir()
+            (frontend / "__init__.py").write_text("", encoding="utf-8")
+            (frontend / "entrypoint.js").write_text("", encoding="utf-8")
+            lock.rmdir()
+
+    monkeypatch.setattr(seed.time, "time", lambda: created)
+    monkeypatch.setattr(seed.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(seed.time, "sleep", advance)
+    seed._ensure_hacs_frontend(state)
+    assert not lock.exists()
+
+
+def test_archive_fetch_is_pinned_and_anonymous_even_with_local_tokens(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "unused-fixture-token")
+    monkeypatch.setenv("HACS_FRONTEND_GITHUB_TOKEN", "unused-fixture-alias")
     requests: list[urllib.request.Request] = []
     payload = _archive(
-        {
-            "hacs_frontend/__init__.py": b"VERSION = 'fixture'",
-            "hacs_frontend/entrypoint.js": b"export {};",
-        }
+        {"hacs_frontend/__init__.py": b"", "hacs_frontend/entrypoint.js": b""}
     )
 
     def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
         requests.append(request)
-        if request.full_url == metadata_url:
-            if request.get_header("Authorization") != f"Bearer {token}":
-                return _http_response(request, b"rate limit exceeded", 403)
-            return _http_response(request, b'{"tag_name":"1.0.0"}')
-        if request.full_url == asset_url:
-            return _http_response(request, b"", 302, download_url)
-        assert request.full_url == download_url
         return _http_response(request, payload)
 
     _stub_http(seed, monkeypatch, respond)
-    seed._ensure_hacs_frontend(state)
-
-    assert os.environ.get("GITHUB_TOKEN") == github_token_before
-    assert [request.full_url for request in requests] == [
-        metadata_url,
-        asset_url,
-        download_url,
+    seed._ensure_hacs_frontend(state, core_version="2026.10.4")
+    assert [r.full_url for r in requests] == [
+        "https://github.com/hacs/frontend/releases/download/20250128065759/hacs_frontend-20250128065759.tar.gz"
     ]
-    assert [request.get_header("Authorization") for request in requests] == [
-        f"Bearer {token}",
-        None,
-        None,
-    ]
-    redirected = urllib.request.HTTPRedirectHandler().redirect_request(
-        requests[0],
-        io.BytesIO(),
-        302,
-        "Found",
-        HTTPMessage(),
-        "https://redirect.invalid/",
-    )
-    assert redirected is not None
-    assert redirected.get_header("Authorization") is None
-    assert token not in caplog.text
-    assert "fixture-fallback-token" not in caplog.text
-    for path in state.rglob("*"):
-        if path.is_file():
-            assert token.encode() not in path.read_bytes()
-            assert b"fixture-fallback-token" not in path.read_bytes()
-
-
-def test_metadata_redirect_is_refused_before_any_other_host_is_contacted(
-    seed: ModuleType,
-    state: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    token = "fixture-metadata-token"
-    monkeypatch.setenv("GITHUB_TOKEN", token)
-    caplog.set_level(logging.DEBUG, logger=seed.__name__)
-    metadata_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-    requests: list[str] = []
-
-    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
-        requests.append(request.full_url)
-        if request.full_url == metadata_url:
-            return _http_response(request, b"", 302, "https://redirect.invalid/release")
-        raise AssertionError("The metadata redirect was followed")
-
-    _stub_http(seed, monkeypatch, respond)
-    with pytest.raises(urllib.error.HTTPError) as error:
-        seed._ensure_hacs_frontend(state)
-    assert error.value.code == 302
-    assert requests == [metadata_url]
-    assert token not in caplog.text
-    assert not _frontend(state).exists()
-    assert not (state / ".hacs_frontend.lock").exists()
-
-
-def test_local_metadata_lookup_without_a_token_remains_anonymous(
-    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    requests: list[urllib.request.Request] = []
-    responses = iter(
-        [
-            b'{"tag_name":"1.0.0"}',
-            _archive(
-                {
-                    "hacs_frontend/__init__.py": b"VERSION = 'fixture'",
-                    "hacs_frontend/entrypoint.js": b"export {};",
-                }
-            ),
-        ]
-    )
-
-    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
-        requests.append(request)
-        return _http_response(request, next(responses))
-
-    _stub_http(seed, monkeypatch, respond)
-    seed._ensure_hacs_frontend(state)
-    assert len(requests) == 2
-    assert all(request.get_header("Authorization") is None for request in requests)
-
-
-def test_authenticated_metadata_failure_is_not_retried_or_logged_with_token(
-    seed: ModuleType,
-    state: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    token = "fixture-sensitive-token"
-    caplog.set_level(logging.DEBUG, logger=seed.__name__)
-    monkeypatch.setenv("GITHUB_TOKEN", token)
-    requests: list[str] = []
-
-    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
-        requests.append(request.full_url)
-        return _http_response(request, b"rate limit exceeded", 403)
-
-    _stub_http(seed, monkeypatch, respond)
-    with pytest.raises(urllib.error.HTTPError) as error:
-        seed._ensure_hacs_frontend(state)
-    assert error.value.code == 403
-    assert requests == ["https://api.github.com/repos/hacs/frontend/releases/latest"]
-    assert token not in caplog.text
-    assert not _frontend(state).exists()
-    assert not (state / ".hacs_frontend.lock").exists()
+    assert requests[0].get_header("Authorization") is None

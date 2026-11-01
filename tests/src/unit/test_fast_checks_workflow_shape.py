@@ -191,7 +191,7 @@ def test_every_setup_uv_site_pins_a_full_version() -> None:
 
 
 def test_setup_uv_rejects_compromised_ca_bundle() -> None:
-    """GHSA-hq85-5cpj-mr62 affects uv before 0.13.4, including pinned builds."""
+    """uv before 0.13.4 bundles the compromised emSign ECC Root CA - G3."""
     for path, step in _setup_uv_sites():
         assert Version(step["with"]["version"]) >= Version("0.13.4"), path.name
 

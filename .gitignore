@@ -104,3 +104,7 @@ tests/initial_test_state/.storage/ha_mcp_tools/
 
 # Node modules — site (Astro) and tests/js (JSDOM behaviour harness)
 node_modules/
+
+# Bootstrap scratch data must never enter commits or seeded HA configs.
+tests/initial_test_state/.hacs_frontend-staging-*/
+tests/initial_test_state/.hacs_frontend.lock/

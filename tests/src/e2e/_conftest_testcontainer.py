@@ -175,10 +175,19 @@ def _prepare_testcontainer_config(
         pytest.fail(f"Initial test state not found at {initial_state_path}")
 
     # Ensure HACS frontend is downloaded (if HACS is present)
-    _ensure_hacs_frontend(initial_state_path)
+    _ensure_hacs_frontend(
+        initial_state_path, core_version=HA_TEST_IMAGE.rsplit(":", 1)[-1]
+    )
 
     # Copy all files from initial_test_state
-    shutil.copytree(initial_state_path, config_path, dirs_exist_ok=True)
+    shutil.copytree(
+        initial_state_path,
+        config_path,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(
+            ".hacs_frontend-staging-*", ".hacs_frontend.lock"
+        ),
+    )
 
     # Inject GITHUB_TOKEN into HACS config entry if available.
     # Without a valid token HACS disables itself, causing flaky test skips.

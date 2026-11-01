@@ -284,6 +284,10 @@ release-age policy (including the existing timestamp-optional and vulnerability
 exceptions). `updateNotScheduled: false` also prevents ordinary branch updates
 outside that window.
 
+The repository does not impose an additional uv package-age cutoff. A developer's
+personal uv configuration may impose one; that local policy is separate from
+Renovate's vulnerability exceptions and is not inherited by CI.
+
 Stable Home Assistant Core, Supervisor, and HAOS are exact-name exceptions:
 no release-age delay, any-time scheduling, immediate PR creation, and no
 ordinary PR rate/concurrency cap. Core pins include the container lanes and

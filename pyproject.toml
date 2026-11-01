@@ -33,7 +33,7 @@ dependencies = [
     "anyio>=4.10; python_version >= '3.14'",
     "anyio>=4.9; python_version < '3.14'",
     "authlib>=1.6.11",
-    # Exclude the compromised emSign CA bundle (GHSA-6q48-6c7w-9gw2).
+    # 10.18 removed the compromised roots; 10.19 restores unaffected roots.
     "certifi>=2026.10.19",
     "cyclopts>=4.0.0",
     "exceptiongroup>=1.2.2",
@@ -106,9 +106,6 @@ ha-mcp-smoke-test = "ha_mcp.smoke_test:main"
 ha-mcp-web = "ha_mcp.__main__:main_web"
 ha-mcp-oauth = "ha_mcp.__main__:main_oauth"
 ha-mcp-oidc = "ha_mcp.__main__:main_oidc"
-
-[tool.uv]
-exclude-newer = "7 days"
 
 [tool.uv.build-backend]
 # Explicit because publish-dev.yml renames the project to ha-mcp-dev, which
