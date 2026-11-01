@@ -136,7 +136,8 @@ _HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
     "input_datetime": "ha_config_set_helper(helper_type='input_datetime', ...)",
     "input_button": "ha_config_set_helper(helper_type='input_button', ...)",
     "template": "ha_config_set_helper(helper_type='template', ...) "
-    "(trigger-based templates are YAML-only: ha_config_set_yaml)",
+    "(trigger-based templates are YAML-only: ha_config_set_yaml when YAML "
+    "config editing is enabled, otherwise the HA UI or YAML packages)",
     "homeassistant": None,
     "sensor": None,
     "binary_sensor": None,
