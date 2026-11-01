@@ -730,7 +730,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_manage_pipeline` — Manage Home Assistant Assist pipelines.
 
 ### Automations
-- `ha_config_get_automation` — Get Home Assistant automation configuration.
+- `ha_config_get_automation` — Get a Home Assistant automation's stored configuration.
 - `ha_config_remove_automation` — Delete a Home Assistant automation permanently.
 - `ha_config_set_automation` — Create or update a Home Assistant automation.
 
