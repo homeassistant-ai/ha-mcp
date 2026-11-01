@@ -1052,12 +1052,17 @@
   {
     "name": "ha_config_list_dashboard_resources",
     "title": "List Dashboard Resources",
-    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nHome Assistant 2026.6+ exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
+    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n- Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)\n\nHome Assistant 2026.6+ exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
     "inputSchema": {
       "properties": {
         "include_content": {
           "type": "bool",
           "description": "Include full decoded content for inline resources in the \"_content\" field. When False, a 150-char preview is shown instead. Rows past the per-response content budget carry '_content_truncated': True instead of '_content'; request a smaller page before copying content into an update.",
+          "default": false
+        },
+        "include_hash": {
+          "type": "bool",
+          "description": "Add \"_config_hash\" (SHA-256 hex digest of the decoded UTF-8 content) to each inline resource, e.g. to verify an edit or to pass as config_hash without fetching the content.",
           "default": false
         },
         "limit": {
@@ -1177,7 +1182,7 @@
   {
     "name": "ha_config_set_dashboard_resource",
     "title": "Set Dashboard Resource",
-    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (HACS cards) or\n  https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
+    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- edits: Search/replace edits on an existing inline resource. Any\n  failing edit (or a config_hash mismatch) aborts the whole call\n  and saves nothing. Prefer this over content= for small changes to a\n  large card: only the changed text is sent.\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (HACS cards) or\n  https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n- Patch: ha_config_set_dashboard_resource(resource_id=\"abc123\", edits=[{\"old\": \"color: red\", \"new\": \"color: blue\"}], config_hash=\"<_config_hash from the list>\")\n\nInline writes return the stored content's config_hash.\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
     "inputSchema": {
       "properties": {
         "content": {
@@ -1198,6 +1203,20 @@
         "resource_id": {
           "type": "str | None",
           "description": "Resource ID to update. If omitted, creates a new resource. Get IDs from ha_config_list_dashboard_resources()",
+          "default": null
+        },
+        "edits": {
+          "constraints": {
+            "min_length": 1,
+            "max_length": 100
+          },
+          "type": "list[ResourceEdit] | None",
+          "description": "Search/replace edits for an existing inline resource, applied in order. Requires resource_id; resource_type is ignored and the stored type is kept.",
+          "default": null
+        },
+        "config_hash": {
+          "type": "str | None",
+          "description": "With edits: refuse the patch unless the stored content has this hash when read, just before the write (the list's _config_hash with include_hash=True, or a previous write response's config_hash). A preflight check only: a change made by another client after that read is not detected and can be overwritten.",
           "default": null
         }
       }
