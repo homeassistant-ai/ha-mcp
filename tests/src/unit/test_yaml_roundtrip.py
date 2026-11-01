@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from io import StringIO
 from unittest.mock import MagicMock
 
@@ -33,6 +34,8 @@ sys.modules["homeassistant.helpers.storage"] = homeassistant.helpers.storage
 sys.modules["homeassistant.loader"] = homeassistant.loader
 
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
+    _HA_TAG_FALLBACK,
+    _ha_tags_from_core,
     _TaggedScalar,
     make_yaml,
     yaml_dumps,
@@ -142,6 +145,45 @@ class TestEnvVarTag:
         ry, data = _load("token: !env_var MY_TOKEN\n")
         out = yaml_dumps(ry, data)
         assert "!env_var MY_TOKEN" in out
+
+
+class TestCoreTagDiscovery:
+    """The Core-loader branch must be pinned separately from the fallback."""
+
+    def _loader(self, monkeypatch, constructors):
+        loader = types.ModuleType("annotatedyaml.loader")
+        loader.FastSafeLoader = type(
+            "FastSafeLoader", (), {"yaml_constructors": constructors}
+        )
+        monkeypatch.setitem(sys.modules, "annotatedyaml.loader", loader)
+
+    def test_tags_come_from_core_loader(self, monkeypatch):
+        self._loader(
+            monkeypatch,
+            {
+                "!input": None,
+                "!future": None,
+                "tag:yaml.org,2002:str": None,
+                None: None,
+            },
+        )
+
+        assert _ha_tags_from_core() == ("!future", "!input")
+
+    def test_import_error_falls_back(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "annotatedyaml.loader", None)
+
+        assert _ha_tags_from_core() == _HA_TAG_FALLBACK
+
+    def test_loader_without_fast_safe_loader_falls_back(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "annotatedyaml.loader", types.ModuleType("x"))
+
+        assert _ha_tags_from_core() == _HA_TAG_FALLBACK
+
+    def test_loader_with_no_ha_tags_falls_back(self, monkeypatch):
+        self._loader(monkeypatch, {"tag:yaml.org,2002:str": None})
+
+        assert _ha_tags_from_core() == _HA_TAG_FALLBACK
 
 
 class TestInputTag:

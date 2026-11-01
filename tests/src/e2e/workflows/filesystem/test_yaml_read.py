@@ -215,7 +215,7 @@ class TestYamlReadTagPreservation:
                 TOOL_NAME,
                 {
                     "yaml_path": "actions",
-                    "file": ("blueprints/automation/homeassistant/motion_light.yaml"),
+                    "file": "blueprints/automation/homeassistant/motion_light.yaml",
                     "include_parsed": True,
                 },
             )
