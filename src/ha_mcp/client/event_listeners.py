@@ -43,4 +43,8 @@ async def get_event_listeners(client: _EventEndpoint) -> dict[str, int] | None:
         # a listener count, so neither may reach the response.
         if isinstance(event, str) and type(count) is int and count >= 0:
             counts[event] = count
+    if result and not counts:
+        # Rows were present, but none was readable: the count is unknown.
+        logger.debug("Event listener reply had %d row(s), none readable", len(result))
+        return None
     return counts

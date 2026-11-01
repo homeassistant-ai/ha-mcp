@@ -1,7 +1,7 @@
 """Unit tests for ha_call_event tool."""
 
 import asyncio
-import time
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -186,9 +186,9 @@ class TestHaCallEvent:
         assert "wildcard_listener_count" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
 
-    @pytest.mark.parametrize("event_type", ["bad?event", "bad#event"])
+    @pytest.mark.parametrize("event_type", ["bad?event", "bad#event", "bad%3Fevent"])
     async def test_rejects_event_type_with_url_delimiters(self, event_type):
-        """'?' and '#' would truncate the fired event type in the request URL."""
+        """URL delimiters would truncate or decode the fired event type."""
         tools = _make_tools({"message": "ok"})
 
         with pytest.raises(ToolError):
@@ -199,20 +199,36 @@ class TestHaCallEvent:
     async def test_slow_listener_lookup_does_not_delay_the_fire(self, monkeypatch):
         """A stalled GET /api/events must not hold back the event dispatch."""
         tools = _make_tools({"message": "ok"})
+        lookup_cancelled = False
 
         async def _stalled(*args: object, **kwargs: object) -> list[object]:
-            await asyncio.sleep(0.5)
+            nonlocal lookup_cancelled
+            try:
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                lookup_cancelled = True
+                raise
             return []
 
         tools._client._request = AsyncMock(side_effect=_stalled)
         monkeypatch.setattr(event_call, "EVENT_LISTENER_LOOKUP_BUDGET_SECONDS", 0.05)
 
-        started = time.monotonic()
         result = await tools.ha_call_event("my_event")
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.4, f"listener lookup delayed the fire by {elapsed:.2f}s"
+        assert lookup_cancelled, "listener lookup ran past its budget"
         assert result["success"] is True
+        assert "listener_count" not in result
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_listener_lookup_timeout_is_logged_and_fire_proceeds(self, caplog):
+        """A timing-out lookup is optional enrichment, never a fire blocker."""
+        tools = _make_tools({"message": "ok"}, TimeoutError("events timed out"))
+
+        with caplog.at_level(logging.DEBUG, logger=event_call.__name__):
+            result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert "listener lookup failed" in caplog.text.lower()
         assert "listener_count" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
 

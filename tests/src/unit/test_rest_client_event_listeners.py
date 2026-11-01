@@ -61,6 +61,19 @@ class TestGetEventListeners:
         assert await get_event_listeners(mock_client) == {"good": 0}
 
     @pytest.mark.asyncio
+    async def test_all_unreadable_rows_report_unknown_not_zero(self, mock_client):
+        """A non-empty reply with no valid row is unknown, not zero listeners."""
+        mock_client._request = AsyncMock(
+            return_value=[
+                {"event": 7, "listener_count": 2},
+                {"event": "bad_count", "listener_count": "3"},
+                "not-a-row",
+            ]
+        )
+
+        assert await get_event_listeners(mock_client) is None
+
+    @pytest.mark.asyncio
     async def test_propagates_lookup_failure_to_the_caller(self, mock_client):
         mock_client._request = AsyncMock(side_effect=HomeAssistantAPIError("boom"))
 

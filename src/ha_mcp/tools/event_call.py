@@ -6,6 +6,7 @@ ratchet line) into this mixin so that module shrinks rather than grows.
 """
 
 import asyncio
+import logging
 from typing import Annotated, Any
 
 import httpx
@@ -31,8 +32,11 @@ from .helpers import (
 )
 from .tool_hints import write_hints
 
-# Characters that would break the ``POST /api/events/{event_type}`` path.
-_EVENT_TYPE_SEPARATORS = ("/", "\\", "?", "#")
+logger = logging.getLogger(__name__)
+
+# Characters that would break, truncate, or decode the
+# ``POST /api/events/{event_type}`` path.
+_EVENT_TYPE_SEPARATORS = ("/", "\\", "?", "#", "%")
 
 # Upper bound for the optional listener-count lookup, including its retries: a
 # stalled GET /api/events must not hold back the fire.
@@ -118,9 +122,9 @@ class EventCallMixin:
         try:
             async with asyncio.timeout(EVENT_LISTENER_LOOKUP_BUDGET_SECONDS):
                 listener_counts = await get_event_listeners(self._client)
-        except (HomeAssistantError, TimeoutError):
+        except (HomeAssistantError, TimeoutError) as err:
             # Counts are optional enrichment; never block the fire on them.
-            pass
+            logger.debug("Event listener lookup failed: %s", err)
 
         listener_fields = event_listener_fields(listener_counts, event_type)
 
