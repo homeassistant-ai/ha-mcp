@@ -303,6 +303,101 @@ class TestHaCallEvent:
         assert result["wildcard_listener_count"] == 1
         tools._client.fire_event.assert_not_awaited()
 
+    async def test_component_transport_error_is_not_retried(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("component down")
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+        tools._client.fire_event.assert_not_awaited()
+
+    async def test_component_not_sent_falls_back_to_ws(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=[
+                HomeAssistantCommandNotSent("no component socket"),
+                {"context": {"id": "ws-context"}},
+            ]
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context_id"] == "ws-context"
+
+    async def test_component_invalid_result_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value=["not", "a", "dict"]
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_component_unknown_command_falls_back_to_ws(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": False, "error_code": "unknown_command"},
+                {"context": {"id": "ws-context"}},
+            ]
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context_id"] == "ws-context"
+
+    async def test_component_rejection_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "bad event"}
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_component_non_dict_context_is_omitted(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"context": "not-a-dict", "listener_count": 0}
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context"] == {}
+        assert result["context_id"] is None
+
     async def test_ws_route_returns_context_when_component_is_absent(self, monkeypatch):
         """Without the component, Core's fire_event still returns the context."""
         tools = _make_tools({"message": "rest"})
@@ -333,6 +428,68 @@ class TestHaCallEvent:
 
         assert result["success"] is True
         assert result["context_id"] == "ws-context"
+
+    async def test_ws_transport_error_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws down")
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_ws_invalid_result_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(return_value="nope")
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_ws_unknown_command_falls_back_to_rest(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error_code": "unknown_command"}
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_ws_rejection_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "bad event"}
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_ws_non_dict_context_is_omitted(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"context": "bad"}
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context"] == {}
+        assert result["context_id"] is None
 
     async def test_state_changed_stays_on_the_rest_view(self, monkeypatch):
         """state_changed needs APIEventView's State rebuilding, not WS."""
@@ -373,3 +530,40 @@ class TestHaCallEvent:
         warning = " ".join(result["warnings"]).lower()
         assert "no event listeners" in warning
         assert "received" not in warning
+
+    @pytest.mark.parametrize("component_capable", [True, False])
+    async def test_absent_payload_is_omitted_from_the_fire_message(
+        self, monkeypatch, component_capable
+    ):
+        """Core types event_data as a dict, so an explicit null is refused."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"context": {"id": "ctx"}}
+        )
+        caps = (
+            SimpleNamespace(capabilities=["call_event"]) if component_capable else None
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=caps)
+        )
+
+        await tools.ha_call_event("my_event")
+
+        message = tools._client.send_websocket_message.await_args.args[0]
+        assert "event_data" not in message
+
+    async def test_payload_is_sent_when_given(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"context": {"id": "ctx"}}
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        await tools.ha_call_event("my_event", {"key": "value"})
+
+        message = tools._client.send_websocket_message.await_args.args[0]
+        assert message["event_data"] == {"key": "value"}

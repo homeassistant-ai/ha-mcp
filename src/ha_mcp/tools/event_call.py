@@ -62,6 +62,21 @@ def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | Non
     )
 
 
+def _fire_message(
+    command: str, event_type: str, data: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Build a WebSocket fire message, omitting an absent payload.
+
+    Core's ``fire_event`` schema types ``event_data`` as a dict, so an explicit
+    null is refused as an invalid payload; the key is simply absent when the
+    caller passed no data.
+    """
+    message: dict[str, Any] = {"type": command, "event_type": event_type}
+    if data is not None:
+        message["event_data"] = data
+    return message
+
+
 class EventCallMixin:
     """The ``ha_call_event`` tool method."""
 
@@ -179,21 +194,16 @@ class EventCallMixin:
             return None
         try:
             raw = await self._client.send_websocket_message(
-                {
-                    "type": WS_CALL_EVENT,
-                    "event_type": event_type,
-                    "event_data": data,
-                }
+                _fire_message(WS_CALL_EVENT, event_type, data)
             )
         except HomeAssistantCommandNotSent:
             return None
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             exception_to_structured_error(
                 err,
                 context={"event_type": event_type},
                 suggestions=["Check the Home Assistant connection"],
             )
-            raise  # unreachable
         if not isinstance(raw, dict):
             raise_tool_error(
                 create_error_response(
@@ -239,21 +249,16 @@ class EventCallMixin:
         fields = await self._listener_fields(event_type)
         try:
             raw = await self._client.send_websocket_message(
-                {
-                    "type": CORE_FIRE_EVENT,
-                    "event_type": event_type,
-                    "event_data": data,
-                }
+                _fire_message(CORE_FIRE_EVENT, event_type, data)
             )
         except HomeAssistantCommandNotSent:
             return None
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             exception_to_structured_error(
                 err,
                 context={"event_type": event_type},
                 suggestions=["Check the Home Assistant connection"],
             )
-            raise  # unreachable
         if not isinstance(raw, dict):
             raise_tool_error(
                 create_error_response(
