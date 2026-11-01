@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -168,7 +169,8 @@ async def test_acknowledged_completion_survives_local_response_error() -> None:
     [
         (401, "not_applied", HomeAssistantAuthError),
         (403, "not_applied", HomeAssistantAPIError),
-        (504, "unknown", HomeAssistantAPIError),
+        # The walker reports a lost answer as possibly applied (a ToolError).
+        (504, "unknown", ToolError),
     ],
 )
 async def test_http_submit_failure_preserves_application_knowledge(

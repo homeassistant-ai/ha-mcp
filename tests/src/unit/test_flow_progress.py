@@ -31,6 +31,7 @@ from ha_mcp.tools.config_entry_flow import (
     _cleanup_snapshot_creation,
     _CreationFlowProgress,
     create_config_entry,
+    set_config_subentry,
     update_config_entry_options,
 )
 from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
@@ -41,6 +42,7 @@ from ha_mcp.tools.config_entry_flow_progress import (
 from ha_mcp.tools.config_entry_flow_walker import (
     _handle_config_subentry_flow_steps,
     _handle_flow_steps,
+    leaves_flow_open,
 )
 from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_flow
 
@@ -264,65 +266,140 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
     client.abort_config_flow.assert_awaited_once_with("flow-progress")
 
 
-# --- a poll that gets no answer may have committed ---------------------------
+# --- a submit or poll that gets no answer may have committed -----------------
 #
 # The GET re-runs async_configure: past progress_done that is the step that
 # finishes the flow. A lost answer to it is the same applied_but_unverified
-# ambiguity as a lost answer to a submit.
+# ambiguity as a lost answer to a submit, in every flow kind.
+
+
+_NO_ANSWERS = [
+    pytest.param(TimeoutError(), id="timeout"),
+    pytest.param(HomeAssistantConnectionError("reset"), id="connection"),
+    pytest.param(
+        HomeAssistantAPIError("API error: 504", status_code=504), id="http-504"
+    ),
+]
+# Core moves a progress flow on only inside the GET: the client's retry after a
+# gateway 502/503/504 meets this 404 when the first attempt finished the flow.
+_POLL_404 = pytest.param(
+    HomeAssistantAPIError("API error: 404 - Invalid flow specified", status_code=404),
+    id="http-404",
+)
+
+
+async def _create_entry(client: AsyncMock, step: dict[str, Any]) -> Any:
+    client.start_config_flow.return_value = step
+    return await create_config_entry(client, "demo", {})
+
+
+async def _update_options(client: AsyncMock, step: dict[str, Any]) -> Any:
+    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
+    client.start_options_flow.return_value = step
+    return await update_config_entry_options(client, "e1", {})
+
+
+async def _create_subentry(client: AsyncMock, step: dict[str, Any]) -> Any:
+    client.start_config_subentry_flow.return_value = step
+    return await set_config_subentry(client, "e1", "plane", {})
+
+
+async def _reconfigure(client: AsyncMock, step: dict[str, Any]) -> Any:
+    client.start_reconfigure_flow.return_value = step
+    return await _run_reconfigure_flow(
+        client,
+        domain="demo",
+        entry_id="e1",
+        flow_config={},
+        rollback_metadata={},
+    )
+
+
+_FLOW_KINDS = [
+    pytest.param(
+        _create_entry, "submit_config_flow_step", "abort_config_flow", id="create"
+    ),
+    pytest.param(
+        _update_options, "submit_options_flow_step", "abort_options_flow", id="options"
+    ),
+    pytest.param(
+        _create_subentry,
+        "submit_config_subentry_flow_step",
+        "abort_config_subentry_flow",
+        id="subentry",
+    ),
+    pytest.param(
+        _reconfigure, "submit_config_flow_step", "abort_config_flow", id="reconfigure"
+    ),
+]
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_wait")
-@pytest.mark.parametrize(
-    "no_answer",
-    [
-        TimeoutError(),
-        HomeAssistantConnectionError("reset"),
-        HomeAssistantAPIError("API error: 504", status_code=504),
-        # Core finishes a flow only inside a GET: the client's retry after a
-        # gateway 502/503/504 meets this 404 when the first attempt did.
-        HomeAssistantAPIError(
-            "API error: 404 - Invalid flow specified", status_code=404
-        ),
-    ],
-    ids=["timeout", "connection", "http-504", "http-404"],
-)
-async def test_reconfigure_poll_without_an_answer_is_applied_but_unverified(
-    no_answer: Exception,
+@pytest.mark.parametrize("no_answer", [*_NO_ANSWERS, _POLL_404])
+@pytest.mark.parametrize(("run", "submit", "abort"), _FLOW_KINDS)
+async def test_a_lost_poll_answer_is_possibly_applied_in_every_flow_kind(
+    no_answer: Exception, run: Any, submit: str, abort: str
 ) -> None:
+    # Past progress_done the GET finishes the flow, whichever kind it is, so
+    # an entry may exist (or the change may be saved) when the answer is lost.
     client = _client(strings={})
     client._request.side_effect = no_answer
-    client.start_reconfigure_flow.return_value = dict(_PROGRESS)
 
     with pytest.raises(ToolError) as exc_info:
-        await _run_reconfigure_flow(
-            client,
-            domain="demo",
-            entry_id="e1",
-            flow_config={"host": "h"},
-            rollback_metadata={},
-        )
+        await run(client, dict(_PROGRESS))
 
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
-    client.abort_config_flow.assert_not_called()
+    assert json.loads(str(exc_info.value))["status"] == (
+        ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+    )
+    getattr(client, abort).assert_not_called()
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_wait")
-async def test_a_404_on_an_add_mode_poll_is_not_reported_as_possibly_applied() -> None:
-    # Only reconfigure has the applied_but_unverified contract.
+@pytest.mark.parametrize("no_answer", _NO_ANSWERS)
+@pytest.mark.parametrize(("run", "submit", "abort"), _FLOW_KINDS)
+async def test_a_lost_submit_answer_is_possibly_applied_in_every_flow_kind(
+    no_answer: Exception, run: Any, submit: str, abort: str
+) -> None:
     client = _client(strings={})
-    client._request.side_effect = HomeAssistantAPIError(
-        "API error: 404 - Invalid flow specified", status_code=404
+    getattr(client, submit).side_effect = no_answer
+
+    with pytest.raises(ToolError) as exc_info:
+        await run(client, dict(_FORM))
+
+    assert json.loads(str(exc_info.value))["status"] == (
+        ReconfigureStatus.APPLIED_BUT_UNVERIFIED
     )
-    client.start_config_flow.return_value = dict(_PROGRESS)
+    getattr(client, submit).assert_awaited_once()
+    getattr(client, abort).assert_not_called()
 
-    with pytest.raises(HomeAssistantAPIError) as exc_info:
-        await create_config_entry(client, "demo", {})
 
-    assert exc_info.value.status_code == 404
-    client.abort_config_flow.assert_awaited_once_with("f1")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("run", "submit", "abort"), _FLOW_KINDS)
+async def test_a_500_leaves_only_a_reconfigure_possibly_applied(
+    run: Any, submit: str, abort: str
+) -> None:
+    # In Core's flows only a reconfigure step writes the entry before it returns.
+    client = _client(strings={})
+    getattr(client, submit).side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
+    reconfigure = run is _reconfigure
+
+    with pytest.raises(ToolError if reconfigure else HomeAssistantAPIError) as exc_info:
+        await run(client, dict(_FORM))
+
+    getattr(client, submit).assert_awaited_once()
+    assert leaves_flow_open(exc_info.value) is reconfigure
+    assert getattr(client, abort).called is not reconfigure
+
+
+def test_only_a_flow_tool_error_can_leave_the_flow_open() -> None:
+    text = json.dumps({"status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED})
+
+    assert leaves_flow_open(ToolError(text))
+    assert not leaves_flow_open(RuntimeError(text))
+    assert not leaves_flow_open(ToolError("not json"))
 
 
 # --- every caller aborts a flow it leaves in progress ------------------------

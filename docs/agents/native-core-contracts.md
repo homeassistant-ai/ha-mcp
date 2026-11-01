@@ -222,7 +222,9 @@ is driven by the GET on the flow the frontend sends. `log_persistence` reaches
 `logger/integration_log_level` as Core's `persistence` unchanged, so Core
 validates it. HA-MCP policies here: the 120 s progress budget, the reconfigure
 preview's key check against the form, refusing writes to ha-mcp's own entries,
-secret redaction, reporting an ignored entry as `supports_options: false`
+secret redaction, reporting a submit or progress GET whose answer is lost as
+`applied_but_unverified` and leaving that flow open (Core may have committed
+it), reporting an ignored entry as `supports_options: false`
 (Core never sets it up, so its options flow can fail), and failing a describe whose step Core finishes (naming
 what Core saved, not undoing it) or that reaches a step without a form.
 

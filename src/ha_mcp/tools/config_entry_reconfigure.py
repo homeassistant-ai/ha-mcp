@@ -12,7 +12,6 @@ sentinel-rejection helpers), never the reverse. Identity comparison lives in
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
@@ -27,7 +26,12 @@ from .config_entry_flow import (
     refuse_component_entry,
 )
 from .config_entry_flow_errors import FlowRef, ReconfigureStatus
-from .config_entry_flow_walker import POST_COMMIT_STATUSES, _handle_flow_steps
+from .config_entry_flow_walker import (
+    POST_COMMIT_STATUSES,
+    _handle_flow_steps,
+    flow_error_payload,
+    leaves_flow_open,
+)
 from .config_entry_identity import (
     ReconfigureIdentity,
     _classify_related_entries,
@@ -70,7 +74,7 @@ class PreparedReconfigure:
 
 
 def _raise_post_commit_verification_error(
-    error: ToolError,
+    error: BaseException,
     *,
     entry_id: str,
     domain: str,
@@ -81,17 +85,11 @@ def _raise_post_commit_verification_error(
     Keeps the raiser's own status when it named one, so a device-swap safety
     violation stays distinguishable from a registry read that timed out.
     """
-    payload: Any = None
-    try:
-        payload = json.loads(str(error))
-    except (TypeError, ValueError):
-        payload = None
-    if not isinstance(payload, dict):
-        payload = create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Reconfiguration was applied but could not be verified: {error}",
-            details=str(error),
-        )
+    payload = flow_error_payload(error) or create_error_response(
+        ErrorCode.SERVICE_CALL_FAILED,
+        f"Reconfiguration was applied but could not be verified: {error}",
+        details=str(error),
+    )
 
     if payload.get("status") not in POST_COMMIT_STATUSES:
         payload["status"] = ReconfigureStatus.APPLIED_BUT_UNVERIFIED
@@ -609,31 +607,14 @@ async def _run_reconfigure_flow(
             keep_current_values=True,
             flow=FlowRef(domain, "config"),
         )
-    except asyncio.CancelledError:
-        await _abort_flow_best_effort(client, flow_id)
-        raise
-    except ToolError as flow_error:
-        try:
-            payload = json.loads(str(flow_error))
-        except (TypeError, ValueError):
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        # A flow HA has already committed must not be aborted, unless the walker
-        # ran out of step budget and left it pending.
-        if payload.get("status") not in POST_COMMIT_STATUSES or payload.get(
-            "flow_budget_exhausted"
-        ):
-            await _abort_flow_best_effort(client, flow_id)
-        if payload.get("status") in POST_COMMIT_STATUSES:
+    except (Exception, asyncio.CancelledError) as flow_error:
+        if leaves_flow_open(flow_error):
             _raise_post_commit_verification_error(
                 flow_error,
                 entry_id=entry_id,
                 domain=domain,
                 rollback_metadata=rollback_metadata,
             )
-        raise
-    except Exception:
         await _abort_flow_best_effort(client, flow_id)
         raise
     return flow_id, result

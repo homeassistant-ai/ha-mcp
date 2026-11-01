@@ -1670,14 +1670,17 @@ class IntegrationTools:
         UI would (may pair devices, scan the network, create entities). Flows
         requiring a browser step (OAuth) error out at that step. A progress
         step (Home Assistant working in the background) is waited out for up
-        to 120 s; after that the flow is aborted. An aborted flow or a
-        rejected form returns Core's own text next to the key (reason_text,
-        error_text), as the HA UI shows it. Reconfigure edits the
-        settings a live integration connects with: a wrong host or credential
-        takes it offline, and there is no automatic rollback — the returned
-        rollback metadata describes repeating the official flow by hand with
-        the previous values, which this tool cannot read back. The preflight
-        opens the reconfigure flow, returns its first form as
+        to 120 s; after that the flow is aborted. When Home Assistant does not
+        answer a submit or a progress poll (or, on reconfigure, answers with
+        any 5xx), the error carries status applied_but_unverified: the entry
+        may exist or the change may be saved, so check it before retrying. An
+        aborted flow or a rejected form returns Core's own text next to the
+        key (reason_text, error_text), as the HA UI shows it. Reconfigure
+        edits the settings a live integration connects with: a wrong host or
+        credential takes it offline, and there is no automatic rollback — the
+        returned rollback metadata describes repeating the official flow by
+        hand with the previous values, which this tool cannot read back. The
+        preflight opens the reconfigure flow, returns its first form as
         reconfigure_form (fields, current values, help text) and aborts it:
         config keys that form does not declare are warned about, or refused
         when it is the last form. Home Assistant validates values only on

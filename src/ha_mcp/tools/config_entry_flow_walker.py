@@ -11,10 +11,16 @@ public entry points in ``config_entry_flow`` import from here.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, NoReturn
 
-from ..client.rest_client import _NO_ANSWER_ERRORS, HomeAssistantAPIError
+from .._vendor.fastmcp.exceptions import ToolError
+from ..client.rest_client import (
+    _NO_ANSWER_ERRORS,
+    _RETRYABLE_GATEWAY_STATUS,
+    HomeAssistantAPIError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_errors import (
     FlowRef,
@@ -69,6 +75,22 @@ POST_COMMIT_STATUSES = frozenset(
 )
 
 
+def flow_error_payload(error: BaseException) -> dict[str, Any]:
+    """The JSON object a flow ``ToolError`` carries; empty for anything else."""
+    if not isinstance(error, ToolError):
+        return {}
+    try:
+        payload = json.loads(str(error))
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def leaves_flow_open(error: BaseException) -> bool:
+    """Whether a failed walk must not abort its flow: HA may have committed it."""
+    return flow_error_payload(error).get("status") in POST_COMMIT_STATUSES
+
+
 async def _submit_step(
     submit_fn: Any,
     flow_id: str,
@@ -94,55 +116,46 @@ async def _submit_step(
                 submitted=payload,
                 is_reconfigure=is_reconfigure,
             )
-        if is_reconfigure and (api_err.status_code or 0) >= 500:
-            # A 5xx is the HTTP spelling of "no answer came back". A 504 from
-            # a proxy in front of Home Assistant means the upstream WAS
-            # reached and simply did not answer in time, so the submit — the
-            # call that probes, commits and reloads — may already have
-            # committed. Without a status this re-raised bare and the generic
-            # handler in _run_reconfigure_flow aborted a possibly-committed
-            # flow, which is exactly what POST_COMMIT_STATUSES exists to
-            # suppress. 4xx stays a re-raise: HA parsed the request and
-            # answered about it (rejection, auth, unknown flow).
-            _raise_reconfigure_no_answer(
+        status = api_err.status_code or 0
+        if status in _RETRYABLE_GATEWAY_STATUS or (is_reconfigure and status >= 500):
+            # 502/503/504 mean no answer came back: the submit may have reached
+            # Home Assistant and committed. On reconfigure any 5xx may follow
+            # the step's own write to the entry; other kinds are written by Core
+            # only after the step returns (a create flow's async_on_create_entry
+            # can still 500 after the save, which this does not tell apart).
+            # Anything else re-raises: HA answered.
+            _raise_no_answer(
                 api_err,
                 flow_id=flow_id,
                 payload=payload,
                 current_step=current_step,
                 error_code=ErrorCode.SERVICE_CALL_FAILED,
-                detail=f"HTTP {api_err.status_code}",
+                detail=f"HTTP {status}",
             )
         raise
     except (TimeoutError, *_NO_ANSWER_ERRORS) as no_answer:
         # Every class here is evidence that NO ANSWER came back — see
         # _NO_ANSWER_ERRORS in rest_client.py — as opposed to Home Assistant
         # answering with a rejection (which the 400/422 branch above handles).
-        # The submit is the call that probes, commits and reloads, so losing
-        # the answer to it is precisely the applied_but_unverified ambiguity:
-        # HA may already have committed.
-        #
-        # Widening beyond TimeoutError matters because rest_client funnels
-        # EVERY httpx transport failure (ConnectError, TimeoutException,
-        # HTTPError) into HomeAssistantConnectionError, so an ordinary
-        # connection reset after the POST reached HA took the old re-raise
-        # path: it reached the caller with no status at all, and the generic
-        # handler upstream aborted a flow that may have committed. A caller
-        # reads a bare connection error as "nothing happened" and retries.
-        #
-        # Carrying the post-commit status also suppresses that abort, since
-        # _run_reconfigure_flow gates it on POST_COMMIT_STATUSES.
-        if is_reconfigure:
-            _raise_reconfigure_no_answer(
-                no_answer,
-                flow_id=flow_id,
-                payload=payload,
-                current_step=current_step,
-                error_code=ErrorCode.TIMEOUT_OPERATION
-                if isinstance(no_answer, TimeoutError)
-                else ErrorCode.SERVICE_CALL_FAILED,
-                detail=type(no_answer).__name__,
-            )
-        raise
+        # The submit is the call that commits (creates the entry, saves the
+        # options, or probes and reloads on reconfigure), so losing the answer
+        # to it is precisely the applied_but_unverified ambiguity: HA may
+        # already have committed, and a retry can repeat the change.
+        # rest_client funnels every httpx transport failure into
+        # HomeAssistantConnectionError, so a connection reset after the POST
+        # reached HA lands here too. Callers keep the flow open on this status
+        # (leaves_flow_open; the snapshot paths on their "unknown" apply_status).
+        _raise_no_answer(
+            no_answer,
+            flow_id=flow_id,
+            payload=payload,
+            current_step=current_step,
+            error_code=ErrorCode.TIMEOUT_OPERATION
+            if isinstance(no_answer, TimeoutError)
+            else ErrorCode.SERVICE_CALL_FAILED,
+            detail=type(no_answer).__name__,
+        )
+        raise  # not reached; an explicit end of this path for CodeQL
 
 
 async def _wait_for_progress(
@@ -171,11 +184,12 @@ async def _wait_for_progress(
                 is_reconfigure=is_reconfigure,
             )
         except HomeAssistantAPIError as err:
-            # Core finishes a flow only inside a GET. A 404 here is what the
-            # client's retry after a gateway 502/503/504 meets when the first
-            # attempt did (or Home Assistant restarted in between).
-            if is_reconfigure and err.status_code == 404:
-                _raise_reconfigure_no_answer(
+            # Core moves a progress flow on only inside the GET. A 404 here is
+            # what the client's retry after a gateway 502/503/504 meets when
+            # the first attempt finished the flow (or Home Assistant restarted
+            # in between).
+            if err.status_code == 404:
+                _raise_no_answer(
                     err,
                     flow_id=flow_id,
                     payload={},
@@ -190,7 +204,7 @@ async def _wait_for_progress(
     )
 
 
-def _raise_reconfigure_no_answer(
+def _raise_no_answer(
     cause: BaseException,
     *,
     flow_id: str,
@@ -199,18 +213,21 @@ def _raise_reconfigure_no_answer(
     error_code: ErrorCode,
     detail: str,
 ) -> NoReturn:
-    """Raise ``applied_but_unverified`` for a submit whose answer was lost.
+    """Raise ``applied_but_unverified`` for a submit or poll whose answer was lost.
 
-    Carrying the post-commit status is what suppresses the flow abort, since
-    ``_run_reconfigure_flow`` gates that on ``POST_COMMIT_STATUSES``.
+    Carrying the post-commit status is what suppresses the flow abort: see
+    ``leaves_flow_open``.
     """
     raise_tool_error(
         create_error_response(
             error_code,
-            "Reconfigure flow submission got no answer from Home "
+            "Flow submission got no answer from Home "
             f"Assistant ({detail}); the change may have been applied",
             suggestions=[
-                "Do not retry automatically. Inspect the config entry in Home Assistant before attempting rollback."
+                "Do not retry automatically: a retry can create a duplicate "
+                "entry, repeat the change, or be refused as already_in_progress "
+                "while this flow stays open. Check the config entry in Home "
+                "Assistant first."
             ],
             context={
                 "flow_id": flow_id,
@@ -723,10 +740,11 @@ async def _handle_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
-                # Reconfigure-only keys: the reconfigure caller reads both to
-                # decide whether to abort the pending flow. Adding them to
-                # every flow's error shape would change the public contract of
-                # the add-integration, options and helper paths for nothing.
+                # Reconfigure-only keys: they tell a reconfigure caller that
+                # nothing was applied and the pending flow is aborted. Adding
+                # them to every flow's error shape would change the public
+                # contract of the add-integration, options and helper paths
+                # for nothing.
                 **(
                     {
                         "flow_budget_exhausted": True,
@@ -960,10 +978,11 @@ async def _handle_config_subentry_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
-                # Reconfigure-only keys: the reconfigure caller reads both to
-                # decide whether to abort the pending flow. Adding them to
-                # every flow's error shape would change the public contract of
-                # the add-integration, options and helper paths for nothing.
+                # Reconfigure-only keys: they tell a reconfigure caller that
+                # nothing was applied and the pending flow is aborted. Adding
+                # them to every flow's error shape would change the public
+                # contract of the add-integration, options and helper paths
+                # for nothing.
                 **(
                     {
                         "flow_budget_exhausted": True,
