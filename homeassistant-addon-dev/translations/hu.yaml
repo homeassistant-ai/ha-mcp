@@ -1,0 +1,281 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/hu.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  verify_ssl:
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
+  ha_tool_concurrency:
+    name: Home Assistant tool concurrency
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Also part of the prompt of Home Assistant conversation
+      agents (Assist) that use this toolset. Use it for guidance that should reach
+      all your clients at once; keep it short and free of secrets. Leave empty to
+      add nothing. Requires restart; clients see the change when they reconnect.
+  enable_beta_features:
+    name: Enable beta features (master)
+    description: ⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant
+      installation. They write to your YAML config, your filesystem, install custom
+      components, run arbitrary sandboxed Python, and edit tool docstrings the AI
+      sees. There is no warranty and no support guarantee — you enable them at your
+      OWN RISK. Take a Home Assistant backup before turning this on, and never enable
+      in production without one. Master gate for the experimental sub-flags below;
+      sub-flags are ignored at runtime while this master is off, even when explicitly
+      set to true. The same toggle is also surfaced in the web settings UI under "Beta
+      features (dangerous)" — either surface reflects the other on restart.
+  enable_tool_search:
+    name: Enable tool search
+    description: 'Replace the full tool catalog with search-based discovery. Reduces
+      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
+      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
+      Claude Code) — the two search layers conflict, and the client''s built-in tool
+      search is the better choice there; leave this off. Whether tools are deferred
+      depends on your client and model combination: use this when your setup loads
+      the full catalog up front — models without native deferred tools (e.g. Gemini,
+      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
+      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
+      Some Codex models and ChatGPT include deferred tools too — check your client/model
+      directly to confirm its features so you don''t leave this enabled unnecessarily.
+      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
+      Requires restart to take effect.'
+  tool_search_max_results:
+    name: Tool search max results
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
+  enable_tool_security_policies:
+    name: Enable Tool Security Policies (advanced)
+    description: Gate high-stakes tool calls (lock/alarm control, automation writes,
+      etc.) behind user approval. When a guarded tool is called, the agent tells the
+      user to open the Tool Security Policies tab in the web UI and click Approve
+      before the call proceeds. Per-tool rules with optional argument conditions are
+      configured in the Tool Security Policies tab. Off by default. Requires restart
+      to take effect.
+  enable_security_policy_tool:
+    name: Let AI agents edit tool security policies
+    description: 'Registers the ha_manage_security_policy tool, which lets connected
+      AI agents read and rewrite the tool security policies — including removing approval
+      gates. Off by default. Independent of the Tool Security Policies option above:
+      this controls who can edit the rules, not whether they are enforced. The tool
+      cannot see or decide pending approvals. To keep a human in the loop, gate the
+      tool before enabling it: switch on "security gated" for Manage Security Policy
+      in the Tools tab of the web UI. Requires restart to take effect.'
+  read_only_mode:
+    name: Read Only Mode
+    description: Toggles all write tools off, and removes ability for tools to make
+      any write or destructive calls. Mixed read/write tools — backups, Apps (add-ons),
+      energy preferences, voice pipelines, and code mode when enabled — stay available
+      with their write operations blocked. Same toggle as the web UI Tools tab. Off
+      by default. Requires restart to take effect.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      App (add-on) options and integration fields marked as passwords are replaced
+      with a set/empty marker (so "is this credential configured?" stays answerable),
+      and other tool responses are scrubbed of secret values the server has already
+      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
+      would corrupt unrelated output). Other fields are not detected, except private
+      keys in app options and the app option names listed below. Off by default.
+  redact_app_option_keys:
+    name: Extra app option keys to redact
+    description: App (add-on) option names to redact like password fields, for apps
+      whose schema stores a secret as plain text (for example backup_password). Separate
+      names with commas or new lines. A name applies to every app; write app_slug:name
+      to limit it to one app. Naming an option group covers every option in it. Used
+      only while Redact Secrets is on. Empty by default.
+  ipv6_allowed_networks:
+    name: Extra IPv6 networks allowed
+    description: 'IPv6 clients reach this server''s own port only from the local network:
+      loopback, link-local, unique local (fc00::/7) and the networks the Home Assistant
+      host is directly connected to. IPv4 is unaffected. List other IPv6 networks
+      to allow, separated by commas or new lines (for example 2001:db8:5::/48). Adding
+      ::/0 allows every IPv6 client, including from the internet if your router lets
+      inbound IPv6 through.'
+  enable_mandatory_bps:
+    name: Attach best-practice skills on writes
+    description: 'Master switch for the write-tool skill content delivery feature
+      (issue #1182). When enabled (default), the six config write tools (automations,
+      scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant
+      best-practice reference files under `skill_content` on every successful write,
+      plus auto-embed any reference sections cited by best-practice warnings. Each
+      tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false
+      on subsequent calls once it has the content. When this master switch is off,
+      NO skill_content goes out regardless of the per-call parameter or BP warnings.
+      Recommended ON as the first choice; disable only for models with very small
+      context windows. Turning this off may degrade write accuracy. Requires restart
+      to take effect.'
+  enable_strict_mandatory_bps:
+    name: Strict best-practices mode
+    description: 'Strict mode: prevents the client from using the tool until it can
+      prove that it read the best practices. While on, the six best-practice write
+      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
+      and return an error directing the client to read the best-practices skill via
+      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
+      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
+      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
+      option above and inert while that parent is off. Requires restart to take effect.'
+  enable_yaml_config_editing:
+    name: Enable YAML config editing (beta)
+    description: Beta feature. Allows AI assistants to add, replace, or remove top-level
+      keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed
+      (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant,
+      http, and recorder are blocked. Each edit validates YAML syntax, runs a config
+      check, and creates an automatic backup. Changes to most keys require a full
+      HA restart to take effect. See docs/beta.md for known limitations. Dedicated
+      tools (automations, scripts, scenes, helpers, template sensors) should be preferred
+      when available. REQUIRES the master "Enable beta features" toggle above (and
+      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
+      of its value here.
+  enable_yaml_edit_confirm:
+    name: Require confirmation for YAML edits (diff preview)
+    description: 'Sub-toggle of YAML config editing, ON by default (recommended).
+      The first ha_config_set_yaml call returns a unified diff of exactly what would
+      change on disk plus a confirm token and writes nothing; the edit only lands
+      when the call is repeated with that token. Exists so unintended changes outside
+      the requested edit are caught before they reach disk (issue #1720). Turn off
+      only to save one round-trip per edit.'
+  enable_yaml_packages_automation:
+    name: Allow automation in packages/*.yaml
+    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
+      yaml_path='automation' inside packages/*.yaml. When off, the call is rejected
+      both client-side and server-side. The storage-mode tool (ha_config_set_automation)
+      is unaffected. Default OFF; only takes effect when "Enable YAML config editing"
+      above is also on.
+  enable_yaml_packages_script:
+    name: Allow script in packages/*.yaml
+    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
+      yaml_path='script' inside packages/*.yaml. When off, the call is rejected both
+      client-side and server-side. The storage-mode tool (ha_config_set_script) is
+      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
+      above is also on.
+  enable_yaml_packages_scene:
+    name: Allow scene in packages/*.yaml
+    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
+      yaml_path='scene' inside packages/*.yaml. When off, the call is rejected both
+      client-side and server-side. The storage-mode tool (ha_config_set_scene) is
+      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
+      above is also on.
+  enable_lite_docstrings:
+    name: Enable lite tool docstrings (beta)
+    description: 'Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation,
+      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
+      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
+      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
+      ha_report_issue) with shorter variants that defer schema and example detail
+      to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue
+      defers to the instructions field of its own response instead. WARNING: this
+      reduces idle token usage, but may degrade LLM performance — the trimmed descriptions
+      rely on the LLM actually calling the skill tool or reading the skill resource
+      for detail, which is not guaranteed (some models will skip the extra tool call
+      and end up with less guidance than they had before). Best paired with a client
+      that supports MCP resources or with enable_tool_search. Requires restart to
+      take effect. REQUIRES the master "Enable beta features" toggle above (and in
+      the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
+      of its value here.'
+  enable_filesystem_tools:
+    name: Enable filesystem tools (beta)
+    description: 'Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
+      access to your Home Assistant filesystem. WARNING: This gives the MCP server
+      sensitive direct file access to your system. Only enable if you trust the AI
+      assistant with file operations. Requires restart to take effect. REQUIRES the
+      master "Enable beta features" toggle above (and in the web UI) to be on — otherwise
+      this sub-flag is ignored at runtime regardless of its value here.'
+  enable_code_mode:
+    name: Enable custom tool sandbox (beta)
+    description: Beta feature. Enables the ha_manage_custom_tool tool, which lets
+      AI assistants create, run, save, and delete custom Python code in a secure sandbox
+      when no built-in tool can handle the request. Code runs in an isolated interpreter
+      with no filesystem or arbitrary network access. Sandbox code can hit the HA
+      REST API (api_get/api_post), send WebSocket commands (ws_send), call existing
+      MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools
+      persist to /data/saved_tools.json by default so they survive app (add-on) restarts,
+      and are visible to any client that can connect. See docs/beta.md for known limitations.
+      Requires restart to take effect. REQUIRES the master "Enable beta features"
+      toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
+      at runtime regardless of its value here.
+  enable_dashboard_screenshot:
+    name: Enable dashboard screenshot mode (beta)
+    description: 'Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot
+      tool plus include_screenshot / return_screenshot options on the dashboard get/set
+      tools, so AI assistants can inspect responsive Lovelace images. Supports stable
+      named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering
+      runs in a separate app: balloob''s Puppet or WPE Screenshot Engine. Install
+      and configure one engine with its own Home Assistant long-lived access token.
+      HA OS / Supervised discovers a started engine through Supervisor; Docker/Container
+      deployments run it as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Nothing heavy is installed unless you enable this and install an engine. Requires
+      restart to take effect. REQUIRES the master "Enable beta features" toggle above
+      (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime
+      regardless of its value here.'
+  enable_auto_backup:
+    name: Auto-backup edits
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
+  auto_backup_throttle_minutes:
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
+  auto_backup_retain_per_entity:
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
+  enable_snapshot_delete:
+    name: Allow snapshot deletion
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
+  snapshot_delete_min_age_days:
+    name: Minimum snapshot age to delete (days)
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
+  disabled_tools:
+    name: Disabled tools (comma-separated)
+    description: Tools listed here are forced off and locked in the web Settings UI
+      (Tools tab) — they cannot be re-enabled there without unsetting this option
+      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
+      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
+      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
+      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
+      ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Pinned tools (comma-separated)
+    description: Tools listed here are locked pinned — they appear at the top of the
+      Tools tab and cannot be unpinned from the web Settings UI without unsetting
+      this option first. Useful in combination with Tool Search. Comma-separated tool
+      names.
+  secret_path:
+    name: Secret path override
+    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
+      the auto-generated secure path.
+
+      '

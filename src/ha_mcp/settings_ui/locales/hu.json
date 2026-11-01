@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "native_name": "Magyar",
+    "dir": "ltr"
+  },
+  "messages": {
+    "accessibility.storage_blocked": "A böngészője letiltja a webhelyadatok tárolását; a választásai csak erre a munkamenetre érvényesek.",
+    "actions.approve": "Jóváhagyás",
+    "actions.deny": "Elutasítás",
+    "notice.restart.standalone": "⚠ A módosítások mentve. Indítsa újra a ha-mcp folyamatot, majd frissítse az MCP-eszközlistát az AI-kliensében.",
+    "policies.operators.exists": "létezik",
+    "policies.operators.exists_long": "létezik (tetszőleges értékkel)",
+    "policies.operators.eq": "egyenlő",
+    "policies.operators.neq": "NEM egyenlő",
+    "policies.operators.in": "a következők egyike",
+    "policies.operators.not_in": "NEM a következők egyike",
+    "policies.operators.contains": "tartalmazza",
+    "policies.operators.regex": "illeszkedik a reguláris kifejezésre",
+    "policies.operators.gt": "nagyobb, mint",
+    "policies.operators.lt": "kisebb, mint",
+    "policies.pending.already_decided": "Erről a kérelemről már döntés született ({decision}), esetleg egy másik lapon vagy munkamenetben.",
+    "policies.pending.decision.approved": "jóváhagyva",
+    "policies.pending.decision.denied": "elutasítva",
+    "visibility.errors.conflict": "A konfigurációt egy másik lapon vagy munkamenetben módosították. Töltse be újra az oldalt, majd alkalmazza ismét a módosításait."
+  }
+}
