@@ -90,13 +90,13 @@ async def test_installed_and_built_in_themes_render(
 
 @pytest.mark.parametrize(
     ("theme", "dark_mode", "rendered"),
-    [("Flat Blue", True, "light mode"), ("Night Only", False, "dark mode")],
+    [("Flat Blue", True, "no dark variant"), ("Night Only", False, "no light variant")],
     ids=["no-dark-mode", "dark-only"],
 )
-async def test_a_mode_the_theme_lacks_says_which_mode_renders(
+async def test_a_mode_the_theme_does_not_define_is_reported(
     engine: list[str], theme: str, dark_mode: bool, rendered: str
 ) -> None:
-    """The frontend overrides dark_mode when the theme lacks that mode."""
+    """dark_mode naming a mode the theme does not define is reported."""
     warnings: list[str] = []
     await capture.capture_dashboard_images(
         "lovelace/0",

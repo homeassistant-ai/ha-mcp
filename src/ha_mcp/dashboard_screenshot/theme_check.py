@@ -32,16 +32,18 @@ async def check_requested_theme(
     """Refuse a theme Home Assistant does not have.
 
     Returns warnings for a theme list that could not be read and for a
-    ``dark_mode`` the theme's modes override (the frontend renders a theme
-    without a dark mode light, and one with only a dark mode dark).
+    ``dark_mode`` naming a mode the theme's data does not define.
     """
     if theme is None or client is None or theme == _BUILT_IN_THEME:
         return []
     try:
         result = await client.send_websocket_message({"type": "frontend/get_themes"})
-    except Exception as exc:  # noqa: BLE001  # an optional pre-check must not fail the render
+    except Exception as exc:  # an optional pre-check must not fail the render
         logger.warning(
-            "frontend/get_themes failed; theme %r not checked: %s", theme, exc
+            "frontend/get_themes failed; theme %r not checked: %s",
+            theme,
+            exc,
+            exc_info=True,
         )
         return _unchecked(theme, str(exc))
     if isinstance(result, dict) and result.get("success") is False:
@@ -65,12 +67,12 @@ async def check_requested_theme(
         modes = {}
     if dark_mode and "dark" not in modes:
         return [
-            f"Theme {theme!r} defines no dark mode in Home Assistant, so the "
-            "frontend renders it in light mode."
+            f"Theme {theme!r} defines no dark mode in Home Assistant's theme "
+            "list, so dark_mode=true has no dark variant to use."
         ]
     if not dark_mode and modes and "light" not in modes:
         return [
-            f"Theme {theme!r} defines only a dark mode in Home Assistant, so the "
-            "frontend renders it in dark mode."
+            f"Theme {theme!r} defines only a dark mode in Home Assistant's theme "
+            "list, so dark_mode=false has no light variant to use."
         ]
     return []
