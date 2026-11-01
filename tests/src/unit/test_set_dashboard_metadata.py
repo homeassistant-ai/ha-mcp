@@ -564,19 +564,25 @@ class TestSetDashboardUrlPathCreationContract:
         }
 
     @pytest.mark.asyncio
-    async def test_create_without_a_title_leaves_the_title_to_core(
+    async def test_create_without_a_title_gets_cores_refusal_not_an_invented_title(
         self, set_tool: Any, mock_client: MagicMock
     ) -> None:
-        """Core requires a title on create; the tool must not invent one."""
+        """Core requires a title on create; the tool sends only what it was given
+        (a blank icon is left out) and relays Core's refusal as invalid input."""
         mock_client.send_websocket_message.side_effect = [
             {"result": []},
-            {"success": True, "result": {"id": "new_map"}},
-            {"result": {"views": []}},
+            {
+                "success": False,
+                "error": "Command failed: required key not provided at 'title'. "
+                "Got None",
+                "error_code": "invalid_format",
+            },
         ]
 
-        await set_tool(
-            url_path="new-map", icon="", require_admin=True, show_in_sidebar=False
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                url_path="new-map", icon="", require_admin=True, show_in_sidebar=False
+            )
 
         assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
             "type": "lovelace/dashboards/create",
@@ -584,6 +590,9 @@ class TestSetDashboardUrlPathCreationContract:
             "require_admin": True,
             "show_in_sidebar": False,
         }
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "title" in body["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_existing_hyphenless_dashboard_full_config_update_is_allowed(
