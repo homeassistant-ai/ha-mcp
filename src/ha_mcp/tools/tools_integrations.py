@@ -337,7 +337,8 @@ class IntegrationTools:
                 "when supports_options=true. Without entry_id but with domain, "
                 "describe that integration's setup form as config_flow_schema "
                 "(same shape). The flow is started and aborted, so nothing is "
-                "added.",
+                "added, unless it creates an entry without asking (warnings "
+                "then says so).",
                 default=False,
             ),
         ] = False,

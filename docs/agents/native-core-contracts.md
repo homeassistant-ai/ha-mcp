@@ -192,6 +192,35 @@ the `enabled` and `category` parameters out of the stored config, blueprint
 empty-list stripping, the best-practice checker and the reference
 validator.
 
+`ha_get_integration` and `ha_set_integration` pass Core's config-entry
+contracts through. An entry is Core's `ConfigEntry.as_json_fragment` row with
+every field kept: from the component's `config_entries` command (which adds
+`unique_id` and the stored options) or Core's REST entry list otherwise. The
+list's `domain` and `integration_type` go to Core's REST `?domain=` and
+`?type=`, so Core's own matching rule applies (an unknown type is not
+rejected); the component command has no type filter, so that path keeps the
+rows whose entry ids Core's `?type=` answer holds. One entry is read with
+WebSocket `config_entries/get_single`, Core's `not_found` being the 404; the
+REST list is the fallback when no WebSocket answer comes back or Core answers
+`unauthorized` (`get_single` is admin-only, the REST list is not).
+`include_schema` (options flow, or the setup flow of `domain` without an
+entry), `include_subentry_schema` and the reconfigure preview start Core's own
+flow, describe its first step in the helper describe's compact `fields` shape
+(current values from `suggested_value`, help text from Core's strings) and
+abort it. A menu lists Core's menu options; `menu_choice` submits
+`next_step_id` to the same flow. Form errors, abort reasons and progress
+actions keep Core's key and add Core's string (`error_text`, `reason_text`,
+`progress_action_text`), looked up as the frontend's flow dialogs do under
+`config`, `options` or `config_subentries.<type>` (an abort's
+`translation_domain` names the owning integration) and filled with the step's
+`description_placeholders`; a key without a string stays raw. A progress step
+is driven by the GET on the flow the frontend sends. `log_persistence` reaches
+`logger/integration_log_level` as Core's `persistence` unchanged, so Core
+validates it. HA-MCP policies here: the 120 s progress budget, the reconfigure
+preview's key check against the form, refusing writes to ha-mcp's own entries,
+secret redaction, and reporting (not undoing) a setup flow that creates an
+entry without asking.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative
