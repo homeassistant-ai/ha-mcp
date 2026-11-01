@@ -3,6 +3,7 @@
 import base64
 import json
 import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,12 @@ from ha_mcp.tools.tools_resources import (
     _is_data_url,
     register_resources_tools,
 )
+
+_REGISTERED_TOOLS = {
+    name
+    for path in Path(tools_resources.__file__).parent.glob("*.py")
+    for name in re.findall(r'@tool\(\s*name="(ha_[a-z_]+)"', path.read_text())
+}
 
 
 def _legacy_url(content: str, resource_type: str = "module") -> str:
@@ -1010,37 +1017,20 @@ class TestHaConfigSetDashboardResource:
     # ---- HA-config YAML misroute rejection (#1072) ----
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("content", "marker", "tool"),
-        [
-            (
-                "scene:\n  - id: 'luce'\n    name: Luce Notturna\n"
-                "    entities:\n      light.led_tavolo:\n        state: 'on'\n",
-                "scene:",
-                "ha_config_set_scene",
-            ),
-            (
-                "template:\n  - sensor:\n      - name: Temp\n        state: 21\n",
-                "template:",
-                "ha_config_set_helper(helper_type='template'",
-            ),
-        ],
-        ids=["scene", "template"],
-    )
-    async def test_inline_rejects_config_yaml_pointing_at_the_tool_that_writes_it(
-        self, set_tool, mock_client, content, marker, tool
+    @pytest.mark.parametrize("marker", sorted(tools_resources._HA_CONFIG_YAML_MARKERS))
+    async def test_inline_rejects_config_yaml_pointing_at_a_tool_that_exists(
+        self, set_tool, mock_client, marker
     ):
-        """A model sending scene/template YAML as resource content (the small-model
-        misroute) is pointed at the ha-mcp tool that writes it."""
+        """A model sending config YAML as resource content (the small-model
+        misroute) is pointed at an ha-mcp tool that exists, not an issue number."""
         with pytest.raises(ToolError) as exc_info:
-            await set_tool(content=content, resource_type="module")
+            await set_tool(content=f"{marker}:\n  - id: x\n", resource_type="module")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert marker in error_data["error"]["message"]
-        # `context=` fields are flattened to the top level by create_error_response
-        assert error_data["detected_marker"] == marker
-        assert any(tool in s for s in error_data["error"]["suggestions"])
+        assert error_data["detected_marker"] == f"{marker}:"
+        named = set(re.findall(r"\bha_[a-z_]+", error_data["error"]["suggestions"][0]))
+        assert named and named <= _REGISTERED_TOOLS
         assert not re.search(r"#\d", json.dumps(error_data["error"]))
         mock_client.send_websocket_message.assert_not_called()
 
