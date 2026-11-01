@@ -4,7 +4,7 @@
 its config ``entry_id`` via ``resolve_entry_id``, which dumped EVERY config entry
 over the legacy ``config_entries/get`` WS read and filtered client-side. When the
 component advertises ``config_entries`` the domain-scoped read now rides one
-``ha_mcp_tools/config_entries`` frame (shared ``_fetch_entries_via_component``);
+``ha_mcp_tools/config_entries`` frame (shared ``fetch_config_entries``);
 the legacy ``config_entries/get`` dump stays the fallback. These pin the seam:
 component-hit (no legacy dump), legacy fallback on no-caps, ``unknown_command`` →
 invalidate caps + legacy, an establish failure → legacy, and
@@ -21,7 +21,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_integrations
+from ha_mcp.tools import component_api, component_config_entries
 from ha_mcp.tools.radio.base import resolve_entry_id
 
 from ._component_routing_helpers import (
@@ -85,7 +85,7 @@ async def test_resolve_entry_id_served_by_component() -> None:
     )
     client = RoutingClient()
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         entry_id = await resolve_entry_id(client, "zwave_js")
 
     assert entry_id == "cfg-zwave"
@@ -103,7 +103,7 @@ async def test_resolve_entry_id_capsless_uses_legacy_dump() -> None:
     )
     client = RoutingClient(entries=[_entry()])
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         entry_id = await resolve_entry_id(client, "zwave_js")
 
     assert entry_id == "cfg-zwave"
@@ -120,7 +120,7 @@ async def test_resolve_entry_id_unknown_command_invalidates_and_falls_back() -> 
     )
     client = RoutingClient(entries=[_entry()])
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         entry_id = await resolve_entry_id(client, "zwave_js")
 
     assert entry_id == "cfg-zwave"
@@ -140,7 +140,9 @@ async def test_resolve_entry_id_establish_failure_falls_back_to_legacy() -> None
     client = RoutingClient(entries=[_entry()])
 
     with patch_ws_establish_failure(
-        caps_ws, tools_integrations, HomeAssistantConnectionError("WS establish failed")
+        caps_ws,
+        component_config_entries,
+        HomeAssistantConnectionError("WS establish failed"),
     ):
         entry_id = await resolve_entry_id(client, "zwave_js")
 
@@ -158,7 +160,7 @@ async def test_resolve_entry_id_not_configured_returns_none() -> None:
     )
     client = RoutingClient()
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         entry_id = await resolve_entry_id(client, "zwave_js")
 
     assert entry_id is None

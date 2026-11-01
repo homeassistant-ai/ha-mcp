@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.tools import component_api, tools_integrations
+from ha_mcp.tools import component_api, component_config_entries
 from ha_mcp.tools.tools_integrations import options_from_form_flow
 
 from ._component_routing_helpers import patch_ws
@@ -119,7 +119,7 @@ async def test_single_entry_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     assert resp["success"] is True
@@ -159,7 +159,7 @@ async def test_single_entry_include_subentries_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1", include_subentries=True)
 
     assert resp["subentry_count"] == 1
@@ -193,7 +193,7 @@ async def test_list_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(include_options=True)
 
     by_id = {e["entry_id"]: e for e in resp["entries"]}
@@ -217,7 +217,7 @@ async def test_list_domain_filter_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(domain="mqtt")
 
     assert [e["entry_id"] for e in resp["entries"]] == ["c1"]
@@ -240,7 +240,7 @@ async def test_options_secret_scrub_end_to_end(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     assert resp["entry"]["options"] == {"password": "**redacted**", "keep": 1}
@@ -261,7 +261,7 @@ async def test_options_shape_caveat_raw_persisted(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     component_options = resp["entry"]["options"]
@@ -312,7 +312,7 @@ async def test_single_entry_returns_stored_options_unchanged(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     assert resp["entry"]["options"] == _NESTED_OPTIONS
@@ -330,7 +330,7 @@ async def test_list_returns_stored_options_unchanged(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(include_options=True)
 
     assert resp["entries"][0]["options"] == _NESTED_OPTIONS

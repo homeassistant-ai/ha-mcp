@@ -18,11 +18,8 @@ from ..backup_manager import _is_flow_helper_domain
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..redaction import (
     harvest_secret_strings,
@@ -34,12 +31,7 @@ from ..redaction import (
 )
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
-from .component_api import (
-    component_supports,
-    get_component_caps,
-    invalidate_caps,
-    is_unknown_command,
-)
+from .component_config_entries import fetch_config_entries
 from .component_helper_collections import removal_reply, stored_helper_target
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
@@ -158,14 +150,6 @@ def _reject_set_integration_mode_conflicts(
                 context={"entry_id": entry_id, "domain": domain},
             )
         )
-
-
-# The ``ha_mcp_tools`` component command that serves config entries (identity +
-# already-materialized ``options`` + ``subentries``) from HA's live registry in
-# one in-process frame, replacing the REST list-all + OptionsFlow start/abort
-# dance + subentries WS call. Module-local constant per the component-routing
-# idiom (see ``component_devices.WS_DEVICE_GET``).
-WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
 
 # ha_remove_helpers_integrations.helper_type: a storage helper type,
@@ -292,87 +276,6 @@ async def fetch_entry_options_with_status(
                     f"Failed to abort options flow {flow_id}: "
                     f"{type(abort_err).__name__}: {abort_err}"
                 )
-
-
-async def _fetch_entries_via_component(
-    client: Any, *, entry_id: str | None = None, domain: str | None = None
-) -> list[dict[str, Any]] | None:
-    """One ``ha_mcp_tools/config_entries`` read; ``None`` ⇒ run the legacy path.
-
-    Returns the component's ``entries`` list — each row Core's
-    ``ConfigEntry.as_json_fragment`` plus ``unique_id``, the entry's
-    already-materialized ``options`` [raw persisted, secret-scrubbed] and its
-    ``subentries`` identity rows — so a single in-process frame replaces the
-    legacy REST list-all + OptionsFlow start/abort probe + subentries WS call.
-    Pass ``entry_id`` for the single entry (empty list ⇒ no such entry) or
-    ``domain`` to filter the list; neither lists all.
-
-    Consumers: ``ha_get_integration`` (single-entry + list) and radio's
-    ``resolve_entry_id`` (single-instance domain → entry_id) both import this so
-    the domain/entry-scoped read routes through one place.
-
-    ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
-    cached caps), or command error/timeout (logged) — the caller falls back to
-    its legacy path.
-
-    Per the uniform transport-fallback taxonomy, a connection-establishment
-    failure IS caught here and mapped to ``None`` (legacy fallback), like every
-    component fetch helper. The callers' legacy paths are NOT the shared pooled WS —
-    ``ha_get_integration`` reads pure REST (``get_config_entry`` /
-    ``GET /config/config_entries`` + the REST OptionsFlow probe) and radio's
-    ``resolve_entry_id`` uses the REST client's ``send_websocket_message``
-    bridge — so a WS outage must not kill the tool when the legacy path can
-    still serve the entry. (The bridge itself raises on a dead transport since
-    #1947, which only matters for the radio caller: when the socket is dead
-    that path has nothing to serve either, while the pure-REST caller is
-    unaffected.) The catch stays broad so no unexpected fault escapes and
-    kills the tool; routing any
-    non-command component failure back to the legacy fetch is safe here (mirrors
-    ``get_component_caps``' own broad-catch precedent). Otherwise the same caps-gate
-    discipline as ``component_devices.fetch_device_via_component``.
-    """
-    caps = await get_component_caps(client)
-    if not component_supports(caps, "config_entries"):
-        return None
-    kwargs: dict[str, Any] = {}
-    if entry_id is not None:
-        kwargs["entry_id"] = entry_id
-    if domain is not None:
-        kwargs["domain"] = domain
-    try:
-        ws = await get_websocket_client(
-            url=client.base_url,
-            token=client.token,
-            verify_ssl=getattr(client, "verify_ssl", None),
-        )
-        raw = await ws.send_command(WS_CONFIG_ENTRIES, **kwargs)
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-        if is_unknown_command(exc):
-            invalidate_caps(client)
-        else:
-            logger.warning("%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        # DEVIATION (see docstring): the legacy path is pure REST / the REST-client
-        # WS bridge, NOT the shared pooled WS. A pooled-WS drop or a failed
-        # (re)connect (HomeAssistantConnectionError), a rejected token
-        # (HomeAssistantAuthError) or any other error must fall back to legacy
-        # rather than kill the tool.
-        logger.warning(
-            "%s connection error; falling back to legacy: %r",
-            WS_CONFIG_ENTRIES,
-            exc,
-        )
-        return None
-    result = raw.get("result")
-    entries = result.get("entries") if isinstance(result, dict) else None
-    if not isinstance(entries, list):
-        logger.debug(
-            "%s returned a malformed result (no 'entries' list); falling back to legacy",
-            WS_CONFIG_ENTRIES,
-        )
-        return None
-    return entries
 
 
 def _split_component_entry_row(
@@ -906,11 +809,11 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
-            rows = await _fetch_entries_via_component(self._client, entry_id=entry_id)
-            if rows is not None:
+            read = await fetch_config_entries(self._client, entry_id=entry_id)
+            if read is not None:
                 return await self._single_entry_from_component(
                     entry_id,
-                    rows,
+                    read.rows,
                     include_schema,
                     include_subentries=include_subentries,
                     include_subentry_schema=include_subentry_schema,
@@ -1423,10 +1326,16 @@ class IntegrationTools:
         # OptionsFlow probes. Normalize the domain to HA's canonical lowercase:
         # both the component and Core's REST list filter by exact match.
         domain_norm = domain.strip().lower() if domain else None
-        rows = await _fetch_entries_via_component(self._client, domain=domain_norm)
-        if rows is not None:
+        read = await fetch_config_entries(self._client, domain=domain_norm)
+        if read is not None:
             return await self._list_entries_from_component(
-                rows, domain, query, include_opts, exact_match, limit_int, offset_int
+                read.rows,
+                domain,
+                query,
+                include_opts,
+                exact_match,
+                limit_int,
+                offset_int,
             )
 
         response = await self._client._request(
