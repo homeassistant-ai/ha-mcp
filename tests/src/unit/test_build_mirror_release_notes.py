@@ -172,6 +172,17 @@ def test_the_first_dev_build_has_no_previous_one() -> None:
     assert build.previous_dev_tag(["v9.0.0"], "9.0.0.dev1") is None
 
 
+def test_a_pin_that_is_not_a_dev_build_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    output = tmp_path / "notes.md"
+    argv = ["--repo-dir", str(tmp_path), "--dev-pin", "9.0.0", "--out", str(output)]
+    assert build.main(argv) == 1
+    assert "not a dev build version: 9.0.0" in capsys.readouterr().err
+    assert not output.exists()
+
+
 def test_dev_notes_list_each_merged_pull_request() -> None:
     notes = build.format_dev_release_notes(
         "9.0.0.dev3100",
