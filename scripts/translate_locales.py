@@ -701,6 +701,8 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
                 return parsed
             if not retryable:
                 break
+        if attempt == 5:
+            break
         if _out_of_time():
             last_error += " (time budget exhausted; not retrying)"
             break
