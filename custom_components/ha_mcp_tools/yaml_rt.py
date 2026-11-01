@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import math
 import re
 import threading
@@ -38,7 +39,7 @@ class _TaggedScalar:
         return hash((self.tag, self.value))
 
 
-_HA_TAGS = (
+_HA_TAG_FALLBACK = (
     "!include",
     "!include_dir_list",
     "!include_dir_named",
@@ -46,7 +47,33 @@ _HA_TAGS = (
     "!include_dir_merge_named",
     "!secret",
     "!env_var",
+    "!input",
 )
+
+
+def _ha_tags_from_core() -> tuple[str, ...]:
+    """Return the ``!`` tags Core's YAML loader registers.
+
+    The component runs inside Home Assistant, where ``annotatedyaml`` owns the
+    loader constructors, so a new Core tag needs no edit here. Unit tests
+    import this module without Home Assistant installed; the fallback keeps
+    the same tag set available there.
+    """
+    try:
+        loader = importlib.import_module("annotatedyaml.loader").FastSafeLoader
+    except (ImportError, AttributeError):
+        return _HA_TAG_FALLBACK
+    tags = tuple(
+        sorted(
+            tag
+            for tag in loader.yaml_constructors
+            if isinstance(tag, str) and tag.startswith("!")
+        )
+    )
+    return tags or _HA_TAG_FALLBACK
+
+
+_HA_TAGS = _ha_tags_from_core()
 
 
 def _make_tag_constructor(tag: str) -> Callable[[Any, Any], _TaggedScalar]:
