@@ -79,11 +79,20 @@ async def test_restoring_a_deleted_entry_is_refused_and_changes_nothing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("disabled_by,expected", [("user", "user"), (None, None)])
-async def test_restoring_an_existing_entry_reapplies_its_enabled_state(
+async def test_a_snapshot_taken_before_options_were_kept_reports_them_not_restored(
     monkeypatch: pytest.MonkeyPatch, disabled_by: str | None, expected: str | None
 ) -> None:
+    # Such a snapshot holds the enabled state but no options at all: the
+    # state is put back, the options are reported as not restored.
     sent = _ws(monkeypatch, [{"entry_id": "e1"}])
-    await restore_integration(None, "e1", {"domain": "hue", "disabled_by": disabled_by})
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "hue", "disabled_by": disabled_by}
+        )
+    assert exc_info.value.outcome["reason"] == "options_not_restored"
+    assert exc_info.value.outcome["apply_status"] == "applied"
+    assert exc_info.value.outcome["verification_status"] == "unavailable"
+    assert "taken before options were captured" in str(exc_info.value)
     assert sent[-1] == {
         "type": "config_entries/disable",
         "entry_id": "e1",
@@ -497,3 +506,39 @@ async def test_an_entry_enabled_before_a_refused_options_flow_says_it_was_enable
     assert "enabled" in str(exc_info.value)
     assert "nothing was applied" not in str(exc_info.value).lower()
     assert [m["type"] for m in sent].count("config_entries/disable") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [["x"], None], ids=["list", "null"])
+async def test_snapshot_options_that_are_not_an_object_are_refused_before_any_write(
+    monkeypatch: pytest.MonkeyPatch, options: Any
+) -> None:
+    sent = _ws(monkeypatch, [], [_read(_row({"int": 42}, disabled_by="user"))])
+    update = _options_flow(monkeypatch, sent)
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "demo", "disabled_by": None, "options": options}
+        )
+
+    assert exc_info.value.outcome["reason"] == "invalid_snapshot"
+    assert exc_info.value.outcome["apply_status"] == "not_applied"
+    update.assert_not_called()
+    assert "config_entries/disable" not in [m["type"] for m in sent]
+
+
+@pytest.mark.asyncio
+async def test_options_that_differ_only_in_type_are_put_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # False == 0 in Python, but the options flow stores what it is given.
+    sent = _ws(
+        monkeypatch, [], [_read(_row({"flag": 0})), _read(_row({"flag": False}))]
+    )
+    update = _options_flow(monkeypatch, sent)
+
+    await restore_integration(
+        None, "e1", {"domain": "demo", "disabled_by": None, "options": {"flag": False}}
+    )
+
+    update.assert_awaited_once()

@@ -93,6 +93,12 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
             ],
         )
     options = config.get("options")
+    if "options" in config and not isinstance(options, dict):
+        raise bm.BackupRestoreError(
+            "The integration snapshot's options are not an object. Nothing was "
+            "changed.",
+            reason="invalid_snapshot",
+        )
     if options is not None and "options" not in current:
         raise bm.BackupRestoreError(
             f"The current options of config entry {entity_id} cannot be read "
@@ -105,7 +111,11 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
     enable_first = disabled_by is None and current.get("disabled_by") is not None
     if enable_first:
         result = await _set_disabled_by(client, entity_id, None)
-    if not_restored is None and options is not None and options != current["options"]:
+    if (
+        not_restored is None
+        and options is not None
+        and not bm._snapshot_configs_match(options, current["options"])
+    ):
         try:
             await _restore_options(client, entity_id, config, current["options"])
         except bm.BackupRestoreError as err:
@@ -134,11 +144,9 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
 
 def _options_not_restored(config: Any, current: dict[str, Any]) -> Any:
     """``(verification_status, why)`` for options a restore cannot put back."""
-    if "options_unavailable" in config:
-        return (
-            "unavailable",
-            f"the snapshot holds none ({config['options_unavailable']})",
-        )
+    if "options_unavailable" in config or "options" not in config:
+        why = config.get("options_unavailable", "taken before options were captured")
+        return ("unavailable", f"the snapshot holds none ({why})")
     if config.get("options") == {} and current["options"]:
         return (
             "mismatched",
