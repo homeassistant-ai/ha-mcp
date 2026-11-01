@@ -386,3 +386,114 @@ async def test_restore_holds_the_entry_write_guard(
     await manager.restore_snapshot("integration_e1_x")
 
     assert held == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_component_row_without_options_is_captured_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _row({})
+    del row["options"]
+    _ws(monkeypatch, [], [_read(row)])
+
+    snapshot = await fetch_integration(None, "e1")
+
+    assert "options" not in snapshot
+    assert snapshot["options_unavailable"] == "options_missing"
+
+
+# --- options a restore cannot put back are reported, not passed as success ---
+
+
+@pytest.mark.asyncio
+async def test_empty_snapshot_options_over_different_ones_are_reported_not_restored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An options flow cannot produce {}, so the snapshot's empty options
+    # cannot be put back over the entry's current ones.
+    sent = _ws(monkeypatch, [], [_read(_row({"int": 42}))])
+    update = _options_flow(monkeypatch, sent)
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "demo", "disabled_by": "user", "options": {}}
+        )
+
+    update.assert_not_called()
+    assert exc_info.value.outcome["verification_status"] == "mismatched"
+    assert exc_info.value.outcome["apply_status"] == "applied"
+    assert "options were not" in str(exc_info.value)
+    assert sent[-1] == {
+        "type": "config_entries/disable",
+        "entry_id": "e1",
+        "disabled_by": "user",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_snapshot_without_readable_options_reports_them_not_restored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent = _ws(monkeypatch, [], [_read(_row({"int": 42}))])
+    update = _options_flow(monkeypatch, sent)
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None,
+            "e1",
+            {
+                "domain": "demo",
+                "disabled_by": None,
+                "options_unavailable": "redacted_options",
+            },
+        )
+
+    update.assert_not_called()
+    assert exc_info.value.outcome["verification_status"] == "unavailable"
+    assert "redacted_options" in str(exc_info.value)
+    assert sent[-1]["type"] == "config_entries/disable"
+
+
+@pytest.mark.asyncio
+async def test_empty_snapshot_options_equal_to_the_current_ones_restore_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent = _ws(monkeypatch, [], [_read(_row({}))])
+    update = _options_flow(monkeypatch, sent)
+
+    await restore_integration(
+        None, "e1", {"domain": "demo", "disabled_by": None, "options": {}}
+    )
+
+    update.assert_not_called()
+    assert sent[-1]["type"] == "config_entries/disable"
+
+
+@pytest.mark.asyncio
+async def test_an_entry_enabled_before_a_refused_options_flow_says_it_was_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent = _ws(monkeypatch, [], [_read(_row({"int": 42}, disabled_by="user"))])
+    monkeypatch.setattr(
+        config_entry_flow,
+        "update_config_entry_options",
+        AsyncMock(
+            side_effect=config_entry_flow.OptionsFlowError(
+                "Home Assistant aborted the options restore",
+                apply_status="not_applied",
+                entry_id="e1",
+                reason="flow_aborted",
+            )
+        ),
+    )
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "demo", "disabled_by": None, "options": {"int": 11}}
+        )
+
+    assert exc_info.value.outcome["apply_status"] == "applied"
+    assert exc_info.value.outcome["reason"] == "flow_aborted"
+    assert "enabled" in str(exc_info.value)
+    assert "nothing was applied" not in str(exc_info.value).lower()
+    assert [m["type"] for m in sent].count("config_entries/disable") == 1
