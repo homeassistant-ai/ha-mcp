@@ -247,6 +247,12 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
         _prepare_testcontainer_config(embedded)
     )
 
+    def cleanup_config() -> None:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.info("✅ Cleanup completed")
+
+    request.addfinalizer(cleanup_config)
+
     container = _build_ha_testcontainer(
         config_path, embedded, embedded_wheel_name, image=resolved_image
     )
@@ -363,8 +369,6 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
             # ``remove(force=True)`` and is non-idempotent — a second call
             # from the enclosing ``with container:`` ``__exit__`` raises
             # ``docker.errors.NotFound`` at session teardown.
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            logger.info("✅ Cleanup completed")
 
 
 @pytest.fixture(scope="session")

@@ -696,3 +696,68 @@ def test_e2e_fixture_forwards_the_prepared_immutable_image(
     fixture = unwrap(e2e.ha_container_with_fresh_config)(MagicMock(), tmp_path)
     with pytest.raises(BuilderReached):
         next(fixture)
+
+
+@pytest.mark.parametrize("phase", ["build", "enter", "readiness", "success"])
+def test_fixture_releases_prepared_config_after_setup_or_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    from inspect import unwrap
+    from unittest.mock import MagicMock
+
+    import docker
+
+    from tests.src.e2e import conftest as e2e
+
+    owned = tmp_path / "session"
+    owned.mkdir()
+    preserved = tmp_path / "unrelated"
+    preserved.mkdir()
+    finalizers: list[Callable[[], None]] = []
+    request = MagicMock()
+    request.config.stash = {}
+    request.addfinalizer.side_effect = finalizers.append
+    container = MagicMock()
+    container.__enter__.return_value = container
+    container.__exit__.return_value = False
+    container.get_exposed_port.return_value = 8123
+    container.get_container_host_ip.return_value = "127.0.0.1"
+
+    def fail(*args: Any, **kwargs: Any) -> NoReturn:
+        raise RuntimeError("fixture setup failure")
+
+    if phase == "enter":
+        container.__enter__.side_effect = fail
+    monkeypatch.setattr(e2e.os, "environ", e2e.os.environ.copy())
+    monkeypatch.setattr(docker, "from_env", MagicMock())
+    monkeypatch.setattr(e2e, "is_haos_backend_selected", lambda: False)
+    monkeypatch.setattr(e2e, "_is_embedded_backend_selected", lambda: False)
+    monkeypatch.setattr(
+        e2e,
+        "_prepare_testcontainer_config",
+        lambda embedded: (owned, str(owned), {}, None, "sha256:fixture"),
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_build_ha_testcontainer",
+        fail if phase == "build" else lambda *a, **kw: container,
+    )
+    monkeypatch.setattr(e2e, "_reset_ha_in_process_caches", lambda: None)
+    monkeypatch.setattr(
+        e2e,
+        "_wait_for_testcontainer_ready",
+        fail if phase == "readiness" else lambda *a, **kw: None,
+    )
+    fixture = unwrap(e2e.ha_container_with_fresh_config)(request, tmp_path)
+    try:
+        if phase == "success":
+            next(fixture)
+            fixture.close()
+        else:
+            with pytest.raises(RuntimeError, match="fixture setup failure"):
+                next(fixture)
+    finally:
+        for cleanup in reversed(finalizers):
+            cleanup()
+    assert not owned.exists()
+    assert preserved.is_dir()
