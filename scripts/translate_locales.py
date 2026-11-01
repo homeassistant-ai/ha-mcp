@@ -695,18 +695,12 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
             # Connect/read timeouts, DNS failures, resets — as transient as a
             # 5xx; retry with the same bounded backoff.
             last_error = f"transport error: {exc!r}"
-            if _out_of_time():
-                last_error += " (time budget exhausted; not retrying)"
+        else:
+            parsed, last_error, retryable = _read_answer(response)
+            if parsed is not None:
+                return parsed
+            if not retryable:
                 break
-            delay = 20 * attempt
-            print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
-            time.sleep(delay)
-            continue
-        parsed, last_error, retryable = _read_answer(response)
-        if parsed is not None:
-            return parsed
-        if not retryable:
-            break
         if _out_of_time():
             last_error += " (time budget exhausted; not retrying)"
             break
