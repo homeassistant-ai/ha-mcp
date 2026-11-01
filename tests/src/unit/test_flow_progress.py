@@ -10,6 +10,7 @@ give up with Core's text for the progress action.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -38,12 +39,12 @@ _PROGRESS = {
 _FORM = {"type": "form", "flow_id": "f1", "step_id": "pick", "data_schema": []}
 
 
+@dataclass
 class _FakeClock:
     """A monotonic clock that only moves when the poll sleeps."""
 
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.sleeps: list[float] = []
+    now: float = 0.0
+    sleeps: list[float] = field(default_factory=list)
 
     def __call__(self) -> float:
         return self.now
