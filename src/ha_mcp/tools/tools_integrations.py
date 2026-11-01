@@ -1548,9 +1548,22 @@ class IntegrationTools:
                     "page's Enable/Disable debug logging: pass the integration "
                     "with 'domain' (no config flow runs) or 'entry_id', and "
                     "nothing else. Lasts through the next Home Assistant "
-                    "restart. DEFAULT clears the override: the integration then "
-                    "logs at the inherited default level, and a level set for it "
-                    "in configuration.yaml returns only after a restart."
+                    "restart unless log_persistence says otherwise. DEFAULT "
+                    "clears the override: the integration then logs at the "
+                    "inherited default level, and a level set for it in "
+                    "configuration.yaml returns only after a restart."
+                ),
+            ),
+        ] = None,
+        log_persistence: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Only with log_level: how long Home Assistant keeps the "
+                    "level. 'once' (default) through the next restart, "
+                    "'permanent' after every restart until changed, 'none' "
+                    "until the next restart. Home Assistant validates the value."
                 ),
             ),
         ] = None,
@@ -1568,6 +1581,7 @@ class IntegrationTools:
           preflight returns as confirm_token to apply.
         - Log level: log_level + domain (or entry_id) — sets how much the
           integration logs; read it back with ha_get_integration's log_level.
+          log_persistence='permanent' keeps it across every restart.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -1611,6 +1625,17 @@ class IntegrationTools:
         - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
         """
         try:
+            if log_persistence is not None and log_level is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "log_persistence applies only together with log_level",
+                        suggestions=[
+                            "Example: ha_set_integration(domain='zha', "
+                            "log_level='DEBUG', log_persistence='permanent')"
+                        ],
+                    )
+                )
             if log_level is not None:
                 reject_reconfigure_only_parameters(
                     confirm_token=confirm_token,
@@ -1627,6 +1652,7 @@ class IntegrationTools:
                     other_modes=config is not None
                     or enabled is not None
                     or reconfigure,
+                    persistence=log_persistence,
                 )
 
             if reconfigure:
