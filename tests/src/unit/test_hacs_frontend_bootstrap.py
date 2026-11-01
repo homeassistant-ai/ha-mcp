@@ -644,3 +644,42 @@ def test_failed_config_preparation_does_not_leak_session_directory(
         assert not allocated
     assert all(not path.exists() for path in allocated)
     assert initial.is_dir()
+
+
+def test_e2e_fixture_forwards_the_prepared_immutable_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from inspect import unwrap
+    from unittest.mock import MagicMock
+
+    import docker
+
+    from tests.src.e2e import conftest as e2e
+
+    class BuilderReached(Exception):
+        pass
+
+    resolved = "sha256:fixture-prepared-image"
+
+    def build(
+        config_path: Path,
+        embedded: bool,
+        wheel: str | None,
+        *,
+        image: str | None = None,
+    ) -> NoReturn:
+        assert image == resolved
+        raise BuilderReached
+
+    monkeypatch.setattr(e2e, "is_haos_backend_selected", lambda: False)
+    monkeypatch.setattr(e2e, "_is_embedded_backend_selected", lambda: False)
+    monkeypatch.setattr(
+        e2e,
+        "_prepare_testcontainer_config",
+        lambda embedded: (tmp_path, str(tmp_path), {}, None, resolved),
+    )
+    monkeypatch.setattr(e2e, "_build_ha_testcontainer", build)
+    monkeypatch.setattr(docker, "from_env", MagicMock())
+    fixture = unwrap(e2e.ha_container_with_fresh_config)(MagicMock(), tmp_path)
+    with pytest.raises(BuilderReached):
+        next(fixture)
