@@ -61,20 +61,27 @@ def _option_values(options: list[Any]) -> list[Any]:
     return [*values[:MAX_OPTIONS], f"...{len(values) - MAX_OPTIONS} more"]
 
 
+def _compact_selector(selector: dict[str, Any]) -> dict[str, Any]:
+    kind, cfg = next(iter(selector.items()))
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out: dict[str, Any] = {"type": kind}
+    # A text selector's own type (password, email, url) is kept: it is how a
+    # secret field stays recognisable.
+    if isinstance(cfg.get("type"), str):
+        out["input_type"] = cfg["type"]
+    if isinstance(cfg.get("options"), list | tuple):
+        out["options"] = _option_values(cfg["options"])
+    out.update({k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)})
+    return out
+
+
 def compact_field(field: dict[str, Any]) -> dict[str, Any]:
     """One HA schema field (flow selector or serialized voluptuous) in brief."""
     out: dict[str, Any] = {"name": field.get("name")}
     if field.get("required"):
         out["required"] = True
     if isinstance(field.get("selector"), dict) and field["selector"]:
-        kind, cfg = next(iter(field["selector"].items()))
-        cfg = cfg if isinstance(cfg, dict) else {}
-        out["type"] = kind
-        if isinstance(cfg.get("options"), list | tuple):
-            out["options"] = _option_values(cfg["options"])
-        out.update(
-            {k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)}
-        )
+        out.update(_compact_selector(field["selector"]))
     elif field.get("type") in {"expandable", "grid"}:
         out["type"] = "section"
         out["fields"] = [compact_field(f) for f in field.get("schema", [])]
@@ -135,21 +142,26 @@ def _with_help(fields: list[dict[str, Any]], help_text: dict[str, str]) -> None:
         _with_help(field.get("fields", []), help_text)
 
 
-async def _describe_form(
-    client: Any, helper_type: str, category: str, step: dict[str, Any]
+async def describe_form(
+    client: Any, domain: str, path: str, step: dict[str, Any]
 ) -> list[dict[str, Any]]:
+    """A flow form's fields in brief, with HA's help text for each.
+
+    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
+    or ``config_subentries.<type>``.
+    """
     fields = compact_schema(step.get("schema") or step.get("data_schema") or [])
     step_id = step.get("step_id")
     if step_id:
-        strings = await fetch_flow_strings(client, helper_type, category)
-        _with_help(fields, field_help(strings, helper_type, category, step_id))
+        strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
+        _with_help(fields, field_help(strings, domain, path, step_id))
     return fields
 
 
 _MORE_FORMS = {False: "yes", None: "depends_on_answers"}
 
 
-def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
+def later_forms(step: dict[str, Any]) -> dict[str, Any]:
     """Say when HA asks for more fields on a later form of the same flow."""
     more = _MORE_FORMS.get(step.get("last_step"))
     if more is None:
@@ -174,8 +186,8 @@ async def _describe_flow(
         if "schema" in info:
             return {
                 "source": "config_flow",
-                "fields": await _describe_form(client, helper_type, "config", info),
-                **_later_forms(info),
+                "fields": await describe_form(client, helper_type, "config", info),
+                **later_forms(info),
             }
         if "menu_options" in info:
             return {
@@ -231,8 +243,8 @@ async def _describe_flow(
             )
         return {
             "source": "options_flow",
-            "fields": await _describe_form(client, helper_type, "options", result),
-            **_later_forms(result),
+            "fields": await describe_form(client, helper_type, "options", result),
+            **later_forms(result),
         }
     finally:
         if flow_id:

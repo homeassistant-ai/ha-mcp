@@ -28,7 +28,10 @@ from ha_mcp.redaction import (
     sentinel_option_keys,
 )
 from ha_mcp.tools.config_entry_flow import _reject_redaction_sentinels
-from ha_mcp.tools.tools_integrations import options_from_form_flow
+from ha_mcp.tools.integration_schema import (
+    options_from_form_flow,
+    redact_component_options,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -568,7 +571,7 @@ class TestRedactSecretsMiddleware:
 
 
 class TestRedactComponentOptions:
-    """IntegrationTools._redact_component_options — component path (issue 2157)."""
+    """integration_schema.redact_component_options — component path (issue 2157)."""
 
     def _tools_with_flow(self, flow_response, abort_raises=False):
         from ha_mcp.tools.tools_integrations import IntegrationTools
@@ -593,7 +596,7 @@ class TestRedactComponentOptions:
             "options": {"host": "1.2.3.4", "api_key": "sk-LIVEFLOWSECRET"},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"host": "1.2.3.4", "api_key": REDACTED_SET}
         assert warnings == []
         tools._client.abort_options_flow.assert_awaited_once_with("f1")
@@ -609,7 +612,7 @@ class TestRedactComponentOptions:
             "options": {"advanced": {"inner_token": "tok-INNERSECRET"}},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"advanced": {"inner_token": REDACTED_SET}}
         assert warnings == []
 
@@ -624,7 +627,7 @@ class TestRedactComponentOptions:
             "options": {"host": "1.2.3.4", "maybe_pw": "hunter2secret", "empty": ""},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {
             "host": REDACTED_SET,
             "maybe_pw": REDACTED_SET,
@@ -646,7 +649,7 @@ class TestRedactComponentOptions:
             "options": {"api_key": "sk-LIVEFLOWSECRET"},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"api_key": REDACTED_SET}
         assert len(warnings) == 1
 
@@ -659,7 +662,7 @@ class TestRedactComponentOptions:
             "options": {"plain": "value"},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"plain": "value"}
         assert warnings == []
         tools._client.start_options_flow.assert_not_awaited()
@@ -668,7 +671,7 @@ class TestRedactComponentOptions:
     async def test_empty_options_skip_probe(self):
         tools = self._tools_with_flow({"flow_id": "f1", "type": "form"})
         entry = {"entry_id": "e1", "supports_options": True, "options": {}}
-        await tools._redact_component_options("e1", entry, [])
+        await redact_component_options(tools._client, "e1", entry, [])
         assert entry["options"] == {}
         tools._client.start_options_flow.assert_not_awaited()
 
@@ -684,7 +687,7 @@ class TestRedactComponentOptions:
             "options": {"api_key": "sk-LIVEFLOWSECRET"},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"api_key": REDACTED_SET}
         assert warnings == []
 
@@ -817,7 +820,7 @@ class TestEmptyFormSchemaFailsClosed:
             "options": {"maybe_pw": "hunter2secret"},
         }
         warnings: list[str] = []
-        await tools._redact_component_options("e1", entry, warnings)
+        await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"maybe_pw": REDACTED_SET}
         assert len(warnings) == 1
 
@@ -898,9 +901,9 @@ class TestComponentPathEndToEndRedaction:
         )
         assert resp["entry"]["options"]["api_key"] == REDACTED_SET
         assert resp["entry"]["options"]["host"] == "1.2.3.4"
-        schema = resp["options_schema"]["data_schema"]
-        api_field = next(f for f in schema if f.get("name") == "api_key")
-        assert api_field["description"]["suggested_value"] == REDACTED_SET
+        fields = resp["options_schema"]["fields"]
+        api_field = next(f for f in fields if f.get("name") == "api_key")
+        assert api_field["current"] == REDACTED_SET
 
     @pytest.mark.asyncio
     async def test_list_page_redacts_options(self, redact_on, monkeypatch):

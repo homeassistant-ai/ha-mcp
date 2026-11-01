@@ -152,6 +152,11 @@ class RoutingClient:
         self.abort_options_flow_calls += 1
         return {"success": True}
 
+    async def submit_options_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        raise AssertionError("the schema read never submits a form")
+
     async def list_config_subentries(self, entry_id: str) -> dict[str, Any]:
         self.list_config_subentries_calls += 1
         return {"success": True, "result": list(self._subentries)}
@@ -285,7 +290,7 @@ async def test_single_entry_include_schema_keeps_component_options() -> None:
 
     assert resp["entry"]["options"] == {"discovery": True}  # component won
     assert resp["options_schema"]["flow_type"] == "form"
-    assert resp["options_schema"]["data_schema"]
+    assert resp["options_schema"]["fields"] == [{"name": "discovery", "current": False}]
     # The schema needed a live flow (start + abort), but the entry did not come
     # from the REST get.
     assert client.start_options_flow_calls == 1

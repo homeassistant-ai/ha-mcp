@@ -22,12 +22,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import (
-    harvest_secret_strings,
-    is_password_flow_field,
-    redact_flow_schema,
-    redact_options_by_flow_schema,
     redaction_enabled,
-    sentinel_replacement,
 )
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
@@ -45,7 +40,6 @@ from .config_entry_flow import (
     refuse_component_entry,
     update_config_entry_options,
 )
-from .config_entry_flow_form import iter_schema_fields
 from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
@@ -70,6 +64,12 @@ from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_reconfigure import (
     ReconfigureRunner,
     reject_reconfigure_only_parameters,
+)
+from .integration_schema import (
+    fetch_config_subentry_schema,
+    fetch_options_schema,
+    options_from_form_flow,
+    redact_component_options,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -155,53 +155,6 @@ def _reject_set_integration_mode_conflicts(
 # ha_remove_helpers_integrations.helper_type: a storage helper type,
 # "config_subentry", or one of Core's helper flows, checked at call time.
 HelperTypeLiteral = StorageHelperType | Literal["config_subentry"] | str
-
-
-def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
-    """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
-
-    Reads each ``data_schema`` entry's ``description.suggested_value``
-    first: HA's ``add_suggested_values_to_schema`` injects the entry's
-    *persisted* option there (voluptuous renders ``suggested_value=...``
-    into the ``description`` sub-object, not as a top-level field key),
-    and it is what the HA UI renders as the current value. Falls back to
-    ``default`` (the static schema default a brand-new form would show)
-    and then ``value`` (constant-type fields ship ``value`` instead of
-    ``default``). A field can carry both ``suggested_value`` and
-    ``default`` at once — e.g. a group helper's ``hide_members`` stored as
-    ``True`` over a schema default of ``False`` — and the stored value
-    must win (issue #1575). Nested section fields are flattened into the
-    returned top-level map. Fields with a missing or ``None`` value are skipped.
-    """
-    out: dict[str, Any] = {}
-    # Defensive: HA should always return a list of dict fields, but guard
-    # against malformed shapes so a bad response degrades to {} instead of
-    # raising AttributeError (e.g. a string data_schema would iterate chars).
-    data_schema = flow.get("data_schema")
-    if not isinstance(data_schema, list):
-        return out
-    redact = redaction_enabled()
-    for field in iter_schema_fields(data_schema):
-        name = field.get("name")
-        if name is None:
-            continue
-        value = None
-        description = field.get("description")
-        if isinstance(description, dict):
-            value = description.get("suggested_value")
-        if value is None:
-            value = field.get("default", field.get("value"))
-        if value is not None:
-            if redact and is_password_flow_field(field):
-                # Password-marked field (issue #2157): remember the live
-                # value(s) for the global known-value scrub, then emit
-                # set/empty sentinel(s) instead of the value itself
-                # (multiple-value selectors keep their list shape).
-                harvest_secret_strings(value)
-                out[name] = sentinel_replacement(value)
-            else:
-                out[name] = value
-    return out
 
 
 async def fetch_entry_options_with_status(
@@ -363,8 +316,11 @@ class IntegrationTools:
         include_schema: Annotated[
             bool,
             Field(
-                description="When entry_id is set, also return the options flow schema (available "
-                "fields and their types). Only applies when supports_options=true.",
+                description="When entry_id is set, also describe the options flow "
+                "form as options_schema.fields: each field's type, current value "
+                "and Home Assistant's help text. A flow that opens with a menu "
+                "lists menu_options instead (see menu_choice). Only applies when "
+                "supports_options=true.",
                 default=False,
             ),
         ] = False,
@@ -382,10 +338,11 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "When entry_id is set, return introspection-only config "
-                    "subentry schema information; no subentry is created. "
-                    "Pair with subentry_type, and optionally subentry_id for "
-                    "reconfigure schema."
+                    "When entry_id is set, describe a config subentry flow's "
+                    "form as subentry_schema.fields (same shape as "
+                    "include_schema); no subentry is created. Pair with "
+                    "subentry_type, and optionally subentry_id for the "
+                    "reconfigure form."
                 ),
                 default=False,
             ),
@@ -421,6 +378,17 @@ class IntegrationTools:
                 default=False,
             ),
         ] = False,
+        menu_choice: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "With include_schema or include_subentry_schema, when the "
+                    "flow opens with a menu: the menu option whose form to "
+                    "describe. Without it the menu options are listed."
+                ),
+                default=None,
+            ),
+        ] = None,
         exact_match: Annotated[
             bool,
             Field(
@@ -570,12 +538,13 @@ class IntegrationTools:
         - Get an entry with its editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
         - Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
         - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
+        - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; add menu_choice="<option>" to describe that form
         - List template entries with their options: ha_get_integration(domain="template")
 
         OPTIONS: ``options`` reflect the entry's persisted values. Values that
         match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. Use
-        ``include_schema=True`` to see every editable field and its
-        default/type. The shape depends on the read path, which the response
+        ``include_schema=True`` to see every editable field with its type,
+        current value and help text. The shape depends on the read path, which the response
         does not name: when the ha_mcp_tools custom component serves the read,
         ``options`` are the stored mapping as-is, so a field never set may be
         absent and a section's fields stay nested under the section key (e.g. a
@@ -642,6 +611,7 @@ class IntegrationTools:
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
                     show_advanced_options=show_advanced_options_bool,
+                    menu_choice=menu_choice,
                     include_diagnostics=include_diagnostics_bool,
                     include_knx_project=include_knx_project_bool,
                     device_id=device_id,
@@ -672,6 +642,8 @@ class IntegrationTools:
                 subentry_id=subentry_id,
                 show_advanced_options=show_advanced_options_bool,
             )
+            if menu_choice is not None:
+                ignored_detail_params.append("menu_choice")
             if ignored_detail_params:
                 result.setdefault("warnings", []).append(
                     f"{', '.join(ignored_detail_params)} "
@@ -703,6 +675,7 @@ class IntegrationTools:
         subentry_type: str | None,
         subentry_id: str | None,
         show_advanced_options: bool,
+        menu_choice: str | None,
         include_diagnostics: bool,
         include_knx_project: bool,
         device_id: str | None,
@@ -713,6 +686,15 @@ class IntegrationTools:
         data_limit_int: int | None,
     ) -> dict[str, Any]:
         """Build the single-entry response, attaching diagnostics/KNX when asked."""
+        if menu_choice is not None and include_schema and include_subentry_schema:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "menu_choice applies to one flow: pass include_schema or "
+                    "include_subentry_schema, not both.",
+                    context={"entry_id": entry_id, "menu_choice": menu_choice},
+                )
+            )
         resp = await self._get_single_entry(
             entry_id,
             include_schema,
@@ -721,7 +703,13 @@ class IntegrationTools:
             subentry_type=subentry_type,
             subentry_id=subentry_id,
             show_advanced_options=show_advanced_options,
+            menu_choice=menu_choice,
         )
+        if menu_choice is not None and not (include_schema or include_subentry_schema):
+            resp.setdefault("warnings", []).append(
+                "menu_choice was ignored: it applies only with include_schema "
+                "or include_subentry_schema"
+            )
         if include_diagnostics:
             resp["diagnostics"] = await fetch_integration_diagnostics(
                 self._client,
@@ -806,6 +794,7 @@ class IntegrationTools:
         subentry_type: str | None,
         subentry_id: str | None,
         show_advanced_options: bool,
+        menu_choice: str | None = None,
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
@@ -820,6 +809,7 @@ class IntegrationTools:
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
                     show_advanced_options=show_advanced_options,
+                    menu_choice=menu_choice,
                 )
 
             result = await self._client.get_config_entry(entry_id)
@@ -830,7 +820,7 @@ class IntegrationTools:
             # Surface `options` on every per-entry response (HA's REST endpoint
             # omits the field). For entries with supports_options=True we probe
             # via OptionsFlow — see `fetch_entry_options_with_status`. When
-            # include_schema is also requested, `_fetch_options_schema` below
+            # include_schema is also requested, `fetch_options_schema` below
             # populates options from the same flow init so we don't pay for
             # two round-trips.
             probe_warnings: list[str] = []
@@ -865,7 +855,9 @@ class IntegrationTools:
 
             # Optionally fetch options flow schema (logically read-only: start+abort)
             if include_schema and result.get("supports_options"):
-                await self._fetch_options_schema(entry_id, resp)
+                await fetch_options_schema(
+                    self._client, entry_id, resp, menu_choice=menu_choice
+                )
 
             if include_subentries:
                 subentries = await self._fetch_config_subentries(entry_id)
@@ -873,12 +865,14 @@ class IntegrationTools:
                 resp["subentries"] = subentries
 
             if include_subentry_schema:
-                await self._fetch_config_subentry_schema(
+                await fetch_config_subentry_schema(
+                    self._client,
                     entry_id,
                     resp,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
                     show_advanced_options=show_advanced_options,
+                    menu_choice=menu_choice,
                 )
 
             return resp
@@ -934,6 +928,7 @@ class IntegrationTools:
         subentry_type: str | None,
         subentry_id: str | None,
         show_advanced_options: bool,
+        menu_choice: str | None = None,
     ) -> dict[str, Any]:
         """Build the single-entry response from a component ``config_entries`` read.
 
@@ -990,7 +985,9 @@ class IntegrationTools:
         # application costs one extra probe and nothing else.
         if redaction_enabled():
             redact_warnings: list[str] = []
-            await self._redact_component_options(entry_id, entry, redact_warnings)
+            await redact_component_options(
+                self._client, entry_id, entry, redact_warnings
+            )
             if redact_warnings:
                 resp.setdefault("warnings", []).extend(redact_warnings)
 
@@ -998,19 +995,27 @@ class IntegrationTools:
         # legacy flow, but keep the component-provided options (populate_options
         # False) so the raw persisted values win over the flow-derived shape.
         if include_schema and entry.get("supports_options"):
-            await self._fetch_options_schema(entry_id, resp, populate_options=False)
+            await fetch_options_schema(
+                self._client,
+                entry_id,
+                resp,
+                populate_options=False,
+                menu_choice=menu_choice,
+            )
 
         if include_subentries:
             resp["subentry_count"] = len(subentries)
             resp["subentries"] = subentries
 
         if include_subentry_schema:
-            await self._fetch_config_subentry_schema(
+            await fetch_config_subentry_schema(
+                self._client,
                 entry_id,
                 resp,
                 subentry_type=subentry_type,
                 subentry_id=subentry_id,
                 show_advanced_options=show_advanced_options,
+                menu_choice=menu_choice,
             )
 
         return resp
@@ -1102,214 +1107,6 @@ class IntegrationTools:
             )
 
         return [subentry for subentry in subentries if isinstance(subentry, dict)]
-
-    async def _fetch_config_subentry_schema(
-        self,
-        entry_id: str,
-        resp: dict[str, Any],
-        *,
-        subentry_type: str | None,
-        subentry_id: str | None,
-        show_advanced_options: bool,
-    ) -> None:
-        """Start a config subentry flow to read its schema, then abort it."""
-        if not subentry_type:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "subentry_type is required when include_subentry_schema=True",
-                    suggestions=[
-                        "Call ha_get_integration(entry_id=..., "
-                        "include_subentries=True) to inspect existing subentry "
-                        "types, then retry with subentry_type.",
-                    ],
-                    context={"entry_id": entry_id},
-                )
-            )
-
-        flow_id = None
-        try:
-            flow_result = await self._client.start_config_subentry_flow(
-                entry_id,
-                subentry_type,
-                subentry_id=subentry_id,
-                show_advanced_options=show_advanced_options,
-            )
-            flow_id = flow_result.get("flow_id")
-            flow_type = flow_result.get("type")
-            schema: dict[str, Any] = {
-                "subentry_type": subentry_type,
-                "subentry_id": subentry_id,
-                "flow_type": flow_type,
-                "step_id": flow_result.get("step_id"),
-                "description_placeholders": flow_result.get(
-                    "description_placeholders", {}
-                ),
-            }
-            if flow_type == "form":
-                data_schema = flow_result.get("data_schema", [])
-                # Subentry schema echoes carry live suggested_values just
-                # like the options-flow echo — same redaction (#2157).
-                schema["data_schema"] = (
-                    redact_flow_schema(data_schema)
-                    if redaction_enabled()
-                    else data_schema
-                )
-            elif flow_type == "menu":
-                schema["menu_options"] = flow_result.get("menu_options", [])
-            else:
-                schema["details"] = flow_result
-            resp["subentry_schema"] = schema
-        finally:
-            if flow_id:
-                try:
-                    await asyncio.wait_for(
-                        self._client.abort_config_subentry_flow(flow_id),
-                        timeout=5.0,
-                    )
-                except Exception as abort_err:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to abort config subentry introspection flow %s: %s",
-                        flow_id,
-                        abort_err,
-                    )
-
-    @staticmethod
-    def _options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
-        """Class-method alias for :func:`options_from_form_flow`."""
-        return options_from_form_flow(flow)
-
-    async def _redact_component_options(
-        self, entry_id: Any, entry: dict[str, Any], warnings: list[str]
-    ) -> None:
-        """Redact password-marked fields on component-served options (#2157).
-
-        The component row carries raw persisted options with no schema, so
-        the password markers must come from a live options-flow probe. When
-        the entry supports an options flow but no form schema could be read
-        (probe failed, or the flow opens with a menu), every option value is
-        replaced with a set/empty sentinel — without the schema the password
-        fields cannot be told apart, so this fails closed. Entries without
-        an options flow carry no password markers anywhere (the documented
-        metadata limit of the toggle); their options pass through and the
-        known-value scrub remains the only line for them.
-        """
-        options = entry.get("options")
-        if not isinstance(options, dict) or not options:
-            return
-        if not entry.get("supports_options"):
-            return
-        data_schema: Any = None
-        flow_id = None
-        try:
-            flow = await self._client.start_options_flow(entry_id)
-            flow_id = flow.get("flow_id")
-            if flow.get("type") == "form":
-                # An empty/missing schema on a form (e.g. a confirm-only
-                # step) classifies nothing — persisted options can outlive
-                # fields removed from the flow, so treat it as unreadable
-                # and take the fail-closed branch below instead of
-                # "redacting" zero fields.
-                candidate = flow.get("data_schema")
-                if isinstance(candidate, list) and candidate:
-                    data_schema = candidate
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "redact_secrets: options-flow probe failed for %s: %r", entry_id, exc
-            )
-        finally:
-            if flow_id:
-                try:
-                    await self._client.abort_options_flow(flow_id)
-                except Exception as abort_err:  # noqa: BLE001
-                    logger.warning(
-                        "redact_secrets: failed to abort probe flow %s: %r",
-                        flow_id,
-                        abort_err,
-                    )
-        if isinstance(data_schema, list):
-            entry["options"] = redact_options_by_flow_schema(options, data_schema)
-        else:
-            entry["options"] = {
-                key: sentinel_replacement(value) for key, value in options.items()
-            }
-            warnings.append(
-                f"redact_secrets: no options schema readable for {entry_id} — "
-                "every option value was redacted conservatively (the password "
-                "fields cannot be told apart without the schema)"
-            )
-
-    async def _fetch_options_schema(
-        self, entry_id: str, resp: dict[str, Any], *, populate_options: bool = True
-    ) -> None:
-        """Start an options flow to read the schema, then abort it.
-
-        Also populates ``resp["entry"]["options"]`` for form-type flows from
-        the same flow result so callers requesting both schema and options
-        don't pay for two round-trips. Pass ``populate_options=False`` on the
-        component-served path, where ``options`` already carry the raw persisted
-        values and must NOT be overwritten by the OptionsFlow-derived
-        suggested-value shape.
-        """
-        flow_id = None
-        try:
-            flow_result = await self._client.start_options_flow(entry_id)
-            flow_id = flow_result.get("flow_id")
-            flow_type = flow_result.get("type")
-            entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
-            if flow_type == "form":
-                data_schema = flow_result.get("data_schema", [])
-                # The schema echo carries the live persisted value of every
-                # field in description.suggested_value — under redact_secrets
-                # password-marked fields get sentinels here too (#2157).
-                # redact_flow_schema deep-copies, so flow_result stays raw for
-                # the options extraction below (which redacts independently).
-                schema_out = (
-                    redact_flow_schema(data_schema)
-                    if redaction_enabled()
-                    else data_schema
-                )
-                resp["options_schema"] = {
-                    "flow_type": "form",
-                    "step_id": flow_result.get("step_id"),
-                    "data_schema": schema_out,
-                }
-                if entry is not None and populate_options:
-                    entry["options"] = self._options_from_form_flow(flow_result)
-                elif entry is not None and redaction_enabled():
-                    # Component-served path: options carry raw persisted
-                    # values (the component only scrubs resolved !secret
-                    # references). Now that the flow schema is in hand,
-                    # redact the fields it marks as passwords.
-                    entry["options"] = redact_options_by_flow_schema(
-                        entry.get("options"), data_schema
-                    )
-            elif flow_type == "menu":
-                resp["options_schema"] = {
-                    "flow_type": "menu",
-                    "step_id": flow_result.get("step_id"),
-                    "menu_options": flow_result.get("menu_options", []),
-                }
-        except Exception as schema_err:  # noqa: BLE001
-            logger.warning(
-                f"Failed to fetch options schema for {entry_id}: "
-                f"{type(schema_err).__name__}: {schema_err}"
-            )
-            schema_warnings: list[str] = resp.setdefault("warnings", [])
-            schema_warnings.append(
-                f"options schema probe failed for {entry_id}: "
-                f"{type(schema_err).__name__} — 'options_schema' is missing "
-                "and 'options' may be incomplete"
-            )
-        finally:
-            if flow_id:
-                try:
-                    await self._client.abort_options_flow(flow_id)
-                except Exception as abort_err:  # noqa: BLE001
-                    logger.warning(
-                        f"Failed to abort options flow {flow_id}: "
-                        f"{type(abort_err).__name__}: {abort_err}"
-                    )
 
     async def _list_entries(
         self,
@@ -1418,7 +1215,7 @@ class IntegrationTools:
         values (a field never set may be absent) and may contain
         ``"**redacted**"`` markers.
         With ``redact_secrets`` on, the returned page IS probed per entry
-        after pagination (``_redact_component_options``) to learn each
+        after pagination (``redact_component_options``) to learn each
         entry's password markers — the one case where this path probes.
         """
         level_warnings: list[str] = []
@@ -1446,8 +1243,11 @@ class IntegrationTools:
             redaction_warnings: list[str] = []
             await asyncio.gather(
                 *(
-                    self._redact_component_options(
-                        formatted.get("entry_id"), formatted, redaction_warnings
+                    redact_component_options(
+                        self._client,
+                        formatted.get("entry_id"),
+                        formatted,
+                        redaction_warnings,
                     )
                     for formatted in result["entries"]
                 )
