@@ -187,8 +187,7 @@
   "3612c8892dd9": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetAutomationMissingSurfacesAvailableIds.tools",
     "tests/src/unit/test_error_code_consistency_1297.py::TestRemoveAutomationMissingSurfacesAvailableIds.tools",
-    "tests/src/unit/test_error_code_consistency_1297.py::TestSetAutomationMissingSurfacesAvailableIds.tools",
-    "tests/src/unit/test_identifier_validation_family.py::TestAutomationsIdentifierValidation.tools"
+    "tests/src/unit/test_error_code_consistency_1297.py::TestSetAutomationMissingSurfacesAvailableIds.tools"
   ],
   "36579b7ba470": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_resolve_public_addresses",
