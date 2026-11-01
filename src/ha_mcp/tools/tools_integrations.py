@@ -299,10 +299,10 @@ async def _fetch_entries_via_component(
 ) -> list[dict[str, Any]] | None:
     """One ``ha_mcp_tools/config_entries`` read; ``None`` ⇒ run the legacy path.
 
-    Returns the component's ``entries`` list — each row in the
-    ``config_entries/get`` shape (identity + status fields plus the entry's
+    Returns the component's ``entries`` list — each row Core's
+    ``ConfigEntry.as_json_fragment`` plus ``unique_id``, the entry's
     already-materialized ``options`` [raw persisted, secret-scrubbed] and its
-    ``subentries`` identity rows) — so a single in-process frame replaces the
+    ``subentries`` identity rows — so a single in-process frame replaces the
     legacy REST list-all + OptionsFlow start/abort probe + subentries WS call.
     Pass ``entry_id`` for the single entry (empty list ⇒ no such entry) or
     ``domain`` to filter the list; neither lists all.
@@ -380,8 +380,8 @@ def _split_component_entry_row(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Split a component ``config_entries`` row into ``(entry, subentries)``.
 
-    The returned ``entry`` mirrors the legacy REST per-entry shape: the row's
-    identity + status fields and its already-materialized ``options`` (raw
+    The returned ``entry`` mirrors the legacy REST per-entry shape (plus
+    ``unique_id``): the row's Core fields and its already-materialized ``options`` (raw
     persisted, secret-scrubbed), with the nested ``subentries`` list lifted out
     so callers surface subentries at the top level exactly like the legacy
     ``include_subentries`` branch — and never leak them onto ``entry`` when
@@ -393,6 +393,17 @@ def _split_component_entry_row(
     if not isinstance(subentries, list):
         subentries = []
     return entry, subentries
+
+
+def _normalize_ignored_entry(entry: dict[str, Any]) -> None:
+    """HA-MCP policy: report an ignored entry as having no options flow (in place).
+
+    Core never sets it up, so its options flow can raise (#2927), and Core's
+    ``supports_options`` asks only the domain's flow handler, never ``source``.
+    The frontend lists ignored entries apart, with only a stop-ignoring action.
+    """
+    if entry.get("source") == "ignore":
+        entry["supports_options"] = False
 
 
 class IntegrationTools:
@@ -658,9 +669,6 @@ class IntegrationTools:
         - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
         - List template entries with their options: ha_get_integration(domain="template")
 
-        STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
-        'failed_unload', 'migration_error'.
-
         OPTIONS: ``options`` reflect the entry's persisted values. Values that
         match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. Use
         ``include_schema=True`` to see every editable field and its
@@ -911,6 +919,8 @@ class IntegrationTools:
 
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
+            if isinstance(result, dict):
+                _normalize_ignored_entry(result)
 
             # Surface `options` on every per-entry response (HA's REST endpoint
             # omits the field). For entries with supports_options=True we probe
@@ -1043,6 +1053,7 @@ class IntegrationTools:
             )
         entry, subentries = _split_component_entry_row(rows[0])
         entry.setdefault("options", {})
+        _normalize_ignored_entry(entry)
 
         resp: dict[str, Any] = {
             "success": True,
@@ -1407,8 +1418,8 @@ class IntegrationTools:
         """List config entries with optional domain/query filtering and pagination."""
         # Component fast path: one in-process read (domain filtered server-side,
         # options materialized on each row) replaces the REST list + per-entry
-        # OptionsFlow probes. Normalize the domain to HA's canonical lowercase so
-        # the component's exact-match filter mirrors the legacy client-side one.
+        # OptionsFlow probes. Normalize the domain to HA's canonical lowercase:
+        # both the component and Core's REST list filter by exact match.
         domain_norm = domain.strip().lower() if domain else None
         rows = await _fetch_entries_via_component(self._client, domain=domain_norm)
         if rows is not None:
@@ -1416,8 +1427,11 @@ class IntegrationTools:
                 rows, domain, query, include_opts, exact_match, limit_int, offset_int
             )
 
-        # Use REST API endpoint for config entries
-        response = await self._client._request("GET", "/config/config_entries/entry")
+        response = await self._client._request(
+            "GET",
+            "/config/config_entries/entry",
+            params={"domain": domain_norm} if domain_norm else None,
+        )
 
         if not isinstance(response, list):
             raise_tool_error(
@@ -1428,15 +1442,6 @@ class IntegrationTools:
                 )
             )
 
-        entries = response
-
-        # Apply domain filter before formatting
-        if domain:
-            domain_lower = domain.strip().lower()
-            entries = [
-                e for e in entries if e.get("domain", "").lower() == domain_lower
-            ]
-
         # Fetch current logger levels once; enrich each entry with its effective level.
         level_warnings: list[str] = []
         logger_levels = await get_logger_levels(self._client, level_warnings)
@@ -1446,7 +1451,7 @@ class IntegrationTools:
         # advertise supports_options=True. See `fetch_entry_options_with_status`.
         formatted_entries = [
             self._format_entry(entry, include_opts, logger_levels, bool(level_warnings))
-            for entry in entries
+            for entry in response
         ]
 
         # quiet=True: per-entry probe failures are aggregated into a response
@@ -1602,18 +1607,18 @@ class IntegrationTools:
         logger_levels: dict[str, dict[str, Any]] | None = None,
         levels_unknown: bool = False,
     ) -> dict[str, Any]:
-        """Format a raw config entry into the response shape."""
+        """Copy the entry row minus ``options``/``subentries``; add the tool's fields.
+
+        Every other key passes through (Core's fields, plus ``unique_id`` on the
+        component path); ``supports_options`` is forced off for an ignored entry.
+        ``options`` comes back when ``include_opts`` is set.
+        """
         formatted_entry: dict[str, Any] = {
-            "entry_id": entry.get("entry_id"),
-            "domain": entry.get("domain"),
-            "title": entry.get("title"),
-            "state": entry.get("state"),
-            "source": entry.get("source"),
-            "supports_options": entry.get("supports_options", False),
-            "supports_unload": entry.get("supports_unload", False),
-            "supports_reconfigure": entry.get("supports_reconfigure", False),
-            "disabled_by": entry.get("disabled_by"),
+            key: value
+            for key, value in entry.items()
+            if key not in ("options", "subentries")
         }
+        _normalize_ignored_entry(formatted_entry)
 
         # Surface the effective Python logger level for this integration
         # ("DEFAULT" = no override; falls back to the root logger level).
@@ -1634,14 +1639,6 @@ class IntegrationTools:
         # Include options when requested (for auditing template definitions, etc.)
         if include_opts:
             formatted_entry["options"] = entry.get("options", {})
-
-        # Include pref_disable_new_entities and pref_disable_polling if present
-        if "pref_disable_new_entities" in entry:
-            formatted_entry["pref_disable_new_entities"] = entry[
-                "pref_disable_new_entities"
-            ]
-        if "pref_disable_polling" in entry:
-            formatted_entry["pref_disable_polling"] = entry["pref_disable_polling"]
 
         return formatted_entry
 

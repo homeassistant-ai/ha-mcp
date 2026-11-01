@@ -289,3 +289,17 @@ class FakeRegEntry:
             **self.as_partial_dict,
             "aliases": sorted(self.aliases),
         } | dict.fromkeys(extra)
+
+
+class FakeFragment:
+    """Opaque stand-in for ``orjson.Fragment``, which has no public attributes."""
+
+    __slots__ = ("_raw",)
+
+    def __init__(self, raw: bytes) -> None:
+        self._raw = raw
+
+
+def fake_json_bytes(fragment: FakeFragment) -> bytes:
+    """Core's ``json_bytes`` (orjson) writes a Fragment as its raw bytes."""
+    return fragment._raw

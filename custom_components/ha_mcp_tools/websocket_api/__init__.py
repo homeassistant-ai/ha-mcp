@@ -209,14 +209,10 @@ the info handshake carries no capability entry:
   the loop; see
   :mod:`.template_diagnose`.
 
-* ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
-  WS shape (``created_at`` / ``modified_at`` / ``entry_id`` / ``domain`` /
-  ``title`` / ``state`` / ``source`` / ``supports_*`` / ``supported_subentry_types``
-  / ``pref_disable_*`` / ``disabled_by`` / ``reason`` / ``options`` /
-  ``subentries`` — the full ``as_json_fragment`` field set), filtered by ``domain``
-  or fetched by
-  ``entry_id``. ``state`` is serialized as ``ConfigEntryState.value`` (mirroring
-  core's ``as_json_fragment``). ``entry.data`` (integration credentials) is
+* ``ha_mcp_tools/config_entries`` — config entries as Core's
+  ``config_entries/get`` rows (``ConfigEntry.as_json_fragment``) plus
+  ``unique_id``, ``options`` and ``subentries``, filtered by ``domain`` or fetched
+  by ``entry_id``. ``entry.data`` (integration credentials) is
   NEVER read; ``options`` is passed through a resolved-``!secret`` scrub (an
   options leaf equal to a ``secrets.yaml`` value becomes ``"**redacted**"``,
   loaded off the loop by :func:`_config_entries_prep`) — data minimization

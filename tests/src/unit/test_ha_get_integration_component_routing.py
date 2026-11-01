@@ -121,15 +121,18 @@ class RoutingClient:
         self._options_flow = options_flow
         self._subentries = list(subentries or [])
         self.rest_list_calls = 0
+        self.rest_list_params: dict[str, Any] | None = None
         self.get_config_entry_calls = 0
         self.start_options_flow_calls = 0
         self.abort_options_flow_calls = 0
         self.list_config_subentries_calls = 0
 
-    async def _request(self, method: str, path: str) -> Any:
-        # Legacy list-all-entries REST fetch.
+    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        # Legacy entry-list REST fetch; Core filters ``?domain=`` itself.
         self.rest_list_calls += 1
-        return list(self._rest_entries)
+        self.rest_list_params = kwargs.get("params")
+        domain = (self.rest_list_params or {}).get("domain")
+        return [e for e in self._rest_entries if not domain or e["domain"] == domain]
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         # Legacy single-entry read (lists all + filters client-side in real life).
@@ -421,7 +424,11 @@ async def test_list_without_options_uses_component_and_omits_options() -> None:
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_result={"entries": [_row("c1")]},
+        cmd_result={
+            "entries": [
+                _row("c1", subentries=[{"subentry_id": "s1", "subentry_type": "x"}])
+            ]
+        },
     )
     client = RoutingClient()
     get_integration = _build_get_integration(client)
@@ -431,6 +438,7 @@ async def test_list_without_options_uses_component_and_omits_options() -> None:
 
     assert [e["entry_id"] for e in resp["entries"]] == ["c1"]
     assert "options" not in resp["entries"][0]
+    assert "subentries" not in resp["entries"][0]
     assert client.rest_list_calls == 0
 
 
@@ -626,8 +634,8 @@ async def test_empty_entry_id_is_not_found_never_first_entry() -> None:
 # --- ignored entries (#2927) ----------------------------------------------------
 # Core never sets up an ignored entry (``source == "ignore"``, created with empty
 # ``data``), so its options flow has nothing to read and several integrations'
-# flows raise. Core may still report ``supports_options: true`` for one whenever
-# the domain's flow handler is loaded, so the tool must key on ``source``.
+# flows raise. Core's ``supports_options`` asks only the domain's flow handler,
+# never ``source``, so the tool must key on ``source``.
 _IGNORED = {"source": "ignore", "state": "not_loaded", "supports_options": True}
 _CAPSLESS = HomeAssistantCommandError("no info", "unknown_command")
 
@@ -645,6 +653,22 @@ async def test_ignored_entry_legacy_single_is_not_probed() -> None:
     assert resp["entry"]["supports_options"] is False
     assert resp["entry"]["options"] == {}
     assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_not_loaded_entry_that_is_not_ignored_is_still_probed() -> None:
+    # Control for the ignored-entry tests: the gate keys on ``source``, not on
+    # the entry state, so a not-loaded user entry keeps its options probe.
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    entry = _rest_entry("nl1", "unifi", state="not_loaded")
+    client = RoutingClient(single_entry=entry)
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(entry_id="nl1")
+
+    assert client.start_options_flow_calls == 1
+    assert resp["entry"]["supports_options"] is True
 
 
 @pytest.mark.asyncio
@@ -698,3 +722,37 @@ async def test_ignored_entry_component_single_schema_opens_no_flow() -> None:
     assert resp["entry"]["supports_options"] is False
     assert "options_schema" not in resp
     assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_legacy_list_passes_domain_filter_to_core() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(
+        rest_entries=[
+            _rest_entry("m1", "mqtt", supports_options=False),
+            _rest_entry("h1", "hue", supports_options=False),
+        ]
+    )
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(domain=" MQTT ")
+
+    assert client.rest_list_params == {"domain": "mqtt"}
+    assert [e["entry_id"] for e in resp["entries"]] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_list_keeps_core_fields() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(
+        rest_entries=[
+            _rest_entry("m1", "mqtt", supports_options=False, num_subentries=0)
+        ]
+    )
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration()
+
+    assert resp["entries"][0]["num_subentries"] == 0

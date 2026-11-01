@@ -77,6 +77,15 @@ class TestListIntegrations:
                 "supports_options",
                 "supports_unload",
                 "disabled_by",
+                # Core fields the row must pass through unchanged (#2632).
+                "supports_remove_device",
+                "supported_subentry_types",
+                "num_subentries",
+                "created_at",
+                "modified_at",
+                "reason",
+                "error_reason_translation_key",
+                "error_reason_translation_placeholders",
             ]
 
             for field in expected_fields:
