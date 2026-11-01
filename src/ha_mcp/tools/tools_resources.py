@@ -51,8 +51,10 @@ from .resource_codec import (
 from .resource_patch import (
     MAX_EDITS,
     ResourceEdit,
+    ResourceLookupError,
     apply_resource_edits,
-    check_expected_sha256,
+    check_config_hash,
+    find_resource,
     load_inline_resource,
 )
 from .response_helpers import build_pagination_metadata
@@ -185,9 +187,9 @@ class ResourceTools:
         include_hash: Annotated[
             bool,
             Field(
-                description='Add "_sha256" (hex digest of the decoded UTF-8 content) '
-                "to each inline resource, e.g. to verify an edit or to pass as "
-                "expected_sha256 without fetching the content."
+                description='Add "_config_hash" (SHA-256 hex digest of the decoded '
+                "UTF-8 content) to each inline resource, e.g. to verify an edit or "
+                "to pass as config_hash without fetching the content."
             ),
         ] = False,
         limit: Annotated[
@@ -334,12 +336,13 @@ class ResourceTools:
                 "and the stored type is kept.",
             ),
         ] = None,
-        expected_sha256: Annotated[
+        config_hash: Annotated[
             str | None,
             Field(
                 description="With edits: refuse the patch unless the stored content "
-                "has this SHA-256 when read, just before the write (from "
-                "include_hash=True or a previous response's sha256). A preflight "
+                "has this hash when read, just before the write (the list's "
+                "_config_hash with include_hash=True, or a previous write "
+                "response's config_hash). A preflight "
                 "check only: a change made by another client after that read is "
                 "not detected and can be overwritten."
             ),
@@ -349,7 +352,7 @@ class ResourceTools:
 
         Provide exactly one of:
         - edits: Search/replace edits on an existing inline resource. Any
-          failing edit (or an expected_sha256 mismatch) aborts the whole call
+          failing edit (or a config_hash mismatch) aborts the whole call
           and saves nothing. Prefer this over content= for small changes to a
           large card: only the changed text is sent.
         - content: Inline JavaScript or CSS code (embedded in the resource URL
@@ -372,24 +375,24 @@ class ResourceTools:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
         - Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
         - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
-        - Patch: ha_config_set_dashboard_resource(resource_id="abc123", edits=[{"old": "color: red", "new": "color: blue"}], expected_sha256="<sha256 from the list>")
+        - Patch: ha_config_set_dashboard_resource(resource_id="abc123", edits=[{"old": "color: red", "new": "color: blue"}], config_hash="<_config_hash from the list>")
 
-        Inline writes return the new content's sha256.
+        Inline writes return the stored content's config_hash.
 
         After adding a resource, a browser cache clear or hard refresh
         (Ctrl+Shift+R) is needed to load it.
         """
         if edits is not None:
             return await self._patch_inline_resource(
-                resource_id, edits, expected_sha256, other_modes=(content, url)
+                resource_id, edits, config_hash, other_modes=(content, url)
             )
-        if expected_sha256 is not None:
+        if config_hash is not None:
             raise_tool_error(
                 create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message="expected_sha256 only applies together with edits",
+                    message="config_hash only applies together with edits",
                     suggestions=[
-                        "Pass edits=[...] with resource_id, or drop expected_sha256"
+                        "Pass edits=[...] with resource_id, or drop config_hash"
                     ],
                 )
             )
@@ -559,7 +562,7 @@ class ResourceTools:
                 "resource_id": new_resource_id,
                 "resource_type": resource_type,
                 "size": content_size,
-                "sha256": content_sha256(content),
+                "config_hash": _stored_content_hash(result),
                 "note": "Clear browser cache or hard refresh to load changes",
             }
         except ToolError:
@@ -580,7 +583,7 @@ class ResourceTools:
         self,
         resource_id: str | None,
         edits: list[ResourceEdit],
-        expected_sha256: str | None,
+        config_hash: str | None,
         other_modes: tuple[str | None, str | None],
     ) -> dict[str, Any]:
         """Apply search/replace edits to a stored inline resource, all or nothing."""
@@ -628,7 +631,7 @@ class ResourceTools:
             )
             # Unreachable (exception_to_structured_error is NoReturn).
             raise
-        check_expected_sha256(stored, expected_sha256)
+        check_config_hash(stored, config_hash)
         patched = apply_resource_edits(stored, edits)
         response = await self._set_inline_resource(
             patched, resource_type, resource_id, check_preview=False
@@ -682,42 +685,28 @@ class ResourceTools:
             )
 
         try:
-            result = await self._client.send_websocket_message(
-                {"type": "lovelace/resources"}
-            )
+            found = await find_resource(self._client, resource_id)
+        except ResourceLookupError as e:
+            _unverifiable(e.detail)
         except Exception as e:  # noqa: BLE001
             _unverifiable(f"listing the resources failed: {e}")
-        error_msg = _check_ws_error(result)
-        if error_msg:
-            _unverifiable(f"Home Assistant rejected the listing: {error_msg}")
-        resources = result.get("result") if isinstance(result, dict) else result
-        if not isinstance(resources, list):
-            _unverifiable("Home Assistant returned an unreadable resource list")
-        for res in resources:
-            # Element type is guarded too: a malformed entry must not raise a
-            # bare AttributeError out of the tool.
-            if not isinstance(res, dict) or str(res.get("id")) != str(resource_id):
-                continue
-            url = res.get("url", "")
-            stored = None
-            if isinstance(url, str):
-                decoded = _decode_inline_content(url)
-                stored = decoded[0] if decoded else None
-            if stored and _is_preview_of(content, stored):
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message="Content is the truncated preview from "
-                        "ha_config_list_dashboard_resources, not the full "
-                        "resource code — saving it would destroy the resource",
-                        context={"resource_id": resource_id},
-                        suggestions=[
-                            "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
-                            "Then re-save with the complete content",
-                        ],
-                    )
-                )
+        if found is None:
             return
+        stored = found[1]
+        if stored and _is_preview_of(content, stored):
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Content is the truncated preview from "
+                    "ha_config_list_dashboard_resources, not the full "
+                    "resource code — saving it would destroy the resource",
+                    context={"resource_id": resource_id},
+                    suggestions=[
+                        "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
+                        "Then re-save with the complete content",
+                    ],
+                )
+            )
 
     async def _set_url_resource(
         self,
@@ -955,6 +944,19 @@ def _extract_resource_id(result: Any, fallback_id: str | None) -> str | None:
     if isinstance(resource_info, dict):
         return resource_info.get("id", fallback_id)
     return fallback_id
+
+
+def _stored_content_hash(result: Any) -> str | None:
+    """Hash the content Home Assistant stored, decoded from the write's result.
+
+    ``lovelace/resources/create`` and ``/update`` return the stored item;
+    hashing its URL rather than the string sent keeps the hash tied to what
+    HA holds. None when the result carries no decodable inline URL.
+    """
+    item = result.get("result") if isinstance(result, dict) else None
+    url = item.get("url") if isinstance(item, dict) else None
+    decoded = _decode_inline_content(url) if isinstance(url, str) else None
+    return content_sha256(decoded[0]) if decoded else None
 
 
 def _require_created_resource_id(resource_id: str | None, action: str) -> None:

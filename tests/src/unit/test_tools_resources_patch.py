@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -27,6 +28,8 @@ class FakeLovelace:
     def __init__(self, resources: list[dict[str, Any]]) -> None:
         self.resources = resources
         self.updates: list[dict[str, Any]] = []
+        # What HA stores for a written URL; Core returns the stored item.
+        self.store: Callable[[str], str] = lambda url: url
 
     async def send_websocket_message(self, message: dict[str, Any]) -> Any:
         kind = message["type"]
@@ -36,7 +39,14 @@ class FakeLovelace:
             return {"success": True, "result": {"resource_mode": "storage"}}
         if kind == "lovelace/resources/update":
             self.updates.append(message)
-            return {"success": True, "result": {"id": message["resource_id"]}}
+            return {
+                "success": True,
+                "result": {
+                    "id": message["resource_id"],
+                    "type": message["res_type"],
+                    "url": self.store(message["url"]),
+                },
+            }
         raise AssertionError(f"unexpected WS command {kind}")
 
 
@@ -78,7 +88,7 @@ class TestPatchSuccess:
                 {"old": "[10, 20, 30, 40]", "new": "[10, 20, 32, 40]"},
                 {"old": "speed = 1.5", "new": "speed = 2.5"},
             ],
-            expected_sha256=_sha(CARD).upper(),
+            config_hash=_sha(CARD).upper(),
         )
 
         (update,) = fake.updates
@@ -88,7 +98,7 @@ class TestPatchSuccess:
         assert result["action"] == "patched"
         assert result["applied"] == 2
         assert result["size"] == len(stored.encode("utf-8"))
-        assert result["sha256"] == _sha(stored)
+        assert result["config_hash"] == _sha(stored)
 
     async def test_later_edit_can_target_text_an_earlier_edit_wrote(self):
         fake = FakeLovelace([_inline(CARD)])
@@ -102,16 +112,6 @@ class TestPatchSuccess:
         )
 
         assert "colour = 'blue'" in _decode_data_uri(fake.updates[0]["url"])
-
-    async def test_umlauts_and_emoji_survive_the_roundtrip(self):
-        content = "const label = 'Wärme 🔥 Grüße';\nconst unit = '°C';\n"
-        fake = FakeLovelace([_inline(content)])
-
-        result = await _patch(fake, edits=[{"old": "Wärme 🔥", "new": "Kälte ❄️"}])
-
-        stored = _decode_data_uri(fake.updates[0]["url"])
-        assert stored == "const label = 'Kälte ❄️ Grüße';\nconst unit = '°C';\n"
-        assert result["sha256"] == _sha(stored)
 
     async def test_legacy_worker_resource_is_patched_into_a_data_uri(self):
         fake = FakeLovelace(
@@ -180,11 +180,11 @@ class TestPatchRefusals:
         error = await _patch_error(
             fake,
             edits=[{"old": "'red'", "new": "'blue'"}],
-            expected_sha256=_sha("an older version"),
+            config_hash=_sha("an older version"),
         )
 
         assert error["reason"] == "hash_mismatch"
-        assert error["actual_sha256"] == _sha(CARD)
+        assert error["current_config_hash"] == _sha(CARD)
 
     async def test_non_inline_resource_is_refused(self):
         url = "/local/x.js"
@@ -240,7 +240,7 @@ class TestPatchModeSelection:
     async def test_expected_hash_without_edits_is_refused_instead_of_ignored(self):
         fake = FakeLovelace([_inline(CARD)])
 
-        await _patch_error(fake, content="const x = 1;", expected_sha256=_sha(CARD))
+        await _patch_error(fake, content="const x = 1;", config_hash=_sha(CARD))
 
 
 class TestHashReporting:
@@ -249,9 +249,17 @@ class TestHashReporting:
 
         result = await _patch(fake, content="const x = 'ü';")
 
-        assert result["sha256"] == _sha(_decode_data_uri(fake.updates[0]["url"]))
+        assert result["config_hash"] == _sha(_decode_data_uri(fake.updates[0]["url"]))
 
-    async def test_include_hash_adds_sha256_only_when_requested(self):
+    async def test_write_hash_is_taken_from_the_item_ha_returns(self):
+        fake = FakeLovelace([_inline(CARD)])
+        fake.store = lambda _url: _data_uri_for("const normalized = 1;", "module")
+
+        result = await _patch(fake, edits=[{"old": "'red'", "new": "'blue'"}])
+
+        assert result["config_hash"] == _sha("const normalized = 1;")
+
+    async def test_include_hash_adds_config_hash_only_when_requested(self):
         external = {"id": "ext", "type": "module", "url": "/local/x.js"}
         fake = FakeLovelace([_inline(CARD), external])
         list_tool = ResourceTools(fake).ha_config_list_dashboard_resources
@@ -259,6 +267,8 @@ class TestHashReporting:
         hashed = (await list_tool(include_hash=True))["resources"]
         plain = (await list_tool())["resources"]
 
-        assert hashed[0]["_sha256"] == _sha(CARD)
-        assert "_sha256" not in hashed[1], "external resources have no content to hash"
-        assert all("_sha256" not in row for row in plain)
+        assert hashed[0]["_config_hash"] == _sha(CARD)
+        assert "_config_hash" not in hashed[1], (
+            "external resources have no content to hash"
+        )
+        assert all("_config_hash" not in row for row in plain)

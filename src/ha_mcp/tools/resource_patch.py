@@ -113,29 +113,69 @@ def apply_resource_edits(content: str, edits: list[ResourceEdit]) -> str:
     return result
 
 
-async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]:
-    """Fetch an inline resource and return ``(decoded_content, resource_type)``.
+class ResourceLookupError(Exception):
+    """Home Assistant rejected the resource listing or returned no list.
 
-    Raises ``RESOURCE_NOT_FOUND`` for an unknown ID and a ``not_inline``
-    validation error for /local/, /hacsfiles/, https:// or undecodable URLs.
+    ``result`` is Core's reply, so a caller can map Core's error code.
     """
-    context = {"action": "patch", "resource_id": resource_id}
+
+    def __init__(self, detail: str, result: Any) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.result = result
+
+
+async def find_resource(
+    client: Any, resource_id: str
+) -> tuple[dict[str, Any], str | None] | None:
+    """Look up ``resource_id`` in ``lovelace/resources``.
+
+    Returns ``(row, decoded_content)``, with ``decoded_content`` None for a
+    URL that is not an inline resource, or None when no row has that ID.
+    Raises ``ResourceLookupError`` when Home Assistant rejects the listing or
+    returns something other than a list; transport errors propagate as-is.
+    Callers word their own errors.
+    """
     result = await client.send_websocket_message({"type": "lovelace/resources"})
     error_msg = _check_ws_error(result)
     if error_msg:
-        raise_tool_error(
-            create_error_response(ws_failure_code(result), error_msg, context=context)
+        raise ResourceLookupError(
+            f"Home Assistant rejected the listing: {error_msg}", result
         )
     resources = result.get("result") if isinstance(result, dict) else result
-    stored = next(
-        (
-            res
-            for res in (resources if isinstance(resources, list) else [])
-            if isinstance(res, dict) and str(res.get("id")) == str(resource_id)
-        ),
-        None,
-    )
-    if stored is None:
+    if not isinstance(resources, list):
+        raise ResourceLookupError(
+            "Home Assistant returned an unreadable resource list", result
+        )
+    for row in resources:
+        # A malformed entry must not raise a bare AttributeError.
+        if isinstance(row, dict) and str(row.get("id")) == str(resource_id):
+            url = row.get("url")
+            decoded = _decode_inline_content(url) if isinstance(url, str) else None
+            return row, decoded[0] if decoded else None
+    return None
+
+
+async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]:
+    """Fetch an inline resource and return ``(decoded_content, resource_type)``.
+
+    Raises ``RESOURCE_NOT_FOUND`` for an unknown ID, a ``not_inline``
+    validation error for /local/, /hacsfiles/, https:// or undecodable URLs,
+    an ``unsupported_type`` validation error for an inline row whose type a
+    ``data:`` URI cannot carry (legacy ``js``/``html`` worker rows), and
+    Core's mapped error when the listing itself fails.
+    """
+    context = {"action": "patch", "resource_id": resource_id}
+    try:
+        found = await find_resource(client, resource_id)
+    except ResourceLookupError as e:
+        code = (
+            ws_failure_code(e.result)
+            if isinstance(e.result, dict)
+            else ErrorCode.SERVICE_CALL_FAILED
+        )
+        raise_tool_error(create_error_response(code, e.detail, context=context))
+    if found is None:
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
@@ -146,9 +186,9 @@ async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]
                 ],
             )
         )
-    url = stored.get("url")
-    decoded = _decode_inline_content(url) if isinstance(url, str) else None
-    if decoded is None:
+    stored, content = found
+    if content is None:
+        url = stored.get("url")
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -184,20 +224,20 @@ async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]
                 ],
             )
         )
-    return decoded[0], resource_type
+    return content, resource_type
 
 
-def check_expected_sha256(content: str, expected_sha256: str | None) -> None:
+def check_config_hash(content: str, config_hash: str | None) -> None:
     """Refuse the patch when the stored content no longer has the caller's hash."""
-    if expected_sha256 is None:
+    if config_hash is None:
         return
-    actual = content_sha256(content)
-    if expected_sha256.strip().lower() != actual:
+    current = content_sha256(content)
+    if config_hash.strip().lower() != current:
         _raise_edit_error(
             "hash_mismatch",
-            "The stored resource does not match expected_sha256; it changed "
+            "The stored resource does not match config_hash; it changed "
             "since you last read it",
-            {"actual_sha256": actual},
+            {"current_config_hash": current},
             [
                 "Re-read it with ha_config_list_dashboard_resources(include_hash=True, include_content=True)",
                 "Rebuild the edits against the current content",

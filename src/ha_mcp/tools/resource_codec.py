@@ -308,7 +308,7 @@ def _process_resource_list(
             res["_inline"] = True
             res["_size"] = content_bytes
             if include_hash:
-                res["_sha256"] = content_sha256(content)
+                res["_config_hash"] = content_sha256(content)
             if is_legacy:
                 # The full remediation text lives once at response level;
                 # repeating it per resource wasted ~330 chars each.
