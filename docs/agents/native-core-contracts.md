@@ -218,8 +218,8 @@ is driven by the GET on the flow the frontend sends. `log_persistence` reaches
 `logger/integration_log_level` as Core's `persistence` unchanged, so Core
 validates it. HA-MCP policies here: the 120 s progress budget, the reconfigure
 preview's key check against the form, refusing writes to ha-mcp's own entries,
-secret redaction, and reporting (not undoing) a setup flow that creates an
-entry without asking.
+secret redaction, and failing a describe whose step Core finishes (naming
+what Core saved, not undoing it) or that reaches a step without a form.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

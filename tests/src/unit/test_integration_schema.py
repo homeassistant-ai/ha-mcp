@@ -467,21 +467,141 @@ async def test_setup_menu_lists_branches_until_menu_choice_picks_one() -> None:
     assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
 
 
+# --- a describe step that does not stop at a form, menu or abort -----------
+
+
+def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
+    return json.loads(str(exc_info.value))
+
+
 @pytest.mark.asyncio
-async def test_setup_flow_that_creates_an_entry_is_reported() -> None:
+async def test_setup_flow_that_creates_an_entry_fails_and_names_the_entry() -> None:
     client = _config_client(
         {
             "type": "create_entry",
             "flow_id": "f1",
-            "result": {"entry_id": "new1", "domain": "demo"},
+            "title": "Sun",
+            "result": {"entry_id": "new1", "domain": "demo", "title": "Sun"},
         }
     )
     resp: dict[str, Any] = {}
 
-    await fetch_config_flow_schema(client, "demo", resp)
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_config_flow_schema(client, "demo", resp)
 
-    assert resp["config_flow_schema"]["flow_type"] == "create_entry"
-    assert any("new1" in w and "created" in w for w in resp["warnings"])
+    body = _error(exc_info)
+    assert "new1" in body["error"]["message"]
+    assert body["entry_id"] == "new1"
+    assert body["title"] == "Sun"
+    assert "status" not in body
+    assert "ha_remove_helpers_integrations" in body["error"]["suggestion"]
+    assert "config_flow_schema" not in resp
+
+
+@pytest.mark.asyncio
+async def test_menu_choice_whose_step_creates_an_entry_fails() -> None:
+    client = _config_client(dict(_MENU))
+    client.submit_config_flow_step.return_value = {
+        "type": "create_entry",
+        "flow_id": "f1",
+        "title": "Basic",
+        "result": {"entry_id": "new2", "title": "Basic"},
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_config_flow_schema(client, "group", {}, menu_choice="basic")
+
+    assert _error(exc_info)["entry_id"] == "new2"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_that_creates_an_entry_fails_and_says_options_saved() -> (
+    None
+):
+    client = _client({"type": "create_entry", "flow_id": "f1", "title": ""})
+    resp = _resp()
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_options_schema(client, "e1", resp)
+
+    assert "options were saved" in _error(exc_info)["error"]["message"]
+    assert "options_schema" not in resp
+
+
+@pytest.mark.asyncio
+async def test_subentry_flow_that_creates_an_entry_fails_and_names_the_subentry() -> (
+    None
+):
+    client = _client({"type": "create_entry", "flow_id": "f1", "title": "Chat"})
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_config_subentry_schema(
+            client,
+            "e1",
+            _resp("ollama"),
+            subentry_type="conversation",
+            subentry_id=None,
+            show_advanced_options=False,
+        )
+
+    body = _error(exc_info)
+    assert "subentry" in body["error"]["message"]
+    assert body["title"] == "Chat"
+
+
+_PROGRESS_STEP = {
+    "type": "progress",
+    "flow_id": "f1",
+    "step_id": "discover",
+    "progress_action": "scanning",
+}
+
+
+@pytest.mark.asyncio
+async def test_setup_flow_in_progress_is_aborted_and_named_with_cores_text() -> None:
+    client = _config_client(
+        dict(_PROGRESS_STEP),
+        {"component.demo.config.progress.scanning": "Scanning the network."},
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_config_flow_schema(client, "demo", {})
+
+    body = _error(exc_info)
+    assert "progress" in body["error"]["message"]
+    assert body["progress_action"] == "scanning"
+    assert body["progress_action_text"] == "Scanning the network."
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_options_flow_in_progress_is_aborted_and_reported() -> None:
+    client = _client(dict(_PROGRESS_STEP))
+    resp = _resp()
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_options_schema(client, "e1", resp)
+
+    assert _error(exc_info)["progress_action"] == "scanning"
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
+    client = _client({"type": "external", "flow_id": "f1", "step_id": "auth"})
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_config_subentry_schema(
+            client,
+            "e1",
+            _resp("ollama"),
+            subentry_type="conversation",
+            subentry_id=None,
+            show_advanced_options=False,
+        )
+
+    assert "'external'" in _error(exc_info)["error"]["message"]
+    client.abort_config_subentry_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio

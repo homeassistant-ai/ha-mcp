@@ -333,12 +333,13 @@ class IntegrationTools:
                 "form as options_schema.fields: each field's type, current value "
                 "and Home Assistant's help text. A flow that opens with a menu "
                 "lists menu_options instead (see menu_choice), and a flow Home "
-                "Assistant aborts gives aborted and reason_text. Only applies "
+                "Assistant aborts gives aborted, plus reason_text when Home "
+                "Assistant has a string for the reason. Only applies "
                 "when supports_options=true. Without entry_id but with domain, "
                 "describe that integration's setup form as config_flow_schema "
-                "(same shape). The flow is started and aborted, so nothing is "
-                "added, unless it creates an entry without asking (warnings "
-                "then says so).",
+                "(same shape). The flow is started, described and aborted. If "
+                "Home Assistant finishes it instead of showing a form, the call "
+                "fails and says what was saved (e.g. the new entry).",
                 default=False,
             ),
         ] = False,
@@ -358,7 +359,9 @@ class IntegrationTools:
                 description=(
                     "When entry_id is set, describe a config subentry flow's "
                     "form as subentry_schema.fields (same shape as "
-                    "include_schema); no subentry is created. Pair with "
+                    "include_schema); the flow is aborted afterwards, and if "
+                    "Home Assistant finishes it instead of showing a form, the "
+                    "call fails and says what was created. Pair with "
                     "subentry_type, and optionally subentry_id for the "
                     "reconfigure form."
                 ),
@@ -403,7 +406,11 @@ class IntegrationTools:
                     "With include_schema (options or setup flow) or "
                     "include_subentry_schema, when the flow opens with a menu: "
                     "the menu option whose form to describe. Without it the "
-                    "menu options are listed."
+                    "menu options are listed. Choosing an option runs that "
+                    "step in Home Assistant; if it finishes the flow at once, "
+                    "the call fails and reports what was saved. Refused when "
+                    "the flow opens with anything but a menu (an abort is "
+                    "still reported), or the menu lacks the option."
                 ),
                 default=None,
             ),

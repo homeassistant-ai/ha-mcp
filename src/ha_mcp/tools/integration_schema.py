@@ -1,11 +1,13 @@
-"""ha_get_integration's setup, options and subentry flow schemas (issue #2632).
+"""ha_get_integration's setup, options and subentry flow schemas.
 
 A schema only exists inside an open flow: the domain's config flow (or the
 entry's options or subentry flow) is started, its form described in the same
 compact shape the helper describe uses (fields, HA's help text, current
 values), and the flow aborted. A flow that opens with a menu lists its
-branches; ``menu_choice`` submits one of them and describes the form behind
-it. A flow Home Assistant aborts is reported with Core's reason text.
+branches; ``menu_choice`` submits one of them, which runs that step in Home
+Assistant, and describes the form behind it. A flow Home Assistant aborts is
+reported with Core's reason text. A step that finishes the flow (Core has
+then saved it) or waits on work Core runs fails the call.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -26,7 +28,11 @@ from ..redaction import (
     redaction_enabled,
     sentinel_replacement,
 )
-from .config_entry_flow_errors import FlowRef, abort_reason_text
+from .config_entry_flow_errors import (
+    FlowRef,
+    abort_reason_text,
+    progress_action_text,
+)
 from .config_entry_flow_form import iter_schema_fields
 from .config_entry_flow_introspect import menu_choices
 from .config_helpers.describe import describe_form, later_forms
@@ -156,6 +162,38 @@ def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> None:
     )
 
 
+def _raise_flow_finished(step: dict[str, Any], path: str) -> NoReturn:
+    """Report a describe step Core answered with ``create_entry``: it committed."""
+    title = step.get("title")
+    context: dict[str, Any] = {}
+    suggestions: list[str] = []
+    if path == "config":
+        result = step.get("result")
+        result = result if isinstance(result, dict) else {}
+        title = result.get("title", title)
+        context = {"entry_id": result.get("entry_id"), "title": title}
+        what = (
+            f"the setup flow and created config entry {result.get('entry_id')} "
+            f"({title!r})"
+        )
+        suggestions.append(
+            "Remove the entry with ha_remove_helpers_integrations if it is not wanted."
+        )
+    elif path == "options":
+        what = "the options flow; the options were saved"
+    else:
+        context = {"title": title}
+        what = f"the subentry flow and created a subentry ({title!r})"
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Home Assistant finished {what} instead of showing a form to describe",
+            suggestions=suggestions,
+            context=context,
+        )
+    )
+
+
 async def _describe_step(
     client: Any,
     step: dict[str, Any],
@@ -165,7 +203,10 @@ async def _describe_step(
     menu_choice: str | None,
     submit: _Submit,
 ) -> dict[str, Any]:
-    """Describe a flow's first step, or the form behind ``menu_choice``."""
+    """Describe a flow's first step, or the form behind ``menu_choice``.
+
+    A step that is not a form, menu or abort raises; the callers abort the flow.
+    """
     chosen: dict[str, Any] = {}
     if step.get("type") == "menu":
         choices = menu_choices(step)
@@ -186,20 +227,42 @@ async def _describe_step(
         _refuse_menu_choice(
             menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
         )
-    if step.get("type") == "abort":
+    step_type = step.get("type")
+    if step_type == "abort":
         return {
             "flow_type": "abort",
             **chosen,
             "aborted": step.get("reason"),
             **await abort_reason_text(client, FlowRef(domain, path), step),
         }
-    if step.get("type") != "form":
+    if step_type == "menu":
         return {
-            "flow_type": step.get("type"),
+            "flow_type": "menu",
             "step_id": step.get("step_id"),
             **chosen,
-            "details": step,
+            "menu_options": menu_choices(step),
         }
+    if step_type == "create_entry":
+        _raise_flow_finished(step, path)
+    if step_type != "form":
+        progress: dict[str, Any] = {}
+        if step_type == "progress":
+            progress = {
+                "progress_action": step.get("progress_action"),
+                **await progress_action_text(client, FlowRef(domain, path), step),
+            }
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"The flow reached a {step_type!r} step, which has no form to "
+                "describe; the flow is aborted",
+                suggestions=[
+                    "Run this flow in the Home Assistant UI "
+                    "(Settings > Devices & Services)."
+                ],
+                context={"step_id": step.get("step_id"), **chosen, **progress},
+            )
+        )
     return {
         "flow_type": "form",
         "step_id": step.get("step_id"),
@@ -231,10 +294,7 @@ async def fetch_options_schema(
     try:
         flow_result = await client.start_options_flow(entry_id)
         flow_id = flow_result.get("flow_id")
-        flow_type = flow_result.get("type")
-        if flow_type not in ("form", "menu", "abort"):
-            return
-        if flow_type == "form" and entry is not None:
+        if flow_result.get("type") == "form" and entry is not None:
             if populate_options:
                 entry["options"] = options_from_form_flow(flow_result)
             elif redaction_enabled():
@@ -344,7 +404,7 @@ async def fetch_config_flow_schema(
     """Describe ``domain``'s setup (config) flow as ``resp["config_flow_schema"]``.
 
     The flow is started, its first step (or the form behind ``menu_choice``)
-    described, and the flow aborted, so nothing is set up.
+    described, and the flow aborted. A step that creates the entry raises.
     """
     try:
         first_step = await client.start_config_flow(domain)
@@ -376,12 +436,3 @@ async def fetch_config_flow_schema(
                 # A flow that already finished (abort, create_entry) is gone.
                 logger.debug("config flow %s abort failed: %s", flow_id, abort_err)
     resp["config_flow_schema"] = schema
-    if schema.get("flow_type") == "create_entry":
-        result = schema.get("details", {}).get("result")
-        entry_id = result.get("entry_id") if isinstance(result, dict) else None
-        resp.setdefault("warnings", []).append(
-            f"{domain}'s config flow finished without asking anything and Home "
-            f"Assistant created a config entry (entry_id {entry_id}). It was "
-            "left in place; remove it with ha_remove_helpers_integrations if "
-            "it is not wanted."
-        )
