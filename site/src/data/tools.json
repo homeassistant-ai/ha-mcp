@@ -3860,7 +3860,7 @@
     "tags": [
       "Service & Device Control"
     ],
-    "source_file": "tools_event.py"
+    "source_file": "event_call.py"
   },
   {
     "name": "ha_call_service",

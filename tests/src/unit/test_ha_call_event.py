@@ -13,7 +13,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import tools_event
+from ha_mcp.tools import event_call
 from ha_mcp.tools.tools_service import ServiceTools
 
 
@@ -222,7 +222,7 @@ class TestHaCallEvent:
             return []
 
         tools._client._request = AsyncMock(side_effect=_stalled)
-        monkeypatch.setattr(tools_event, "EVENT_LISTENER_LOOKUP_BUDGET_SECONDS", 0.05)
+        monkeypatch.setattr(event_call, "EVENT_LISTENER_LOOKUP_BUDGET_SECONDS", 0.05)
 
         result = await tools.ha_call_event("my_event")
 
@@ -235,7 +235,7 @@ class TestHaCallEvent:
         """A timing-out lookup is optional enrichment, never a fire blocker."""
         tools = _make_tools({"message": "ok"}, TimeoutError("events timed out"))
 
-        with caplog.at_level(logging.DEBUG, logger=tools_event.__name__):
+        with caplog.at_level(logging.DEBUG, logger=event_call.__name__):
             result = await tools.ha_call_event("my_event")
 
         assert result["success"] is True
