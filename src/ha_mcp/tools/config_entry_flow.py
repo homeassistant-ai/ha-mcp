@@ -50,6 +50,7 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
+from .config_entry_flow_introspect import _ABORT_TIMEOUT_S
 from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
     _FlowType,
@@ -60,7 +61,6 @@ from .config_entry_flow_walker import (
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
-
 
 OptionsRestoreReason = Literal[
     "unsupported_form",
@@ -413,7 +413,7 @@ async def _cleanup_snapshot_creation(
         try:
             with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
                 await asyncio.wait_for(
-                    client.abort_config_flow(progress.flow_id), timeout=5
+                    client.abort_config_flow(progress.flow_id), timeout=_ABORT_TIMEOUT_S
                 )
         except Exception as err:  # noqa: BLE001
             logger.warning(
@@ -441,7 +441,9 @@ async def _abort_flow_best_effort(client: Any, flow_id: str) -> Exception | None
     """
     try:
         with anyio.CancelScope(shield=True):
-            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+            await asyncio.wait_for(
+                client.abort_config_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+            )
     except Exception as abort_err:  # noqa: BLE001
         logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
         return abort_err
@@ -453,7 +455,7 @@ async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
     try:
         with anyio.CancelScope(shield=True):
             await asyncio.wait_for(
-                client.abort_config_subentry_flow(flow_id), timeout=5.0
+                client.abort_config_subentry_flow(flow_id), timeout=_ABORT_TIMEOUT_S
             )
     except Exception as abort_err:  # noqa: BLE001
         logger.warning(
@@ -656,7 +658,9 @@ async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] |
     finally:
         if flow_id:
             try:
-                await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+                await asyncio.wait_for(
+                    client.abort_config_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+                )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     f"Failed to abort introspection flow {flow_id}: {abort_err}"
@@ -866,7 +870,7 @@ async def _update_config_entry_options(
             try:
                 with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
                     await asyncio.wait_for(
-                        client.abort_options_flow(flow_id), timeout=5.0
+                        client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
                     )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(

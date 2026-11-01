@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -277,6 +278,29 @@ async def test_options_flow_menu_lists_only_string_choices(
     assert result.get("menu_options") == expected
     assert result["note"]
     client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_an_options_flow_abort_that_never_answers_does_not_hold_the_describe(
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never_answers(*_args: Any) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(mod, "_ABORT_TIMEOUT_S", 0.01)
+    client.get_config_entry.return_value = {"domain": "group"}
+    client.start_options_flow.return_value = {
+        "type": "menu",
+        "flow_id": "f1",
+        "menu_options": ["a"],
+    }
+    client.abort_options_flow.side_effect = never_answers
+
+    result = await asyncio.wait_for(
+        mod.describe_helper(client, "group", helper_id="entry1"), timeout=2
+    )
+
+    assert result["menu_options"] == ["a"]
 
 
 @pytest.mark.asyncio

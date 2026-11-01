@@ -20,14 +20,17 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
-from ha_mcp.tools import integration_schema
+from ha_mcp.tools import integration_schema, tools_integrations
 from ha_mcp.tools.integration_schema import (
     fetch_config_flow_schema,
     fetch_config_subentry_schema,
     fetch_options_schema,
     redact_component_options,
 )
-from ha_mcp.tools.tools_integrations import IntegrationTools
+from ha_mcp.tools.tools_integrations import (
+    IntegrationTools,
+    fetch_entry_options_with_status,
+)
 
 _HOST = {
     "name": "host",
@@ -244,6 +247,22 @@ async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read
     await asyncio.wait_for(redact_component_options(client, "e1", entry, []), timeout=2)
 
     assert entry["options"] == {"host": "h", "api_key": REDACTED_SET}
+
+
+@pytest.mark.asyncio
+async def test_an_options_probe_abort_that_never_answers_does_not_hold_the_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tools_integrations, "_ABORT_TIMEOUT_S", 0.01)
+    client = _client(_form("init", _HOST))
+    client.abort_options_flow.side_effect = _never_answers
+
+    options, ok = await asyncio.wait_for(
+        fetch_entry_options_with_status(client, "e1"), timeout=2
+    )
+
+    assert ok is True
+    assert set(options) == {"host"}
 
 
 @pytest.mark.asyncio

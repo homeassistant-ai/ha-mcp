@@ -20,7 +20,11 @@ from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
-from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
+from ..config_entry_flow_introspect import (
+    _ABORT_TIMEOUT_S,
+    fetch_helper_flow_info,
+    menu_choices,
+)
 from ..flow_translations import (
     fetch_flow_strings,
     field_help,
@@ -261,7 +265,9 @@ async def _describe_flow(
     finally:
         if flow_id:
             try:
-                await asyncio.wait_for(client.abort_options_flow(flow_id), 5.0)
+                await asyncio.wait_for(
+                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+                )
             except Exception as err:  # noqa: BLE001
                 logger.debug("describe: options flow %s abort failed: %s", flow_id, err)
 

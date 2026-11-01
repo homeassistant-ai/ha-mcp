@@ -18,7 +18,9 @@ identically) behaves like every other component consumer.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -371,3 +373,21 @@ async def test_identified_entry_flow_open_failure_then_legacy_finds_entry() -> N
     # First open (component-identified path) failed, legacy loop retried it.
     assert client.start_options_flow_calls == ["server-1", "server-1"]
     assert client.config_entries_get_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_probe_abort_that_never_answers_does_not_hold_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def never_answers(*_args: Any) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tools_dev, "_ABORT_TIMEOUT_S", 0.01)
+    client = AsyncMock()
+    client.abort_options_flow.side_effect = never_answers
+
+    await asyncio.wait_for(
+        tools_dev.abort_options_flow_quietly(client, {"flow_id": "f1"}), timeout=2
+    )
+
+    client.abort_options_flow.assert_awaited_once_with("f1")

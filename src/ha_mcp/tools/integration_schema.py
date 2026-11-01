@@ -34,14 +34,11 @@ from .config_entry_flow_errors import (
     progress_action_text,
 )
 from .config_entry_flow_form import iter_schema_fields
-from .config_entry_flow_introspect import menu_choices
+from .config_entry_flow_introspect import _ABORT_TIMEOUT_S, menu_choices
 from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
-
-# How long a describe waits for Home Assistant to abort the flow it opened.
-_ABORT_TIMEOUT_S = 5.0
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 

@@ -15,6 +15,9 @@ from ..client.rest_client import HomeAssistantAPIError
 
 logger = logging.getLogger(__name__)
 
+# How long cleanup waits for Home Assistant to abort a flow.
+_ABORT_TIMEOUT_S = 5.0
+
 
 class _FlowType(StrEnum):
     """HA config flow result type strings."""
@@ -125,7 +128,7 @@ async def fetch_helper_flow_info(
         if intro_flow_id:
             try:
                 await asyncio.wait_for(
-                    client.abort_config_flow(intro_flow_id), timeout=5.0
+                    client.abort_config_flow(intro_flow_id), timeout=_ABORT_TIMEOUT_S
                 )
             except Exception as abort_err:  # noqa: BLE001
                 logger.debug(
