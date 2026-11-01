@@ -20,11 +20,13 @@ fastmcp/pydantic stack or a running server):
   the best-practice checker passes to ``_emit()``, plus every canonical
   file mapping the six tools declare, and resolves each against the real
   bundled skills-vendor submodule. Catches submodule heading renames and
-  ``_emit()`` typos before they ship as silent skill_content drops.
+  ``_emit()`` typos before they ship as silent skill_content drops. The
+  extra sections the generic template-trigger warning embeds are not
+  ``_emit()`` arguments; the subsection test below resolves them.
 
-* :func:`test_trigger_warning_embeds_its_subsection` — runs each trigger
-  warning and checks that it embeds one trigger subsection rather than the
-  whole ``#trigger-types`` chapter.
+* :func:`test_trigger_warning_embeds_its_subsections` — runs each trigger
+  warning and checks that it embeds the trigger subsections it points to
+  rather than the whole ``#trigger-types`` chapter.
 
 All of them rely on the bundled submodule being initialised — they skip cleanly
 when it's absent so a fresh clone doesn't fail collection.
@@ -430,52 +432,68 @@ _TRIGGER_TYPES_CHAPTER = "references/triggers-and-conditions.md#trigger-types"
 
 
 @pytest.mark.parametrize(
-    ("trigger", "fix"),
+    ("trigger", "fixes"),
     [
         pytest.param(
             {"trigger": "motion.detected", "options": {"behavior": "any"}},
-            "behavior: each",
+            ("behavior: each",),
             id="deprecated-behavior",
         ),
         pytest.param(
             {"platform": "template", "value_template": "{{ x | float(0) > 25 }}"},
-            "trigger: numeric_state",
+            ("trigger: numeric_state",),
             id="template-numeric-comparison",
         ),
         pytest.param(
             {"platform": "template", "value_template": "{{ is_state('a.b', 'on') }}"},
-            "trigger: state",
+            ("trigger: state",),
             id="template-is-state",
         ),
         pytest.param(
             {"platform": "template", "value_template": _RECENCY_TEMPLATE},
-            "trigger: state",
+            ("trigger: state", "for:"),
             id="template-duration",
         ),
         pytest.param(
             {"platform": "template", "value_template": "{{ x == 1 }}"},
-            "trigger: template",
+            (
+                "trigger: template",
+                "trigger: state",
+                "trigger: numeric_state",
+                "trigger: time",
+                "trigger: time_pattern",
+                "trigger: sun",
+                "trigger: zone",
+                "trigger: event",
+            ),
             id="template-generic",
         ),
         pytest.param(
             {"platform": "numeric_state", "value_template": _RECENCY_TEMPLATE},
-            "trigger: state",
+            ("trigger: state", "for:"),
             id="numeric-state-duration",
         ),
     ],
 )
-def test_trigger_warning_embeds_its_subsection(trigger: dict, fix: str) -> None:
-    """The embedded section contains the trigger syntax the warning points to
+def test_trigger_warning_embeds_its_subsections(
+    trigger: dict, fixes: tuple[str, ...]
+) -> None:
+    """The embedded sections contain the trigger syntax the warning points to
     (the native fix; for the generic template fallback, the template trigger
-    itself) and stays smaller than the ``#trigger-types`` chapter, which
-    contains every trigger subsection.
+    and every native trigger its message names), each embedded section carries
+    at least one of them, and together they stay smaller than the
+    ``#trigger-types`` chapter, which contains every trigger subsection.
     """
     skills_dir = _require_vendored_skills()
     warnings = check_automation_config({"trigger": [trigger]})
     assert len(warnings) == 1, warnings
-    (ref,) = warnings.referenced_files
+    refs = sorted(warnings.referenced_files)
     sections = skill_loader.resolve_skill_files(
-        skills_dir, "home-assistant-best-practices", [ref, _TRIGGER_TYPES_CHAPTER]
+        skills_dir, "home-assistant-best-practices", [*refs, _TRIGGER_TYPES_CHAPTER]
     )
-    assert fix in sections[ref]
-    assert len(sections[ref]) < len(sections[_TRIGGER_TYPES_CHAPTER])
+    embedded = "".join(sections[ref] for ref in refs)
+    for fix in fixes:
+        assert fix in embedded
+    for ref in refs:
+        assert any(fix in sections[ref] for fix in fixes), ref
+    assert len(embedded) < len(sections[_TRIGGER_TYPES_CHAPTER])

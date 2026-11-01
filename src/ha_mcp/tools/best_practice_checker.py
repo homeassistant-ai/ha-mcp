@@ -151,6 +151,17 @@ _SERVICE_KEYS = ("service", "action")
 # ``any``/``all`` — conditions are never flagged.
 _DEPRECATED_TRIGGER_BEHAVIOR = {"any": "each", "last": "all"}
 
+# Sections for the seven native triggers the generic template-trigger warning
+# names (``time_pattern`` is covered under Time Trigger).
+_NATIVE_TRIGGER_ANCHORS = (
+    "state-trigger",
+    "numeric-state-trigger",
+    "time-trigger",
+    "sun-trigger",
+    "zone-trigger",
+    "event-trigger",
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -168,8 +179,8 @@ def check_automation_config(
     back-compat (so ``result == []`` and iteration work unchanged), and
     additionally exposes ``referenced_files`` — the set of skill file
     paths (relative to the skill root, e.g.
-    ``"references/triggers-and-conditions.md"``) referenced by at least one
-    emitted warning. Callers use that set to fetch the bodies via
+    ``"references/triggers-and-conditions.md"``) that the emitted warnings
+    cite or name. Callers use that set to fetch the bodies via
     :func:`ha_mcp.utils.skill_loader.resolve_skill_files` and embed them
     in the response under ``skill_content``.
 
@@ -766,6 +777,10 @@ def _check_template_trigger(
             "template triggers re-evaluate on every state change.",
             skill_prefix,
             "triggers-and-conditions.md#template-trigger",
+        )
+        warnings.referenced_files.update(
+            f"references/triggers-and-conditions.md#{anchor}"
+            for anchor in _NATIVE_TRIGGER_ANCHORS
         )
 
 

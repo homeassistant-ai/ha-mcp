@@ -19,7 +19,9 @@ class BestPracticeCheckResult(list[str]):
     and embed the relevant skill bodies into responses.
 
     Use :func:`_emit` to append warnings; direct ``append``/``extend``
-    skip the ``referenced_files`` mirror. Slicing, ``list()`` coercion,
+    skip the ``referenced_files`` mirror. A check may also add sections its
+    warning names inline straight to ``referenced_files`` (the generic
+    template-trigger warning does). Slicing, ``list()`` coercion,
     and ``copy.copy``/``copy.deepcopy`` all return plain ``list[str]``
     without the attribute — no current call site does any of these.
     """
