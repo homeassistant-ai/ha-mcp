@@ -169,6 +169,13 @@ the info handshake carries no capability entry:
   raises ``HomeAssistantError`` (→ the server's command-error fallback to its legacy
   options-flow path). All awaiting-adjacent work (the deferred apply) lives in
   :func:`_server_entry_update_prep`; :func:`_do_server_entry_update` is a pure formatter.
+* ``ha_mcp_tools/call_event`` — fire a custom event on Core's own bus in-process
+  and return the event's ``context`` plus the exact-event and ``MATCH_ALL``
+  listener counts, read in the same synchronous pass, so the server's
+  ``ha_call_event`` needs no separate ``GET /api/events`` before a fire. The
+  event type travels in the message body, so Core accepts the same names its
+  WebSocket ``fire_event`` command does; the server keeps ``state_changed`` on
+  its REST path because ``APIEventView`` rebuilds that payload's state dicts.
 * ``ha_mcp_tools/call_service`` — the FIRST write capability. Fires exactly one
   ``hass.services.async_call`` in-process and returns the REAL pre→post state
   transition for the target ``entity_ids`` — event-confirmed via an

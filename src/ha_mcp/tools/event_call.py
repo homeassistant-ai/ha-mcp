@@ -109,8 +109,25 @@ class EventCallMixin:
         bus accepted the event and how many listeners were registered for it,
         not that any of them acted. A timeout means dispatch is unconfirmed.
         listener_count covers the exact event type; wildcard_listener_count
-        covers match-all listeners. Both counts are returned only when the
-        optional listener lookup succeeds.
+        covers match-all listeners (the recorder is one, and it only stores the
+        event). Both counts are returned only when the optional listener
+        lookup succeeds.
+
+        The response carries the event's context_id (and context) when Home
+        Assistant reports it. An automation triggered by this event records that
+        id as the parent_id of its run's context, so looking up that automation
+        trace proves whether a listener acted — which the counts cannot show,
+        because an event trigger that filters on event_data still registers as a
+        listener when the payload does not match.
+
+        Events fire in-process through the ha_mcp_tools component when it is
+        installed, otherwise over Home Assistant's own WebSocket fire_event
+        command; both carry the event type in the message body, so any type Core
+        accepts fires as written and Core's rejection comes back as the error
+        text (for example its 64-character event-type limit). state_changed
+        alone keeps the REST route, because only that route rebuilds its
+        old_state/new_state payloads into State objects; there event_type must
+        be a plain name with no / \\ ? # or % characters.
         """
         if not event_type or not event_type.strip():
             raise_tool_error(

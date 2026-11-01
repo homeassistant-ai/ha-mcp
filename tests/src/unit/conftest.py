@@ -220,6 +220,7 @@ _HA_CONST_DEFAULTS = {
     "EVENT_STATE_CHANGED": "state_changed",
     "ENTITY_MATCH_NONE": "none",
     "ENTITY_MATCH_ALL": "all",
+    "MATCH_ALL": "*",
 }
 
 
@@ -227,19 +228,25 @@ _HA_CONST_DEFAULTS = {
 def _ensure_ha_const_names():
     """Guarantee the ``homeassistant.const`` names the component imports.
 
-    The ``call_service`` confirmation-waiter imports ``EVENT_STATE_CHANGED`` and
-    ``reference_data`` imports ``ENTITY_MATCH_NONE`` / ``ENTITY_MATCH_ALL`` from
-    ``homeassistant.const`` function-locally. Home Assistant is not a unit-test
-    dependency, so that submodule is whatever a test module stubbed — and under
-    full-suite collection an earlier module can install a ``homeassistant.const``
-    stub lacking those names, making the import raise (component tests + the
+    The ``call_service`` confirmation-waiter imports ``EVENT_STATE_CHANGED``,
+    ``call_event`` imports ``MATCH_ALL``, and ``reference_data`` imports
+    ``ENTITY_MATCH_NONE`` / ``ENTITY_MATCH_ALL`` from ``homeassistant.const``
+    function-locally. Home Assistant is not a unit-test dependency, so that
+    submodule is whatever a test module stubbed — and under full-suite
+    collection an earlier module can install a ``homeassistant.const`` stub
+    lacking those names, making the import raise (component tests + the
     write-path contract/routing tests then fail only in the full suite, never in
     isolation). This adds the missing constants — always present in real HA —
     onto whatever stub is live, preserving its other attributes; it never
     replaces a populated stub.
+
+    A ``Mock`` attribute counts as missing: a ``MagicMock`` stub answers every
+    name with a Mock, which imports fine but is not Core's value, so
+    ``MATCH_ALL`` would come back as a Mock instead of ``"*"``.
     """
     import sys
     from types import SimpleNamespace
+    from unittest.mock import Mock
 
     mod = sys.modules.get("homeassistant.const")
     if mod is None:
@@ -247,7 +254,8 @@ def _ensure_ha_const_names():
     else:
         try:
             for name, value in _HA_CONST_DEFAULTS.items():
-                if not getattr(mod, name, None):
+                current = getattr(mod, name, None)
+                if not current or isinstance(current, Mock):
                     setattr(mod, name, value)
         except (AttributeError, TypeError):
             sys.modules["homeassistant.const"] = SimpleNamespace(**_HA_CONST_DEFAULTS)

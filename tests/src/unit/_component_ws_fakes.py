@@ -107,6 +107,17 @@ class _FakeWSApi:
         self.registered[handler._ws_command] = handler
 
 
+class FakeServices:
+    """Stand-in for ``hass.services`` (``async_services`` mapping)."""
+
+    def __init__(self, services: Mapping[str, Mapping[str, Any]]) -> None:
+        # services: {domain: {service_name: <anything>}}
+        self._services = {d: dict(s) for d, s in dict(services).items()}
+
+    def async_services(self) -> dict[str, dict[str, Any]]:
+        return dict(self._services)
+
+
 class _FakeCallServices:
     """``hass.services`` stand-in with the write surface ``call_service`` drives.
 

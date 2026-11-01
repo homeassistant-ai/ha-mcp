@@ -42,6 +42,7 @@ import pytest
 
 from ._component_ws_fakes import (
     FakeRegEntry,
+    FakeServices,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
@@ -152,17 +153,6 @@ class FakeConfigEntries:
             if getattr(entry, "entry_id", None) == entry_id:
                 return entry
         return None
-
-
-class FakeServices:
-    """Stand-in for ``hass.services`` (``async_services`` mapping)."""
-
-    def __init__(self, services):
-        # services: {domain: {service_name: <anything>}}
-        self._services = {d: dict(s) for d, s in dict(services).items()}
-
-    def async_services(self):
-        return dict(self._services)
 
 
 class FakeHass:
