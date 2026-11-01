@@ -1,8 +1,9 @@
-"""Mount check for writes under a HAOS sibling volume (issue #2875).
+"""Mount checks for writes and deletes under a HAOS sibling volume (#2875).
 
 Kept out of ``__init__.py``, which is at its module-size baseline.
 """
 
+import errno
 import os
 from pathlib import Path
 
@@ -56,3 +57,17 @@ def on_mounted_volume(target: Path, root: str) -> bool:
     while probe != top and not (str(probe) in mounts or os.path.ismount(probe)):
         probe = probe.parent
     return str(probe) in mounts or os.path.ismount(probe)
+
+
+def os_error_text(err: OSError, rel_path: str) -> str:
+    """The error for an OSError raised by a write or delete.
+
+    A read-only mount is named as one: Supervisor always mounts /ssl
+    read-only into Core on HAOS and Supervised, and a Container install can
+    bind-mount any volume read-only. Anything else keeps the OS's own text.
+    """
+    if err.errno == errno.EROFS:
+        return (
+            f"{rel_path} is on a read-only mount in Home Assistant Core on this install"
+        )
+    return str(err)

@@ -62,7 +62,7 @@ from .const import (
 )
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
-from .volume_mounts import PARENT_ERRORS, on_mounted_volume
+from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
 from .yaml_rt import (
     apply_seq_indent,
@@ -3012,7 +3012,7 @@ def _build_write_file_handler(
             _LOGGER.error("Error writing file %s: %s", rel_path, err)
             return {
                 "success": False,
-                "error": str(err),
+                "error": os_error_text(err, rel_path),
             }
 
         err_kind = result.get("_error")
@@ -3082,7 +3082,7 @@ def _build_delete_file_handler(
             _LOGGER.error("Error deleting file %s: %s", rel_path, err)
             return {
                 "success": False,
-                "error": str(err),
+                "error": os_error_text(err, rel_path),
             }
 
         err_kind = result.get("_error")

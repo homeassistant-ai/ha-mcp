@@ -5,10 +5,12 @@ and /ssl on HAOS and Supervised, and a Container install has only what the user
 bind-mounts. An unmounted root may still exist as a plain directory (the
 image's own /media, or one an earlier build created); writing there would put
 the file in the container layer and report success for a file the user never
-sees. Kept out of ``test_custom_component_filesystem.py``, which is at its
+sees. A write or delete on a read-only mount (/ssl on HAOS and Supervised)
+names the mount instead of a raw errno. Kept out of ``test_custom_component_filesystem.py``, which is at its
 module-size baseline.
 """
 
+import errno
 import os
 import sys
 from pathlib import Path
@@ -141,3 +143,47 @@ def test_core_install_writes_to_an_existing_plain_volume(
 
     assert result["is_new"] is True
     assert target.read_text() == "x"
+
+
+def _handler_hass(tmp_path: Path) -> MagicMock:
+    hass = MagicMock()
+    hass.config.config_dir = str(tmp_path)
+    hass.data = {comp.DOMAIN: {"caller_token": "t", "allowed_paths": ["/ssl/t"]}}
+
+    async def _run(func, *args):
+        return func(*args)
+
+    hass.async_add_executor_job = _run
+    return hass
+
+
+def _raise(err: OSError):
+    def _sync(*_args):
+        raise err
+
+    return _sync
+
+
+@pytest.mark.parametrize("build", ["write", "delete"])
+async def test_read_only_mount_is_named_not_a_raw_errno(
+    build: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On HAOS and Supervised, Supervisor mounts /ssl read-only into Core.
+    erofs = OSError(errno.EROFS, "Read-only file system", "/ssl/t")
+    monkeypatch.setattr(comp, f"_{build}_file_sync", _raise(erofs))
+    handler = getattr(comp, f"_build_{build}_file_handler")(_handler_hass(tmp_path))
+    call = MagicMock()
+    call.data = {"_ha_mcp_token": "t", "path": "/ssl/t/a.txt", "content": "x"}
+
+    result = await handler(call)
+
+    assert result == {
+        "success": False,
+        "error": "/ssl/t/a.txt is on a read-only mount in Home Assistant Core"
+        " on this install",
+    }
+
+
+def test_other_os_errors_keep_their_own_text() -> None:
+    err = OSError(errno.ENOSPC, "No space left on device", "/share/t/a.txt")
+    assert volume_mounts.os_error_text(err, "/share/t/a.txt") == str(err)
