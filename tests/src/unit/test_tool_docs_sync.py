@@ -218,6 +218,11 @@ class TestExtractToolsScriptRobustness:
             f"an explicit encoding: {offenders}. Pass encoding='utf-8'."
         )
 
+    def test_readme_table_between_the_markers_is_regenerated(self) -> None:
+        start, end = extract_tools.README_START_MARKER, extract_tools.README_END_MARKER
+        stale = f"<details>\n{start}\nSTALE_ROW\n{end}\n</details>\n"
+        assert "STALE_ROW" not in extract_tools.update_readme([], content=stale)
+
     def test_lost_readme_markers_fail_instead_of_reporting_in_sync(self) -> None:
         """A README whose markers are gone must not compare equal to itself.
 

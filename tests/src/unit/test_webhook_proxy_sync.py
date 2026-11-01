@@ -11,6 +11,7 @@ a clean tree) is guaranteed by the acceptance gate in the build spec, not here.
 """
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -219,6 +220,28 @@ def test_start_py_identity_names_the_other_flavor_as_sibling(dst, expected):
     )
     flipped = sync.apply_start_py_identity(source, dst)
     assert flipped == _START_PY_IDENTITY.format(**expected)
+
+
+@pytest.mark.parametrize("dst", [sync.DEV, sync.STABLE], ids=["DEV", "STABLE"])
+def test_dockerfile_labels_take_the_flavor_values(dst):
+    labels = sync.apply_dockerfile_labels(
+        'io.hass.name="x"\nio.hass.description="y"\n', dst
+    )
+    assert labels == (
+        f'io.hass.name="{dst.dockerfile_hass_name}"\n'
+        f'io.hass.description="{dst.dockerfile_hass_description}"\n'
+    )
+
+
+@pytest.mark.parametrize("dst", [sync.DEV, sync.STABLE], ids=["DEV", "STABLE"])
+def test_manifest_takes_the_flavor_identity_and_the_version(dst):
+    manifest = '{"domain": "a", "name": "b", "version": "0", "iot_class": "c"}'
+    assert json.loads(sync.apply_manifest(manifest, dst, "9.9.9")) == {
+        "domain": dst.component,
+        "name": dst.manifest_name,
+        "version": "9.9.9",
+        "iot_class": "c",
+    }
 
 
 # ---------------------------------------------------------------------------

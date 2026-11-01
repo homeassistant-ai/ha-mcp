@@ -240,6 +240,7 @@ class TestFetchFailurePath:
         limit — the exact outcome the sentinel exists to prevent.
         """
         attempts: list[int] = []
+        sleeps: list[float] = []
 
         def throttled(*_args, **_kwargs):
             attempts.append(1)
@@ -248,13 +249,14 @@ class TestFetchFailurePath:
             )
 
         monkeypatch.setattr(checker.urllib.request, "urlopen", throttled)
-        monkeypatch.setattr(checker.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(checker.time, "sleep", sleeps.append)
 
         assert (
             checker.main(["--ha-version", "2026.8.0"])
             == checker.EXIT_CONSTRAINTS_UNREACHABLE
         )
         assert len(attempts) == checker._FETCH_ATTEMPTS
+        assert len(sleeps) == checker._FETCH_ATTEMPTS - 1
 
     def test_exactly_three_attempts_with_no_trailing_sleep(self, monkeypatch):
         sleeps: list[float] = []

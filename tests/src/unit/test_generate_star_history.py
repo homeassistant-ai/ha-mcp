@@ -157,3 +157,21 @@ def test_write_charts_uses_stable_production_names(tmp_path: Path) -> None:
 
     assert written == [tmp_path / "light.svg", tmp_path / "dark.svg"]
     assert all(path.is_file() for path in written)
+
+
+def test_main_charts_the_fetched_stars_of_the_requested_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fetched: list[tuple[str, str]] = []
+
+    def fake_fetch(repository: str, token: str) -> list[datetime]:
+        fetched.append((repository, token))
+        return [datetime(2026, 1, 5, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)]
+
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setattr(generator, "fetch_starred_at", fake_fetch)
+
+    argv = ["--repository", "owner/repo", "--output-dir", str(tmp_path)]
+    assert generator.main(argv) == 0
+    assert fetched == [("owner/repo", "token")]
+    assert "Star history for owner/repo" in (tmp_path / "light.svg").read_text("utf-8")
