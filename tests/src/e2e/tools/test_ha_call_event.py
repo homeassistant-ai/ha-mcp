@@ -2,6 +2,7 @@
 E2E tests for ha_call_event tool - publish events onto the HA event bus.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -123,12 +124,20 @@ async def test_call_event_delivery_verified(mcp_client):
             f"Automation {automation_id} not registered within 15s"
         )
 
-        # 4. Fire the event via ha_call_event
-        event_result = await mcp_client.call_tool(
-            "ha_call_event",
-            {"event_type": event_type},
-        )
-        data = assert_mcp_success(event_result, "fire custom event")
+        # 4. Fire the event. Poll the pre-dispatch count: the config entry can
+        # be readable before Core has attached the trigger listener, and the
+        # component route reports the count without the REST round-trip that
+        # previously gave the listener time to register.
+        data: dict = {}
+        for _ in range(30):
+            event_result = await mcp_client.call_tool(
+                "ha_call_event",
+                {"event_type": event_type},
+            )
+            data = assert_mcp_success(event_result, "fire custom event")
+            if data.get("listener_count", 0) >= 1:
+                break
+            await asyncio.sleep(0.5)
         assert data["success"] is True
         assert data["event_type"] == event_type
         assert data["listener_count"] >= 1, (
