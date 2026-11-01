@@ -1,0 +1,15 @@
+{
+  "common": {
+    "oauth_not_serving": "A Legacy OAuth még nem szolgálja ki ezeket — az aktiválásukhoz indítsa újra a Home Assistantot, amikor erre kéri Önt."
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data_description": {
+          "server_port": "Az a port, amelyen ez a szerver figyel. A ha-mcp alkalmazás (bővítmény) a 9583-as portot használja, ezért itt az alapértelmezett érték 9584, hogy a kettő egymás mellett futhasson - ha nem futtatja az alkalmazást (bővítményt), bármelyik szabad port megfelel.",
+          "server_url": "Az URL, amelyen a folyamaton belüli szerver eléri az Ön Home Assistant rendszerét (általában magát ezt a példányt). Ha üresen hagyja, az érték a példány port- és SSL-beállításaiból adódik; csak akkor adjon meg értéket, ha a szervernek más útvonalra van szüksége."
+        }
+      }
+    }
+  }
+}
