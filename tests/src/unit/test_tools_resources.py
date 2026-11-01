@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1009,44 +1010,42 @@ class TestHaConfigSetDashboardResource:
     # ---- HA-config YAML misroute rejection (#1072) ----
 
     @pytest.mark.asyncio
-    async def test_inline_rejects_scene_yaml_with_995_pointer(
-        self, set_tool, mock_client
+    @pytest.mark.parametrize(
+        ("content", "marker", "tool"),
+        [
+            (
+                "scene:\n  - id: 'luce'\n    name: Luce Notturna\n"
+                "    entities:\n      light.led_tavolo:\n        state: 'on'\n",
+                "scene:",
+                "ha_config_set_scene",
+            ),
+            (
+                "template:\n  - sensor:\n      - name: Temp\n        state: 21\n",
+                "template:",
+                "ha_config_set_helper(helper_type='template'",
+            ),
+        ],
+        ids=["scene", "template"],
+    )
+    async def test_inline_rejects_config_yaml_pointing_at_the_tool_that_writes_it(
+        self, set_tool, mock_client, content, marker, tool
     ):
-        """Scene-YAML content is rejected with a pointer to issue #995.
-
-        Reproduces the small-model misroute from #1072: model picks this
-        tool to "create a scene" and passes scene-YAML as content. Without
-        rejection, the YAML lands as a Lovelace module, not an HA scene.
-        """
-        scene_yaml = (
-            "scene:\n"
-            "  - id: 'luce_notturna_led_tavolo'\n"
-            "    name: Luce Notturna\n"
-            "    entities:\n"
-            "      light.led_tavolo:\n"
-            "        state: 'on'\n"
-        )
+        """A model sending scene/template YAML as resource content (the small-model
+        misroute) is pointed at the ha-mcp tool that writes it."""
         with pytest.raises(ToolError) as exc_info:
-            await set_tool(content=scene_yaml, resource_type="module")
+            await set_tool(content=content, resource_type="module")
 
         error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "scene:" in error_data["error"]["message"]
-        assert "#1072" in error_data["error"]["message"]
+        assert marker in error_data["error"]["message"]
         # `context=` fields are flattened to the top level by create_error_response
-        assert error_data["detected_marker"] == "scene:"
-        assert error_data["resource_type"] == "module"
-        # Scene tools are tracked in #995; at least one suggestion must point there.
-        suggestions = error_data["error"]["suggestions"]
-        assert any("#995" in s for s in suggestions)
-        # And no WebSocket call must have been made.
+        assert error_data["detected_marker"] == marker
+        assert any(tool in s for s in error_data["error"]["suggestions"])
+        assert not re.search(r"#\d", json.dumps(error_data["error"]))
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_inline_update_rejects_scene_yaml_with_995_pointer(
-        self, set_tool, mock_client
-    ):
+    async def test_inline_update_rejects_scene_yaml(self, set_tool, mock_client):
         """Update path (resource_id provided) also rejects scene-YAML.
 
         Locks the YAML check above ``_upsert_resource`` — a future refactor
@@ -1067,8 +1066,6 @@ class TestHaConfigSetDashboardResource:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "scene:" in error_data["error"]["message"]
-        suggestions = error_data["error"]["suggestions"]
-        assert any("#995" in s for s in suggestions)
         # Critical: no upsert call with the malformed payload.
         mock_client.send_websocket_message.assert_not_called()
 
