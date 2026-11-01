@@ -232,7 +232,7 @@ async def fetch_options_schema(
         flow_result = await client.start_options_flow(entry_id)
         flow_id = flow_result.get("flow_id")
         flow_type = flow_result.get("type")
-        if flow_type not in ("form", "menu"):
+        if flow_type not in ("form", "menu", "abort"):
             return
         if flow_type == "form" and entry is not None:
             if populate_options:

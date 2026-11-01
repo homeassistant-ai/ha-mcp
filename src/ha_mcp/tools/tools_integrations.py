@@ -320,12 +320,12 @@ class IntegrationTools:
                 description="When entry_id is set, also describe the options flow "
                 "form as options_schema.fields: each field's type, current value "
                 "and Home Assistant's help text. A flow that opens with a menu "
-                "lists menu_options instead (see menu_choice). Only applies when "
-                "supports_options=true. Without entry_id but with domain, "
+                "lists menu_options instead (see menu_choice), and a flow Home "
+                "Assistant aborts gives aborted and reason_text. Only applies "
+                "when supports_options=true. Without entry_id but with domain, "
                 "describe that integration's setup form as config_flow_schema "
-                "(same shape; a flow Home Assistant aborts gives aborted and "
-                "reason_text instead). The flow is started and aborted, so "
-                "nothing is added.",
+                "(same shape). The flow is started and aborted, so nothing is "
+                "added.",
                 default=False,
             ),
         ] = False,

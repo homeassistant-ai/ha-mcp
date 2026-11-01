@@ -263,6 +263,76 @@ async def test_component_read_keeps_its_options_and_redacts_the_secret(
     assert "sk-LIVE" not in json.dumps(resp)
 
 
+@pytest.mark.asyncio
+async def test_options_flow_that_aborts_at_once_returns_cores_reason_text() -> None:
+    client = _client(
+        {
+            "type": "abort",
+            "flow_id": "f1",
+            "reason": "not_supported",
+            "description_placeholders": {"model": "X1"},
+        },
+        {"component.demo.options.abort.not_supported": "{model} has no options."},
+    )
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    schema = resp["options_schema"]
+    assert schema["flow_type"] == "abort"
+    assert schema["aborted"] == "not_supported"
+    assert schema["reason_text"] == "X1 has no options."
+    assert resp["entry"]["options"] == {}
+    client.send_websocket_message.assert_awaited_once_with(
+        {
+            "type": "frontend/get_translations",
+            "language": "en",
+            "category": "options",
+            "integration": ["demo"],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_options_abort_reads_the_reason_under_its_translation_domain() -> None:
+    client = _client(
+        {
+            "type": "abort",
+            "flow_id": "f1",
+            "reason": "reauth_required",
+            "translation_domain": "other",
+        },
+        {"component.other.options.abort.reauth_required": "Sign in again."},
+    )
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    assert resp["options_schema"]["reason_text"] == "Sign in again."
+
+
+@pytest.mark.asyncio
+async def test_subentry_flow_that_aborts_at_once_returns_cores_reason_text() -> None:
+    client = _client(
+        {"type": "abort", "flow_id": "f1", "reason": "no_models"},
+        {"component.ollama.config_subentries.conversation.abort.no_models": "None."},
+    )
+    resp = _resp("ollama")
+
+    await fetch_config_subentry_schema(
+        client,
+        "e1",
+        resp,
+        subentry_type="conversation",
+        subentry_id=None,
+        show_advanced_options=False,
+    )
+
+    schema = resp["subentry_schema"]
+    assert schema["aborted"] == "no_models"
+    assert schema["reason_text"] == "None."
+
+
 def _tools() -> IntegrationTools:
     return IntegrationTools(AsyncMock())
 
