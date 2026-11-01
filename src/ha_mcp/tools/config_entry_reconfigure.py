@@ -26,7 +26,7 @@ from .config_entry_flow import (
     _reject_redaction_sentinels,
     refuse_component_entry,
 )
-from .config_entry_flow_errors import ReconfigureStatus
+from .config_entry_flow_errors import FlowRef, ReconfigureStatus
 from .config_entry_flow_walker import POST_COMMIT_STATUSES, _handle_flow_steps
 from .config_entry_identity import (
     ReconfigureIdentity,
@@ -608,6 +608,7 @@ async def _run_reconfigure_flow(
             helper_type=domain,
             is_reconfigure=True,
             keep_current_values=True,
+            flow=FlowRef(domain, "config"),
         )
     except asyncio.CancelledError:
         await _abort_flow_best_effort(client, flow_id)

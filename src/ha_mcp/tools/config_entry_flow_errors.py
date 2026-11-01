@@ -1,11 +1,13 @@
 """Error reporting for config-entry flow walks.
 
-Turns Home Assistant's answers to a flow submit (a 400/422 body, an ``abort``
-step) into structured ``ToolError``s, and holds the reconfigure outcome
-vocabulary those errors carry. Split out of ``config_entry_flow_walker``,
-which drives the flows and raises through here.
+Turns Home Assistant's answers to a flow submit (a 400/422 body, a form
+with ``errors``, an ``abort`` step) into structured ``ToolError``s, and holds
+the reconfigure outcome vocabulary those errors carry. Split out of
+``config_entry_flow_walker``, which drives the flows and raises through here.
 """
 
+import logging
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, NoReturn
 
@@ -13,7 +15,62 @@ from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_introspect import fetch_helper_flow_info
+from .flow_translations import fetch_flow_strings, flow_text
 from .helpers import raise_tool_error
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FlowRef:
+    """Where a flow's strings live: ``component.<domain>.<path>``.
+
+    ``path`` is ``config`` (config and reconfigure flows), ``options`` or
+    ``config_subentries.<type>``. A subentry flow knows only its parent
+    entry, so it names ``entry_id`` and the domain is read when needed.
+    """
+
+    domain: str | None
+    path: str
+    entry_id: str | None = None
+
+
+async def _flow_texts(
+    client: Any,
+    flow: FlowRef | None,
+    step: dict[str, Any],
+    kind: str,
+    keys: dict[str, Any],
+) -> dict[str, str]:
+    """Core's text for each ``<path>.<kind>.<key>``, as the frontend looks it up.
+
+    ``keys`` maps a name (a field, or ``reason``) to its translation key; a
+    key Core ships no string for is left out, so the caller keeps the raw key.
+    """
+    if flow is None or not keys:
+        return {}
+    domain, path = flow.domain, flow.path
+    if isinstance(step.get("translation_domain"), str):
+        # The reason belongs to another integration; for a subentry flow it
+        # is defined once under that integration's config strings.
+        domain = step["translation_domain"]
+        if kind == "abort" and path.startswith("config_subentries."):
+            path = "config"
+    elif domain is None and flow.entry_id:
+        try:
+            domain = (await client.get_config_entry(flow.entry_id)).get("domain")
+        except Exception as err:  # noqa: BLE001 - the text is best effort
+            logger.debug("domain of %s for flow text failed: %s", flow.entry_id, err)
+    if not isinstance(domain, str):
+        return {}
+    strings = await fetch_flow_strings(client, domain, path.split(".")[0])
+    placeholders = step.get("description_placeholders")
+    texts = {
+        name: flow_text(strings, domain, f"{path}.{kind}.{key}", placeholders)
+        for name, key in keys.items()
+        if isinstance(key, str)
+    }
+    return {name: text for name, text in texts.items() if text}
 
 
 class ReconfigureStatus(StrEnum):
@@ -249,26 +306,57 @@ def _flow_failure_context(
     return context
 
 
-def _raise_flow_abort(
-    flow_id: str, current_step: dict[str, Any], *, is_reconfigure: bool = False
+async def raise_form_errors(
+    client: Any, flow: FlowRef | None, flow_id: str, current_step: dict[str, Any]
+) -> NoReturn:
+    """Raise for a form HA returned with ``errors``, with Core's text for each."""
+    errors = current_step["errors"]
+    context: dict[str, Any] = {
+        "flow_id": flow_id,
+        "step_id": current_step.get("step_id"),
+        "errors": errors,
+        "data_schema": current_step.get("data_schema"),
+    }
+    if isinstance(errors, dict):
+        if texts := await _flow_texts(client, flow, current_step, "error", errors):
+            context["error_text"] = texts
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "Form validation failed",
+            suggestions=["Fix the field errors and retry with corrected values"],
+            context=context,
+        )
+    )
+
+
+async def abort_reason_text(
+    client: Any, flow: FlowRef | None, current_step: dict[str, Any]
+) -> dict[str, str]:
+    """``{"reason_text": ...}`` for an abort step, or ``{}`` without a string."""
+    return await _flow_texts(
+        client, flow, current_step, "abort", {"reason_text": current_step.get("reason")}
+    )
+
+
+async def raise_flow_abort(
+    client: Any,
+    flow: FlowRef | None,
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool = False,
 ) -> NoReturn:
     """Raise the structured error for an ABORT flow step."""
-    reason = current_step.get("reason")
-    abort_suggestions: list[str] = []
-    if reason in ("already_configured", "single_instance_allowed"):
-        # Common benign aborts on the add-integration path (#1814): give the
-        # caller a route to the existing entry instead of a bare failure.
-        abort_suggestions.append(
-            "The integration is already set up — use "
-            "ha_get_integration() to find the existing entry."
-        )
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
-            f"Flow aborted: {reason}",
-            suggestions=abort_suggestions or None,
-            context=_flow_failure_context(
-                flow_id, current_step, is_reconfigure=is_reconfigure
-            ),
+            f"Flow aborted: {current_step.get('reason')}",
+            context={
+                **_flow_failure_context(
+                    flow_id, current_step, is_reconfigure=is_reconfigure
+                ),
+                **await abort_reason_text(client, flow, current_step),
+            },
         )
     )

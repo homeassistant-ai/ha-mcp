@@ -17,10 +17,13 @@ from typing import Any, NoReturn
 from ..client.rest_client import _NO_ANSWER_ERRORS, HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_errors import (
+    FlowRef,
     ReconfigureStatus,
     _flow_failure_context,
-    _raise_flow_abort,
     _raise_flow_api_error,
+    abort_reason_text,
+    raise_flow_abort,
+    raise_form_errors,
 )
 from .config_entry_flow_form import (
     _MENU_SELECTION_KEYS,
@@ -317,7 +320,9 @@ def _reconfigure_abort_result(
     )
 
 
-def _handle_abort_step(
+async def _handle_abort_step(
+    client: Any,
+    flow: FlowRef | None,
     flow_id: str,
     current_step: dict[str, Any],
     *,
@@ -337,8 +342,9 @@ def _handle_abort_step(
     )
     if reconfigure_result is not None:
         return reconfigure_result
-    _raise_flow_abort(flow_id, current_step, is_reconfigure=is_reconfigure)
-    raise AssertionError("unreachable after _raise_flow_abort")
+    await raise_flow_abort(
+        client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+    )
 
 
 def _flow_form_payload(
@@ -425,6 +431,7 @@ async def _handle_flow_steps(
     is_reconfigure: bool = False,
     keep_current_values: bool = False,
     complete_snapshot: bool = False,
+    flow: FlowRef | None = None,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps.
 
@@ -482,6 +489,9 @@ async def _handle_flow_steps(
             last (``_OptionsFlowProgress``); skips the no-key-consumed check
             and the leftover-key warnings and reconfigure error, since a
             flow without a marked last form is verified by readback instead.
+        flow: Where the flow's strings live, so a form's ``errors`` and an
+            abort ``reason`` come back with Core's text next to the key
+            (``error_text`` / ``reason_text``). ``None`` keeps the raw keys.
         is_reconfigure: Whether this is the official reconfigure flow — the
             same mode HA uses for reauth, so both ``reconfigure_successful``
             and ``reauth_successful`` count as its success aborts. In this
@@ -544,7 +554,9 @@ async def _handle_flow_steps(
             )
 
         if result_type == _FlowType.ABORT:
-            return _handle_abort_step(
+            return await _handle_abort_step(
+                client,
+                flow,
                 flow_id,
                 current_step,
                 is_reconfigure=is_reconfigure,
@@ -584,6 +596,8 @@ async def _handle_flow_steps(
             # statistics: user step then pick-characteristic step), and records
             # what it consumed for any later step that redeclares the same
             # field.
+            if current_step.get("errors"):
+                await raise_form_errors(client, flow, flow_id, current_step)
             saw_form_step = True
             form_data, consumed_any = _flow_form_payload(
                 current_step,
@@ -701,7 +715,9 @@ def _handle_subentry_create_entry(
     return response
 
 
-def _handle_subentry_abort(
+async def _handle_subentry_abort(
+    client: Any,
+    flow: FlowRef | None,
     flow_id: str,
     current_step: dict[str, Any],
     *,
@@ -726,7 +742,11 @@ def _handle_subentry_abort(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"Config subentry flow aborted: {reason}",
-            context={"flow_id": flow_id, "details": current_step},
+            context={
+                "flow_id": flow_id,
+                "details": current_step,
+                **await abort_reason_text(client, flow, current_step),
+            },
         )
     )
     raise AssertionError("unreachable after subentry flow abort")
@@ -740,6 +760,7 @@ async def _handle_config_subentry_flow_steps(
     *,
     is_reconfigure: bool,
     keep_current_values: bool = False,
+    flow: FlowRef | None = None,
 ) -> dict[str, Any]:
     """Walk a config subentry flow and accept HA's reconfigure-success abort.
 
@@ -787,7 +808,9 @@ async def _handle_config_subentry_flow_steps(
             )
 
         if result_type == _FlowType.ABORT:
-            return _handle_subentry_abort(
+            return await _handle_subentry_abort(
+                client,
+                flow,
                 flow_id,
                 current_step,
                 is_reconfigure=is_reconfigure,
@@ -824,6 +847,8 @@ async def _handle_config_subentry_flow_steps(
             continue
 
         if result_type == _FlowType.FORM:
+            if current_step.get("errors"):
+                await raise_form_errors(client, flow, flow_id, current_step)
             form_data = _handle_form_step(
                 flow_id,
                 current_step,

@@ -223,6 +223,38 @@ class TestIntegrationManagement:
                 {"target": entry_id, "confirm": True},
             )
 
+    async def test_adding_a_single_instance_integration_again_says_why_in_cores_words(
+        self, mcp_client, ha_client
+    ):
+        """A second ``sun`` aborts; the error carries Core's text for the reason.
+
+        ``sun`` is set up in the test state and allows one entry, so Core's
+        flow manager aborts with ``single_instance_allowed`` and names the
+        ``homeassistant`` integration as the owner of that string
+        (``translation_domain``). The caller gets the text the HA UI shows,
+        read here from Core.
+        """
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": ["homeassistant"],
+            }
+        )
+        expected = translations["result"]["resources"][
+            "component.homeassistant.config.abort.single_instance_allowed"
+        ]
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_set_integration",
+                {"domain": "sun", "config": {}},
+                expected_error="single_instance_allowed",
+            )
+
+        assert data["reason_text"] == expected, data
+
     async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
         """A one-field options patch must not reset the fields it omits (#2254).
 

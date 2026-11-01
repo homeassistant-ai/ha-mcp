@@ -1770,7 +1770,9 @@ class IntegrationTools:
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
         requiring a browser step (OAuth) or an asynchronous provider step
-        error out at that step instead of completing. Reconfigure edits the
+        error out at that step instead of completing. An aborted flow or a
+        rejected form returns Core's own text next to the key (reason_text,
+        error_text), as the HA UI shows it. Reconfigure edits the
         settings a live integration connects with: a wrong host or credential
         takes it offline, and there is no automatic rollback — the returned
         rollback metadata describes repeating the official flow by hand with

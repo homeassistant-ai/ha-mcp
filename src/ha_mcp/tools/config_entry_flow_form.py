@@ -1072,23 +1072,8 @@ def _handle_form_step(
     back to legacy behaviour: submit all non-menu keys and clear them. This
     keeps single-step flows working when HA omits the schema.
 
-    Raises ToolError on validation errors.
+    A step HA returned with ``errors`` is the walker's to raise, before this.
     """
-    if current_step.get("errors"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Form validation failed",
-                suggestions=["Fix the field errors and retry with corrected values"],
-                context={
-                    "flow_id": flow_id,
-                    "step_id": current_step.get("step_id"),
-                    "errors": current_step["errors"],
-                    "data_schema": current_step.get("data_schema"),
-                },
-            )
-        )
-
     if reuse_state is not None:
         reuse_state.begin_step(current_step.get("step_id"))
 

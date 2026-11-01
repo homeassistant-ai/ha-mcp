@@ -47,6 +47,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
+from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
@@ -589,6 +590,7 @@ async def _run_config_subentry_flow(
             config_dict,
             is_reconfigure=subentry_id is not None,
             keep_current_values=subentry_id is not None,
+            flow=FlowRef(None, f"config_subentries.{subentry_type}", entry_id),
         )
     except asyncio.CancelledError:
         await _abort_subentry_flow_best_effort(client, flow_id)
@@ -851,6 +853,8 @@ async def _update_config_entry_options(
             helper_type=expected_domain,
             keep_current_values=progress is None,
             complete_snapshot=progress is not None,
+            # A restore reports its own refusal, never the flow's text.
+            flow=FlowRef(actual_domain, "options") if progress is None else None,
         )
     except Exception as flow_err:
         if progress is None or progress.apply_status == "not_applied":
@@ -937,6 +941,7 @@ async def create_config_entry(
             flow_result,
             config_dict,
             helper_type=domain,
+            flow=FlowRef(domain, "config"),
         )
     except Exception:
         try:
