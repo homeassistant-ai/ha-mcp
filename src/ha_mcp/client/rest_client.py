@@ -1878,14 +1878,11 @@ class HomeAssistantClient:
         return await self._list_registry("config/device_registry/list", "device")
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
-        """
-        Get config entry details.
+        """Get one config entry with WebSocket ``config_entries/get_single``.
 
-        Note: Home Assistant doesn't have a direct REST API endpoint for individual
-        config entries. This method lists all entries and filters by entry_id.
-
-        Args:
-            entry_id: Config entry ID
+        Core has no REST read for one entry, so its REST list is the fallback
+        when no WebSocket answer comes back, or when the token's user is not an
+        admin (``get_single`` is admin-only, the REST list is not).
 
         Returns:
             Home Assistant's config-entry fragment (``ConfigEntry.as_json_fragment``):
@@ -1893,13 +1890,26 @@ class HomeAssistantClient:
             entry's connection settings and credentials are not in it.
 
         Raises:
-            HomeAssistantAPIError: If entry not found or API error
+            HomeAssistantAPIError: 404 if not found; Core's other errors
         """
-        logger.debug(f"Getting config entry: {entry_id}")
-        entries = await self.list_config_entries()
-        found: dict[str, Any] | None = next(
-            (entry for entry in entries if entry.get("entry_id") == entry_id), None
-        )
+        reply: dict[str, Any] | None = None
+        try:
+            reply = await self.send_websocket_message(
+                {"type": "config_entries/get_single", "entry_id": entry_id}
+            )
+        except HomeAssistantConnectionError as e:
+            logger.debug(f"config_entries/get_single unanswered, using REST: {e}")
+        found: dict[str, Any] | None = None
+        if reply is None or reply.get("error_code") == "unauthorized":
+            entries = await self.list_config_entries()
+            found = next((e for e in entries if e.get("entry_id") == entry_id), None)
+        elif reply.get("success"):
+            found = (reply.get("result") or {}).get("config_entry")
+        elif reply.get("error_code") != "not_found":
+            raise HomeAssistantAPIError(
+                f"config_entries/get_single failed: {reply.get('error')}",
+                response_data=reply,
+            )
         if found is None:
             raise HomeAssistantAPIError(
                 f"Config entry not found: {entry_id}",

@@ -11,9 +11,9 @@ list send ZERO ``start_options_flow`` calls (the key no-dance assertion), schema
 requests still open the legacy live flow while KEEPING the component's options,
 and every backend degradation (no caps, ``unknown_command`` → invalidate + fall
 back, a command error) behaves per the routing taxonomy. A connection error is a
-deliberate DEVIATION: this tool's legacy path is pure REST, not the shared pooled
-WS, so a WS-down error ALSO falls back (returns None → legacy REST get) rather
-than propagating. An empty-string ``entry_id`` is a single-entry lookup for a
+deliberate DEVIATION: this tool's legacy read falls back to Core's REST list when
+the WS gives no answer, so a WS-down error ALSO falls back (returns None → legacy
+get) rather than propagating. An empty-string ``entry_id`` is a single-entry lookup for a
 nonexistent id (not-found, never the first entry).
 """
 
@@ -145,7 +145,7 @@ class RoutingClient:
         ]
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
-        # Legacy single-entry read (lists all + filters client-side in real life).
+        # Legacy single-entry read (config_entries/get_single in real life).
         self.get_config_entry_calls += 1
         if self._single_entry is None:
             raise HomeAssistantAPIError(
