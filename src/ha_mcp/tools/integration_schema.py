@@ -228,7 +228,8 @@ async def _describe_step(
             )
         step = await submit(step["flow_id"], {"next_step_id": menu_choice})
         chosen = {"menu_choice": menu_choice}
-    elif menu_choice is not None and step.get("type") != "abort":
+    elif menu_choice is not None and step.get("type") not in ("abort", "create_entry"):
+        # An abort is reported, and a finished flow must say what it saved.
         _refuse_menu_choice(
             menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
         )

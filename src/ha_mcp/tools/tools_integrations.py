@@ -414,8 +414,9 @@ class IntegrationTools:
                     "menu options are listed. Choosing an option runs that "
                     "step in Home Assistant; if it finishes the flow at once, "
                     "the call fails and reports what was saved. Refused when "
-                    "the flow opens with anything but a menu (an abort is "
-                    "still reported), or the menu lacks the option."
+                    "the flow opens with anything but a menu (an abort, or a "
+                    "flow Home Assistant finishes, is still reported), or the "
+                    "menu lacks the option."
                 ),
                 default=None,
             ),

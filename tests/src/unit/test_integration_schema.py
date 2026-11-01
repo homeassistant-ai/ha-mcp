@@ -475,6 +475,24 @@ def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
+async def test_setup_flow_that_creates_an_entry_names_it_even_with_menu_choice() -> (
+    None
+):
+    client = _config_client(
+        {
+            "type": "create_entry",
+            "flow_id": "f1",
+            "result": {"entry_id": "new1", "domain": "demo", "title": "Sun"},
+        }
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await fetch_config_flow_schema(client, "demo", {}, menu_choice="x")
+
+    assert _error(exc_info)["entry_id"] == "new1"
+
+
+@pytest.mark.asyncio
 async def test_setup_flow_that_creates_an_entry_fails_and_names_the_entry() -> None:
     client = _config_client(
         {
