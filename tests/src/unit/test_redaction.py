@@ -18,6 +18,7 @@ from ha_mcp.redaction import (
     is_password_flow_field,
     is_sentinel,
     known_secret_values,
+    placeholder_option_keys,
     redact_addon_options,
     redact_flow_schema,
     redact_options_by_flow_schema,
@@ -306,6 +307,23 @@ class TestSentinels:
     def test_sentinel_option_keys_clean_options(self):
         assert sentinel_option_keys({"a": 1, "b": {"c": "x"}}) == []
 
+    def test_placeholder_option_keys_adds_the_components_scrub(self):
+        # The component writes "**redacted**" over an option equal to a
+        # secrets.yaml value; add-on options never pass through it.
+        options = {
+            "a": REDACTED_SET,
+            "b": "**redacted**",
+            "nested": {"c": "**redacted**"},
+            "items": ["ok", "**redacted**"],
+        }
+        assert placeholder_option_keys(options) == [
+            "a",
+            "b",
+            "nested.c",
+            "items[1]",
+        ]
+        assert sentinel_option_keys(options) == ["a"]
+
 
 FLOW_SCHEMA = [
     {"name": "host", "type": "string", "description": {"suggested_value": "1.2.3.4"}},
@@ -464,6 +482,11 @@ class TestRejectRedactionSentinels:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "password" in body["error"]["message"]
+
+    def test_rejects_the_components_scrub(self, redact_off):
+        with pytest.raises(ToolError) as exc_info:
+            _reject_redaction_sentinels({"password": "**redacted**"})
+        assert "password" in json.loads(str(exc_info.value))["error"]["message"]
 
     def test_toggle_on_accepts_clean_config(self, redact_on):
         _reject_redaction_sentinels({"password": "real-value"})

@@ -24,7 +24,8 @@ surfaces stop returning operator secrets verbatim:
 The set/empty sentinel split keeps the genuinely useful diagnostic — "is
 this credential configured at all?" — answerable without disclosing the
 value. ``ha_manage_app`` and the config-entry flow writes reject
-submitted values that are (or contain) a sentinel — unconditionally, not
+submitted values that are (or contain) a sentinel, and the flow writes also
+reject the component's ``**redacted**`` placeholder — unconditionally, not
 only while the flag is on — so a redacted marker can never be round-tripped
 into a live config (add-on writes still merge from the real, unredacted
 current options server-side).
@@ -41,7 +42,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
@@ -397,7 +398,9 @@ def _collect_stored(value: Any, listed: frozenset[str], secret: bool) -> set[str
     return known_values_for_option_item(value) if secret else set()
 
 
-def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
+def sentinel_option_keys(
+    options: Any, _prefix: str = "", _match: Callable[[Any], bool] = carries_sentinel
+) -> list[str]:
     """Dotted paths of submitted option values that equal a redaction sentinel.
 
     Used by ``ha_manage_app`` config mode to reject round-tripping a
@@ -408,23 +411,42 @@ def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
         return keys
     for name, value in options.items():
         path = f"{_prefix}.{name}" if _prefix else str(name)
-        _collect_sentinel_paths(value, path, keys)
+        _collect_matching_paths(value, path, keys, _match)
     return keys
 
 
-def _collect_sentinel_paths(value: Any, path: str, keys: list[str]) -> None:
-    """Append ``path`` (or deeper paths) for every sentinel-carrying value.
+def _collect_matching_paths(
+    value: Any, path: str, keys: list[str], match: Callable[[Any], bool]
+) -> None:
+    """Append ``path`` (or deeper paths) for every value ``match`` accepts.
 
-    Recurses through dicts AND lists at any nesting depth so a sentinel at
+    Recurses through dicts AND lists at any nesting depth so a marker at
     e.g. ``opt[0][0]`` cannot slip past the write guard.
     """
-    if carries_sentinel(value):
+    if match(value):
         keys.append(path)
     elif isinstance(value, dict):
-        keys.extend(sentinel_option_keys(value, path))
+        keys.extend(sentinel_option_keys(value, path, match))
     elif isinstance(value, list):
         for idx, item in enumerate(value):
-            _collect_sentinel_paths(item, f"{path}[{idx}]", keys)
+            _collect_matching_paths(item, f"{path}[{idx}]", keys, match)
+
+
+#: What the ha_mcp_tools component writes over an option value equal to a
+#: ``secrets.yaml`` entry. Like a sentinel, it is no usable value to write.
+_COMPONENT_REDACTED = "**redacted**"
+
+
+def _is_placeholder(value: Any) -> bool:
+    return carries_sentinel(value) or value == _COMPONENT_REDACTED
+
+
+def placeholder_option_keys(options: Any) -> list[str]:
+    """``sentinel_option_keys`` plus paths holding the component's scrub.
+
+    For config-entry options, which the component may have served.
+    """
+    return sentinel_option_keys(options, _match=_is_placeholder)
 
 
 # ---------------------------------------------------------------------------

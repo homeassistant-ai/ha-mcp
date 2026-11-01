@@ -50,7 +50,7 @@ from ..client.rest_client import (
     HomeAssistantError,
 )
 from ..errors import ErrorCode, create_error_response
-from ..redaction import sentinel_option_keys
+from ..redaction import placeholder_option_keys
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_menu import answer_menu_from_snapshot
@@ -473,13 +473,13 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
     redaction was on must not overwrite a credential after the operator
     turns it off.
     """
-    sentinel_keys = sentinel_option_keys(config_dict)
-    if sentinel_keys:
+    placeholder_keys = placeholder_option_keys(config_dict)
+    if placeholder_keys:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "config contains redaction placeholder values for: "
-                f"{', '.join(sentinel_keys)}. These came from a redacted "
+                f"{', '.join(placeholder_keys)}. These came from a redacted "
                 "read, not real values — omit these keys to keep the "
                 "current values, or submit the real value.",
                 context={"parameter": "config"},

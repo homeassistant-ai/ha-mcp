@@ -24,7 +24,7 @@ from .backup_entity_ids import _manager
 
 
 async def fetch_integration(client: Any, entity_id: str) -> Any:
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
     from .tools import component_config_entries
 
     bm = _manager()
@@ -48,7 +48,7 @@ async def fetch_integration(client: Any, entity_id: str) -> Any:
         row["options_unavailable"] = "options_missing"
     elif read.secret_scrub_degraded:
         row["options_unavailable"] = "secret_scrub_degraded"
-    elif sentinel_option_keys(options) or bm._contains_redacted_leaf(options):
+    elif placeholder_option_keys(options):
         row["options_unavailable"] = "redacted_options"
     else:
         row["options"] = options

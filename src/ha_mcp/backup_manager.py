@@ -3048,7 +3048,7 @@ def _flow_label(helper_type: str) -> str:
 
 def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
     """Require persisted flow-helper options that can safely be restored."""
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
 
     label = _flow_label(helper_type)
     if not isinstance(config, dict):
@@ -3060,22 +3060,14 @@ def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
             f"{label} helper has no stored options to back up or restore",
             "invalid_options",
         )
-    # The component's resolved-!secret scrub predates the server sentinels.
-    # Neither kind of placeholder is a usable recovery value.
-    if sentinel_option_keys(config) or _contains_redacted_leaf(config):
+    # Neither a server sentinel nor the component's scrub is a usable
+    # recovery value.
+    if placeholder_option_keys(config):
         raise _FlowHelperReadError(
             f"{label} helper options contain redacted values; capture is incomplete",
             "redacted_options",
         )
     return config
-
-
-def _contains_redacted_leaf(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(_contains_redacted_leaf(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_redacted_leaf(item) for item in value)
-    return isinstance(value, str) and value == "**redacted**"
 
 
 async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> Any:
@@ -3577,13 +3569,13 @@ def _subentry_target(entity_id: str) -> tuple[str, str]:
 
 
 def _subentry_data(data: Any) -> dict[str, Any]:
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
 
     if not isinstance(data, dict):
         raise _FlowHelperReadError(
             "Config subentry data must be an object", "invalid_data"
         )
-    if sentinel_option_keys(data) or _contains_redacted_leaf(data):
+    if placeholder_option_keys(data):
         raise _FlowHelperReadError(
             "Config subentry data contains redacted values; capture is incomplete",
             "redacted_data",
