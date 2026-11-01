@@ -21,8 +21,10 @@ from typing import Any
 from .backup_entity_ids import _manager
 from .client.rest_client import HomeAssistantCommandError, HomeAssistantError
 
-# Core's DASHBOARD_BASE_UPDATE_FIELDS: what lovelace/dashboards/update accepts.
-_SETTINGS_FIELDS = ("title", "icon", "require_admin", "show_in_sidebar")
+# Keys of Core's stored dashboard item that lovelace/dashboards/update does not
+# take. Without the component, which reads Core's update schema, a restore sends
+# back the rest of the item.
+_ROW_ONLY_FIELDS = ("id", "url_path", "mode")
 _DASHBOARD_KIND = "dashboard_settings"
 
 
@@ -169,16 +171,17 @@ async def restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
 async def _recreate(client: Any, row: dict[str, Any], body: Any) -> Any:
     bm = _manager()
     url_path = row["url_path"]
-    # The component's rows carry ``icon: None`` for an unset icon, which Core's
-    # create schema rejects; an omitted field takes Core's default.
+    # Rows captured by an older component carry ``icon: None`` for an unset
+    # icon, which Core's create schema rejects; an omitted field takes Core's
+    # default.
     fields = bm._strip_readonly(row, "id", "mode")
     create = {
         "type": "lovelace/dashboards/create",
         **{key: value for key, value in fields.items() if value is not None},
+        # The row is one Core already accepted, so its path needs no hyphen
+        # check (Core's own single-word dashboards: ``lovelace``, ``map``).
+        "allow_single_word": True,
     }
-    if "-" not in url_path:
-        # Core's own single-word dashboards (``lovelace``, ``map``) need this.
-        create["allow_single_word"] = True
     try:
         await bm._ws_send(client, create)
     except HomeAssistantCommandError as err:
@@ -197,19 +200,34 @@ async def _restore_settings(
 ) -> None:
     """Put back the row's settings after its config; ``icon: None`` clears it."""
     bm = _manager()
-    fields = {key: row[key] for key in _SETTINGS_FIELDS if key in row}
-    # Core's own list omits ``icon`` when none is stored; the component's sends None.
-    fields.setdefault("icon", None)
+    update_fields = await _update_fields(client)
+    if update_fields:
+        fields = {k: v for k, v in row.items() if k in update_fields}
+    else:
+        fields = {k: v for k, v in row.items() if k not in _ROW_ONLY_FIELDS}
+    if not update_fields or "icon" in update_fields:
+        # Core's list omits ``icon`` when none is stored; None clears a live one.
+        fields.setdefault("icon", None)
     update = {"type": "lovelace/dashboards/update", "dashboard_id": dashboard_id}
     try:
         await bm._ws_send(client, {**update, **fields})
     except bm._CAPTURE_TRANSIENT_ERRORS as err:
         raise bm.BackupRestoreError(
             f"The config of dashboard {row['url_path']} was restored, but its "
-            "settings (title, icon, sidebar, admin) may not have been.",
+            "settings may not have been.",
             apply_status="unknown",
             reason="settings_not_restored",
         ) from err
+
+
+async def _update_fields(client: Any) -> list[str] | None:
+    """The keys Core's ``lovelace/dashboards/update`` schema accepts, from the
+    component; ``None`` without a component that reports them."""
+    from .tools.tools_config_dashboards import _dashboards_via_component
+
+    result = await _dashboards_via_component(client, "list")
+    fields = result.get("update_fields") if result else None
+    return fields if isinstance(fields, list) else None
 
 
 async def _restore_default_store(client: Any, body: Any) -> dict[str, Any]:

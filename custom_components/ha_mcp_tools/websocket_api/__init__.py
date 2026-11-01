@@ -88,9 +88,10 @@ the info handshake carries no capability entry:
   ``hass.states.get(id)`` omits the live-state fields (friendly_name/state) rather
   than crashing.
 * ``ha_mcp_tools/dashboards`` — Lovelace dashboards read in-process, four modes.
-  ``list`` mirrors the ``lovelace/dashboards/list`` row shape (id/url_path/title/
-  icon/show_in_sidebar/require_admin) with an additive per-row ``mode`` so the
-  server can exclude YAML dashboards; ``get`` returns one dashboard's config body
+  ``list`` returns each dashboard's ``LovelaceConfig.config`` as Core's
+  ``lovelace/dashboards/list`` sends it, with an additive per-row ``mode`` so the
+  server can exclude YAML dashboards, and ``update_fields``, the keys Core's
+  dashboard update schema accepts (omitted when unreadable); ``get`` returns one dashboard's config body
   (``await store.async_load`` in the async prep) with a structured
   ``yaml_excluded`` status for YAML-mode dashboards (the server falls back to
   legacy for those — a YAML body may carry resolved ``!secret`` plaintext);

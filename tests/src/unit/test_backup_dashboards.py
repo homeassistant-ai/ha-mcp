@@ -229,7 +229,7 @@ async def test_restore_of_deleted_lovelace_falls_back_to_the_default_store(
     ("row", "expected_create"),
     [
         (
-            # Component rows report an unset icon as None.
+            # Rows captured by an older component report an unset icon as None.
             _row("kitchen-dash", icon=None),
             {
                 "type": "lovelace/dashboards/create",
@@ -328,7 +328,32 @@ async def test_restore_puts_back_a_setting_core_added_after_this_release(
     assert update["type"] == "lovelace/dashboards/update"
     assert update["sidebar_order"] == 3
     assert update["icon"] == "mdi:stove"
-    assert not {"id", "url_path", "mode"} & set(update) - {"type"}
+    assert not {"id", "url_path", "mode"} & update.keys()
+
+
+async def test_restore_with_the_component_sends_only_what_core_update_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored key Core's update schema does not take would get the update
+    refused after the config was already written; an unset icon still clears."""
+    ws = _FakeWs()
+    ws.created = True
+    monkeypatch.setattr(bm, "_ws_send", ws)
+    _component_list(monkeypatch, ["title", "icon", "require_admin", "show_in_sidebar"])
+    row = _row("kitchen-dash", created_at="2026-11-01")
+    live = _row("kitchen-dash", id="live_id", icon="mdi:stove")
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([live], ws.sent))
+
+    await restore_dashboard(object(), row["id"], {"dashboard": row, "config": _BODY})
+
+    assert ws.sent[-1] == {
+        "type": "lovelace/dashboards/update",
+        "dashboard_id": "live_id",
+        "title": "Kitchen",
+        "icon": None,
+        "require_admin": False,
+        "show_in_sidebar": True,
+    }
 
 
 async def test_restore_writes_nothing_when_the_dashboard_list_cannot_be_read(
