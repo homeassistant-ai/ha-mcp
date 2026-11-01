@@ -81,7 +81,7 @@ class ReconfigureStatus(StrEnum):
     retry those.
     """
 
-    #: Read-only preflight: validated, nothing started.
+    #: Preflight: validated, the flow only read and aborted, nothing applied.
     PREVIEW = "preview"
     #: A confirmation was required and none was supplied.
     CONFIRMATION_REQUIRED = "confirmation_required"

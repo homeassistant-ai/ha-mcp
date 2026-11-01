@@ -2003,6 +2003,10 @@ class TestSetIntegrationModes:
                     )
                 ),
             ) as prepare_mock,
+            patch(
+                "ha_mcp.tools.integration_reconfigure.read_reconfigure_form",
+                new=AsyncMock(return_value=({}, [])),
+            ),
         ):
             preview = await ReconfigureRunner(mock_client).run(
                 "abc",
@@ -2058,6 +2062,10 @@ class TestSetIntegrationModes:
                 "ha_mcp.tools.integration_reconfigure.reconfigure_config_entry",
                 new=AsyncMock(return_value={"success": True}),
             ) as apply_mock,
+            patch(
+                "ha_mcp.tools.integration_reconfigure.read_reconfigure_form",
+                new=AsyncMock(return_value=({}, [])),
+            ),
         ):
             preview = await ReconfigureRunner(mock_client).run(
                 "abc",

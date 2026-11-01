@@ -362,9 +362,8 @@ async def prepare_reconfigure_request(
     Everything here is read-only: the entry exists, it implements
     ``async_step_reconfigure``, the caller's identity anchors match what the
     registries currently say, no second entry in the same domain shares the
-    device, and some identity anchor exists at all. The integration's own
-    reconfigure form is NOT consulted — the flow is never started — so the
-    keys in ``config`` are still unvalidated when this returns.
+    device, and some identity anchor exists at all. The flow is not started
+    here; the preview leg then reads its form (``reconfigure_preflight``).
     """
     validated_entry_id = validate_identifier_not_empty(
         entry_id,

@@ -131,6 +131,9 @@ def reconfigure_client(
     loudly instead.
     """
     client = MagicMock()
+    # A menu first step: the preview lists it, checks no keys, aborts the flow.
+    client.start_reconfigure_flow = AsyncMock(return_value={"type": "menu"})
+    client.abort_config_flow = AsyncMock()
     client.list_entity_registry = AsyncMock(return_value=list(entity_rows or []))
     client.list_device_registry = AsyncMock(return_value=list(device_rows or []))
     # Defaults to a component install reporting the fixture entry's unique_id.
@@ -1581,10 +1584,10 @@ async def test_reconfigure_without_token_previews_and_never_writes(
     reconfig_entry: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Omitting confirm_token is the preflight; it starts no flow.
+    """Omitting confirm_token is the preflight; it submits nothing.
 
     The handshake is the token alone, matching ha_config_set_yaml — there is
-    no separate confirm flag that could contradict it.
+    no separate confirm flag. The flow is opened only to read its form.
     """
     monkeypatch.setattr(
         "ha_mcp.tools.auto_backup.get_global_settings",
@@ -1592,7 +1595,6 @@ async def test_reconfigure_without_token_previews_and_never_writes(
     )
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock()
     tools = IntegrationTools(client)
 
     preview = await tools.ha_set_integration(
@@ -1606,7 +1608,8 @@ async def test_reconfigure_without_token_previews_and_never_writes(
     assert preview["status"] == ReconfigureStatus.PREVIEW
     assert isinstance(preview["confirm_token"], str)
     assert preview["confirm_token"].startswith("sha256:")
-    client.start_reconfigure_flow.assert_not_awaited()
+    client.submit_config_flow_step.assert_not_called()
+    client.abort_config_flow.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1618,7 +1621,6 @@ async def test_reconfigure_rejects_stale_confirmation_token(
     client.get_config_entry = AsyncMock(
         side_effect=[reconfig_entry, {**reconfig_entry, "title": "changed"}]
     )
-    client.start_reconfigure_flow = AsyncMock()
     tools = IntegrationTools(client)
 
     preview = await tools.ha_set_integration(
@@ -1639,7 +1641,7 @@ async def test_reconfigure_rejects_stale_confirmation_token(
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
     assert "preview" not in payload
     assert "preview" not in payload.get("context", {})
-    client.start_reconfigure_flow.assert_not_awaited()
+    client.start_reconfigure_flow.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1743,7 +1745,9 @@ async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(  # noqa: PL
     if not backup_capture_fails:
         assert "entry-123" in snapshots[0].read_text()
     assert result["status"] == "applied_and_verified"
-    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "entry-123")
+    # Once to read the preview's form, once to apply.
+    assert client.start_reconfigure_flow.await_count == 2
+    client.start_reconfigure_flow.assert_awaited_with("shelly", "entry-123")
     client.submit_config_flow_step.assert_awaited()
 
 
@@ -2489,7 +2493,6 @@ async def test_confirm_token_is_bound_to_the_requested_config(
     """
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock()
     tools = IntegrationTools(client)
 
     preview = await tools.ha_set_integration(
@@ -2508,7 +2511,7 @@ async def test_confirm_token_is_bound_to_the_requested_config(
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
-    client.start_reconfigure_flow.assert_not_awaited()
+    client.start_reconfigure_flow.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2544,7 +2547,6 @@ async def test_confirm_token_is_bound_to_the_supplied_identity_anchors() -> None
     )
     client.get_config_entry = AsyncMock(return_value=entry)
     client.list_config_entries = AsyncMock(return_value=[entry])
-    client.start_reconfigure_flow = AsyncMock()
     tools = IntegrationTools(client)
 
     preview = await tools.ha_set_integration(
@@ -2564,7 +2566,7 @@ async def test_confirm_token_is_bound_to_the_supplied_identity_anchors() -> None
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
-    client.start_reconfigure_flow.assert_not_awaited()
+    client.start_reconfigure_flow.assert_awaited_once()
 
 
 @pytest.mark.asyncio

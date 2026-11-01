@@ -448,8 +448,20 @@ class TestIntegrationManagement:
         assert entry.get("domain") == "filesize", entry
         assert entry.get("supports_reconfigure") is True, entry
 
-    async def test_reconfigure_preflight_is_read_only(self, mcp_client):
-        """The preflight validates and issues a token without touching the entry."""
+    async def test_reconfigure_preflight_is_read_only(self, mcp_client, ha_client):
+        """The preflight reads the reconfigure form and issues a token without
+        touching the entry; a key the form does not declare is warned about."""
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": ["filesize"],
+            }
+        )
+        file_path_label = translations["result"]["resources"][
+            "component.filesize.config.step.reconfigure.data.file_path"
+        ]
         async with MCPAssertions(mcp_client) as mcp:
             before = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
@@ -461,7 +473,10 @@ class TestIntegrationManagement:
                 {
                     "entry_id": self.RECONFIGURE_ENTRY_ID,
                     "reconfigure": True,
-                    "config": {"file_path": self.RECONFIGURE_PATH_B},
+                    "config": {
+                        "file_path": self.RECONFIGURE_PATH_B,
+                        "not_a_filesize_field": True,
+                    },
                 },
             )
 
@@ -472,6 +487,12 @@ class TestIntegrationManagement:
             assert isinstance(confirm_token, str) and confirm_token.startswith(
                 "sha256:"
             ), result
+            form = result["reconfigure_form"]
+            assert form["step_id"] == "reconfigure", form
+            fields = {f["name"]: f for f in form["fields"]}
+            assert fields["file_path"]["description"] == file_path_label, form
+            assert "not_a_filesize_field" not in fields
+            assert any("not_a_filesize_field" in w for w in result["warnings"])
 
             after = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}

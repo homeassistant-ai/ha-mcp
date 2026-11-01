@@ -1479,8 +1479,8 @@ class IntegrationTools:
                 description=(
                     "Use the existing config entry's official reconfigure flow "
                     "(its connection settings) instead of its options flow. "
-                    "Without confirm_token this is a read-only preflight that "
-                    "returns one."
+                    "Without confirm_token this is a preflight that applies "
+                    "nothing and returns one, with the flow's first form."
                 ),
             ),
         ] = False,
@@ -1597,8 +1597,11 @@ class IntegrationTools:
         takes it offline, and there is no automatic rollback — the returned
         rollback metadata describes repeating the official flow by hand with
         the previous values, which this tool cannot read back. The preflight
-        does not validate config keys against the integration's form; wrong
-        field names surface on the confirm call.
+        opens the reconfigure flow, returns its first form as
+        reconfigure_form (fields, current values, help text) and aborts it:
+        config keys that form does not declare are warned about, or refused
+        when it is the last form. Home Assistant validates values only on
+        confirm.
 
         EXAMPLES:
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
