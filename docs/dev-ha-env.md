@@ -87,14 +87,16 @@ Run it **from your fork only**. The job refuses to run in
 
    Test through `MCP:`, the way an agent uses the server: add it to your
    client as a regular MCP server, or, when the agent's client cannot load a
-   new server mid-session, drive it one call at a time through a shim that
-   sends `tools/list` and `tools/call` to that URL.
+   new server mid-session, drive it one call at a time through a shim.
    [`.github/dev-ha-env/mcpshim.py`](../.github/dev-ha-env/mcpshim.py) is an
-   example; agents can modify it as needed:
+   example built on the vendored FastMCP client, so it negotiates protocol
+   versions, follows pagination and prints whole results (structured content
+   and errors included) as a real client receives them; agents can modify it
+   as needed:
    ```bash
-   python3 .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt tools
-   python3 .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt describe ha_search
-   python3 .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt call ha_search '{"query": "kitchen"}'
+   uv run python .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt tools
+   uv run python .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt describe ha_search
+   uv run python .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt call ha_search '{"query": "kitchen"}'
    ```
    Do the setup and the checks with the tools as well. Creating or verifying
    state through `HA:`'s REST API routes around the tools under test, so a
