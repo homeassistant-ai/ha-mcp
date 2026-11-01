@@ -25,6 +25,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -37,6 +38,7 @@ from .resource_codec import (
     _DATA_URI_MIME,
     _MAX_CONTENT_BUDGET,
     MAX_CONTENT_SIZE,
+    _check_ws_error,
     _data_uri_for,
     _decode_inline_content,
     _is_data_url,
@@ -44,6 +46,14 @@ from .resource_codec import (
     _looks_like_preview,
     _process_resource_list,
     _summarize_resources,
+    content_sha256,
+)
+from .resource_patch import (
+    MAX_EDITS,
+    ResourceEdit,
+    apply_resource_edits,
+    check_expected_sha256,
+    load_inline_resource,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -172,6 +182,14 @@ class ResourceTools:
                 "update."
             ),
         ] = False,
+        include_hash: Annotated[
+            bool,
+            Field(
+                description='Add "_sha256" (hex digest of the decoded UTF-8 content) '
+                "to each inline resource, e.g. to verify an edit or to pass as "
+                "expected_sha256 without fetching the content."
+            ),
+        ] = False,
         limit: Annotated[
             int,
             Field(
@@ -204,6 +222,7 @@ class ResourceTools:
         EXAMPLES:
         - Next page: ha_config_list_dashboard_resources(offset=100)
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
+        - Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)
 
         Home Assistant 2026.6+ exposes resource management in the UI by default;
         API access works regardless of UI availability.
@@ -229,7 +248,7 @@ class ResourceTools:
             page = resources[offset : offset + limit]
             page_decoded = [decoded_by_index.get(offset + i) for i in range(len(page))]
             paginated, truncated_count = _process_resource_list(
-                page, page_decoded, include_content
+                page, page_decoded, include_content, include_hash=include_hash
             )
 
             response: dict[str, Any] = {
@@ -304,10 +323,33 @@ class ResourceTools:
                 "Get IDs from ha_config_list_dashboard_resources()"
             ),
         ] = None,
+        edits: Annotated[
+            list[ResourceEdit] | None,
+            JSON_STRING_COERCION,
+            Field(
+                min_length=1,
+                max_length=MAX_EDITS,
+                description="Search/replace edits for an existing inline resource, "
+                "applied in order. Requires resource_id; resource_type is ignored "
+                "and the stored type is kept.",
+            ),
+        ] = None,
+        expected_sha256: Annotated[
+            str | None,
+            Field(
+                description="With edits: refuse the patch unless the stored content "
+                "currently has this SHA-256 (from include_hash=True or a previous "
+                "response's sha256)."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Create or update a dashboard resource (inline code or external URL).
 
         Provide exactly one of:
+        - edits: Search/replace edits on an existing inline resource. Any
+          failing edit (or an expected_sha256 mismatch) aborts the whole call
+          and saves nothing. Prefer this over content= for small changes to a
+          large card: only the changed text is sent.
         - content: Inline JavaScript or CSS code (embedded in the resource URL
           as a data: URI — no file storage or external hosting involved).
           Supports 'module' and 'css' types only; URLs are
@@ -328,10 +370,28 @@ class ResourceTools:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
         - Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
         - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
+        - Patch: ha_config_set_dashboard_resource(resource_id="abc123", edits=[{"old": "color: red", "new": "color: blue"}], expected_sha256="<sha256 from the list>")
+
+        Inline writes return the new content's sha256.
 
         After adding a resource, a browser cache clear or hard refresh
         (Ctrl+Shift+R) is needed to load it.
         """
+        if edits is not None:
+            return await self._patch_inline_resource(
+                resource_id, edits, expected_sha256, other_modes=(content, url)
+            )
+        if expected_sha256 is not None:
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="expected_sha256 only applies together with edits",
+                    suggestions=[
+                        "Pass edits=[...] with resource_id, or drop expected_sha256"
+                    ],
+                )
+            )
+
         # Validate: exactly one of content or url must be provided
         if content is not None and url is not None:
             raise_tool_error(
@@ -451,7 +511,7 @@ class ResourceTools:
                 create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
                     message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
-                    context={"size": content_size},
+                    context={"size": content_size, "limit": MAX_CONTENT_SIZE},
                     suggestions=[
                         "Minify the code to reduce size",
                         "Split into multiple smaller modules",
@@ -489,6 +549,7 @@ class ResourceTools:
                 "resource_id": new_resource_id,
                 "resource_type": resource_type,
                 "size": content_size,
+                "sha256": content_sha256(content),
                 "note": "Clear browser cache or hard refresh to load changes",
             }
         except ToolError:
@@ -504,6 +565,63 @@ class ResourceTools:
             )
             # Unreachable (exception_to_structured_error is NoReturn).
             raise
+
+    async def _patch_inline_resource(
+        self,
+        resource_id: str | None,
+        edits: list[ResourceEdit],
+        expected_sha256: str | None,
+        other_modes: tuple[str | None, str | None],
+    ) -> dict[str, Any]:
+        """Apply search/replace edits to a stored inline resource, all or nothing."""
+        if any(mode is not None for mode in other_modes):
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Provide only one of 'edits', 'content' or 'url'",
+                    suggestions=[
+                        "Use edits= alone to change part of an existing inline resource",
+                    ],
+                )
+            )
+        if resource_id is None:
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    message="edits requires resource_id",
+                    suggestions=[
+                        "Get the ID from ha_config_list_dashboard_resources()",
+                    ],
+                )
+            )
+        validate_identifier_not_empty(
+            resource_id,
+            "resource_id",
+            suggestions=["Pass the ID of the inline resource to patch"],
+            context={"action": "patch"},
+        )
+        try:
+            stored, resource_type = await load_inline_resource(
+                self._client, resource_id
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error reading dashboard resource to patch: {e}")
+            exception_to_structured_error(
+                e,
+                context={
+                    "tool": "ha_config_set_dashboard_resource",
+                    "action": "patch",
+                    "resource_id": resource_id,
+                },
+            )
+            # Unreachable (exception_to_structured_error is NoReturn).
+            raise
+        check_expected_sha256(stored, expected_sha256)
+        patched = apply_resource_edits(stored, edits)
+        response = await self._set_inline_resource(patched, resource_type, resource_id)
+        return {**response, "action": "patched", "applied": len(edits)}
 
     async def _reject_truncated_preview_resave(
         self, content: str, resource_id: str
@@ -811,17 +929,6 @@ class ResourceTools:
 def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register dashboard resource tools."""
     register_tool_methods(mcp, ResourceTools(client))
-
-
-def _check_ws_error(result: Any) -> str | None:
-    """Check a WebSocket result for errors. Returns error message or None."""
-    if isinstance(result, dict) and not result.get("success", True):
-        error = result.get("error", {})
-        if isinstance(error, dict):
-            msg: str = error.get("message", str(error)) or "Unknown error"
-            return msg
-        return str(error) or "Unknown error"
-    return None
 
 
 def _extract_resource_id(result: Any, fallback_id: str | None) -> str | None:

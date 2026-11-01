@@ -5,6 +5,7 @@ Pure functions shared by the resource tools. Kept apart from
 """
 
 import base64
+import hashlib
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -67,6 +68,11 @@ _MAX_CONTENT_BUDGET = 512_000
 # what every dashboard load ships (the registered URL rides the Lovelace
 # bootstrap to every browser) and what auto-backup snapshots per edit.
 MAX_CONTENT_SIZE = 128_000
+
+
+def content_sha256(content: str) -> str:
+    """SHA-256 hex digest over the UTF-8 bytes of decoded resource content."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _data_uri_for(content: str, resource_type: str) -> str:
@@ -273,6 +279,8 @@ def _process_resource_list(
     resources: list[Any],
     decoded_page: list[tuple[str, bool] | None],
     include_content: bool,
+    *,
+    include_hash: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """Render one page of resources. Returns ``(rows, truncated_count)``.
 
@@ -299,6 +307,8 @@ def _process_resource_list(
             content_bytes = len(content.encode("utf-8"))
             res["_inline"] = True
             res["_size"] = content_bytes
+            if include_hash:
+                res["_sha256"] = content_sha256(content)
             if is_legacy:
                 # The full remediation text lives once at response level;
                 # repeating it per resource wasted ~330 chars each.
@@ -333,3 +343,14 @@ def _process_resource_list(
 
         processed.append(res)
     return processed, truncated_count
+
+
+def _check_ws_error(result: Any) -> str | None:
+    """Check a WebSocket result for errors. Returns error message or None."""
+    if isinstance(result, dict) and not result.get("success", True):
+        error = result.get("error", {})
+        if isinstance(error, dict):
+            msg: str = error.get("message", str(error)) or "Unknown error"
+            return msg
+        return str(error) or "Unknown error"
+    return None

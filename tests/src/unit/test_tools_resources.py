@@ -330,10 +330,10 @@ class TestHaConfigListDashboardResources:
         retained_counts = []
         real_process = tools_resources._process_resource_list
 
-        def _spy(page, decoded_page, include):
+        def _spy(page, decoded_page, include, **kwargs):
             seen_page_sizes.append(len(page))
             retained_counts.append(sum(1 for d in decoded_page if d is not None))
-            return real_process(page, decoded_page, include)
+            return real_process(page, decoded_page, include, **kwargs)
 
         monkeypatch.setattr(tools_resources, "_process_resource_list", _spy)
 
