@@ -391,7 +391,7 @@ def test_stale_owner_recovers_and_sweeps_abandoned_staging(
     assert (_frontend(state) / "entrypoint.js").is_file()
 
 
-def test_slow_healthy_owner_within_stale_budget_is_accepted(
+def test_slow_owner_progress_keeps_waiters_alive_beyond_initial_budget(
     seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lock = state / ".hacs_frontend.lock"
@@ -402,7 +402,8 @@ def test_slow_healthy_owner_within_stale_budget_is_accepted(
     def advance(seconds: float) -> None:
         nonlocal elapsed
         elapsed += seconds
-        if elapsed >= 240:
+        seed.os.utime(lock, (created + elapsed, created + elapsed))
+        if elapsed >= 660:
             frontend = _frontend(state)
             frontend.mkdir()
             (frontend / "__init__.py").write_text("", encoding="utf-8")
@@ -436,3 +437,102 @@ def test_archive_fetch_is_pinned_and_anonymous_even_with_local_tokens(
         "https://github.com/hacs/frontend/releases/download/20250128065759/hacs_frontend-20250128065759.tar.gz"
     ]
     assert requests[0].get_header("Authorization") is None
+
+
+def test_live_download_renews_lock_and_stops_heartbeat_on_failure(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    refreshed = threading.Event()
+    lock = state / ".hacs_frontend.lock"
+    real_utime = seed.os.utime
+    threads = []
+
+    def make_thread(*args: Any, **kwargs: Any) -> threading.Thread:
+        thread = threading.Thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    def renew(path: Path, times: Any = None) -> None:
+        real_utime(path, (400.0, 400.0))
+        refreshed.set()
+
+    def download(target: Path) -> NoReturn:
+        assert refreshed.wait(2), "Live owner never renewed its lock"
+        seed._clear_stale_hacs_lock(lock)
+        assert lock.is_dir()
+        raise OSError("fixture owner failure")
+
+    monkeypatch.setattr(seed, "_HACS_HEARTBEAT_INTERVAL_S", 0.01, raising=False)
+    monkeypatch.setattr(seed, "Thread", make_thread, raising=False)
+    monkeypatch.setattr(seed.os, "utime", renew)
+    monkeypatch.setattr(seed.time, "time", lambda: 401.0)
+    monkeypatch.setattr(seed, "_download_hacs_frontend", download)
+    with pytest.raises(OSError, match="fixture owner failure"):
+        seed._ensure_hacs_frontend(state)
+    assert threads and all(not t.is_alive() for t in threads)
+    assert not lock.exists()
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "ghcr.io/home-assistant/home-assistant:stable",
+        "homeassistant/home-assistant:latest",
+    ],
+)
+def test_symbolic_core_version_comes_from_image_without_starting_ha(
+    image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    import docker
+
+    from tests.src.e2e import _conftest_testcontainer as containers
+
+    client = MagicMock()
+    client.containers.run.return_value = b"2026.11.0\n"
+    monkeypatch.setattr(docker, "from_env", lambda: client)
+    initial = tmp_path / "initial_test_state"
+    initial.mkdir()
+    monkeypatch.setattr(containers, "HA_TEST_IMAGE", image)
+    monkeypatch.setattr(
+        containers, "__file__", str(tmp_path / "src" / "e2e" / "seed.py")
+    )
+    monkeypatch.setattr(containers.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+
+    class VersionReachedBootstrap(Exception):
+        pass
+
+    def bootstrap(path: Path, *, core_version: str) -> NoReturn:
+        assert path == initial
+        assert core_version == "2026.11.0"
+        raise VersionReachedBootstrap
+
+    monkeypatch.setattr(containers, "_ensure_hacs_frontend", bootstrap)
+    with pytest.raises(VersionReachedBootstrap):
+        containers._prepare_testcontainer_config(embedded=False)
+    args, kwargs = client.containers.run.call_args
+    assert args[0] == image
+    assert kwargs["network_disabled"] and kwargs["remove"]
+    assert kwargs["entrypoint"][0] == "python"
+
+
+def test_numeric_image_version_needs_no_docker_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docker
+
+    from tests.src.e2e import _conftest_testcontainer as containers
+
+    def unexpected() -> NoReturn:
+        pytest.fail("Numeric Core tags need no Docker version probe")
+
+    monkeypatch.setattr(docker, "from_env", unexpected)
+    assert (
+        containers._core_version_for_image(
+            "ghcr.io/home-assistant/home-assistant:2026.11.0b0"
+        )
+        == "2026.11.0b0"
+    )

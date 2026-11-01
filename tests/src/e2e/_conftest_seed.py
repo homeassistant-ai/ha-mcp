@@ -10,7 +10,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Thread
 
 from packaging.version import Version
 
@@ -19,6 +22,7 @@ logger = logging.getLogger(__name__)
 # HACS integration 2.0.5 scripts/install/frontend pins this release.
 _HACS_FRONTEND_VERSION = "20250128065759"
 _HACS_LOCK_BUDGET_S = 300
+_HACS_HEARTBEAT_INTERVAL_S = 30
 _HACS_STAGING_PREFIX = ".hacs_frontend-staging-"
 
 
@@ -195,14 +199,44 @@ def _clear_stale_hacs_lock(lock_dir: Path) -> None:
             logger.warning(f"Stale-lock cleanup failed at {lock_dir}: {exc}")
 
 
+@contextmanager
+def _hacs_lock_heartbeat(lock_dir: Path) -> Iterator[None]:
+    """Keep a live owner's lease fresh; stop before releasing ownership."""
+    stopped = Event()
+
+    def renew() -> None:
+        while not stopped.wait(_HACS_HEARTBEAT_INTERVAL_S):
+            try:
+                os.utime(lock_dir, None)
+            except FileNotFoundError:
+                logger.warning("HACS bootstrap lock disappeared during renewal")
+                return
+
+    heartbeat = Thread(target=renew, name="hacs-bootstrap-lock", daemon=True)
+    heartbeat.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        heartbeat.join()
+
+
 def _wait_for_hacs_lock_release(lock_dir: Path) -> None:
-    """Wait for the owner using the same budget as stale-lock recovery."""
+    """Wait while ownership is renewed; fail only after an idle lease budget."""
+    last_renewal: float | None = None
     wait_start = time.monotonic()
-    while lock_dir.exists():
-        if time.monotonic() - wait_start >= _HACS_LOCK_BUDGET_S:
+    while True:
+        try:
+            renewal = lock_dir.stat().st_mtime
+        except FileNotFoundError:
+            return
+        if renewal != last_renewal:
+            last_renewal = renewal
+            wait_start = time.monotonic()
+        elif time.monotonic() - wait_start >= _HACS_LOCK_BUDGET_S:
             raise RuntimeError(
                 f"Timeout waiting for HACS frontend lock release at {lock_dir}; "
-                "owner may be slow or orphaned. Check the bootstrap owner log; "
+                "owner has stopped renewing its lease. Check the bootstrap owner log; "
                 "stop remaining workers before retrying the session."
             )
         time.sleep(2)
@@ -311,12 +345,13 @@ def _ensure_hacs_frontend(
     # We own the lock. Outer try/finally guarantees release even when the
     # download block is skipped (e.g. hacs_dir missing) or raises.
     try:
-        for staging in initial_state_path.glob(f"{_HACS_STAGING_PREFIX}*"):
-            if staging.is_dir():
-                shutil.rmtree(staging)
-        # Check if HACS is installed and frontend is missing or invalid.
-        if hacs_dir.exists() and not _is_valid_hacs_frontend(frontend_dir):
-            _download_hacs_frontend(frontend_dir)
+        with _hacs_lock_heartbeat(lock_dir):
+            for staging in initial_state_path.glob(f"{_HACS_STAGING_PREFIX}*"):
+                if staging.is_dir():
+                    shutil.rmtree(staging)
+            # Check if HACS is installed and frontend is missing or invalid.
+            if hacs_dir.exists() and not _is_valid_hacs_frontend(frontend_dir):
+                _download_hacs_frontend(frontend_dir)
     finally:
         # Release the lock so waiting workers can proceed. A
         # ``FileNotFoundError`` can mean startup stale-lock cleanup removed

@@ -158,6 +158,34 @@ def _copy_local_blueprint_to_www(config_path: Path) -> dict[str, str]:
     }
 
 
+def _core_version_for_image(image: str) -> str:
+    """Read symbolic tags from the image itself without starting Home Assistant."""
+    from packaging.version import InvalidVersion, Version
+
+    tag = image.rsplit(":", 1)[-1]
+    try:
+        return str(Version(tag))
+    except InvalidVersion:
+        import docker
+
+        client = docker.from_env()
+        try:
+            output = client.containers.run(
+                image,
+                command=[],
+                entrypoint=[
+                    "python",
+                    "-c",
+                    "from homeassistant.const import __version__; print(__version__)",
+                ],
+                network_disabled=True,
+                remove=True,
+            )
+            return str(Version(output.decode("utf-8").strip()))
+        finally:
+            client.close()
+
+
 def _prepare_testcontainer_config(
     embedded: bool,
 ) -> tuple[Path, str, dict, str | None]:
@@ -176,7 +204,7 @@ def _prepare_testcontainer_config(
 
     # Ensure HACS frontend is downloaded (if HACS is present)
     _ensure_hacs_frontend(
-        initial_state_path, core_version=HA_TEST_IMAGE.rsplit(":", 1)[-1]
+        initial_state_path, core_version=_core_version_for_image(HA_TEST_IMAGE)
     )
 
     # Copy all files from initial_test_state
