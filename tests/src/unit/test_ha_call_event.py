@@ -92,6 +92,13 @@ class TestHaCallEvent:
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
 
+    async def test_non_timeout_connection_error_uses_structured_error(self):
+        """A connection failure that is not a timeout takes the structured path."""
+        tools = _make_tools(HomeAssistantConnectionError("connection refused"))
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
     async def test_event_type_passed_to_client(self):
         tools = _make_tools({"message": "Event zone_entered fired."})
         await tools.ha_call_event("zone_entered", {"zone": "home"})
