@@ -279,8 +279,13 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
         TimeoutError(),
         HomeAssistantConnectionError("reset"),
         HomeAssistantAPIError("API error: 504", status_code=504),
+        # Core finishes a flow only inside a GET: the client's retry after a
+        # gateway 502/503/504 meets this 404 when the first attempt did.
+        HomeAssistantAPIError(
+            "API error: 404 - Invalid flow specified", status_code=404
+        ),
     ],
-    ids=["timeout", "connection", "http-504"],
+    ids=["timeout", "connection", "http-504", "http-404"],
 )
 async def test_reconfigure_poll_without_an_answer_is_applied_but_unverified(
     no_answer: Exception,
@@ -305,26 +310,18 @@ async def test_reconfigure_poll_without_an_answer_is_applied_but_unverified(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_wait")
-async def test_a_poll_on_a_flow_that_is_gone_reaches_the_caller_as_the_404() -> None:
+async def test_a_404_on_an_add_mode_poll_is_not_reported_as_possibly_applied() -> None:
+    # Only reconfigure has the applied_but_unverified contract.
     client = _client(strings={})
     client._request.side_effect = HomeAssistantAPIError(
         "API error: 404 - Invalid flow specified", status_code=404
     )
-    client.abort_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 404", status_code=404
-    )
-    client.start_reconfigure_flow.return_value = dict(_PROGRESS)
+    client.start_config_flow.return_value = dict(_PROGRESS)
 
     with pytest.raises(HomeAssistantAPIError) as exc_info:
-        await _run_reconfigure_flow(
-            client,
-            domain="demo",
-            entry_id="e1",
-            flow_config={"host": "h"},
-            rollback_metadata={},
-        )
+        await create_config_entry(client, "demo", {})
 
-    assert "Invalid flow specified" in str(exc_info.value)
+    assert exc_info.value.status_code == 404
     client.abort_config_flow.assert_awaited_once_with("f1")
 
 

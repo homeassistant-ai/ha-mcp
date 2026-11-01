@@ -159,16 +159,31 @@ async def _wait_for_progress(
     """
 
     async def poll(url: str, polled: dict[str, Any]) -> dict[str, Any]:
-        return await _submit_step(
-            lambda _flow_id, _payload: client._request("GET", url),
-            flow_id,
-            {},
-            client=client,
-            helper_type=None,
-            last_menu_choice=None,
-            current_step=polled,
-            is_reconfigure=is_reconfigure,
-        )
+        try:
+            return await _submit_step(
+                lambda _flow_id, _payload: client._request("GET", url),
+                flow_id,
+                {},
+                client=client,
+                helper_type=None,
+                last_menu_choice=None,
+                current_step=polled,
+                is_reconfigure=is_reconfigure,
+            )
+        except HomeAssistantAPIError as err:
+            # Core finishes a flow only inside a GET. A 404 here is what the
+            # client's retry after a gateway 502/503/504 meets when the first
+            # attempt did (or Home Assistant restarted in between).
+            if is_reconfigure and err.status_code == 404:
+                _raise_reconfigure_no_answer(
+                    err,
+                    flow_id=flow_id,
+                    payload={},
+                    current_step=polled,
+                    error_code=ErrorCode.SERVICE_CALL_FAILED,
+                    detail="HTTP 404 on a progress poll",
+                )
+            raise
 
     return await wait_for_progress(
         client, flow, flow_id, step, is_reconfigure=is_reconfigure, poll=poll
