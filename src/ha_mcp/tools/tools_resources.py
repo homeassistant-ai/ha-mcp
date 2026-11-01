@@ -326,11 +326,12 @@ class ResourceTools:
             ),
         ] = None,
         edits: Annotated[
-            list[ResourceEdit] | None,
+            # Bounds on the list, not the union: there they render as
+            # minItems/maxItems instead of string-only minLength/maxLength.
+            Annotated[list[ResourceEdit], Field(min_length=1, max_length=MAX_EDITS)]
+            | None,
             JSON_STRING_COERCION,
             Field(
-                min_length=1,
-                max_length=MAX_EDITS,
                 description="Search/replace edits for an existing inline resource, "
                 "applied in order. Requires resource_id; resource_type is ignored "
                 "and the stored type is kept.",

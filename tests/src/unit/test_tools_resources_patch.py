@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from ha_mcp import backup_manager
+from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import auto_backup, resource_patch
 from ha_mcp.tools.resource_codec import (
@@ -17,8 +18,12 @@ from ha_mcp.tools.resource_codec import (
     _data_uri_for,
     _decode_data_uri,
 )
-from ha_mcp.tools.resource_patch import RESOURCE_LOCK_REGISTRY, resource_write_lock
-from ha_mcp.tools.tools_resources import ResourceTools
+from ha_mcp.tools.resource_patch import (
+    MAX_EDITS,
+    RESOURCE_LOCK_REGISTRY,
+    resource_write_lock,
+)
+from ha_mcp.tools.tools_resources import ResourceTools, register_resources_tools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 from .test_resource_codec import _legacy_url
@@ -362,6 +367,15 @@ class TestPatchModeSelection:
         fake = FakeLovelace([_inline(CARD)])
 
         await _patch_error(fake, content="const x = 1;", config_hash=_sha(CARD))
+
+    async def test_registered_schema_bounds_the_number_of_edits(self):
+        mcp = FastMCP("test")
+        register_resources_tools(mcp, FakeLovelace([]))
+        tool = await mcp.get_tool("ha_config_set_dashboard_resource")
+
+        schema = tool.parameters["properties"]["edits"]
+        (array,) = [s for s in schema["anyOf"] if s.get("type") == "array"]
+        assert (array["minItems"], array["maxItems"]) == (1, MAX_EDITS)
 
 
 class TestHashReporting:

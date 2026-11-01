@@ -408,9 +408,10 @@ async def _template_write_context(
 
     Dashboard resources take their per-resource write lock here, so the
     snapshot, the tool's own read (an ``edits=`` patch) and its write cannot
-    interleave with another write through this server, and a snapshot always
-    holds the state the write replaced. The resource tools must not take it
-    again: ``asyncio.Lock`` is not reentrant.
+    interleave with another write through this server. Writes from the Home
+    Assistant UI or other processes are not serialized, so the snapshot can
+    predate an edit made there that the write then replaces. The resource
+    tools must not take the lock again: ``asyncio.Lock`` is not reentrant.
     """
     # Both options-update tools take stable config-entry IDs. Alias-based helper
     # removal and dotted subentry targets have separate resolution paths.
