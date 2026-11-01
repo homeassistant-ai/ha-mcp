@@ -12,6 +12,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
@@ -567,3 +568,43 @@ class TestHaCallEvent:
 
         message = tools._client.send_websocket_message.await_args.args[0]
         assert message["event_data"] == {"key": "value"}
+
+    @pytest.mark.parametrize("component_capable", [True, False])
+    async def test_rejected_token_is_not_retried_over_rest(
+        self, monkeypatch, component_capable
+    ):
+        """Re-sending a rejected token adds a 401 toward Home Assistant's ban."""
+        tools = _make_tools({"message": "rest"})
+        not_sent = HomeAssistantCommandNotSent("no answer")
+        not_sent.__cause__ = HomeAssistantAuthError("invalid auth")
+        tools._client.send_websocket_message = AsyncMock(side_effect=not_sent)
+        caps = (
+            SimpleNamespace(capabilities=["call_event"]) if component_capable else None
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=caps)
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+        tools._client.fire_event.assert_not_awaited()
+
+    async def test_command_not_sent_falls_back_when_not_an_auth_failure(
+        self, monkeypatch
+    ):
+        """A command refused before dispatch still uses the REST fallback."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantCommandNotSent("not connected")
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)

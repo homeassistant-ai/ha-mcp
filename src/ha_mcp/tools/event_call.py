@@ -126,8 +126,9 @@ class EventCallMixin:
         not that any of them acted. A timeout means dispatch is unconfirmed.
         listener_count covers the exact event type; wildcard_listener_count
         covers match-all listeners (the recorder is one, and it only stores the
-        event). Both counts are returned only when the optional listener
-        lookup succeeds.
+        event). The counts come from the component's dispatch reply when it
+        serves the fire, otherwise from a GET /api/events lookup taken before
+        dispatch; a route that cannot report them omits both fields.
 
         The response carries the event's context_id (and context) when Home
         Assistant reports it. An automation triggered by this event records that
@@ -197,7 +198,15 @@ class EventCallMixin:
             raw = await self._client.send_websocket_message(
                 _fire_message(WS_CALL_EVENT, event_type, data)
             )
-        except HomeAssistantCommandNotSent:
+        except HomeAssistantCommandNotSent as exc:
+            if isinstance(exc.__cause__, HomeAssistantAuthError):
+                # Re-sending a rejected token over REST adds a 401 toward the
+                # IP-ban counter; stop instead of falling back.
+                exception_to_structured_error(
+                    exc,
+                    context={"event_type": event_type},
+                    suggestions=["Check the Home Assistant token"],
+                )
             return None
         except Exception as err:  # noqa: BLE001
             exception_to_structured_error(
@@ -252,7 +261,15 @@ class EventCallMixin:
             raw = await self._client.send_websocket_message(
                 _fire_message(CORE_FIRE_EVENT, event_type, data)
             )
-        except HomeAssistantCommandNotSent:
+        except HomeAssistantCommandNotSent as exc:
+            if isinstance(exc.__cause__, HomeAssistantAuthError):
+                # Re-sending a rejected token over REST only adds a 401 toward
+                # Home Assistant's IP-ban counter; stop instead of falling back.
+                exception_to_structured_error(
+                    exc,
+                    context={"event_type": event_type},
+                    suggestions=["Check the Home Assistant token"],
+                )
             return None
         except Exception as err:  # noqa: BLE001
             exception_to_structured_error(
