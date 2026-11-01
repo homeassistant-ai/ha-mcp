@@ -66,6 +66,7 @@ from .integration_reconfigure import (
     reject_reconfigure_only_parameters,
 )
 from .integration_schema import (
+    fetch_config_flow_schema,
     fetch_config_subentry_schema,
     fetch_options_schema,
     options_from_form_flow,
@@ -320,7 +321,11 @@ class IntegrationTools:
                 "form as options_schema.fields: each field's type, current value "
                 "and Home Assistant's help text. A flow that opens with a menu "
                 "lists menu_options instead (see menu_choice). Only applies when "
-                "supports_options=true.",
+                "supports_options=true. Without entry_id but with domain, "
+                "describe that integration's setup form as config_flow_schema "
+                "(same shape; a flow Home Assistant aborts gives aborted and "
+                "reason_text instead). The flow is started and aborted, so "
+                "nothing is added.",
                 default=False,
             ),
         ] = False,
@@ -382,9 +387,10 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "With include_schema or include_subentry_schema, when the "
-                    "flow opens with a menu: the menu option whose form to "
-                    "describe. Without it the menu options are listed."
+                    "With include_schema (options or setup flow) or "
+                    "include_subentry_schema, when the flow opens with a menu: "
+                    "the menu option whose form to describe. Without it the "
+                    "menu options are listed."
                 ),
                 default=None,
             ),
@@ -539,6 +545,7 @@ class IntegrationTools:
         - Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
         - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
         - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; add menu_choice="<option>" to describe that form
+        - Fields a new integration asks for when added: ha_get_integration(domain="group", include_schema=True, menu_choice="light")
         - List template entries with their options: ha_get_integration(domain="template")
 
         OPTIONS: ``options`` reflect the entry's persisted values. Values that
@@ -642,12 +649,23 @@ class IntegrationTools:
                 subentry_id=subentry_id,
                 show_advanced_options=show_advanced_options_bool,
             )
-            if menu_choice is not None:
-                ignored_detail_params.append("menu_choice")
             if ignored_detail_params:
                 result.setdefault("warnings", []).append(
                     f"{', '.join(ignored_detail_params)} "
                     "ignored because entry_id was not set (list mode)"
+                )
+            if include_schema_bool and domain is not None:
+                await fetch_config_flow_schema(
+                    self._client,
+                    domain.strip().lower(),
+                    result,
+                    menu_choice=menu_choice,
+                )
+            elif include_schema_bool or menu_choice is not None:
+                result.setdefault("warnings", []).append(
+                    "include_schema and menu_choice were ignored: without "
+                    "entry_id they describe the setup flow of the integration "
+                    "named in domain, so pass domain with include_schema=True"
                 )
             return result
 
@@ -1562,9 +1580,11 @@ class IntegrationTools:
           UI, or (server settings, developer mode on) ha_dev_manage_settings /
           ha_dev_manage_server.
 
-        Use ha_get_integration() to find entry IDs, and
+        Use ha_get_integration() to find entry IDs,
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
-        options fields before an update. Its supports_reconfigure field tells
+        options fields before an update, and
+        ha_get_integration(domain=..., include_schema=True) for the setup
+        form before adding. Its supports_reconfigure field tells
         you whether an entry qualifies for reconfigure=True.
 
         Caveats: adding an integration runs its config flow exactly as the HA

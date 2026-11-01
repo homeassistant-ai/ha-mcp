@@ -17,8 +17,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools.integration_schema import (
+    fetch_config_flow_schema,
     fetch_config_subentry_schema,
     fetch_options_schema,
 )
@@ -307,3 +309,159 @@ async def test_menu_choice_without_a_schema_is_reported_as_ignored() -> None:
     resp = await _detail(tools)
 
     assert any("menu_choice" in w for w in resp["warnings"])
+
+
+# --- the setup (config) flow of a domain, read in list mode -----------------
+
+
+def _config_client(first_step: dict[str, Any], strings: dict[str, str] | None = None):
+    client = _client(first_step, strings)
+    client.start_config_flow.return_value = first_step
+    return client
+
+
+@pytest.mark.asyncio
+async def test_setup_form_is_described_with_help_under_config() -> None:
+    client = _config_client(
+        _form("user", _HOST, last_step=False),
+        {"component.demo.config.step.user.data_description.host": "Device IP."},
+    )
+    resp: dict[str, Any] = {}
+
+    await fetch_config_flow_schema(client, "demo", resp)
+
+    schema = resp["config_flow_schema"]
+    assert schema["flow_type"] == "form"
+    assert schema["fields"][0]["description"] == "Device IP."
+    assert schema["more_forms"] == "yes"
+    client.start_config_flow.assert_awaited_once_with("demo")
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_setup_flow_that_aborts_returns_cores_reason_text() -> None:
+    client = _config_client(
+        {
+            "type": "abort",
+            "flow_id": "f1",
+            "reason": "single_instance_allowed",
+            "description_placeholders": None,
+        },
+        {
+            "component.sun.config.abort.single_instance_allowed": (
+                "Already configured. Only a single configuration possible."
+            )
+        },
+    )
+    resp: dict[str, Any] = {}
+
+    await fetch_config_flow_schema(client, "sun", resp)
+
+    schema = resp["config_flow_schema"]
+    assert schema["aborted"] == "single_instance_allowed"
+    assert schema["reason_text"] == (
+        "Already configured. Only a single configuration possible."
+    )
+    assert "fields" not in schema
+
+
+@pytest.mark.asyncio
+async def test_menu_choice_on_an_aborted_setup_flow_still_returns_the_reason() -> None:
+    client = _config_client(
+        {"type": "abort", "flow_id": "f1", "reason": "single_instance_allowed"}
+    )
+    resp: dict[str, Any] = {}
+
+    await fetch_config_flow_schema(client, "sun", resp, menu_choice="light")
+
+    assert resp["config_flow_schema"]["aborted"] == "single_instance_allowed"
+
+
+@pytest.mark.asyncio
+async def test_setup_menu_lists_branches_until_menu_choice_picks_one() -> None:
+    client = _config_client(dict(_MENU))
+
+    resp: dict[str, Any] = {}
+    await fetch_config_flow_schema(client, "group", resp)
+    assert resp["config_flow_schema"]["menu_options"] == ["basic", "advanced"]
+    client.submit_config_flow_step.assert_not_called()
+
+    client.submit_config_flow_step.return_value = _form("advanced", _HOST)
+    resp = {}
+    await fetch_config_flow_schema(client, "group", resp, menu_choice="advanced")
+
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "f1", {"next_step_id": "advanced"}
+    )
+    assert resp["config_flow_schema"]["menu_choice"] == "advanced"
+    assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
+
+
+@pytest.mark.asyncio
+async def test_setup_flow_that_creates_an_entry_is_reported() -> None:
+    client = _config_client(
+        {
+            "type": "create_entry",
+            "flow_id": "f1",
+            "result": {"entry_id": "new1", "domain": "demo"},
+        }
+    )
+    resp: dict[str, Any] = {}
+
+    await fetch_config_flow_schema(client, "demo", resp)
+
+    assert resp["config_flow_schema"]["flow_type"] == "create_entry"
+    assert any("new1" in w and "created" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_unknown_domain_is_a_warning_not_a_failure() -> None:
+    client = _config_client({})
+    client.start_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 404 - Invalid handler specified",
+        status_code=404,
+        response_data={"message": "Invalid handler specified"},
+    )
+    resp: dict[str, Any] = {"entries": []}
+
+    await fetch_config_flow_schema(client, "no_such_domain", resp)
+
+    assert "config_flow_schema" not in resp
+    assert any(
+        "no_such_domain" in w and "Invalid handler specified" in w
+        for w in resp["warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
+    client = _config_client(_form("user", _HOST))
+
+    with pytest.raises(ToolError):
+        await fetch_config_flow_schema(client, "demo", {}, menu_choice="advanced")
+
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_list_mode_include_schema_describes_the_domains_setup_flow() -> None:
+    client = _config_client(_form("user", _HOST))
+    tools = IntegrationTools(client)
+    tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
+
+    resp = await tools.ha_get_integration(domain="Demo ", include_schema=True)
+
+    client.start_config_flow.assert_awaited_once_with("demo")
+    assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
+
+
+@pytest.mark.asyncio
+async def test_list_mode_include_schema_without_domain_is_reported_as_ignored() -> None:
+    client = _config_client(_form("user", _HOST))
+    tools = IntegrationTools(client)
+    tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
+
+    resp = await tools.ha_get_integration(include_schema=True)
+
+    client.start_config_flow.assert_not_called()
+    assert any("include_schema" in w for w in resp["warnings"])

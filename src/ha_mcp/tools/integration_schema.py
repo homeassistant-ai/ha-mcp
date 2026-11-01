@@ -1,10 +1,11 @@
-"""ha_get_integration's options and subentry flow schemas (issue #2632).
+"""ha_get_integration's setup, options and subentry flow schemas (issue #2632).
 
-A schema only exists inside an open flow: the entry's options (or subentry)
-flow is started, its form described in the same compact shape the helper
-describe uses (fields, HA's help text, current values), and the flow aborted.
-A flow that opens with a menu lists its branches; ``menu_choice`` submits one
-of them and describes the form behind it.
+A schema only exists inside an open flow: the domain's config flow (or the
+entry's options or subentry flow) is started, its form described in the same
+compact shape the helper describe uses (fields, HA's help text, current
+values), and the flow aborted. A flow that opens with a menu lists its
+branches; ``menu_choice`` submits one of them and describes the form behind
+it. A flow Home Assistant aborts is reported with Core's reason text.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import (
     harvest_secret_strings,
@@ -24,6 +26,7 @@ from ..redaction import (
     redaction_enabled,
     sentinel_replacement,
 )
+from .config_entry_flow_errors import FlowRef, abort_reason_text
 from .config_entry_flow_form import iter_schema_fields
 from .config_entry_flow_introspect import menu_choices
 from .config_helpers.describe import describe_form, later_forms
@@ -179,10 +182,17 @@ async def _describe_step(
             )
         step = await submit(step["flow_id"], {"next_step_id": menu_choice})
         chosen = {"menu_choice": menu_choice}
-    elif menu_choice is not None:
+    elif menu_choice is not None and step.get("type") != "abort":
         _refuse_menu_choice(
             menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
         )
+    if step.get("type") == "abort":
+        return {
+            "flow_type": "abort",
+            **chosen,
+            "aborted": step.get("reason"),
+            **await abort_reason_text(client, FlowRef(domain, path), step),
+        }
     if step.get("type") != "form":
         return {
             "flow_type": step.get("type"),
@@ -326,3 +336,52 @@ async def fetch_config_subentry_schema(
                     flow_id,
                     abort_err,
                 )
+
+
+async def fetch_config_flow_schema(
+    client: Any, domain: str, resp: dict[str, Any], *, menu_choice: str | None = None
+) -> None:
+    """Describe ``domain``'s setup (config) flow as ``resp["config_flow_schema"]``.
+
+    The flow is started, its first step (or the form behind ``menu_choice``)
+    described, and the flow aborted, so nothing is set up.
+    """
+    try:
+        first_step = await client.start_config_flow(domain)
+    except HomeAssistantAPIError as err:
+        # Core answers 404 "Invalid handler specified" for a domain without a
+        # config flow and 400 for failed dependencies.
+        if err.status_code not in (400, 404):
+            raise
+        resp.setdefault("warnings", []).append(
+            f"config_flow_schema: Home Assistant could not start a config flow "
+            f"for {domain!r} ({err})"
+        )
+        return
+    flow_id = first_step.get("flow_id")
+    try:
+        schema = await _describe_step(
+            client,
+            first_step,
+            domain=domain,
+            path="config",
+            menu_choice=menu_choice,
+            submit=client.submit_config_flow_step,
+        )
+    finally:
+        if flow_id:
+            try:
+                await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+            except Exception as abort_err:  # noqa: BLE001
+                # A flow that already finished (abort, create_entry) is gone.
+                logger.debug("config flow %s abort failed: %s", flow_id, abort_err)
+    resp["config_flow_schema"] = schema
+    if schema.get("flow_type") == "create_entry":
+        result = schema.get("details", {}).get("result")
+        entry_id = result.get("entry_id") if isinstance(result, dict) else None
+        resp.setdefault("warnings", []).append(
+            f"{domain}'s config flow finished without asking anything and Home "
+            f"Assistant created a config entry (entry_id {entry_id}). It was "
+            "left in place; remove it with ha_remove_helpers_integrations if "
+            "it is not wanted."
+        )
