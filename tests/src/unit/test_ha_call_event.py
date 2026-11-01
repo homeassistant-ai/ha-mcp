@@ -1,6 +1,7 @@
 """Unit tests for ha_call_event tool."""
 
 import asyncio
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
@@ -96,8 +97,11 @@ class TestHaCallEvent:
         """A connection failure that is not a timeout takes the structured path."""
         tools = _make_tools(HomeAssistantConnectionError("connection refused"))
 
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await tools.ha_call_event("my_event")
+
+        payload = json.loads(str(exc_info.value))
+        assert "Check Home Assistant connection" in payload["error"]["suggestions"]
 
     async def test_event_type_passed_to_client(self):
         tools = _make_tools({"message": "Event zone_entered fired."})
@@ -237,6 +241,24 @@ class TestHaCallEvent:
         assert result["success"] is True
         assert "listener lookup failed" in caplog.text.lower()
         assert "listener_count" not in result
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_unreadable_row_for_the_fired_event_omits_counts(self):
+        """A malformed row for this event must not read as 'no listeners'."""
+        tools = _make_tools({"message": "ok"})
+        tools._client._request = AsyncMock(
+            return_value=[
+                {"event": "other_event", "listener_count": 4},
+                {"event": "my_event", "listener_count": "3"},
+            ]
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert "listener_count" not in result
+        assert "wildcard_listener_count" not in result
+        assert "warnings" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
 
     async def test_zero_listener_warning_does_not_claim_delivery(self):

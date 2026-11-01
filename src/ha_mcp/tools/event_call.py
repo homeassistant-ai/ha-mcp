@@ -121,7 +121,7 @@ class EventCallMixin:
         listener_counts: dict[str, int] | None = None
         try:
             async with asyncio.timeout(EVENT_LISTENER_LOOKUP_BUDGET_SECONDS):
-                listener_counts = await get_event_listeners(self._client)
+                listener_counts = await get_event_listeners(self._client, event_type)
         except (HomeAssistantError, TimeoutError) as err:
             # Counts are optional enrichment; never block the fire on them.
             logger.debug("Event listener lookup failed: %s", err)

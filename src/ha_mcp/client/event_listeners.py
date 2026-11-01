@@ -11,6 +11,9 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
+# Home Assistant's match-all listener bucket in GET /api/events.
+MATCH_ALL_EVENT_KEY = "*"
+
 
 class _EventEndpoint(Protocol):
     """The slice of ``HomeAssistantClient`` this lookup needs."""
@@ -19,14 +22,22 @@ class _EventEndpoint(Protocol):
         """Issue one REST request and return its decoded body."""
 
 
-async def get_event_listeners(client: _EventEndpoint) -> dict[str, int] | None:
+async def get_event_listeners(
+    client: _EventEndpoint,
+    event_type: str,
+) -> dict[str, int] | None:
     """Return registered listener counts keyed by event type.
 
     Home Assistant serves ``GET /api/events`` as a list of
     ``{"event": str, "listener_count": int}`` rows. An empty mapping means the
-    bus reported no listeners; ``None`` means the reply could not be read as a
-    listener list, which callers must not report as "no listeners" because the
-    counts are optional enrichment for the operation that follows.
+    bus reported no listeners; ``None`` means the count is unknown: the reply
+    could not be read as a listener list, no row was readable, or the row for
+    ``event_type`` (or the match-all bucket) was unreadable. An unknown count
+    must not be reported as "no listeners", because the counts are optional
+    enrichment for the operation that follows.
+
+    An unreadable row for an unrelated event is skipped: only the rows this
+    call reports on decide whether the answer is unknown.
     """
     logger.debug("Fetching event listeners")
     result = await client._request("GET", "/events")
@@ -43,6 +54,9 @@ async def get_event_listeners(client: _EventEndpoint) -> dict[str, int] | None:
         # a listener count, so neither may reach the response.
         if isinstance(event, str) and type(count) is int and count >= 0:
             counts[event] = count
+        elif event in (event_type, MATCH_ALL_EVENT_KEY):
+            logger.debug("Unreadable listener row for %r: %r", event, row)
+            return None
     if result and not counts:
         # Rows were present, but none was readable: the count is unknown.
         logger.debug("Event listener reply had %d row(s), none readable", len(result))

@@ -11,8 +11,7 @@ delivery.
 
 from typing import Any
 
-# Home Assistant's match-all listener bucket in GET /api/events.
-_MATCH_ALL_EVENT_KEY = "*"
+from ..client.event_listeners import MATCH_ALL_EVENT_KEY
 
 
 def event_listener_fields(
@@ -23,7 +22,7 @@ def event_listener_fields(
     if listener_counts is None:
         return {}
     exact = listener_counts.get(event_type, 0)
-    wildcard = listener_counts.get(_MATCH_ALL_EVENT_KEY, 0)
+    wildcard = listener_counts.get(MATCH_ALL_EVENT_KEY, 0)
     fields: dict[str, Any] = {
         "listener_count": exact,
         "wildcard_listener_count": wildcard,
