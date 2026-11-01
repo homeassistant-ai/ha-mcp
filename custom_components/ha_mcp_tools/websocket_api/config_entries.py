@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.json import json_bytes
 
-from .registry import (
-    _enum_value,
-    _iter_config_entries,
-    _mapping_values,
-    _plainify,
-    _timestamp,
-)
+from .registry import _iter_config_entries, _mapping_values, _plainify
 from .secrets import _load_secret_scrub, _scrub_secret_values
 
 
@@ -27,32 +23,16 @@ def _do_config_entries(
     secret_values: frozenset[str] = frozenset(),
     secret_scrub_degraded: bool = False,
 ) -> dict[str, Any]:
-    """Return config entries in the ``config_entries/get`` WS shape.
+    """Return config entries as Core's ``config_entries/get`` rows, extended.
 
-    ``{entries: [{created_at, modified_at, entry_id, domain, unique_id, title, state, source,
-    supports_options, supports_remove_device, supports_unload, supports_reconfigure,
-    supported_subentry_types, pref_disable_new_entities, pref_disable_polling,
-    disabled_by, reason, error_reason_translation_key,
-    error_reason_translation_placeholders, num_subentries, options, subentries}]}``.
-    The FULL ``as_json_fragment`` field set (``created_at`` / ``modified_at`` as
-    ``.timestamp()`` floats, ``supported_subentry_types`` as core emits it), so the
-    component row carries the same fields the legacy REST row does — no field is
-    dropped on the component path — PLUS ``unique_id``, the one deliberate
-    superset field (core withholds it everywhere; the reconfigure identity
-    anchors need it). Filtered by ``domain`` when
-    given, or the single entry by ``entry_id``
-    (``hass.config_entries.async_get_entry`` — an id that matches nothing,
-    including an empty string, yields an empty list). Only a WHOLLY ABSENT
-    ``entry_id`` key (``None``) selects list mode; an empty-string ``entry_id`` is
-    a single-entry lookup for a nonexistent id, so it returns ``entries: []``
+    Each row is Core's ``ConfigEntry.as_json_fragment`` plus ``unique_id``,
+    ``options`` and ``subentries`` (see :func:`_config_entry_row`). Filtered by
+    ``domain`` when given, or the single entry by ``entry_id``
+    (``hass.config_entries.async_get_entry``). Only a WHOLLY ABSENT ``entry_id``
+    key (``None``) selects list mode; an empty-string ``entry_id`` is a
+    single-entry lookup for a nonexistent id, so it returns ``entries: []``
     (mirroring ``async_get_entry("")``) rather than falling through to list mode
-    and returning the first entry. ``state`` is serialized as
-    ``ConfigEntryState.value`` (mirroring
-    how core's ``config_entries/get`` emits it via ``as_json_fragment``, whose
-    ``json_repr`` in ``homeassistant/config_entries.py`` is this row's source
-    of truth for every field above except ``options``/``subentries``, which
-    this integration re-derives since ``as_json_fragment`` never carries
-    credential data).
+    and returning the first entry.
 
     Data minimization: ``entry.data`` (integration credentials) is NEVER read.
     ``options`` is the only credential-bearing surface emitted, so it is passed
@@ -135,62 +115,24 @@ def _config_entry_by_id(hass: HomeAssistant, entry_id: str) -> Any:
 def _config_entry_row(
     entry: Any, secret_values: frozenset[str], include_subentry_data: bool = False
 ) -> dict[str, Any]:
-    """One config entry as the ``config_entries/get`` row (options scrubbed)."""
+    """One config entry: Core's API row plus ``unique_id``, ``options``, ``subentries``.
+
+    The base is ``entry.as_json_fragment``, the same bytes Core's
+    ``config_entries/get`` and REST entry list send, so every field Core adds
+    reaches the caller unchanged; a ``supports_*`` property that raises fails
+    Core's own ``config_entries/get`` the same way. Core withholds ``unique_id``
+    from every config-entry endpoint, and the reconfigure identity anchors need it.
+    """
+    # An ``orjson.Fragment`` exposes no bytes; serializing it yields them.
+    row: dict[str, Any] = json.loads(json_bytes(entry.as_json_fragment))
     raw_options = getattr(entry, "options", None)
     options = _plainify(dict(raw_options)) if isinstance(raw_options, Mapping) else {}
-    options = _scrub_secret_values(options, secret_values)
-    return {
-        # Timestamps as floats via ``.timestamp()``, mirroring core's
-        # as_json_fragment (``self.created_at.timestamp()``). Absent on a core old
-        # enough to predate them -> None (this row is read-only, never restored, so a
-        # None key is harmless here — unlike the area-registry rows).
-        "created_at": _timestamp(getattr(entry, "created_at", None)),
-        "modified_at": _timestamp(getattr(entry, "modified_at", None)),
-        "entry_id": getattr(entry, "entry_id", None),
-        "domain": getattr(entry, "domain", None),
-        # The ONE field this row adds beyond core's as_json_fragment. Core
-        # deliberately withholds unique_id from every config-entry endpoint
-        # (REST list, config_entries/get and get_single all serialize that
-        # fragment), so a server needing it as an identity anchor has no other
-        # source. Additive within schema_version 1: a server reading an older
-        # component sees the KEY ABSENT, which is distinguishable from a
-        # present-but-None value, so this needs no version gate — the same
-        # discipline as device_get's opt-in entities join.
-        "unique_id": getattr(entry, "unique_id", None),
-        "title": getattr(entry, "title", None),
-        "state": _enum_value(getattr(entry, "state", None)),
-        "source": getattr(entry, "source", None),
-        # supports_* are computed properties (they touch the flow handler) — read
-        # through _safe_prop so a domain whose handler is unavailable degrades
-        # instead of raising. ``or False`` mirrors core's as_json_fragment, which
-        # coerces the optional bools to False.
-        "supports_options": bool(_safe_prop(entry, "supports_options")),
-        "supports_remove_device": _safe_prop(entry, "supports_remove_device") or False,
-        "supports_unload": _safe_prop(entry, "supports_unload") or False,
-        "supports_reconfigure": bool(_safe_prop(entry, "supports_reconfigure")),
-        # supported_subentry_types is a computed property (it touches the flow
-        # handler, same hazard class as supports_*) — _safe_prop-guarded, defaulting
-        # to {} like core's ``self._supported_subentry_types or {}``.
-        "supported_subentry_types": _safe_prop(entry, "supported_subentry_types", {})
-        or {},
-        "pref_disable_new_entities": bool(
-            getattr(entry, "pref_disable_new_entities", False)
-        ),
-        "pref_disable_polling": bool(getattr(entry, "pref_disable_polling", False)),
-        "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
-        "reason": getattr(entry, "reason", None),
-        "error_reason_translation_key": getattr(
-            entry, "error_reason_translation_key", None
-        ),
-        "error_reason_translation_placeholders": getattr(
-            entry, "error_reason_translation_placeholders", None
-        ),
-        "num_subentries": len(_mapping_values(getattr(entry, "subentries", None))),
-        "options": options,
-        "subentries": _config_subentries(
-            entry, secret_values if include_subentry_data else None
-        ),
-    }
+    row["unique_id"] = getattr(entry, "unique_id", None)
+    row["options"] = _scrub_secret_values(options, secret_values)
+    row["subentries"] = _config_subentries(
+        entry, secret_values if include_subentry_data else None
+    )
+    return row
 
 
 def _config_subentries(
@@ -217,16 +159,3 @@ def _config_subentries(
             row["data"] = _scrub_secret_values(data, data_secret_values)
         rows.append(row)
     return rows
-
-
-def _safe_prop(obj: Any, name: str, default: Any = None) -> Any:
-    """Read a possibly-computed property, degrading to ``default`` if it raises.
-
-    ``getattr`` alone only defaults on ``AttributeError``; a ConfigEntry's
-    ``supports_options`` / ``supports_reconfigure`` are computed off the flow
-    handler and can raise other errors when it is unavailable, so catch broadly.
-    """
-    try:
-        return getattr(obj, name, default)
-    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
-        return default

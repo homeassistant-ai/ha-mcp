@@ -20,13 +20,15 @@ a different problem — it commits in place and Home Assistant reloads afterward
 — and lives in ``config_entry_reconfigure``, which depends on this module for
 the shared flow-abort and sentinel-rejection helpers.
 
-The step machinery those entry points drive lives in three sibling modules,
-imported in one direction only (menu <- form <- walker <- here):
+The step machinery those entry points drive lives in four sibling modules,
+imported in one direction only (menu <- form <- walker <- here, and
+progress <- walker):
 
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
-- ``config_entry_flow_walker``: step submission, HA error translation, flow
-  introspection, and the two flow walkers
+- ``config_entry_flow_progress``: waiting out a progress step within a budget
+- ``config_entry_flow_walker``: step submission and the two flow walkers,
+  which report HA's errors through ``config_entry_flow_errors``
 """
 
 import asyncio
@@ -38,6 +40,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
 
+import anyio
+
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
@@ -47,6 +51,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
+from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
@@ -409,9 +414,10 @@ async def _cleanup_snapshot_creation(
         return
     if failure.apply_status == "not_applied":
         try:
-            await asyncio.wait_for(
-                client.abort_config_flow(progress.flow_id), timeout=5
-            )
+            with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
+                await asyncio.wait_for(
+                    client.abort_config_flow(progress.flow_id), timeout=5
+                )
         except Exception as err:  # noqa: BLE001
             logger.warning(
                 "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
@@ -430,9 +436,14 @@ async def _cleanup_snapshot_creation(
 
 
 async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a still-pending flow without hiding the original failure."""
+    """Abort a still-pending flow without hiding the original failure.
+
+    Shielded: a cancellation arrives through an anyio cancel scope, which
+    would cancel the abort itself at its first await.
+    """
     try:
-        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
     except Exception as abort_err:  # noqa: BLE001
         logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
 
@@ -440,7 +451,10 @@ async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
 async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
     """Abort a pending subentry flow without hiding the original failure."""
     try:
-        await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(
+                client.abort_config_subentry_flow(flow_id), timeout=5.0
+            )
     except Exception as abort_err:  # noqa: BLE001
         logger.warning(
             "Failed to abort config subentry flow %s after error: %s",
@@ -589,6 +603,7 @@ async def _run_config_subentry_flow(
             config_dict,
             is_reconfigure=subentry_id is not None,
             keep_current_values=subentry_id is not None,
+            flow=FlowRef(None, f"config_subentries.{subentry_type}", entry_id),
         )
     except asyncio.CancelledError:
         await _abort_subentry_flow_best_effort(client, flow_id)
@@ -851,11 +866,16 @@ async def _update_config_entry_options(
             helper_type=expected_domain,
             keep_current_values=progress is None,
             complete_snapshot=progress is not None,
+            # A restore reports its own refusal, never the flow's text.
+            flow=FlowRef(actual_domain, "options") if progress is None else None,
         )
-    except Exception as flow_err:
+    except (Exception, asyncio.CancelledError) as flow_err:
         if progress is None or progress.apply_status == "not_applied":
             try:
-                await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
+                with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
+                    await asyncio.wait_for(
+                        client.abort_options_flow(flow_id), timeout=5.0
+                    )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     "Failed to abort options flow %s for entry %s "
@@ -937,14 +957,10 @@ async def create_config_entry(
             flow_result,
             config_dict,
             helper_type=domain,
+            flow=FlowRef(domain, "config"),
         )
-    except Exception:
-        try:
-            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-        except Exception as abort_err:  # noqa: BLE001
-            logger.warning(
-                f"Failed to abort config flow {flow_id} after error: {abort_err}"
-            )
+    except (Exception, asyncio.CancelledError):
+        await _abort_flow_best_effort(client, flow_id)
         raise
 
     entry = result["entry"].get("result", {})

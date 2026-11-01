@@ -94,7 +94,7 @@ async def test_get_integration_includes_subentry_schema_and_aborts(mock_client):
     )
 
     assert result["subentry_schema"]["flow_type"] == "form"
-    assert result["subentry_schema"]["data_schema"] == [{"name": "model"}]
+    assert result["subentry_schema"]["fields"] == [{"name": "model"}]
     mock_client.start_config_subentry_flow.assert_awaited_once_with(
         "entry-1",
         "conversation",
@@ -144,7 +144,7 @@ async def test_get_integration_subentry_schema_abort_failure_warns(mock_client, 
             subentry_type="conversation",
         )
 
-    assert result["subentry_schema"]["data_schema"] == [{"name": "model"}]
+    assert result["subentry_schema"]["fields"] == [{"name": "model"}]
     assert "Failed to abort config subentry introspection flow flow-1" in caplog.text
 
 

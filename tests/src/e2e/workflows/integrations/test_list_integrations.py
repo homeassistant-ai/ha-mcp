@@ -14,7 +14,12 @@ from typing import ClassVar
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +82,15 @@ class TestListIntegrations:
                 "supports_options",
                 "supports_unload",
                 "disabled_by",
+                # Core fields the row must pass through unchanged (#2632).
+                "supports_remove_device",
+                "supported_subentry_types",
+                "num_subentries",
+                "created_at",
+                "modified_at",
+                "reason",
+                "error_reason_translation_key",
+                "error_reason_translation_placeholders",
             ]
 
             for field in expected_fields:
@@ -338,6 +352,41 @@ class TestIntegrationFiltering:
 
         assert data["total_count"] == 0, "Should have 0 results for nonexistent domain"
         assert len(data["entries"]) == 0
+
+    async def test_blank_domain_is_rejected(self, mcp_client):
+        """A blank domain is no filter to Core, so the tool refuses it."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_integration",
+                {"domain": " "},
+                expected_error="domain must be a non-empty",
+            )
+
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.parametrize("integration_type", ["service", "not_a_type"])
+    async def test_integration_type_matches_core(
+        self, mcp_client, ha_client, integration_type
+    ):
+        """integration_type returns the entries Core's own ?type= filter returns.
+
+        Core does not reject an unknown type, so that case must match Core's
+        answer too rather than fail.
+        """
+        core = await ha_client._request(
+            "GET", "/config/config_entries/entry", params={"type": integration_type}
+        )
+        expected = {e["entry_id"] for e in core}
+        if integration_type == "service":
+            assert expected, "the test instance has service entries (sun, ...)"
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"integration_type": integration_type, "limit": 200}
+        )
+        data = assert_mcp_success(result, f"list integration_type={integration_type}")
+
+        assert data["total_count"] == len(expected)
+        assert {e["entry_id"] for e in data["entries"]} == expected
 
     async def test_include_options_flag(self, mcp_client, ha_client):
         """

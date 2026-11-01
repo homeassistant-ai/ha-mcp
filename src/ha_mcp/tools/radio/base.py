@@ -22,9 +22,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
+from ..component_config_entries import fetch_config_entries
 from ..component_devices import fetch_device_entities_via_component
 from ..helpers import raise_tool_error
-from ..tools_integrations import _fetch_entries_via_component
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +137,10 @@ async def resolve_entry_id(client: Any, domain: str) -> str | None:
     slash form is rejected as "Unknown command") on capability miss / component
     error. Returns None when the integration is not configured.
     """
-    entries = await _fetch_entries_via_component(client, domain=domain)
-    if entries is None:
+    read = await fetch_config_entries(client, domain=domain)
+    if read is not None:
+        entries = read.rows
+    else:
         entries = await ws_call(
             client, "config_entries/get", context={"domain": domain}
         )

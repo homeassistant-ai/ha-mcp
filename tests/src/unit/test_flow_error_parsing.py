@@ -24,6 +24,7 @@ Tests in this module:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -31,11 +32,19 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools.config_entry_flow import create_flow_helper
-from ha_mcp.tools.config_entry_flow_walker import (
-    _handle_flow_steps,
-    _parse_flow_api_error,
+from ha_mcp.tools.config_entry_flow import (
+    create_config_entry,
+    create_flow_helper,
+    set_config_subentry,
+    update_config_entry_options,
 )
+from ha_mcp.tools.config_entry_flow_errors import (
+    FlowRef,
+    _parse_flow_api_error,
+    raise_form_errors,
+)
+from ha_mcp.tools.config_entry_flow_walker import _handle_flow_steps
+from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_flow
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -316,7 +325,8 @@ class TestHandleFlowStepsOptionsFlowError:
 
 
 class TestUndrivableStepTypes:
-    """External (browser/OAuth) and progress steps cannot be driven over MCP.
+    """External (browser/OAuth) steps cannot be driven over MCP, nor can a
+    progress step in a walk without a FlowRef (a snapshot restore).
 
     ``_handle_flow_steps`` must surface them as SERVICE_CALL_FAILED with an
     actionable "complete in the HA UI" suggestion — NOT fall through to the
@@ -356,30 +366,227 @@ class TestUndrivableStepTypes:
         # Nothing was submitted — the step is surfaced, not attempted.
         client.submit_config_flow_step.assert_not_called()
 
-    @pytest.mark.parametrize(
-        "reason", ["already_configured", "single_instance_allowed"]
-    )
-    async def test_benign_abort_carries_existing_entry_hint(self, reason: str) -> None:
-        # Add-mode drives arbitrary domains, so common benign aborts
-        # (integration already set up) must point the caller at the
-        # existing entry rather than surface as a bare failure.
-        client = AsyncMock()
-        initial_step = {
+
+# ---------------------------------------------------------------------------
+# 6. Core's own text for form errors and abort reasons
+# ---------------------------------------------------------------------------
+
+
+def _strings_client(resources: dict[str, str]) -> AsyncMock:
+    """A client whose ``frontend/get_translations`` answers ``resources``."""
+    client = AsyncMock()
+    client.send_websocket_message.return_value = {
+        "success": True,
+        "result": {"resources": resources},
+    }
+    return client
+
+
+def _translation_requests(client: AsyncMock) -> list[tuple[str, list[str]]]:
+    return [
+        (c.args[0]["category"], c.args[0]["integration"])
+        for c in client.send_websocket_message.await_args_list
+        if c.args[0].get("type") == "frontend/get_translations"
+    ]
+
+
+class TestFlowTextFromCore:
+    """An abort reason or a form error is a key; the UI shows Core's string
+    for it. The tool error carries that string next to the key, so the caller
+    reads what Home Assistant says instead of guessing from the key."""
+
+    async def test_setup_abort_carries_cores_reason_text(self) -> None:
+        # Core's own single-instance abort, as its flow manager answers it:
+        # the reason is defined once under the homeassistant integration.
+        text = "Already configured. Only a single configuration possible."
+        client = _strings_client(
+            {"component.homeassistant.config.abort.single_instance_allowed": text}
+        )
+        client.start_config_flow.return_value = {
             "type": "abort",
             "flow_id": "dup-flow",
-            "reason": reason,
+            "handler": "sun",
+            "reason": "single_instance_allowed",
+            "translation_domain": "homeassistant",
         }
 
         with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_steps(
-                client=client,
-                flow_id="dup-flow",
-                initial_step=initial_step,
-                config={},
-                helper_type="sun",
-            )
+            await create_config_entry(client, "sun", {})
 
         body = _parse_tool_error(exc_info.value)
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert reason in body["error"]["message"]
-        assert "already set up" in body["error"].get("suggestion", "")
+        assert "single_instance_allowed" in body["error"]["message"]
+        assert body["reason_text"] == text
+        assert _translation_requests(client) == [("config", ["homeassistant"])]
+
+    async def test_abort_without_a_core_string_keeps_only_the_reason(self) -> None:
+        client = _strings_client({})
+        client.start_config_flow.return_value = {
+            "type": "abort",
+            "flow_id": "f",
+            "reason": "no_devices_found",
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await create_config_entry(client, "demo", {})
+
+        body = _parse_tool_error(exc_info.value)
+        assert "no_devices_found" in body["error"]["message"]
+        assert "reason_text" not in body
+
+    async def test_options_form_errors_carry_cores_text_with_placeholders(
+        self,
+    ) -> None:
+        client = _strings_client(
+            {"component.demo.options.error.cannot_connect": "Cannot reach {host}."}
+        )
+        client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
+        client.start_options_flow.return_value = {
+            "type": "form",
+            "flow_id": "opt-flow",
+            "step_id": "init",
+            "data_schema": [{"name": "host"}],
+            "errors": {"base": "cannot_connect", "host": "no_string_for_this"},
+            "description_placeholders": {"host": "10.0.0.2"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await update_config_entry_options(client, "e1", {"host": "10.0.0.2"})
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # The raw keys stay; a key Core ships no string for has no text.
+        assert body["errors"] == {
+            "base": "cannot_connect",
+            "host": "no_string_for_this",
+        }
+        assert body["error_text"] == {"base": "Cannot reach 10.0.0.2."}
+        assert _translation_requests(client) == [("options", ["demo"])]
+        client.submit_options_flow_step.assert_not_called()
+
+    async def test_subentry_abort_reads_its_type_under_the_parent_domain(
+        self,
+    ) -> None:
+        client = _strings_client(
+            {
+                "component.ollama.config_subentries.conversation.abort."
+                "entry_not_loaded": "The entry is not loaded."
+            }
+        )
+        client.get_config_entry.return_value = {"entry_id": "e1", "domain": "ollama"}
+        client.start_config_subentry_flow.return_value = {
+            "type": "abort",
+            "flow_id": "sub-flow",
+            "reason": "entry_not_loaded",
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_config_subentry(client, "e1", "conversation", {})
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["reason_text"] == "The entry is not loaded."
+        assert _translation_requests(client) == [("config_subentries", ["ollama"])]
+
+    async def test_abort_translation_domain_names_where_the_reason_lives(
+        self,
+    ) -> None:
+        # translation_domain names the integration that owns the reason; a
+        # subentry flow then reads it under that domain's config strings, as
+        # the frontend's dev branch does (the release Core 2026.8.0 pins reads
+        # config_subentries.<type>.abort).
+        client = _strings_client(
+            {"component.shared.config.abort.cloud_not_connected": "Log in first."}
+        )
+        client.start_config_subentry_flow.return_value = {
+            "type": "abort",
+            "flow_id": "sub-flow",
+            "reason": "cloud_not_connected",
+            "translation_domain": "shared",
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_config_subentry(client, "e1", "conversation", {})
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["reason_text"] == "Log in first."
+        assert _translation_requests(client) == [("config", ["shared"])]
+        client.get_config_entry.assert_not_called()
+
+    async def test_reconfigure_abort_carries_cores_reason_text(self) -> None:
+        client = _strings_client(
+            {"component.shelly.config.abort.another_device": "Wrong device."}
+        )
+        client.start_reconfigure_flow.return_value = {
+            "type": "abort",
+            "flow_id": "rc-flow",
+            "reason": "another_device",
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _run_reconfigure_flow(
+                client,
+                domain="shelly",
+                entry_id="e1",
+                flow_config={"host": "10.0.0.3"},
+                rollback_metadata={},
+            )
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["reason_text"] == "Wrong device."
+        assert body["status"] == "apply_failed"
+
+
+@pytest.mark.asyncio
+async def test_form_errors_redact_the_schemas_password_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A reconfigure form arrives with the stored values in suggested_value;
+    # under redact_secrets a password field's value must not ride into the
+    # error's data_schema.
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    step = {
+        "type": "form",
+        "step_id": "reconfigure",
+        "errors": {"base": "cannot_connect"},
+        "data_schema": [
+            {
+                "name": "api_key",
+                "selector": {"text": {"type": "password"}},
+                "description": {"suggested_value": "sk-LIVE"},
+            }
+        ],
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await raise_form_errors(AsyncMock(), None, "f1", step)
+
+    assert "sk-LIVE" not in str(exc_info.value)
+    assert json.loads(str(exc_info.value))["data_schema"][0]["name"] == "api_key"
+
+
+@pytest.mark.parametrize("path", ["config", "options", "config_subentries.device"])
+def test_a_flow_ref_takes_the_flow_categories_core_has(path: str) -> None:
+    assert FlowRef("demo", path).path == path
+
+
+@pytest.mark.parametrize("path", ["", "option", "subentries.device"])
+def test_a_flow_ref_refuses_a_path_core_has_no_flow_for(path: str) -> None:
+    with pytest.raises(ValueError, match="flow path"):
+        FlowRef("demo", path)
+
+
+@pytest.mark.asyncio
+async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level() -> None:
+    client = AsyncMock()
+    client.send_websocket_message.side_effect = RuntimeError("no answer")
+    step = {"type": "form", "step_id": "user", "errors": {"base": "not_valid"}}
+
+    with pytest.raises(ToolError) as exc_info:
+        await raise_form_errors(client, FlowRef("filesize", "config"), "f1", step)
+
+    body = json.loads(str(exc_info.value))
+    assert "error_text" not in body
+    assert any("could not be read" in w for w in body["warnings"])

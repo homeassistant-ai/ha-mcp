@@ -30,7 +30,7 @@ from .component_config_entries import (
 )
 from .component_devices import fetch_device_list_via_component
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
-from .config_entry_flow_walker import ReconfigureStatus
+from .config_entry_flow_errors import ReconfigureStatus
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)

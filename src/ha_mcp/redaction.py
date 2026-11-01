@@ -14,7 +14,7 @@ surfaces stop returning operator secrets verbatim:
 2. **Integration options** (``ha_get_integration``): fields the
    options-flow schema marks with a password text selector are replaced the
    same way, on both the harvested options and the ``include_schema=True``
-   schema echo (whose ``suggested_value`` carries the live value).
+   fields (whose current value comes from the form's ``suggested_value``).
 3. **Every other tool response**: secret values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
    :class:`RedactSecretsMiddleware` (registered just outside the
@@ -455,7 +455,8 @@ def redact_flow_schema(data_schema: Any) -> Any:
 
     HA injects the persisted option into each field's
     ``description.suggested_value`` (and static defaults into ``default`` /
-    ``value``), so an ``include_schema=True`` echo carries the live secret.
+    ``value``), so a schema handed back to a caller (a describe's fields, a
+    form-error response) would carry the live secret.
     Harvests each replaced value into the known-secrets set first.
     """
     if not isinstance(data_schema, list):

@@ -11,6 +11,13 @@ from ..errors import ErrorCode, create_error_response
 from .config_entry_flow import refuse_component_entry
 from .helpers import raise_tool_error, ws_failure_code
 
+# How long a level lasts under each of Core's persistence values.
+_PERSISTENCE_NOTES = {
+    "none": "Applies now, until the next Home Assistant restart.",
+    "once": "Applies now and through the next Home Assistant restart.",
+    "permanent": "Applies now and after every Home Assistant restart until changed.",
+}
+
 
 async def set_log_level(
     client: Any,
@@ -19,8 +26,14 @@ async def set_log_level(
     log_level: str,
     *,
     other_modes: bool,
+    persistence: str | None = None,
 ) -> dict[str, Any]:
-    """Set an integration's log level through ``logger/integration_log_level``."""
+    """Set an integration's log level through ``logger/integration_log_level``.
+
+    ``persistence`` goes to Core as given (``once`` when omitted), so Core
+    validates it and its own error reaches the caller.
+    """
+    persistence = "once" if persistence is None else persistence
     if other_modes or (domain is None) == (entry_id is None):
         raise_tool_error(
             create_error_response(
@@ -43,7 +56,7 @@ async def set_log_level(
             "integration": domain,
             # NOTSET is what the UI's Disable debug logging sends.
             "level": "NOTSET" if log_level == "DEFAULT" else log_level,
-            "persistence": "once",
+            "persistence": persistence,
         }
     )
     if not result.get("success"):
@@ -65,7 +78,7 @@ async def set_log_level(
             "default level; a level set for it in configuration.yaml returns "
             "after the next restart."
             if log_level == "DEFAULT"
-            else "Applies now and through the next Home Assistant restart."
+            else _PERSISTENCE_NOTES.get(persistence, "Applies now.")
         ),
     }
 

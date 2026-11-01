@@ -223,6 +223,71 @@ class TestIntegrationManagement:
                 {"target": entry_id, "confirm": True},
             )
 
+    async def test_adding_a_single_instance_integration_again_says_why_in_cores_words(
+        self, mcp_client, ha_client
+    ):
+        """A second ``sun`` aborts; the error carries Core's text for the reason.
+
+        ``sun`` is set up in the test state and allows one entry. Core's own
+        abort for the same request names the reason and the integration whose
+        strings hold its text (``translation_domain``); the caller gets that
+        text, the one the HA UI shows.
+        """
+        core_abort = await ha_client.start_config_flow("sun")
+        assert core_abort["type"] == "abort", core_abort
+        text_domain = core_abort.get("translation_domain") or "sun"
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": [text_domain],
+            }
+        )
+        expected = translations["result"]["resources"][
+            f"component.{text_domain}.config.abort.{core_abort['reason']}"
+        ]
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_set_integration",
+                {"domain": "sun", "config": {}},
+                expected_error=core_abort["reason"],
+            )
+
+        assert data["reason_text"] == expected, data
+
+    async def test_a_rejected_setup_form_says_why_in_cores_words(
+        self, mcp_client, ha_client
+    ):
+        """filesize rejects a path that does not exist with ``not_valid``.
+
+        Core's filesize flow re-shows its form with ``errors={"base":
+        "not_valid"}``; the caller gets the text the HA UI shows for that
+        key, read here from Core.
+        """
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": ["filesize"],
+            }
+        )
+        expected = translations["result"]["resources"][
+            "component.filesize.config.error.not_valid"
+        ]
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_set_integration",
+                {"domain": "filesize", "config": {"file_path": "/nonexistent"}},
+                expected_error="Form validation failed",
+            )
+
+        assert data["errors"] == {"base": "not_valid"}, data
+        assert data["error_text"] == {"base": expected}, data
+
     async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
         """A one-field options patch must not reset the fields it omits (#2254).
 
@@ -416,8 +481,20 @@ class TestIntegrationManagement:
         assert entry.get("domain") == "filesize", entry
         assert entry.get("supports_reconfigure") is True, entry
 
-    async def test_reconfigure_preflight_is_read_only(self, mcp_client):
-        """The preflight validates and issues a token without touching the entry."""
+    async def test_reconfigure_preflight_is_read_only(self, mcp_client, ha_client):
+        """The preflight reads the reconfigure form and issues a token without
+        touching the entry; a key the form does not declare is warned about."""
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": ["filesize"],
+            }
+        )
+        file_path_label = translations["result"]["resources"][
+            "component.filesize.config.step.reconfigure.data.file_path"
+        ]
         async with MCPAssertions(mcp_client) as mcp:
             before = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
@@ -429,7 +506,10 @@ class TestIntegrationManagement:
                 {
                     "entry_id": self.RECONFIGURE_ENTRY_ID,
                     "reconfigure": True,
-                    "config": {"file_path": self.RECONFIGURE_PATH_B},
+                    "config": {
+                        "file_path": self.RECONFIGURE_PATH_B,
+                        "not_a_filesize_field": True,
+                    },
                 },
             )
 
@@ -440,6 +520,12 @@ class TestIntegrationManagement:
             assert isinstance(confirm_token, str) and confirm_token.startswith(
                 "sha256:"
             ), result
+            form = result["reconfigure_form"]
+            assert form["step_id"] == "reconfigure", form
+            fields = {f["name"]: f for f in form["fields"]}
+            assert fields["file_path"]["description"] == file_path_label, form
+            assert "not_a_filesize_field" not in fields
+            assert any("not_a_filesize_field" in w for w in result["warnings"])
 
             after = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}

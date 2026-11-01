@@ -1,4 +1,4 @@
-"""The component-gated config-entry ``unique_id`` read.
+"""The component-gated config-entry reads, chiefly ``unique_id``.
 
 Home Assistant withholds a config entry's ``unique_id`` from every endpoint it
 has, so this helper is the only source — and the value it returns is
@@ -293,3 +293,44 @@ async def test_domain_map_is_none_without_the_capability(
     _arrange(monkeypatch, supported=False)
 
     assert await mod.fetch_domain_unique_ids(client, "shelly") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "degraded"),
+    [
+        pytest.param({"secret_scrub_degraded": True}, True, id="degraded"),
+        pytest.param({}, False, id="absent"),
+    ],
+)
+async def test_reader_carries_the_scrub_degraded_flag(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: dict[str, Any],
+    degraded: bool,
+) -> None:
+    """The component sends the key only when its secrets scrub did not run."""
+    row = {"entry_id": "e1", "options": {"token": "x"}}
+    _arrange(
+        monkeypatch,
+        send=AsyncMock(return_value={"result": {"entries": [row], **extra}}),
+    )
+
+    read = await mod.fetch_config_entries(client, entry_id="e1")
+
+    assert read == mod.ComponentEntries(rows=[row], secret_scrub_degraded=degraded)
+
+
+@pytest.mark.asyncio
+async def test_reader_refuses_a_payload_with_a_non_dict_row(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every caller indexes rows as dicts, so one bad row sends it to legacy."""
+    _arrange(
+        monkeypatch,
+        send=AsyncMock(
+            return_value={"result": {"entries": [{"entry_id": "e1"}, "nope"]}}
+        ),
+    )
+
+    assert await mod.fetch_config_entries(client, domain="mqtt") is None

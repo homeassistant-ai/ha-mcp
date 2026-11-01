@@ -26,11 +26,8 @@ from .config_entry_flow import (
     _reject_redaction_sentinels,
     refuse_component_entry,
 )
-from .config_entry_flow_walker import (
-    POST_COMMIT_STATUSES,
-    ReconfigureStatus,
-    _handle_flow_steps,
-)
+from .config_entry_flow_errors import FlowRef, ReconfigureStatus
+from .config_entry_flow_walker import POST_COMMIT_STATUSES, _handle_flow_steps
 from .config_entry_identity import (
     ReconfigureIdentity,
     _classify_related_entries,
@@ -365,9 +362,8 @@ async def prepare_reconfigure_request(
     Everything here is read-only: the entry exists, it implements
     ``async_step_reconfigure``, the caller's identity anchors match what the
     registries currently say, no second entry in the same domain shares the
-    device, and some identity anchor exists at all. The integration's own
-    reconfigure form is NOT consulted — the flow is never started — so the
-    keys in ``config`` are still unvalidated when this returns.
+    device, and some identity anchor exists at all. The flow is not started
+    here; the preview leg then reads its form (``reconfigure_preflight``).
     """
     validated_entry_id = validate_identifier_not_empty(
         entry_id,
@@ -611,6 +607,7 @@ async def _run_reconfigure_flow(
             helper_type=domain,
             is_reconfigure=True,
             keep_current_values=True,
+            flow=FlowRef(domain, "config"),
         )
     except asyncio.CancelledError:
         await _abort_flow_best_effort(client, flow_id)

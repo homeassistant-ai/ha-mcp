@@ -54,7 +54,7 @@ import time
 import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial
@@ -1513,18 +1513,17 @@ class BackupManager:
                         safety_backup=None,
                     ) from err
                 data["entity_id"] = entity_id
-                async with self.config_entry_write_guard(entity_id, exclusive=True):
-                    return await self._restore_snapshot_data(
-                        name, data, take_safety_backup=take_safety_backup
-                    )
-            if data["domain"] == "entity":
-                async with restore_locks(self._client, data["config"]):
-                    return await self._restore_snapshot_data(
-                        name, data, take_safety_backup=take_safety_backup
-                    )
-            return await self._restore_snapshot_data(
-                name, data, take_safety_backup=take_safety_backup
-            )
+                guard: Any = self.config_entry_write_guard(entity_id, exclusive=True)
+            elif data["domain"] == "entity":
+                guard = restore_locks(self._client, data["config"])
+            elif data["domain"] == "integration":  # its restore drives an options flow
+                guard = self.config_entry_write_guard(data["entity_id"])
+            else:
+                guard = nullcontext()
+            async with guard:
+                return await self._restore_snapshot_data(
+                    name, data, take_safety_backup=take_safety_backup
+                )
         finally:
             self._unprotect_snapshot(name)
 

@@ -10,7 +10,7 @@ import pytest
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import auto_backup
+from ha_mcp.tools import auto_backup, component_config_entries
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
@@ -101,6 +101,10 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
     client.delete_config_entry = AsyncMock(side_effect=delete_entry)
     client.send_websocket_message = AsyncMock(side_effect=set_enabled)
     monkeypatch.setattr(bm, "_ws_send", snapshot_read)
+    # No component config-entry read: integration snapshots fall back to Core's row.
+    monkeypatch.setattr(
+        component_config_entries, "fetch_config_entries", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(auto_backup, "get_global_settings", lambda: settings)
     return SimpleNamespace(
         entry=entry,
@@ -236,7 +240,10 @@ async def test_template_enable_disable_keeps_integration_backup(
     assert len(mutation["snapshots"]) == 1
     snapshot = mutation["snapshots"][0]
     assert snapshot["domain"] == "integration"
-    assert snapshot["config"] == original
+    assert snapshot["config"] == {
+        **original,
+        "options_unavailable": "component_unavailable",
+    }
     # Only the own-entry guard reads the entry; the backup keeps the whole
     # integration fragment without resolving a helper domain.
     entry_backup.client.get_config_entry.assert_awaited_once_with("template-entry")
@@ -264,7 +271,10 @@ async def test_other_integration_mutations_keep_existing_backup(
     assert len(mutation["snapshots"]) == 1
     snapshot = mutation["snapshots"][0]
     assert snapshot["domain"] == "integration"
-    assert snapshot["config"] == original
+    assert snapshot["config"] == {
+        **original,
+        "options_unavailable": "component_unavailable",
+    }
 
 
 @pytest.mark.parametrize("operation", ["options", "delete"])

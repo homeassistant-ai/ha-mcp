@@ -40,3 +40,34 @@ async def test_log_level_unknown_integration_is_not_found(mcp_client):
         {"domain": "not_a_real_integration_xyz", "log_level": "DEBUG"},
         expected_error="not_a_real_integration_xyz",
     )
+
+
+@pytest.mark.integrations
+async def test_log_level_permanent_persistence_is_accepted(mcp_client):
+    """Acceptance smoke test: Core takes 'permanent' and the level applies.
+
+    What Core keeps across a restart is not checked here.
+    """
+    mcp = MCPAssertions(mcp_client)
+    try:
+        await mcp.call_tool_success(
+            "ha_set_integration",
+            {"domain": _DOMAIN, "log_level": "DEBUG", "log_persistence": "permanent"},
+        )
+        assert await _logger_level(mcp, _DOMAIN) == "DEBUG"
+    finally:
+        await mcp.call_tool_success(
+            "ha_set_integration", {"domain": _DOMAIN, "log_level": "DEFAULT"}
+        )
+
+
+@pytest.mark.integrations
+async def test_log_level_invalid_persistence_surfaces_cores_error(mcp_client):
+    mcp = MCPAssertions(mcp_client)
+    data = await mcp.call_tool_failure(
+        "ha_set_integration",
+        {"domain": _DOMAIN, "log_level": "DEBUG", "log_persistence": "forever"},
+        # Core's schema error names the field it refused.
+        expected_error="persistence",
+    )
+    assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

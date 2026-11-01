@@ -275,7 +275,7 @@ def _field_prefill(item: dict[str, Any]) -> Any:
     fields carry their value there rather than as a schema ``default`` (a
     ``default`` equal to the value would make the field impossible to clear).
     Falls back to ``default`` then ``value`` for the dropdown/toggle fields.
-    Mirrors ``tools_integrations.options_from_form_flow``.
+    Mirrors ``integration_schema.options_from_form_flow``.
     """
     description = item.get("description")
     if isinstance(description, dict) and description.get("suggested_value") is not None:

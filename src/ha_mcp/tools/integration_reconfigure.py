@@ -20,7 +20,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
-from .config_entry_flow_walker import ReconfigureStatus
+from .config_entry_flow_errors import ReconfigureStatus
 from .config_entry_identity import (
     ReconfigureIdentity,
     build_reconfigure_rollback_metadata,
@@ -31,6 +31,7 @@ from .config_entry_reconfigure import (
     reconfigure_config_entry,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
+from .reconfigure_preflight import read_reconfigure_form
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,7 @@ def _reconfigure_preview_response(
     expected_identity: dict[str, Any],
     confirm_token: str,
     warnings: list[str],
+    reconfigure_form: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the non-mutating response returned by reconfigure preflight.
 
@@ -150,15 +152,22 @@ def _reconfigure_preview_response(
         "entry_id": entry_id,
         "domain": domain,
         "title": entry.get("title"),
-        # Say what was actually checked. The flow is never started here, so
-        # nothing has compared these config keys against the integration's
-        # reconfigure form — wrong field names surface only on the confirm leg.
+        # Say what was actually checked: the flow was started only to read
+        # its first step and aborted, so Home Assistant has not validated
+        # any value yet, and a menu-first flow had no form to check keys on.
         "message": (
             f"Checked: the entry exists, {domain} supports the official "
-            "reconfigure flow, its identity anchors match, and no duplicate "
-            "entry shares its device. The config keys are NOT validated until "
-            "you confirm. Nothing was applied."
+            "reconfigure flow, its identity anchors match, "
+            + (
+                "no duplicate entry shares its device, and the config keys "
+                "against the first reconfigure form (reconfigure_form)."
+                if reconfigure_form.get("flow_type") == "form"
+                else "and no duplicate entry shares its device."
+            )
+            + " Home Assistant validates the values only when you confirm. "
+            "Nothing was applied."
         ),
+        "reconfigure_form": reconfigure_form,
         "confirm_token": confirm_token,
         "target_config": target_config,
         "identity": identity,
@@ -217,8 +226,9 @@ class ReconfigureRunner:
         entry in place, preserving its entry/device/entity relationships.
 
         ``confirm_token`` alone is the handshake, matching
-        ``ha_config_set_yaml``: omitted runs the read-only preflight and
-        returns a token, supplied applies. Auto-backup follows the normal
+        ``ha_config_set_yaml``: omitted runs the read-only preflight, which
+        reads the flow's first form and aborts the flow, and returns a token;
+        supplied applies. Auto-backup follows the normal
         integration backup policy and is captured only after the token
         validates, so a rejected confirmation leaves no snapshot behind. The
         returned rollback metadata describes repeating the official flow with
@@ -245,6 +255,12 @@ class ReconfigureRunner:
                 identity=prepared.identity,
             )
             if confirm_token is None:
+                form, form_warnings = await read_reconfigure_form(
+                    self._client,
+                    entry_id=prepared.entry_id,
+                    domain=prepared.entry["domain"],
+                    config=prepared.flow_config,
+                )
                 return _reconfigure_preview_response(
                     entry_id=prepared.entry_id,
                     domain=prepared.entry["domain"],
@@ -253,7 +269,8 @@ class ReconfigureRunner:
                     identity=prepared.identity.as_payload(),
                     expected_identity=prepared.expected_identity,
                     confirm_token=current_confirm_token,
-                    warnings=prepared.warnings,
+                    warnings=[*prepared.warnings, *form_warnings],
+                    reconfigure_form=form,
                 )
             # Compare as bytes: hmac.compare_digest raises TypeError on a
             # non-ASCII str operand, and a caller's junk token must land on

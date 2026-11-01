@@ -21,6 +21,11 @@ from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
+from ..flow_translations import (
+    fetch_flow_strings,
+    field_help,
+    strings_unread_warning,
+)
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
 from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
@@ -60,20 +65,27 @@ def _option_values(options: list[Any]) -> list[Any]:
     return [*values[:MAX_OPTIONS], f"...{len(values) - MAX_OPTIONS} more"]
 
 
+def _compact_selector(selector: dict[str, Any]) -> dict[str, Any]:
+    kind, cfg = next(iter(selector.items()))
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out: dict[str, Any] = {"type": kind}
+    # A text selector's own type (password, email, url) is kept: it is how a
+    # secret field stays recognisable.
+    if isinstance(cfg.get("type"), str):
+        out["input_type"] = cfg["type"]
+    if isinstance(cfg.get("options"), list | tuple):
+        out["options"] = _option_values(cfg["options"])
+    out.update({k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)})
+    return out
+
+
 def compact_field(field: dict[str, Any]) -> dict[str, Any]:
     """One HA schema field (flow selector or serialized voluptuous) in brief."""
     out: dict[str, Any] = {"name": field.get("name")}
     if field.get("required"):
         out["required"] = True
     if isinstance(field.get("selector"), dict) and field["selector"]:
-        kind, cfg = next(iter(field["selector"].items()))
-        cfg = cfg if isinstance(cfg, dict) else {}
-        out["type"] = kind
-        if isinstance(cfg.get("options"), list | tuple):
-            out["options"] = _option_values(cfg["options"])
-        out.update(
-            {k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)}
-        )
+        out.update(_compact_selector(field["selector"]))
     elif field.get("type") in {"expandable", "grid"}:
         out["type"] = "section"
         out["fields"] = [compact_field(f) for f in field.get("schema", [])]
@@ -127,51 +139,6 @@ def _with_static_hints(
     return merged
 
 
-async def _field_help(
-    client: Any, handler: str, category: str, step_id: str | None
-) -> dict[str, str]:
-    """HA's own help text for a flow step's fields, keyed by field name.
-
-    These are the strings the UI shows under each field; every integration
-    ships and maintains them. Best-effort: missing strings leave no help.
-    """
-    if not step_id:
-        return {}
-    try:
-        result = await client.send_websocket_message(
-            {
-                "type": "frontend/get_translations",
-                "language": "en",
-                "category": category,
-                "integration": [handler],
-            }
-        )
-    except Exception as err:  # noqa: BLE001
-        logger.debug("describe: translations for %s failed: %s", handler, err)
-        return {}
-    if not isinstance(result, dict):
-        return {}
-    payload = result.get("result") or result
-    resources = payload.get("resources") if isinstance(payload, dict) else None
-    if not isinstance(resources, dict):
-        return {}
-    prefix = f"component.{handler}.{category}.step.{step_id}."
-    descriptions: dict[str, str] = {}
-    labels: dict[str, str] = {}
-    for key, text in resources.items():
-        if not key.startswith(prefix) or not isinstance(text, str):
-            continue
-        # [sections.<section>.]data_description.<field> is the help text;
-        # [sections.<section>.]data.<field> the field's label, used when a
-        # field has no help text of its own.
-        parts = key[len(prefix) :].split(".")
-        if len(parts) >= 2 and parts[-2] == "data_description":
-            descriptions[parts[-1]] = text
-        elif len(parts) >= 2 and parts[-2] == "data":
-            labels[parts[-1]] = text
-    return {**labels, **descriptions}
-
-
 def _with_help(fields: list[dict[str, Any]], help_text: dict[str, str]) -> None:
     for field in fields:
         if field["name"] in help_text and "description" not in field:
@@ -179,14 +146,27 @@ def _with_help(fields: list[dict[str, Any]], help_text: dict[str, str]) -> None:
         _with_help(field.get("fields", []), help_text)
 
 
-async def _describe_form(
-    client: Any, helper_type: str, category: str, step: dict[str, Any]
-) -> list[dict[str, Any]]:
+async def describe_form(
+    client: Any, domain: str | None, path: str, step: dict[str, Any]
+) -> dict[str, Any]:
+    """A flow form in brief: ``fields`` with HA's help text for each,
+    ``more_forms``/``note`` when a later form follows, and ``warnings`` when
+    Core's strings could not be read.
+
+    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
+    or ``config_subentries.<type>``. Without a ``domain`` there is no help
+    text to read.
+    """
     fields = compact_schema(step.get("schema") or step.get("data_schema") or [])
-    _with_help(
-        fields, await _field_help(client, helper_type, category, step.get("step_id"))
-    )
-    return fields
+    described: dict[str, Any] = {"fields": fields, **_later_forms(step)}
+    step_id = step.get("step_id")
+    if step_id and domain:
+        strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
+        if strings is None:
+            described["warnings"] = [strings_unread_warning(domain)]
+        else:
+            _with_help(fields, field_help(strings, domain, path, step_id))
+    return described
 
 
 _MORE_FORMS = {False: "yes", None: "depends_on_answers"}
@@ -217,8 +197,7 @@ async def _describe_flow(
         if "schema" in info:
             return {
                 "source": "config_flow",
-                "fields": await _describe_form(client, helper_type, "config", info),
-                **_later_forms(info),
+                **await describe_form(client, helper_type, "config", info),
             }
         if "menu_options" in info:
             return {
@@ -274,8 +253,7 @@ async def _describe_flow(
             )
         return {
             "source": "options_flow",
-            "fields": await _describe_form(client, helper_type, "options", result),
-            **_later_forms(result),
+            **await describe_form(client, helper_type, "options", result),
         }
     finally:
         if flow_id:

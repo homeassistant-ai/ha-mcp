@@ -15,10 +15,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow_walker import ReconfigureStatus
+from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
 from ha_mcp.tools.config_entry_identity import ReconfigureIdentity
 from ha_mcp.tools.config_entry_reconfigure import PreparedReconfigure
 from ha_mcp.tools.integration_reconfigure import ReconfigureRunner
+from ha_mcp.tools.integration_schema import fetch_options_schema
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
     fetch_entry_options_with_status,
@@ -1346,23 +1347,6 @@ class TestOptionsFromFormFlow:
         }
         assert options_from_form_flow(flow) == {}
 
-    def test_static_alias_on_class_calls_module_helper(self) -> None:
-        # Backwards-compatibility: callers still using the @staticmethod
-        # alias must get the same answer as the module-level helper.
-        flow = {
-            "data_schema": [
-                {
-                    "name": "state",
-                    "description": {"suggested_value": "{{ 1 + 1 }}"},
-                }
-            ]
-        }
-        assert (
-            IntegrationTools._options_from_form_flow(flow)
-            == options_from_form_flow(flow)
-            == {"state": "{{ 1 + 1 }}"}
-        )
-
     def test_malformed_data_schema_not_list_returns_empty(self) -> None:
         # HA should never return a non-list data_schema, but a malformed
         # response must degrade to {} rather than iterating a string
@@ -1594,7 +1578,7 @@ class TestOptionsProbeFailureWarnings:
         tools = IntegrationTools(client)
 
         resp: dict[str, Any] = {"entry": {"options": {}}}
-        await tools._fetch_options_schema("entry_s", resp)
+        await fetch_options_schema(tools._client, "entry_s", resp)
         assert "options_schema" not in resp
         assert resp.get("warnings"), f"expected a schema-probe warning: {resp}"
         assert "entry_s" in resp["warnings"][0]
@@ -2019,6 +2003,10 @@ class TestSetIntegrationModes:
                     )
                 ),
             ) as prepare_mock,
+            patch(
+                "ha_mcp.tools.integration_reconfigure.read_reconfigure_form",
+                new=AsyncMock(return_value=({}, [])),
+            ),
         ):
             preview = await ReconfigureRunner(mock_client).run(
                 "abc",
@@ -2074,6 +2062,10 @@ class TestSetIntegrationModes:
                 "ha_mcp.tools.integration_reconfigure.reconfigure_config_entry",
                 new=AsyncMock(return_value={"success": True}),
             ) as apply_mock,
+            patch(
+                "ha_mcp.tools.integration_reconfigure.read_reconfigure_form",
+                new=AsyncMock(return_value=({}, [])),
+            ),
         ):
             preview = await ReconfigureRunner(mock_client).run(
                 "abc",

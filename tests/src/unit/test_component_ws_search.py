@@ -41,10 +41,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from ._component_ws_fakes import (
+    FakeFragment,
     FakeRegEntry,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
+    fake_json_bytes,
 )
 
 # Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
@@ -82,6 +84,10 @@ class _StubHomeAssistantError(Exception):
 _exceptions_stub = MagicMock()
 _exceptions_stub.HomeAssistantError = _StubHomeAssistantError
 sys.modules.setdefault("homeassistant.exceptions", _exceptions_stub)
+
+from custom_components.ha_mcp_tools.websocket_api import (  # noqa: E402
+    config_entries as _ws_config_entries,
+)
 
 # Server-side scoring path the component must stay in parity with.
 from ha_mcp.tools.search.entities import _match_exact_search_entity  # noqa: E402
@@ -630,6 +636,7 @@ class FakeConfigEntry:
         pref_disable_polling=False,
         disabled_by=None,
         reason=None,
+        error_reason_translation_domain=None,
         error_reason_translation_key=None,
         error_reason_translation_placeholders=None,
         subentries=None,
@@ -655,22 +662,65 @@ class FakeConfigEntry:
         self.pref_disable_polling = pref_disable_polling
         self.disabled_by = disabled_by
         self.reason = reason
+        self.error_reason_translation_domain = error_reason_translation_domain
         self.error_reason_translation_key = error_reason_translation_key
         self.error_reason_translation_placeholders = (
             error_reason_translation_placeholders
         )
         # Modern core stores subentries as a MappingProxyType keyed by subentry_id.
         self.subentries = dict(subentries or {})
-        # created_at/modified_at are datetimes core serializes via .timestamp();
-        # supported_subentry_types is a computed property. Set only when provided so
-        # a fixture can omit them (getattr -> None / _safe_prop default {}), modeling
-        # a core old enough to predate them.
-        if created_at is not None:
-            self.created_at = created_at
-        if modified_at is not None:
-            self.modified_at = modified_at
-        if supported_subentry_types is not None:
-            self.supported_subentry_types = supported_subentry_types
+        self.created_at = created_at
+        self.modified_at = modified_at
+        self.supported_subentry_types = supported_subentry_types or {}
+        # Extra keys merged into the fragment, standing in for a field a newer
+        # Core adds to ``as_json_fragment``.
+        self.extra_fragment_fields: dict[str, Any] = {}
+
+    @property
+    def as_json_fragment(self):
+        """Stand-in for Core's ``ConfigEntry.as_json_fragment``.
+
+        Unlike Core it tolerates ``None`` timestamps and subentries, so
+        flow-helper fixtures that omit them still build a row.
+        """
+
+        def _ts(value):
+            return value.timestamp() if value is not None else None
+
+        def _val(value):
+            return getattr(value, "value", value)
+
+        row = {
+            "created_at": _ts(self.created_at),
+            "entry_id": self.entry_id,
+            "domain": self.domain,
+            "modified_at": _ts(self.modified_at),
+            "title": self.title,
+            "source": self.source,
+            "state": _val(self.state),
+            "supports_options": self.supports_options,
+            "supports_remove_device": self.supports_remove_device or False,
+            "supports_unload": self.supports_unload or False,
+            "supports_reconfigure": self.supports_reconfigure,
+            "supported_subentry_types": self.supported_subentry_types,
+            "pref_disable_new_entities": self.pref_disable_new_entities,
+            "pref_disable_polling": self.pref_disable_polling,
+            "disabled_by": _val(self.disabled_by),
+            "reason": self.reason,
+            "error_reason_translation_domain": self.error_reason_translation_domain,
+            "error_reason_translation_key": self.error_reason_translation_key,
+            "error_reason_translation_placeholders": (
+                self.error_reason_translation_placeholders
+            ),
+            "num_subentries": len(self.subentries or {}),
+            **self.extra_fragment_fields,
+        }
+        return FakeFragment(json.dumps(row).encode())
+
+
+# ``homeassistant.helpers.json`` is a MagicMock stub in unit tests; give the
+# config_entries command a json_bytes that serializes the fake fragment.
+_ws_config_entries.json_bytes = fake_json_bytes
 
 
 class FakeSubentry:
@@ -3304,7 +3354,7 @@ class TestConfigEntries:
             "state": _FakeEnum("loaded"),
             "source": "user",
             "supports_options": True,
-            "supports_remove_device": None,  # None -> False (core's `or False`)
+            "supports_remove_device": None,
             "supports_unload": True,
             "supports_reconfigure": False,
             "pref_disable_new_entities": False,
@@ -3326,20 +3376,20 @@ class TestConfigEntries:
         res = wsapi._do_config_entries(
             FakeHass(config_entries=[self._entry()]), {"domain": "mqtt"}
         )
+        # Base keys come from the fake's Core-shaped fragment; the component adds
+        # unique_id, options and subentries.
         assert res["entries"] == [
             {
-                "created_at": self._CREATED_AT.timestamp(),  # float, like core
+                "created_at": self._CREATED_AT.timestamp(),
                 "modified_at": self._MODIFIED_AT.timestamp(),
                 "entry_id": "cfg1",
                 "domain": "mqtt",
-                # Superset field: core's as_json_fragment withholds unique_id,
-                # the component supplies it for the reconfigure identity anchor.
                 "unique_id": "mqtt-unique-1",
                 "title": "Mosquitto",
-                "state": "loaded",  # ConfigEntryState.value
+                "state": "loaded",
                 "source": "user",
                 "supports_options": True,
-                "supports_remove_device": False,  # None coerced to False
+                "supports_remove_device": False,
                 "supports_unload": True,
                 "supports_reconfigure": False,
                 "supported_subentry_types": {"device": {"supports_reconfigure": True}},
@@ -3347,6 +3397,7 @@ class TestConfigEntries:
                 "pref_disable_polling": True,
                 "disabled_by": None,
                 "reason": None,
+                "error_reason_translation_domain": None,
                 "error_reason_translation_key": "config_entry_not_ready",
                 "error_reason_translation_placeholders": {"host": "1.2.3.4"},
                 "num_subentries": 1,
@@ -3362,61 +3413,15 @@ class TestConfigEntries:
             }
         ]
 
-    # Every key core's ConfigEntry.as_json_fragment emits (the config_entries/get +
-    # REST /api/config/config_entries row). The component row must be a SUPERSET —
-    # dropping any of these silently degrades a consumer depending which read path
-    # won. Pinned so a future core field addition (or a component drop) is caught.
-    _CORE_JSON_FRAGMENT_KEYS = frozenset(
-        {
-            "created_at",
-            "modified_at",
-            "entry_id",
-            "domain",
-            "title",
-            "source",
-            "state",
-            "supports_options",
-            "supports_remove_device",
-            "supports_unload",
-            "supports_reconfigure",
-            "supported_subentry_types",
-            "pref_disable_new_entities",
-            "pref_disable_polling",
-            "disabled_by",
-            "reason",
-            "error_reason_translation_key",
-            "error_reason_translation_placeholders",
-            "num_subentries",
-        }
-    )
-
-    def test_row_is_superset_of_core_json_fragment(self):
-        res = wsapi._do_config_entries(
-            FakeHass(config_entries=[self._entry()]), {"domain": "mqtt"}
-        )
-        row_keys = set(res["entries"][0])
-        missing = self._CORE_JSON_FRAGMENT_KEYS - row_keys
-        assert not missing, f"component row dropped core json_fragment keys: {missing}"
-
-    def test_old_core_missing_fields_degrade(self):
-        # A core predating created_at/modified_at/supported_subentry_types: the
-        # attributes are absent, so timestamps degrade to None and
-        # supported_subentry_types to {} (not a crash, not a dropped key). The row is
-        # read-only (never restored), so a None-valued timestamp key is harmless.
-        entry = FakeConfigEntry(
-            "mqtt",
-            title="Old",
-            options={},
-            entry_id="old1",
-            state=_FakeEnum("loaded"),
-        )
-        assert not hasattr(entry, "created_at")
+    def test_core_fields_pass_through_verbatim(self):
+        # The row is Core's as_json_fragment, so a field a newer Core adds reaches
+        # the caller without a component change.
+        entry = self._entry()
+        entry.extra_fragment_fields = {"future_field": {"nested": [1, 2]}}
         row = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})["entries"][
             0
         ]
-        assert row["created_at"] is None
-        assert row["modified_at"] is None
-        assert row["supported_subentry_types"] == {}
+        assert row["future_field"] == {"nested": [1, 2]}
 
     def test_entry_data_never_read(self):
         # entry.data (credentials) must never surface — neither the value nor the
@@ -3506,18 +3511,6 @@ class TestConfigEntries:
         entry.subentries = None
         res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
         assert res["entries"][0]["subentries"] == []
-        assert res["entries"][0]["num_subentries"] == 0
-
-    def test_error_reason_translation_fields_absent_default_to_none(self):
-        # An older ConfigEntry (pre-dating these attrs) must degrade to None via
-        # getattr, not raise -- mirrors the subentries-absent degrade above.
-        entry = FakeConfigEntry("mqtt", entry_id="c1", state=_FakeEnum("loaded"))
-        del entry.error_reason_translation_key
-        del entry.error_reason_translation_placeholders
-        res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
-        row = res["entries"][0]
-        assert row["error_reason_translation_key"] is None
-        assert row["error_reason_translation_placeholders"] is None
 
     def test_mappingproxy_options_read(self):
         # ConfigEntry.options is a MappingProxyType in live HA — it must still be
@@ -4072,7 +4065,7 @@ class TestRegistries:
 
 
 class TestConfigEntryUniqueId:
-    """The one field the component adds beyond core's as_json_fragment."""
+    """``unique_id``: the one Core-withheld identity field the row adds."""
 
     def test_row_carries_unique_id_which_core_withholds(self):
         """Core omits unique_id everywhere; this row is the only source.

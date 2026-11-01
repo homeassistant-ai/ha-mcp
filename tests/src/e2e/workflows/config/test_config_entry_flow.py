@@ -481,31 +481,45 @@ class TestConfigEntryFlow:
                 {"target": entry_id, "confirm": True},
             )
 
-    async def test_get_integration_include_schema(self, mcp_client):
-        """ha_get_integration with include_schema=True returns options_schema for eligible entries."""
-        # Find an entry that supports options
-        async with MCPAssertions(mcp_client) as mcp:
-            list_data = await mcp.call_tool_success("ha_get_integration", {})
-        entry = next(
-            (e for e in list_data.get("entries", []) if e.get("supports_options")),
-            None,
+    async def test_get_integration_include_schema(self, mcp_client, ha_client):
+        """include_schema describes the options form in Core's own words.
+
+        The demo entry's options flow opens with form ``options_1``; a
+        field's help text is Core's ``data_description`` for it, or its
+        ``data`` label when Core has no description, read here from Core's
+        translations.
+        """
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "options",
+                "integration": ["demo"],
+            }
         )
-        if entry is None:
-            pytest.skip(
-                "No config entries with supports_options=true in test environment"
-            )
+        resources = translations["result"]["resources"]
+        step = "component.demo.options.step.options_1"
+        expected = resources.get(
+            f"{step}.data_description.bool", resources.get(f"{step}.data.bool")
+        )
+        assert expected, "Core serves a label for the demo options field"
 
         async with MCPAssertions(mcp_client) as mcp:
+            list_data = await mcp.call_tool_success(
+                "ha_get_integration", {"domain": "demo"}
+            )
+            entry = next(e for e in list_data["entries"] if e.get("supports_options"))
             data = await mcp.call_tool_success(
                 "ha_get_integration",
                 {"entry_id": entry["entry_id"], "include_schema": True},
             )
-        assert "options_schema" in data, "Expected options_schema in response"
+
         schema = data["options_schema"]
-        assert schema.get("flow_type") in ("form", "menu")
-        logger.info(
-            f"options_schema flow_type={schema['flow_type']} for {entry['domain']}"
-        )
+        assert schema["flow_type"] == "form"
+        assert schema["step_id"] == "options_1"
+        assert "data_schema" not in schema
+        fields = {f["name"]: f for f in schema["fields"]}
+        assert fields["bool"]["description"] == expected
 
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
         """Creating a group helper without group_type returns a helpful error
