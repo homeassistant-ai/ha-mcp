@@ -198,7 +198,12 @@ _SCHEDULE_AND_LOOKALIKES = [
         # "closest", which they are not.
         (
             "light.qwzxvjkpqwzxvjkpqwzxvjkp",
-            ["light.brightness_changed", "light.turned_on"],
+            [
+                "light.brightness_changed",
+                "light.turned_on",
+                # A lookalike from another domain must not be offered either.
+                "switch.qwzxvjkpqwzxvjkpqwzxvjkp",
+            ],
             [],
         ),
     ],
