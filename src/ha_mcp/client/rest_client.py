@@ -1878,11 +1878,7 @@ class HomeAssistantClient:
         return await self._list_registry("config/device_registry/list", "device")
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
-        """Get one config entry with WebSocket ``config_entries/get_single``.
-
-        Core has no REST read for one entry, so its REST list is the fallback
-        when no WebSocket answer comes back, or when the token's user is not an
-        admin (``get_single`` is admin-only, the REST list is not).
+        """Get one config entry; see :mod:`.config_entry_read` for the routes.
 
         Returns:
             Home Assistant's config-entry fragment (``ConfigEntry.as_json_fragment``):
@@ -1892,30 +1888,9 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAPIError: 404 if not found; Core's other errors
         """
-        reply: dict[str, Any] | None = None
-        try:
-            reply = await self.send_websocket_message(
-                {"type": "config_entries/get_single", "entry_id": entry_id}
-            )
-        except HomeAssistantConnectionError as e:
-            logger.debug(f"config_entries/get_single unanswered, using REST: {e}")
-        found: dict[str, Any] | None = None
-        if reply is None or reply.get("error_code") == "unauthorized":
-            entries = await self.list_config_entries()
-            found = next((e for e in entries if e.get("entry_id") == entry_id), None)
-        elif reply.get("success"):
-            found = (reply.get("result") or {}).get("config_entry")
-        elif reply.get("error_code") != "not_found":
-            raise HomeAssistantAPIError(
-                f"config_entries/get_single failed: {reply.get('error')}",
-                response_data=reply,
-            )
-        if found is None:
-            raise HomeAssistantAPIError(
-                f"Config entry not found: {entry_id}",
-                status_code=404,
-            )
-        return found
+        from .config_entry_read import read_config_entry
+
+        return await read_config_entry(self, entry_id)
 
     async def delete_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Delete a config entry via REST API.
