@@ -1904,6 +1904,7 @@ class TestRegistrationAndAdminGate:
             # test_component_ws_phase2_async.py, test_component_template_diagnose.py,
             # _oauth_callbacks_ws.py and test_component_ws_logbook.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
+            wsapi.WS_CALL_EVENT,
             wsapi.WS_CALL_SERVICE,
             wsapi.WS_BULK_CALL_SERVICE,
             wsapi.WS_TEMPLATE_DIAGNOSE,
@@ -1952,7 +1953,13 @@ class TestRegistrationAndAdminGate:
             with pytest.raises(_StubHomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
-        handler(FakeHass(), conn, msg)
+        hass = FakeHass()
+        if command == wsapi.WS_CALL_EVENT:
+            hass.bus = SimpleNamespace(
+                async_fire=lambda *args, **kwargs: None,
+                async_listeners=dict,
+            )
+        handler(hass, conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)
 

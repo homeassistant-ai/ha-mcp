@@ -328,6 +328,7 @@ from .. import (
     todo_items,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
+from .call_event import _do_call_event
 from .call_service import _call_service_prep, _do_call_service
 from .config_entries import _config_entries_prep, _do_config_entries
 from .constants import CAPABILITIES, SCHEMA_VERSION
@@ -354,6 +355,7 @@ from .registries import _do_registries
 from .schemas import (
     _blueprint_get_schema,
     _bulk_call_service_schema,
+    _call_event_schema,
     _call_service_schema,
     _config_entries_schema,
     _dashboard_edit_schema,
@@ -484,6 +486,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # The service WRITE command: dispatch + the bounded confirmation wait are
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.
+        (_call_event_schema(), _do_call_event, None),
         (_call_service_schema(), _do_call_service, _call_service_prep),
         # The BATCH write command (D5a): the same async seam — all guards, the
         # register-before-fire pass, the dispatches, and the bounded wait live in

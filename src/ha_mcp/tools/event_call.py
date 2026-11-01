@@ -18,11 +18,17 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.event_listeners import get_event_listeners
 from ..client.rest_client import (
     HomeAssistantClient,
+    HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
-from ..errors import create_validation_error
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .coercion import JSON_STRING_COERCION
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+)
 from .event_listener_fields import event_listener_fields
 from .helpers import (
     _parse_json_dict_param,
@@ -41,6 +47,13 @@ _EVENT_TYPE_SEPARATORS = ("/", "\\", "?", "#", "%")
 # Upper bound for the optional listener-count lookup, including its retries: a
 # stalled GET /api/events must not hold back the fire.
 EVENT_LISTENER_LOOKUP_BUDGET_SECONDS = 5.0
+
+# The component bridge and Core's own WebSocket command. The REST route is
+# retained only for state_changed, whose dict payloads APIEventView rebuilds
+# into State objects; the WebSocket routes do not do that conversion.
+WS_CALL_EVENT = "ha_mcp_tools/call_event"
+CORE_FIRE_EVENT = "fire_event"
+STATE_CHANGED_EVENT = "state_changed"
 
 
 def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | None:
@@ -87,7 +100,7 @@ class EventCallMixin:
 
         When NOT to use: for controlling entities (lights, switches, climate) — use
         ha_call_service instead. To run an automation now, use
-        ha_config_set_automation(identifier=..., run_actions=True).
+        ha_config_set_automation(entity_id=..., run_actions=True).
 
         Use this to publish custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.
@@ -99,9 +112,6 @@ class EventCallMixin:
         covers match-all listeners. Both counts are returned only when the
         optional listener lookup succeeds.
         """
-        # Validate event_type before hitting the wire — empty strings, path
-        # separators, or URL delimiters produce malformed URLs at
-        # POST /api/events/{event_type}.
         if not event_type or not event_type.strip():
             raise_tool_error(
                 create_validation_error(
@@ -109,29 +119,171 @@ class EventCallMixin:
                     parameter="event_type",
                 )
             )
-        if any(separator in event_type for separator in _EVENT_TYPE_SEPARATORS):
-            raise_tool_error(
-                create_validation_error(
-                    "event_type cannot contain path separators or URL delimiters",
-                    parameter="event_type",
-                    details=f"Received: {event_type!r}",
-                )
-            )
 
         parsed_data = _parse_event_data(data)
 
+        # state_changed is the one route that must keep REST: APIEventView
+        # rebuilds its old_state/new_state dicts into State objects, which the
+        # WebSocket fire_event command does not do.
+        if event_type == STATE_CHANGED_EVENT:
+            return await self._fire_event_rest(event_type, parsed_data)
+
+        component_result = await self._fire_event_component(event_type, parsed_data)
+        if component_result is not None:
+            return component_result
+
+        ws_result = await self._fire_event_ws(event_type, parsed_data)
+        if ws_result is not None:
+            return ws_result
+
+        return await self._fire_event_rest(event_type, parsed_data)
+
+    async def _listener_fields(self, event_type: str) -> dict[str, Any]:
+        """Read the optional listener counts, never blocking the fire."""
         listener_counts: dict[str, int] | None = None
         try:
             async with asyncio.timeout(EVENT_LISTENER_LOOKUP_BUDGET_SECONDS):
                 listener_counts = await get_event_listeners(self._client, event_type)
         except (HomeAssistantError, TimeoutError) as err:
-            # Counts are optional enrichment; never block the fire on them.
             logger.debug("Event listener lookup failed: %s", err)
+        return event_listener_fields(listener_counts, event_type)
 
-        listener_fields = event_listener_fields(listener_counts, event_type)
+    async def _fire_event_component(
+        self, event_type: str, data: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Fire through the component bridge when it advertises call_event.
 
+        A command that the component does not know is safe to fall back from:
+        it was refused before dispatch. Other component errors are surfaced, not
+        retried through another path, because the event may already have fired.
+        """
+        caps = await get_component_caps(self._client)
+        if not component_supports(caps, "call_event"):
+            return None
         try:
-            response = await self._client.fire_event(event_type, parsed_data)
+            raw = await self._client.send_websocket_message(
+                {
+                    "type": WS_CALL_EVENT,
+                    "event_type": event_type,
+                    "event_data": data,
+                }
+            )
+        except HomeAssistantCommandNotSent:
+            return None
+        except Exception as err:
+            exception_to_structured_error(
+                err,
+                context={"event_type": event_type},
+                suggestions=["Check the Home Assistant connection"],
+            )
+            raise  # unreachable
+        if not isinstance(raw, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The component returned an invalid call_event result",
+                    context={"event_type": event_type},
+                )
+            )
+        if raw.get("success") is False:
+            if raw.get("error_code") == "unknown_command":
+                invalidate_caps(self._client)
+                return None
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(raw.get("error") or "The component rejected the event"),
+                    context={"event_type": event_type},
+                )
+            )
+        context = raw.get("context")
+        if not isinstance(context, dict):
+            context = {}
+        fields = event_listener_fields(
+            {
+                event_type: raw.get("listener_count", 0),
+                "*": raw.get("wildcard_listener_count", 0),
+            },
+            event_type,
+        )
+        return {
+            "success": True,
+            "event_type": event_type,
+            "message": f"Event {event_type} fired.",
+            "context": context,
+            "context_id": context.get("id"),
+            **fields,
+        }
+
+    async def _fire_event_ws(
+        self, event_type: str, data: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Fire through Core's WebSocket fire_event command."""
+        fields = await self._listener_fields(event_type)
+        try:
+            raw = await self._client.send_websocket_message(
+                {
+                    "type": CORE_FIRE_EVENT,
+                    "event_type": event_type,
+                    "event_data": data,
+                }
+            )
+        except HomeAssistantCommandNotSent:
+            return None
+        except Exception as err:
+            exception_to_structured_error(
+                err,
+                context={"event_type": event_type},
+                suggestions=["Check the Home Assistant connection"],
+            )
+            raise  # unreachable
+        if not isinstance(raw, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Home Assistant returned an invalid fire_event result",
+                    context={"event_type": event_type},
+                )
+            )
+        if raw.get("success") is False:
+            if raw.get("error_code") == "unknown_command":
+                invalidate_caps(self._client)
+                return None
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(raw.get("error") or "Home Assistant rejected the event"),
+                    context={"event_type": event_type},
+                )
+            )
+        context = raw.get("context")
+        if not isinstance(context, dict):
+            context = {}
+        return {
+            "success": True,
+            "event_type": event_type,
+            "message": f"Event {event_type} fired.",
+            "context": context,
+            "context_id": context.get("id"),
+            **fields,
+        }
+
+    async def _fire_event_rest(
+        self, event_type: str, data: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Fire through the REST view; required for state_changed and older HA."""
+        if any(separator in event_type for separator in _EVENT_TYPE_SEPARATORS):
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot contain path separators or URL delimiters "
+                    "on the REST fallback",
+                    parameter="event_type",
+                    details=f"Received: {event_type!r}",
+                )
+            )
+        listener_fields = await self._listener_fields(event_type)
+        try:
+            response = await self._client.fire_event(event_type, data)
         except HomeAssistantConnectionError as error:
             if isinstance(error.__cause__, httpx.ReadTimeout):
                 warnings = list(listener_fields.get("warnings", ()))
@@ -170,7 +322,6 @@ class EventCallMixin:
                     "Verify event_type is a valid identifier",
                 ],
             )
-
         return {
             "success": True,
             "event_type": event_type,

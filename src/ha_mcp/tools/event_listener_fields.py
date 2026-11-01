@@ -37,7 +37,7 @@ def event_listener_fields(
             ]
         else:
             fields["warnings"] = [
-                f"No event listeners are registered for {event_type!r}; "
-                "the event was still fired."
+                f"No event listeners were registered for {event_type!r} "
+                "when the count was read."
             ]
     return fields

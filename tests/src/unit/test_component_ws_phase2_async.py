@@ -1915,7 +1915,8 @@ _base._exceptions_stub.ServiceNotFound = _StubServiceNotFound
 # function-locally). The module-level default here keeps this file importable on
 # its own; conftest handles the full-suite collection-order case.
 sys.modules.setdefault(
-    "homeassistant.const", SimpleNamespace(EVENT_STATE_CHANGED="state_changed")
+    "homeassistant.const",
+    SimpleNamespace(EVENT_STATE_CHANGED="state_changed", MATCH_ALL="*"),
 )
 
 
@@ -3099,3 +3100,55 @@ class TestBulkCallServiceSchema:
         # A per-op hint validates; an op without one omits the key (any-first-event).
         assert out["operations"][0]["expected_state"] == "locked"
         assert "expected_state" not in out["operations"][1]
+
+
+class _CallEventBus:
+    def __init__(self):
+        self.fired = []
+        self.listeners = {}
+
+    def async_fire(self, event_type, event_data, context):
+        self.fired.append((event_type, event_data, context))
+
+    def async_listeners(self):
+        return dict(self.listeners)
+
+
+class TestCallEventCommand:
+    def test_fires_and_returns_context_and_counts(self):
+        hass = FakeHass()
+        hass.bus = _CallEventBus()
+        hass.bus.listeners = {"my_event": 2, "*": 1}
+        context = SimpleNamespace(as_dict=lambda: {"id": "ctx-1"})
+
+        result = wsapi._do_call_event(
+            hass,
+            {
+                "event_type": "my_event",
+                "event_data": {"key": "value"},
+                "ha_mcp_context": context,
+            },
+        )
+
+        assert result == {
+            "event_type": "my_event",
+            "context": {"id": "ctx-1"},
+            "listener_count": 2,
+            "wildcard_listener_count": 1,
+        }
+        assert hass.bus.fired == [("my_event", {"key": "value"}, context)]
+
+    def test_missing_counts_are_zero(self):
+        hass = FakeHass()
+        hass.bus = _CallEventBus()
+
+        result = wsapi._do_call_event(
+            hass,
+            {
+                "event_type": "new_event",
+                "ha_mcp_context": SimpleNamespace(as_dict=lambda: {"id": "ctx-2"}),
+            },
+        )
+
+        assert result["listener_count"] == 0
+        assert result["wildcard_listener_count"] == 0

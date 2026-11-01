@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -11,6 +12,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import event_call
@@ -37,6 +39,9 @@ def _make_tools(
                 for name, count in (listener_counts or {}).items()
             ]
         )
+    client.send_websocket_message = AsyncMock(
+        side_effect=HomeAssistantCommandNotSent("no WebSocket in tests")
+    )
     tools = ServiceTools.__new__(ServiceTools)
     tools._client = client
     tools._device_tools = MagicMock()
@@ -273,6 +278,78 @@ class TestHaCallEvent:
 
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
+
+    async def test_component_route_returns_context_and_counts(self, monkeypatch):
+        """A capable component fulfils the fire, counts, and context in one call."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={
+                "event_type": "my_event",
+                "context": {"id": "component-context"},
+                "listener_count": 2,
+                "wildcard_listener_count": 1,
+            }
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context_id"] == "component-context"
+        assert result["listener_count"] == 2
+        assert result["wildcard_listener_count"] == 1
+        tools._client.fire_event.assert_not_awaited()
+
+    async def test_ws_route_returns_context_when_component_is_absent(self, monkeypatch):
+        """Without the component, Core's fire_event still returns the context."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"context": {"id": "ws-context"}}
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context_id"] == "ws-context"
+        assert result["listener_count"] == 0
+        tools._client.fire_event.assert_not_awaited()
+
+    async def test_ws_route_accepts_url_delimiters(self, monkeypatch):
+        """The WS route carries the event type in JSON, not a URL path."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={"context": {"id": "ws-context"}}
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        result = await tools.ha_call_event("mcp_probe?key=go")
+
+        assert result["success"] is True
+        assert result["context_id"] == "ws-context"
+
+    async def test_state_changed_stays_on_the_rest_view(self, monkeypatch):
+        """state_changed needs APIEventView's State rebuilding, not WS."""
+        tools = _make_tools({"message": "Event state_changed fired."})
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("state_changed", {"entity_id": "light.x"})
+
+        assert result["success"] is True
+        tools._client.fire_event.assert_awaited_once_with(
+            "state_changed", {"entity_id": "light.x"}
+        )
+        tools._client.send_websocket_message.assert_not_awaited()
 
     async def test_timeout_preserves_known_listener_counts(self):
         """A dispatch timeout must not discard counts read before the fire."""
