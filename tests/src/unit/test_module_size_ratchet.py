@@ -130,9 +130,9 @@ def test_last_line_without_a_newline_is_counted() -> None:
 
 
 @pytest.fixture
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def temp_repo(tmp_path: Path) -> Path:
     """An empty git repository with no exclusions and an empty baseline."""
-    return make_ratchet_repo(tmp_path, monkeypatch, ratchet.BASELINE_NAME)
+    return make_ratchet_repo(tmp_path, ratchet.BASELINE_NAME)
 
 
 def _stage(repo: Path, path: str, lines: int) -> None:
