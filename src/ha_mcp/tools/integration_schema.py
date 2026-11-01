@@ -40,6 +40,9 @@ from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
+# How long a describe waits for Home Assistant to abort the flow it opened.
+_ABORT_TIMEOUT_S = 5.0
+
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
@@ -131,7 +134,9 @@ async def redact_component_options(
     finally:
         if flow_id:
             try:
-                await client.abort_options_flow(flow_id)
+                await asyncio.wait_for(
+                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+                )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     "redact_secrets: failed to abort probe flow %s: %r",
@@ -309,6 +314,14 @@ async def fetch_options_schema(
                 entry["options"] = redact_options_by_flow_schema(
                     entry.get("options"), flow_result.get("data_schema", [])
                 )
+        elif populate_options and entry is not None:
+            # A branch form behind a menu holds that branch's fields, not
+            # the entry's options.
+            resp.setdefault("warnings", []).append(
+                f"options for {entry_id} could not be read: the options flow "
+                f"opens with a {flow_result.get('type')!r} step, not a form, so "
+                "empty 'options' does not mean the entry has none"
+            )
         resp["options_schema"] = await _describe_step(
             client,
             flow_result,
@@ -332,7 +345,9 @@ async def fetch_options_schema(
     finally:
         if flow_id:
             try:
-                await client.abort_options_flow(flow_id)
+                await asyncio.wait_for(
+                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+                )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     f"Failed to abort options flow {flow_id}: "
@@ -392,7 +407,8 @@ async def fetch_config_subentry_schema(
         if flow_id:
             try:
                 await asyncio.wait_for(
-                    client.abort_config_subentry_flow(flow_id), timeout=5.0
+                    client.abort_config_subentry_flow(flow_id),
+                    timeout=_ABORT_TIMEOUT_S,
                 )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
@@ -434,7 +450,9 @@ async def fetch_config_flow_schema(
     finally:
         if flow_id:
             try:
-                await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+                await asyncio.wait_for(
+                    client.abort_config_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+                )
             except Exception as abort_err:  # noqa: BLE001
                 # A flow that already finished (abort, create_entry) is gone:
                 # Core answers 404, which is expected here.

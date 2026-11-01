@@ -9,6 +9,7 @@ form behind one of them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -19,10 +20,12 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
+from ha_mcp.tools import integration_schema
 from ha_mcp.tools.integration_schema import (
     fetch_config_flow_schema,
     fetch_config_subentry_schema,
     fetch_options_schema,
+    redact_component_options,
 )
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
@@ -184,6 +187,63 @@ async def test_legacy_read_fills_options_from_the_first_form() -> None:
     await fetch_options_schema(client, "e1", resp)
 
     assert resp["entry"]["options"] == {"host": "10.0.0.2"}
+
+
+@pytest.mark.asyncio
+async def test_options_behind_a_menu_are_reported_unread_on_the_legacy_read() -> None:
+    # The branch form shows one branch's fields, not the entry's options.
+    client = _client(dict(_MENU))
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    assert resp["entry"]["options"] == {}
+    assert any("options for e1 could not be read" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_a_component_read_behind_a_menu_keeps_its_options_without_a_warning() -> (
+    None
+):
+    client = _client(dict(_MENU))
+    resp = {"entry": {"entry_id": "e1", "domain": "demo", "options": {"a": 1}}}
+
+    await fetch_options_schema(client, "e1", resp, populate_options=False)
+
+    assert resp["entry"]["options"] == {"a": 1}
+    assert "warnings" not in resp
+
+
+async def _never_answers(*_args: Any) -> None:
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_an_options_abort_that_never_answers_does_not_hold_the_describe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(integration_schema, "_ABORT_TIMEOUT_S", 0.01)
+    client = _client(_form("init", _HOST))
+    client.abort_options_flow.side_effect = _never_answers
+    resp = _resp()
+
+    await asyncio.wait_for(fetch_options_schema(client, "e1", resp), timeout=2)
+
+    assert resp["options_schema"]["flow_type"] == "form"
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(integration_schema, "_ABORT_TIMEOUT_S", 0.01)
+    client = _client(_form("init", _HOST, _API_KEY))
+    client.abort_options_flow.side_effect = _never_answers
+    entry = {"supports_options": True, "options": {"host": "h", "api_key": "k"}}
+
+    await asyncio.wait_for(redact_component_options(client, "e1", entry, []), timeout=2)
+
+    assert entry["options"] == {"host": "h", "api_key": REDACTED_SET}
 
 
 @pytest.mark.asyncio
