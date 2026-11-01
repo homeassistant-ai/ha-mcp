@@ -310,8 +310,9 @@ class IntegrationTools:
                 "has this type, matched by Home Assistant itself (the manifest's "
                 "integration_type, e.g. 'device', 'hub', 'service', 'helper'). "
                 "Home Assistant does not reject an unknown type: for any type but "
-                "'helper' it also keeps entries whose integration it cannot load, "
-                "so an unknown type returns only those.",
+                "'helper' it also keeps entries whose integration it cannot find "
+                "(e.g. a removed custom integration), so an unknown type returns "
+                "only those.",
                 default=None,
             ),
         ] = None,
@@ -1185,7 +1186,11 @@ class IntegrationTools:
         if domain_norm:
             params["domain"] = domain_norm
         if integration_type is not None:
-            params["type"] = integration_type
+            # A blank type matches no integration, so the list would come back
+            # empty but for entries whose integration Core cannot find.
+            params["type"] = validate_identifier_not_empty(
+                integration_type, "integration_type"
+            )
         read = await fetch_config_entries(self._client, domain=domain_norm)
         if read is not None:
             rows = read.rows

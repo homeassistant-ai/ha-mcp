@@ -774,12 +774,15 @@ async def test_legacy_list_keeps_core_fields() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("domain", ["", "   "])
+@pytest.mark.parametrize("value", ["", "   "])
+@pytest.mark.parametrize("param", ["domain", "integration_type"])
 @pytest.mark.parametrize("component", [True, False], ids=["component", "legacy"])
-async def test_blank_domain_is_rejected_before_any_read(
-    domain: str, component: bool
+async def test_blank_filter_is_rejected_before_any_read(
+    value: str, param: str, component: bool
 ) -> None:
-    # A blank domain is no filter to Core, so it would list and probe every entry.
+    # A blank domain is no filter to Core, so it would list and probe every
+    # entry; a blank type matches no integration, so the list comes back empty
+    # but for entries whose integration Core cannot find.
     info = (
         {"info_result": _CAPS_CONFIG_ENTRIES} if component else {"info_exc": _CAPSLESS}
     )
@@ -788,7 +791,7 @@ async def test_blank_domain_is_rejected_before_any_read(
     get_integration = _build_get_integration(client)
 
     with patch_ws(ws, component_config_entries), pytest.raises(ToolError) as exc:
-        await get_integration(domain=domain)
+        await get_integration(**{param: value})
 
     assert "VALIDATION_INVALID_PARAMETER" in str(exc.value)
     assert not _ce_calls(ws)
