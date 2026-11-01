@@ -1912,8 +1912,16 @@ class HomeAssistantClient:
         logger.debug(f"Deleting config entry: {entry_id}")
         return await self._request("DELETE", f"/config/config_entries/entry/{entry_id}")
 
-    async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self,
+        message: dict[str, Any],
+        *,
+        expected_error_codes: frozenset[str] = frozenset(),
+    ) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
+
+        A Home Assistant error whose code is in ``expected_error_codes`` is an
+        answer the caller handles, so it is logged at debug, not error.
 
         Uses a per-client WebSocket connection keyed to the client's own
         credentials (base_url + token). This ensures OAuth mode uses the
@@ -2021,7 +2029,11 @@ class HomeAssistantClient:
                 # Name the command in the log line: a bare "Command failed:
                 # Unknown command." is undiagnosable from a user's log
                 # (issue #1889 took a live reproduction to attribute).
-                logger.error(f"WebSocket message failed ({message.get('type')}): {e}")
+                code = getattr(e, "code", None)
+                logger.log(
+                    logging.DEBUG if code in expected_error_codes else logging.ERROR,
+                    f"WebSocket message failed ({message.get('type')}): {e}",
+                )
                 # Preserve HA's structured error code (e.g. ``not_found``) so callers
                 # can distinguish HA's authoritative verdict from a transient failure
                 # instead of only seeing the stringified message.

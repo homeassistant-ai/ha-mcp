@@ -7,14 +7,17 @@ answer came back, or the token's user is not an admin (``get_single`` is
 admin-only, the REST list is open to every user).
 """
 
+import contextlib
+import logging
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
@@ -46,7 +49,8 @@ async def test_reads_the_entry_with_get_single(client: HomeAssistantClient) -> N
     assert await client.get_config_entry("e1") == FRAGMENT
 
     send.assert_awaited_once_with(
-        {"type": "config_entries/get_single", "entry_id": "e1"}
+        {"type": "config_entries/get_single", "entry_id": "e1"},
+        expected_error_codes=frozenset({"not_found", "unauthorized"}),
     )
     client.list_config_entries.assert_not_awaited()  # type: ignore[attr-defined]
 
@@ -139,4 +143,69 @@ async def test_other_core_error_is_raised_not_retried_over_rest(
 
     assert exc.value.status_code != 404
     assert "boom" in str(exc.value)
+    client.list_config_entries.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["unauthorized", "not_found"])
+async def test_an_answer_the_read_handles_is_not_logged_as_an_error(
+    client: HomeAssistantClient, code: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A non-admin token gets "unauthorized" on every read and falls back to
+    # REST; "not_found" becomes the 404. Neither is a failure worth an ERROR.
+    client.base_url, client.token, client.verify_ssl = "http://ha", "t", True
+    ws = MagicMock()
+    ws.send_command = AsyncMock(
+        side_effect=HomeAssistantCommandError("Command failed: x", code)
+    )
+    with (
+        patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=AsyncMock(return_value=ws),
+        ),
+        caplog.at_level(logging.DEBUG, logger="ha_mcp.client.rest_client"),
+        contextlib.suppress(HomeAssistantAPIError),
+    ):
+        await client.get_config_entry("e1")
+
+    assert [r.levelname for r in caplog.records if "get_single" in r.message] == [
+        "DEBUG"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_another_core_error_is_still_logged_as_an_error(
+    client: HomeAssistantClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    client.base_url, client.token, client.verify_ssl = "http://ha", "t", True
+    ws = MagicMock()
+    ws.send_command = AsyncMock(
+        side_effect=HomeAssistantCommandError("Command failed: x", "unknown_error")
+    )
+    with (
+        patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=AsyncMock(return_value=ws),
+        ),
+        caplog.at_level(logging.DEBUG, logger="ha_mcp.client.rest_client"),
+        pytest.raises(HomeAssistantAPIError),
+    ):
+        await client.get_config_entry("e1")
+
+    assert [r.levelname for r in caplog.records if "get_single" in r.message] == [
+        "ERROR"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [{}, None, {"config_entry": "e1"}])
+async def test_a_malformed_answer_is_not_read_as_a_missing_entry(
+    client: HomeAssistantClient, result: Any
+) -> None:
+    _ws(client, {"success": True, "result": result})
+
+    with pytest.raises(HomeAssistantAPIError) as exc:
+        await client.get_config_entry("e1")
+
+    assert exc.value.status_code != 404
     client.list_config_entries.assert_not_awaited()  # type: ignore[attr-defined]

@@ -1,4 +1,4 @@
-"""One config entry, read the way :meth:`HomeAssistantClient.get_config_entry` does.
+"""The read behind :meth:`HomeAssistantClient.get_config_entry`.
 
 Core's WebSocket ``config_entries/get_single`` answers ``{"config_entry":
 fragment}`` or ``not_found``. Core has no REST read for one entry, so its REST
@@ -25,7 +25,8 @@ async def read_config_entry(
     reply: dict[str, Any] | None = None
     try:
         reply = await client.send_websocket_message(
-            {"type": "config_entries/get_single", "entry_id": entry_id}
+            {"type": "config_entries/get_single", "entry_id": entry_id},
+            expected_error_codes=frozenset({"not_found", "unauthorized"}),
         )
     except HomeAssistantConnectionError as e:
         logger.debug(f"config_entries/get_single unanswered, using REST: {e}")
@@ -34,7 +35,14 @@ async def read_config_entry(
         entries = await client.list_config_entries()
         found = next((e for e in entries if e.get("entry_id") == entry_id), None)
     elif reply.get("success"):
-        found = (reply.get("result") or {}).get("config_entry")
+        result = reply.get("result")
+        found = result.get("config_entry") if isinstance(result, dict) else None
+        if not isinstance(found, dict):
+            # Core answered, so this is not a missing entry: no 404, no REST.
+            raise HomeAssistantAPIError(
+                f"config_entries/get_single answered without a config entry: {result!r}",
+                response_data=reply,
+            )
     elif reply.get("error_code") != "not_found":
         raise HomeAssistantAPIError(
             f"config_entries/get_single failed: {reply.get('error')}",
