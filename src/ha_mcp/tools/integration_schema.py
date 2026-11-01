@@ -151,6 +151,12 @@ async def redact_component_options(
         )
 
 
+def _entry_domain(entry: dict[str, Any] | None) -> str | None:
+    # None, never "": the flow's strings then resolve the domain by entry_id.
+    domain = (entry or {}).get("domain")
+    return domain if isinstance(domain, str) and domain else None
+
+
 def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> None:
     raise_tool_error(
         create_error_response(
@@ -198,8 +204,7 @@ async def _describe_step(
     client: Any,
     step: dict[str, Any],
     *,
-    domain: str,
-    path: str,
+    flow: FlowRef,
     menu_choice: str | None,
     submit: _Submit,
 ) -> dict[str, Any]:
@@ -233,7 +238,7 @@ async def _describe_step(
             "flow_type": "abort",
             **chosen,
             "aborted": step.get("reason"),
-            **await abort_reason_text(client, FlowRef(domain, path), step),
+            **await abort_reason_text(client, flow, step),
         }
     if step_type == "menu":
         return {
@@ -243,13 +248,13 @@ async def _describe_step(
             "menu_options": menu_choices(step),
         }
     if step_type == "create_entry":
-        _raise_flow_finished(step, path)
+        _raise_flow_finished(step, flow.path)
     if step_type != "form":
         progress: dict[str, Any] = {}
         if step_type == "progress":
             progress = {
                 "progress_action": step.get("progress_action"),
-                **await progress_action_text(client, FlowRef(domain, path), step),
+                **await progress_action_text(client, flow, step),
             }
         raise_tool_error(
             create_error_response(
@@ -263,12 +268,14 @@ async def _describe_step(
                 context={"step_id": step.get("step_id"), **chosen, **progress},
             )
         )
+    warnings: list[str] = []
     return {
         "flow_type": "form",
         "step_id": step.get("step_id"),
         **chosen,
-        "fields": await describe_form(client, domain, path, step),
+        "fields": await describe_form(client, flow.domain, flow.path, step, warnings),
         **later_forms(step),
+        **({"warnings": warnings} if warnings else {}),
     }
 
 
@@ -289,7 +296,6 @@ async def fetch_options_schema(
     overwritten by the OptionsFlow-derived suggested-value shape.
     """
     entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
-    domain = str((entry or {}).get("domain") or "")
     flow_id = None
     try:
         flow_result = await client.start_options_flow(entry_id)
@@ -308,8 +314,7 @@ async def fetch_options_schema(
         resp["options_schema"] = await _describe_step(
             client,
             flow_result,
-            domain=domain,
-            path="options",
+            flow=FlowRef(_entry_domain(entry), "options", entry_id),
             menu_choice=menu_choice,
             submit=client.submit_options_flow_step,
         )
@@ -378,8 +383,9 @@ async def fetch_config_subentry_schema(
             **await _describe_step(
                 client,
                 flow_result,
-                domain=str((entry or {}).get("domain") or ""),
-                path=f"config_subentries.{subentry_type}",
+                flow=FlowRef(
+                    _entry_domain(entry), f"config_subentries.{subentry_type}", entry_id
+                ),
                 menu_choice=menu_choice,
                 submit=client.submit_config_subentry_flow_step,
             ),
@@ -423,8 +429,7 @@ async def fetch_config_flow_schema(
         schema = await _describe_step(
             client,
             first_step,
-            domain=domain,
-            path="config",
+            flow=FlowRef(domain, "config"),
             menu_choice=menu_choice,
             submit=client.submit_config_flow_step,
         )
@@ -433,6 +438,13 @@ async def fetch_config_flow_schema(
             try:
                 await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
             except Exception as abort_err:  # noqa: BLE001
-                # A flow that already finished (abort, create_entry) is gone.
-                logger.debug("config flow %s abort failed: %s", flow_id, abort_err)
+                # A flow that already finished (abort, create_entry) is gone:
+                # Core answers 404, which is expected here.
+                gone = getattr(abort_err, "status_code", None) == 404
+                logger.log(
+                    logging.DEBUG if gone else logging.WARNING,
+                    "config flow %s abort failed: %s",
+                    flow_id,
+                    abort_err,
+                )
     resp["config_flow_schema"] = schema

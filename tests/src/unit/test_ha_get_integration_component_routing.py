@@ -893,3 +893,37 @@ async def test_integration_type_is_ignored_with_a_warning_for_one_entry(
     assert resp["entry_id"] == "cfg1"
     assert client.rest_list_calls == 0
     assert any("integration_type" in w for w in resp.get("warnings", []))
+
+
+# --- a degraded secrets scrub is surfaced, not passed off as scrubbed ---------
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call", [{"entry_id": "cfg1"}, {"include_options": True}], ids=["one", "list"]
+)
+async def test_degraded_secret_scrub_is_a_warning(call: dict[str, Any]) -> None:
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("cfg1")], "secret_scrub_degraded": True},
+    )
+    get_integration = _build_get_integration(RoutingClient())
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(**call)
+
+    assert any("secrets.yaml" in w for w in resp.get("warnings", []))
+
+
+@pytest.mark.asyncio
+async def test_a_clean_secret_scrub_adds_no_warning() -> None:
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("cfg1")]},
+    )
+    get_integration = _build_get_integration(RoutingClient())
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(entry_id="cfg1")
+
+    assert not any("secrets.yaml" in w for w in resp.get("warnings", []))

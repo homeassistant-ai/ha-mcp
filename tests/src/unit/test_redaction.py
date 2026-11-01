@@ -27,6 +27,7 @@ from ha_mcp.redaction import (
     sentinel_for,
     sentinel_option_keys,
 )
+from ha_mcp.tools.component_config_entries import ComponentEntries
 from ha_mcp.tools.config_entry_flow import _reject_redaction_sentinels
 from ha_mcp.tools.integration_schema import (
     options_from_form_flow,
@@ -891,7 +892,7 @@ class TestComponentPathEndToEndRedaction:
         ]
         resp = await tools._single_entry_from_component(
             "e1",
-            rows,
+            ComponentEntries(rows=rows, secret_scrub_degraded=False),
             True,
             include_subentries=False,
             include_subentry_schema=False,

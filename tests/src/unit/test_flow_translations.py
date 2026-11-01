@@ -76,8 +76,32 @@ async def test_fetch_flow_strings_sends_one_english_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_flow_strings_is_empty_when_the_call_fails() -> None:
+async def test_fetch_flow_strings_is_none_when_the_call_fails() -> None:
+    # None, not {}: a failed read must stay distinguishable from Core
+    # shipping no strings.
     client = AsyncMock()
     client.send_websocket_message.side_effect = RuntimeError("ws down")
+
+    assert await fetch_flow_strings(client, "sun", "config") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_flow_strings_is_none_when_core_answers_with_an_error() -> None:
+    client = AsyncMock()
+    client.send_websocket_message.return_value = {
+        "success": False,
+        "error": {"code": "unknown_error"},
+    }
+
+    assert await fetch_flow_strings(client, "sun", "config") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_flow_strings_is_empty_when_core_has_no_strings() -> None:
+    client = AsyncMock()
+    client.send_websocket_message.return_value = {
+        "success": True,
+        "result": {"resources": {}},
+    }
 
     assert await fetch_flow_strings(client, "sun", "config") == {}

@@ -655,3 +655,82 @@ async def test_list_mode_include_schema_without_domain_is_reported_as_ignored() 
 
     client.start_config_flow.assert_not_called()
     assert any("include_schema" in w for w in resp["warnings"])
+
+
+# --- strings Home Assistant could not send are a warning, a missing one not --
+
+
+@pytest.mark.asyncio
+async def test_a_failed_strings_read_is_a_warning_on_the_described_form() -> None:
+    client = _client(_form("init", _HOST))
+    client.send_websocket_message.side_effect = RuntimeError("ws down")
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    assert resp["options_schema"]["fields"][0]["name"] == "host"
+    assert any("could not be read" in w for w in resp["options_schema"]["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_strings_read_is_a_warning_on_an_abort() -> None:
+    client = _client({"type": "abort", "flow_id": "f1", "reason": "no_options"})
+    client.send_websocket_message.side_effect = RuntimeError("ws down")
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    schema = resp["options_schema"]
+    assert schema["aborted"] == "no_options"
+    assert any("could not be read" in w for w in schema["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_a_string_core_does_not_ship_is_no_warning() -> None:
+    client = _client({"type": "abort", "flow_id": "f1", "reason": "no_options"})
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    assert "warnings" not in resp["options_schema"]
+    assert "reason_text" not in resp["options_schema"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_abort_of_the_setup_describe_is_logged_as_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = _config_client(_form("user", _HOST))
+    client.abort_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
+
+    with caplog.at_level("DEBUG", logger="ha_mcp.tools.integration_schema"):
+        await fetch_config_flow_schema(client, "demo", {})
+
+    assert [r.levelname for r in caplog.records if "f1" in r.getMessage()] == [
+        "WARNING"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_entry_without_a_domain_reads_the_reason_under_its_entry() -> None:
+    client = _client(
+        {"type": "abort", "flow_id": "f1", "reason": "no_models"},
+        {"component.ollama.config_subentries.conversation.abort.no_models": "None."},
+    )
+    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "ollama"}
+    resp = {"entry": {"entry_id": "e1"}}
+
+    await fetch_config_subentry_schema(
+        client,
+        "e1",
+        resp,
+        subentry_type="conversation",
+        subentry_id=None,
+        show_advanced_options=False,
+    )
+
+    assert resp["subentry_schema"]["reason_text"] == "None."
+    sent = [c.args[0] for c in client.send_websocket_message.await_args_list]
+    assert all(m["integration"] == ["ollama"] for m in sent)

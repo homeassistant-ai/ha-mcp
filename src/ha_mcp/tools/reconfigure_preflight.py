@@ -69,8 +69,13 @@ async def read_reconfigure_form(
                 "in config. The form behind it is checked when you confirm."
             )
         elif step.get("type") == "form":
-            form["fields"] = await describe_form(client, domain, flow.path, step)
+            warnings: list[str] = []
+            form["fields"] = await describe_form(
+                client, domain, flow.path, step, warnings
+            )
             form.update(later_forms(step))
+            if warnings:
+                form["warnings"] = warnings
     finally:
         await _abort_flow_best_effort(client, step.get("flow_id"))
     if step.get("type") != "form":

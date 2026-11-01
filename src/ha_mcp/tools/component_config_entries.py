@@ -64,6 +64,12 @@ class EntryUniqueId(NamedTuple):
 UNKNOWN_UNIQUE_ID = EntryUniqueId(known=False, value=None)
 
 
+SCRUB_DEGRADED_WARNING = (
+    "options: the ha_mcp_tools component could not read secrets.yaml, so "
+    "option values that match a secret were not replaced with '**redacted**'"
+)
+
+
 class ComponentEntries(NamedTuple):
     """One trusted ``config_entries`` answer."""
 

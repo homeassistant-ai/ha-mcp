@@ -15,7 +15,7 @@ from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_introspect import fetch_helper_flow_info
-from .flow_translations import fetch_flow_strings, flow_text
+from .flow_translations import fetch_flow_strings, flow_text, strings_unread_warning
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -41,11 +41,12 @@ async def _flow_texts(
     step: dict[str, Any],
     kind: str,
     keys: dict[str, Any],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Core's text for each ``<path>.<kind>.<key>``, as the frontend looks it up.
 
     ``keys`` maps a name (a field, or ``reason``) to its translation key; a
     key Core ships no string for is left out, so the caller keeps the raw key.
+    A failed strings read gives ``warnings`` instead.
     """
     if flow is None or not keys:
         return {}
@@ -64,6 +65,8 @@ async def _flow_texts(
     if not isinstance(domain, str):
         return {}
     strings = await fetch_flow_strings(client, domain, path.split(".")[0])
+    if strings is None:
+        return {"warnings": [strings_unread_warning(domain)]}
     placeholders = step.get("description_placeholders")
     texts = {
         name: flow_text(strings, domain, f"{path}.{kind}.{key}", placeholders)
@@ -336,7 +339,7 @@ async def raise_form_errors(
 
 async def abort_reason_text(
     client: Any, flow: FlowRef | None, current_step: dict[str, Any]
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """``{"reason_text": ...}`` for an abort step, or ``{}`` without a string."""
     return await _flow_texts(
         client, flow, current_step, "abort", {"reason_text": current_step.get("reason")}
@@ -345,7 +348,7 @@ async def abort_reason_text(
 
 async def progress_action_text(
     client: Any, flow: FlowRef | None, current_step: dict[str, Any]
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """``{"progress_action_text": ...}`` for a progress step, or ``{}``."""
     return await _flow_texts(
         client,

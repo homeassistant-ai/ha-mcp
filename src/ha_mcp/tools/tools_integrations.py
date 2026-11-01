@@ -26,7 +26,11 @@ from ..redaction import (
 )
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
-from .component_config_entries import fetch_config_entries
+from .component_config_entries import (
+    SCRUB_DEGRADED_WARNING,
+    ComponentEntries,
+    fetch_config_entries,
+)
 from .component_helper_collections import removal_reply, stored_helper_target
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
@@ -853,7 +857,7 @@ class IntegrationTools:
             if read is not None:
                 return await self._single_entry_from_component(
                     entry_id,
-                    read.rows,
+                    read,
                     include_schema,
                     include_subentries=include_subentries,
                     include_subentry_schema=include_subentry_schema,
@@ -971,7 +975,7 @@ class IntegrationTools:
     async def _single_entry_from_component(
         self,
         entry_id: str,
-        rows: list[dict[str, Any]],
+        read: ComponentEntries,
         include_schema: bool | None,
         *,
         include_subentries: bool,
@@ -996,13 +1000,13 @@ class IntegrationTools:
         ``log_level`` / ``log_level_raw`` come from ``get_logger_levels`` on both
         paths (the component does not carry logger overrides).
         """
-        if not rows:
+        if not read.rows:
             # ``async_get_entry(entry_id)`` found nothing — an authoritative
             # not-found, mapped to the same 404 the legacy REST get raises.
             raise HomeAssistantAPIError(
                 f"Config entry not found: {entry_id}", status_code=404
             )
-        entry, subentries = _split_component_entry_row(rows[0])
+        entry, subentries = _split_component_entry_row(read.rows[0])
         entry.setdefault("options", {})
         _normalize_ignored_entry(entry)
 
@@ -1011,6 +1015,8 @@ class IntegrationTools:
             "entry_id": entry_id,
             "entry": entry,
         }
+        if read.secret_scrub_degraded:
+            resp["warnings"] = [SCRUB_DEGRADED_WARNING]
 
         # Surface the effective Python logger level for this integration
         # (unconditionally, for symmetry with the legacy path and _format_entry).
@@ -1191,7 +1197,7 @@ class IntegrationTools:
                     for entry in await self._fetch_rest_entries(params)
                 }
                 rows = [row for row in rows if row.get("entry_id") in matching]
-            return await self._list_entries_from_component(
+            listed = await self._list_entries_from_component(
                 rows,
                 domain,
                 query,
@@ -1200,6 +1206,9 @@ class IntegrationTools:
                 limit_int,
                 offset_int,
             )
+            if include_opts and read.secret_scrub_degraded:
+                listed.setdefault("warnings", []).append(SCRUB_DEGRADED_WARNING)
+            return listed
 
         response = await self._fetch_rest_entries(params)
 

@@ -19,11 +19,22 @@ logger = logging.getLogger(__name__)
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 
-async def fetch_flow_strings(client: Any, domain: str, category: str) -> dict[str, Any]:
-    """One ``frontend/get_translations`` read in English; ``{}`` on any failure.
+def strings_unread_warning(domain: str) -> str:
+    """The warning for a response whose Core strings could not be read."""
+    return (
+        f"Home Assistant's strings for {domain} could not be read, so its help, "
+        "error and reason texts are missing"
+    )
+
+
+async def fetch_flow_strings(
+    client: Any, domain: str, category: str
+) -> dict[str, Any] | None:
+    """One ``frontend/get_translations`` read in English; ``None`` if it failed.
 
     ``category`` is a top-level ``strings.json`` key (``config``, ``options``,
-    ``config_subentries``). Best effort: missing strings only cost help text.
+    ``config_subentries``). ``None`` (no answer, or an error answer) is kept
+    apart from ``{}`` (Core ships no strings) so a caller can say so.
     """
     try:
         result = await client.send_websocket_message(
@@ -35,10 +46,11 @@ async def fetch_flow_strings(client: Any, domain: str, category: str) -> dict[st
             }
         )
     except Exception as err:  # noqa: BLE001
-        logger.debug("translations for %s failed: %s", domain, err)
-        return {}
-    if not isinstance(result, dict):
-        return {}
+        logger.warning("translations for %s failed: %s", domain, err)
+        return None
+    if not isinstance(result, dict) or result.get("success") is False:
+        logger.warning("translations for %s failed: %s", domain, result)
+        return None
     payload = result.get("result") or result
     resources = payload.get("resources") if isinstance(payload, dict) else None
     return resources if isinstance(resources, dict) else {}
