@@ -6,21 +6,41 @@ exact-match and all-or-nothing: every ``old`` must occur exactly once in the
 content as it stands when that edit is applied, or nothing is saved.
 """
 
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Annotated, Any, NoReturn, TypedDict
 
 from pydantic import ConfigDict, Field
 
 from ..errors import ErrorCode, create_error_response
+from ..utils.registry_update_lock import registry_update_lock
 from .helpers import raise_tool_error, ws_failure_code
 from .resource_codec import (
     _DATA_URI_MIME,
     _MAX_ECHOED_URL,
+    MAX_CONTENT_SIZE,
     _check_ws_error,
     _decode_inline_content,
     content_sha256,
 )
 
 MAX_EDITS = 100
+
+# Lock key shared with _restore_dashboard_resource in backup_manager (the
+# auto-backup domain name), so a restore and a tool write serialize too.
+RESOURCE_LOCK_REGISTRY = "dashboard_resource"
+
+
+def resource_write_lock(resource_id: str | None) -> AbstractAsyncContextManager[Any]:
+    """Serialize this process's writes to one resource; a create needs none.
+
+    Hold it from any read the write depends on through the write itself.
+    Writes from the HA UI or other clients are not serialized. Never nest
+    it: ``asyncio.Lock`` is not reentrant, so take it in the tool entry
+    points, not in the shared write helpers.
+    """
+    if resource_id is None:
+        return nullcontext()
+    return registry_update_lock(RESOURCE_LOCK_REGISTRY, resource_id)
 
 
 class ResourceEdit(TypedDict):
@@ -86,6 +106,16 @@ def apply_resource_edits(content: str, edits: list[ResourceEdit]) -> str:
             "'old' or an 'old' identical to 'new'",
             {"edit_index": invalid[0], "invalid_edit_indexes": invalid},
             ["Every edit needs a non-empty 'old' that differs from its 'new'"],
+        )
+    # Bound the work before the loop: each edit scans and copies the whole
+    # intermediate text, and the result's own size check only runs after it.
+    added = sum(len(edit["new"].encode("utf-8")) for edit in edits)
+    if added > MAX_CONTENT_SIZE:
+        _raise_edit_error(
+            "edits_too_large",
+            f"The edits' 'new' texts total {added:,} bytes (max {MAX_CONTENT_SIZE:,})",
+            {"size": added, "limit": MAX_CONTENT_SIZE},
+            ["Replace most of a resource with content= instead of edits"],
         )
 
     result = content

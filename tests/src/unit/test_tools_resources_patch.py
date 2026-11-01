@@ -1,5 +1,6 @@
 """Unit tests for search/replace patching and hashing of inline dashboard resources."""
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Callable
@@ -7,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from ha_mcp import backup_manager
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.resource_codec import (
     _PREVIEW_LENGTH,
@@ -14,6 +16,7 @@ from ha_mcp.tools.resource_codec import (
     _data_uri_for,
     _decode_data_uri,
 )
+from ha_mcp.tools.resource_patch import resource_write_lock
 from ha_mcp.tools.tools_resources import ResourceTools
 
 from .test_resource_codec import _legacy_url
@@ -23,7 +26,11 @@ CARD = "const color = 'red';\nconst speed = 1.5;\nconst bounds = [10, 20, 30, 40
 
 
 class FakeLovelace:
-    """Minimal lovelace/resources WebSocket API that records every write."""
+    """Minimal lovelace/resources WebSocket API that stores and records writes.
+
+    Every call yields to the event loop first, as a real round-trip does, so
+    concurrent tool calls can interleave between a read and a write.
+    """
 
     def __init__(self, resources: list[dict[str, Any]]) -> None:
         self.resources = resources
@@ -32,6 +39,7 @@ class FakeLovelace:
         self.store: Callable[[str], str] = lambda url: url
 
     async def send_websocket_message(self, message: dict[str, Any]) -> Any:
+        await asyncio.sleep(0)
         kind = message["type"]
         if kind == "lovelace/resources":
             return {"success": True, "result": self.resources}
@@ -39,14 +47,15 @@ class FakeLovelace:
             return {"success": True, "result": {"resource_mode": "storage"}}
         if kind == "lovelace/resources/update":
             self.updates.append(message)
-            return {
-                "success": True,
-                "result": {
-                    "id": message["resource_id"],
-                    "type": message["res_type"],
-                    "url": self.store(message["url"]),
-                },
+            item = {
+                "id": message["resource_id"],
+                "type": message["res_type"],
+                "url": self.store(message["url"]),
             }
+            self.resources = [
+                item if row["id"] == item["id"] else row for row in self.resources
+            ]
+            return {"success": True, "result": item}
         raise AssertionError(f"unexpected WS command {kind}")
 
 
@@ -205,6 +214,22 @@ class TestPatchRefusals:
         assert error["reason"] == "unsupported_type"
         assert error["resource_type"] == "js"
 
+    async def test_oversized_edit_payload_is_refused_before_applying(self):
+        fake = FakeLovelace([_inline(CARD)])
+        half = "x" * (MAX_CONTENT_SIZE // 2 + 1)
+
+        # The final result would fit; the combined 'new' texts do not.
+        error = await _patch_error(
+            fake,
+            edits=[
+                {"old": "'red'", "new": half},
+                {"old": half, "new": half[:-1]},
+            ],
+        )
+
+        assert error["reason"] == "edits_too_large"
+        assert error["size"] > error["limit"]
+
     async def test_result_over_the_size_limit_is_refused(self):
         fake = FakeLovelace([_inline(CARD)])
 
@@ -220,6 +245,40 @@ class TestPatchRefusals:
         error = await _patch_error(fake, edits=[{"old": "'red'", "new": "'blue'"}])
 
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+class TestWriteSerialization:
+    async def test_concurrent_patches_on_one_resource_keep_both_edits(self):
+        fake = FakeLovelace([_inline(CARD)])
+
+        await asyncio.gather(
+            _patch(fake, edits=[{"old": "'red'", "new": "'blue'"}]),
+            _patch(fake, edits=[{"old": "speed = 1.5", "new": "speed = 2.5"}]),
+        )
+
+        stored = _decode_data_uri(fake.resources[0]["url"])
+        assert stored == CARD.replace("'red'", "'blue'").replace("1.5", "2.5")
+
+    async def test_restore_waits_for_the_tool_write_lock(self, monkeypatch):
+        sent: list[dict[str, Any]] = []
+
+        async def fake_send(_client: Any, message: dict[str, Any]) -> Any:
+            sent.append(message)
+            return {"id": RESOURCE_ID}
+
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_send)
+        config = {"id": RESOURCE_ID, "type": "module", "url": "/local/x.js"}
+
+        async with resource_write_lock(RESOURCE_ID):
+            restore = asyncio.create_task(
+                backup_manager._restore_dashboard_resource(None, RESOURCE_ID, config)
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert sent == [], "restore must not write while a tool write runs"
+        await restore
+
+        assert [m["type"] for m in sent] == ["lovelace/resources/update"]
 
 
 class TestPatchModeSelection:
