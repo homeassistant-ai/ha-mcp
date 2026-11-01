@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -197,13 +198,8 @@ def _prepare_testcontainer_config(
     """Stage the fresh HA config dir (custom components, seeds, recorder)."""
     embedded_wheel_name: str | None = None
 
-    # Create temporary directory for this test session
-    temp_dir = tempfile.mkdtemp(prefix="ha_e2e_test_")
-
     # Copy initial test state to temporary directory
     initial_state_path = Path(__file__).parent.parent.parent / "initial_test_state"
-    config_path = Path(temp_dir)
-
     if not initial_state_path.exists():
         pytest.fail(f"Initial test state not found at {initial_state_path}")
 
@@ -211,97 +207,110 @@ def _prepare_testcontainer_config(
     resolved_image, core_version = _resolve_core_image(HA_TEST_IMAGE)
     _ensure_hacs_frontend(initial_state_path, core_version=core_version)
 
-    # Copy all files from initial_test_state
-    shutil.copytree(
-        initial_state_path,
-        config_path,
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(
-            ".hacs_frontend-staging-*", ".hacs_frontend.lock"
-        ),
-    )
-
-    # Inject GITHUB_TOKEN into HACS config entry if available.
-    # Without a valid token HACS disables itself, causing flaky test skips.
-    # In CI the automatic GITHUB_TOKEN provides sufficient read access.
-    github_token = os.environ.get("GITHUB_TOKEN")
-    if github_token:
-        storage_file = config_path / ".storage" / "core.config_entries"
-        if storage_file.exists():
-            ce_data = json.loads(storage_file.read_text())
-            if inject_hacs_token(ce_data, github_token):
-                logger.info("Injected GITHUB_TOKEN into HACS config entry")
-            storage_file.write_text(json.dumps(ce_data, indent=2))
-
-    # Install custom components from repo source
-    repo_root = Path(__file__).parent.parent.parent.parent
-    if _install_custom_component(
-        config_path,
-        repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy",
-        "mcp_proxy",
-        "MCP Webhook Proxy",
-    ):
-        # mcp_proxy needs a config file pointing at HA's own API
-        proxy_config = {
-            "target_url": "http://localhost:8123/api/",
-            "webhook_id": "mcp_e2e_test_webhook_proxy",
-        }
-        (config_path / ".mcp_proxy_config.json").write_text(json.dumps(proxy_config))
-    # No-tools lanes (#2292): the File & YAML Tools entry is absent, in the two
-    # shapes a real install can take. Embedded still needs the component FILES
-    # (its in-process server entry loads from them), so the files are copied
-    # with no tools entry seeded — the exact server-entry-only topology. The
-    # plain container installs nothing at all: a user who never installed the
-    # component. The mcp_proxy install above is untouched either way.
-    no_tools_entry = _is_no_tools_entry_selected()
-    if not no_tools_entry or embedded:
-        _install_custom_component(
+    with ExitStack() as cleanup:
+        temp_dir = tempfile.mkdtemp(prefix="ha_e2e_test_")
+        cleanup.callback(shutil.rmtree, temp_dir, ignore_errors=True)
+        config_path = Path(temp_dir)
+        # Copy all files from initial_test_state
+        shutil.copytree(
+            initial_state_path,
             config_path,
-            repo_root / "custom_components" / "ha_mcp_tools",
-            "ha_mcp_tools",
-            "HA-MCP File & YAML Tools",
-            seed_entry=not no_tools_entry,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(
+                ".hacs_frontend-staging-*", ".hacs_frontend.lock"
+            ),
         )
 
-    # Embedded backend: build the checkout's wheel into /config, install the
-    # in-process MCP server entry, seed its config entry + feature-flag overrides.
-    # Runs before _setup_config_permissions so the wheel, integration, and the
-    # .ha_mcp data dir all get the same readable perms as the rest of the
-    # config. The wheel's dep tree is preinstalled in the container entrypoint.
-    if embedded:
-        wheel = _build_embedded_server_wheel(config_path)
-        embedded_wheel_name = wheel.name
-        _install_embedded_server(config_path, embedded_wheel_name)
+        # Inject GITHUB_TOKEN into HACS config entry if available.
+        # Without a valid token HACS disables itself, causing flaky test skips.
+        # In CI the automatic GITHUB_TOKEN provides sufficient read access.
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if github_token:
+            storage_file = config_path / ".storage" / "core.config_entries"
+            if storage_file.exists():
+                ce_data = json.loads(storage_file.read_text())
+                if inject_hacs_token(ce_data, github_token):
+                    logger.info("Injected GITHUB_TOKEN into HACS config entry")
+                storage_file.write_text(json.dumps(ce_data, indent=2))
 
-    # Pre-#1579 legacy backups for the legacy-restore e2e: seed before boot so
-    # the bind-mounted .ha_mcp_tools_backups/ is populated when the component
-    # reads it (a post-boot host write doesn't propagate in CI).
-    _seed_legacy_yaml_backups(config_path)
+        # Install custom components from repo source
+        repo_root = Path(__file__).parent.parent.parent.parent
+        if _install_custom_component(
+            config_path,
+            repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy",
+            "mcp_proxy",
+            "MCP Webhook Proxy",
+        ):
+            # mcp_proxy needs a config file pointing at HA's own API
+            proxy_config = {
+                "target_url": "http://localhost:8123/api/",
+                "webhook_id": "mcp_e2e_test_webhook_proxy",
+            }
+            (config_path / ".mcp_proxy_config.json").write_text(
+                json.dumps(proxy_config)
+            )
+        # No-tools lanes (#2292): the File & YAML Tools entry is absent, in the two
+        # shapes a real install can take. Embedded still needs the component FILES
+        # (its in-process server entry loads from them), so the files are copied
+        # with no tools entry seeded — the exact server-entry-only topology. The
+        # plain container installs nothing at all: a user who never installed the
+        # component. The mcp_proxy install above is untouched either way.
+        no_tools_entry = _is_no_tools_entry_selected()
+        if not no_tools_entry or embedded:
+            _install_custom_component(
+                config_path,
+                repo_root / "custom_components" / "ha_mcp_tools",
+                "ha_mcp_tools",
+                "HA-MCP File & YAML Tools",
+                seed_entry=not no_tools_entry,
+            )
 
-    # A non-YAML file in the bound packages folder for the glob warn-and-continue
-    # e2e (#1788): same pre-boot reason, and no tool can write it there.
-    _seed_non_yaml_package_file(config_path)
+        # Embedded backend: build the checkout's wheel into /config, install the
+        # in-process MCP server entry, seed its config entry + feature-flag overrides.
+        # Runs before _setup_config_permissions so the wheel, integration, and the
+        # .ha_mcp data dir all get the same readable perms as the rest of the
+        # config. The wheel's dep tree is preinstalled in the container entrypoint.
+        if embedded:
+            wheel = _build_embedded_server_wheel(config_path)
+            embedded_wheel_name = wheel.name
+            _install_embedded_server(config_path, embedded_wheel_name)
 
-    # A YAML-package scene with an ``id`` for the not-storage-scene e2e (#1971):
-    # registers in the registry yet 404s on the config API. Same pre-boot reason.
-    _seed_yaml_package_scene(config_path)
+        # Pre-#1579 legacy backups for the legacy-restore e2e: seed before boot so
+        # the bind-mounted .ha_mcp_tools_backups/ is populated when the component
+        # reads it (a post-boot host write doesn't propagate in CI).
+        _seed_legacy_yaml_backups(config_path)
 
-    # Shift the pre-baked recorder timestamps forward so the seeded rows
-    # look "recent" to history queries with a 24h window. The recorder DB in
-    # initial_test_state is baked offline (see scripts/bake_pagination_seed.py)
-    # and its rows have whatever timestamps were captured at bake time. Without
-    # this shift, the pagination tests in test_history.py/test_logbook.py would
-    # silently skip again the moment the seed gets more than 24h old.
-    _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
-    local_blueprint = _copy_local_blueprint_to_www(config_path)
+        # A non-YAML file in the bound packages folder for the glob warn-and-continue
+        # e2e (#1788): same pre-boot reason, and no tool can write it there.
+        _seed_non_yaml_package_file(config_path)
 
-    # Ensure proper permissions for Home Assistant
-    _setup_config_permissions(config_path)
+        # A YAML-package scene with an ``id`` for the not-storage-scene e2e (#1971):
+        # registers in the registry yet 404s on the config API. Same pre-boot reason.
+        _seed_yaml_package_scene(config_path)
 
-    logger.info(
-        f"📁 Fresh HA config prepared at: {config_path} with proper permissions"
-    )
-    return config_path, temp_dir, local_blueprint, embedded_wheel_name, resolved_image
+        # Shift the pre-baked recorder timestamps forward so the seeded rows
+        # look "recent" to history queries with a 24h window. The recorder DB in
+        # initial_test_state is baked offline (see scripts/bake_pagination_seed.py)
+        # and its rows have whatever timestamps were captured at bake time. Without
+        # this shift, the pagination tests in test_history.py/test_logbook.py would
+        # silently skip again the moment the seed gets more than 24h old.
+        _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
+        local_blueprint = _copy_local_blueprint_to_www(config_path)
+
+        # Ensure proper permissions for Home Assistant
+        _setup_config_permissions(config_path)
+
+        logger.info(
+            f"📁 Fresh HA config prepared at: {config_path} with proper permissions"
+        )
+        cleanup.pop_all()
+        return (
+            config_path,
+            temp_dir,
+            local_blueprint,
+            embedded_wheel_name,
+            resolved_image,
+        )
 
 
 def _build_ha_testcontainer(

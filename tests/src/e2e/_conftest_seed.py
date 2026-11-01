@@ -201,15 +201,19 @@ def _clear_stale_hacs_lock(lock_dir: Path) -> None:
 
 @contextmanager
 def _hacs_lock_heartbeat(lock_dir: Path) -> Iterator[Callable[[], None]]:
-    """Keep a live owner's lease fresh; stop before releasing ownership."""
+    """Keep the owner lease fresh and check failures before publication.
+
+    Renewal can fail after the publish-point check: rename may then complete
+    before the final check raises. Waiters may accept that complete frontend.
+    This callback is not an atomic lease/publication transaction; never remove
+    the destination on a late failure, as another owner may have published it.
+    """
     stopped = Event()
     failures: list[OSError] = []
 
     def check_renewal() -> None:
         if failures:
-            raise RuntimeError(
-                "HACS bootstrap lock renewal failed; refusing publication"
-            ) from failures[0]
+            raise RuntimeError("HACS bootstrap lock renewal failed") from failures[0]
 
     def renew() -> None:
         while not stopped.wait(_HACS_HEARTBEAT_INTERVAL_S):

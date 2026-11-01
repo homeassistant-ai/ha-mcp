@@ -507,17 +507,17 @@ def test_symbolic_core_version_comes_from_image_without_starting_ha(
     )
     monkeypatch.setattr(containers.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
 
-    class VersionReachedBootstrap(Exception):
-        pass
-
-    def bootstrap(path: Path, *, core_version: str) -> NoReturn:
+    def bootstrap(path: Path, *, core_version: str) -> None:
         assert path == initial
         assert core_version == probed_version
-        raise VersionReachedBootstrap
 
     monkeypatch.setattr(containers, "_ensure_hacs_frontend", bootstrap)
-    with pytest.raises(VersionReachedBootstrap):
-        containers._prepare_testcontainer_config(embedded=False)
+    monkeypatch.setattr(
+        containers, "_refresh_recorder_timestamps", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(containers, "_copy_local_blueprint_to_www", lambda *a, **kw: {})
+    *_, resolved_image = containers._prepare_testcontainer_config(embedded=False)
+    assert resolved_image == "sha256:fixture-immutable"
     args, kwargs = client.containers.run.call_args
     assert args[0] == "sha256:fixture-immutable"
     assert kwargs["network_disabled"] and kwargs["remove"]
@@ -599,3 +599,48 @@ def test_testcontainer_preserves_resolved_and_default_image_paths(
     with pytest.raises(ConstructionReached):
         kwargs = {} if image is None else {"image": image}
         containers._build_ha_testcontainer(tmp_path, False, None, **kwargs)
+
+
+@pytest.mark.parametrize("failure", ["probe", "bootstrap", "copy"])
+def test_failed_config_preparation_does_not_leak_session_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from tests.src.e2e import _conftest_testcontainer as containers
+
+    initial = tmp_path / "initial_test_state"
+    initial.mkdir()
+    monkeypatch.setattr(
+        containers, "__file__", str(tmp_path / "src" / "e2e" / "seed.py")
+    )
+    allocated: list[Path] = []
+    real_mkdtemp = containers.tempfile.mkdtemp
+
+    def allocate(**kwargs: Any) -> str:
+        path = real_mkdtemp(dir=tmp_path, **kwargs)
+        allocated.append(Path(path))
+        return path
+
+    def fail(*args: Any, **kwargs: Any) -> NoReturn:
+        raise RuntimeError("fixture preparation failure")
+
+    monkeypatch.setattr(containers.tempfile, "mkdtemp", allocate)
+    monkeypatch.setattr(
+        containers,
+        "_resolve_core_image",
+        fail if failure == "probe" else lambda image: (image, "2026.10.4"),
+    )
+    monkeypatch.setattr(
+        containers,
+        "_ensure_hacs_frontend",
+        fail if failure == "bootstrap" else lambda *a, **kw: None,
+    )
+    if failure == "copy":
+        monkeypatch.setattr(containers.shutil, "copytree", fail)
+    with pytest.raises(RuntimeError, match="fixture preparation failure"):
+        containers._prepare_testcontainer_config(embedded=False)
+    if failure == "copy":
+        assert allocated
+    else:
+        assert not allocated
+    assert all(not path.exists() for path in allocated)
+    assert initial.is_dir()
