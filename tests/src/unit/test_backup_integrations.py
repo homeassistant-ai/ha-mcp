@@ -355,3 +355,34 @@ async def test_restoring_a_deleted_entry_read_through_the_component_is_refused(
 
     assert exc_info.value.outcome["reason"] == "entry_deleted"
     assert [m["type"] for m in sent] == ["ha_mcp_tools/config_entries"]
+
+
+@pytest.mark.asyncio
+async def test_restore_holds_the_entry_write_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    # The restore drives an options flow, so a concurrent ha_set_integration
+    # write to the same entry must wait for it, as it does for flow helpers.
+    from types import SimpleNamespace
+
+    manager = bm.BackupManager(
+        SimpleNamespace(auto_backup_dir=str(tmp_path), enable_auto_backup=True),
+        object(),
+    )
+    held: list[bool] = []
+
+    async def read(name: str) -> dict[str, Any]:
+        return {"domain": "integration", "entity_id": "e1", "config": {}}
+
+    async def restore(name: str, data: Any, *, take_safety_backup: bool) -> Any:
+        import asyncio
+
+        held.append(manager._entry_write_owners.get("e1") is asyncio.current_task())
+        return {}
+
+    monkeypatch.setattr(manager, "_read_restore_snapshot", read)
+    monkeypatch.setattr(manager, "_restore_snapshot_data", restore)
+
+    await manager.restore_snapshot("integration_e1_x")
+
+    assert held == [True]

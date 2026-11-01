@@ -1517,6 +1517,12 @@ class BackupManager:
                     return await self._restore_snapshot_data(
                         name, data, take_safety_backup=take_safety_backup
                     )
+            if data["domain"] == "integration":
+                # The restore drives the entry's options flow.
+                async with self.config_entry_write_guard(data["entity_id"]):
+                    return await self._restore_snapshot_data(
+                        name, data, take_safety_backup=take_safety_backup
+                    )
             if data["domain"] == "entity":
                 async with restore_locks(self._client, data["config"]):
                     return await self._restore_snapshot_data(
