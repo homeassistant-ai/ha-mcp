@@ -130,6 +130,8 @@ class RoutingClient:
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         # Entry-list REST fetch; Core filters ``?domain=`` and ``?type=`` itself.
+        # Like Core, ``?type=`` keeps an entry whose integration it cannot
+        # find, except for ``helper``.
         self.rest_list_calls += 1
         self.rest_list_params = kwargs.get("params")
         params = self.rest_list_params or {}
@@ -141,6 +143,10 @@ class RoutingClient:
             and (
                 "type" not in params
                 or self._integration_types.get(e["domain"]) == params["type"]
+                or (
+                    e["domain"] not in self._integration_types
+                    and params["type"] != "helper"
+                )
             )
         ]
 
@@ -860,6 +866,39 @@ async def test_component_list_keeps_rows_core_matches_for_integration_type(
     assert resp["entries"][0]["options"] == {"elevation": 1}
     assert resp["total_count"] == 1
     assert client.start_options_flow_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("integration_type", "expected"),
+    [("service", ["s1", "o1"]), ("helper", [])],
+)
+async def test_component_list_keeps_what_core_keeps_for_an_unknown_integration(
+    integration_type: str, expected: list[str]
+) -> None:
+    # Core keeps an entry whose integration it cannot find for every type
+    # but helper; ha-mcp passes that answer on.
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={
+            "entries": [_row("m1", "mqtt"), _row("s1", "sun"), _row("o1", "gone")]
+        },
+    )
+    client = RoutingClient(
+        rest_entries=[
+            _rest_entry("m1", "mqtt"),
+            _rest_entry("s1", "sun"),
+            _rest_entry("o1", "gone"),
+        ],
+        integration_types={"mqtt": "hub", "sun": "service"},
+    )
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(integration_type=integration_type)
+
+    assert [e["entry_id"] for e in resp["entries"]] == expected
 
 
 @pytest.mark.asyncio
