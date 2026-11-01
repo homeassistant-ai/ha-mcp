@@ -547,10 +547,18 @@ def test_failed_lock_renewal_refuses_publication(
 
     failed = threading.Event()
     real_extract = tarfile.TarFile.extractall
+    real_utime = seed.os.utime
+    real_error = seed.logger.error
+    lock = state / ".hacs_frontend.lock"
 
-    def denied(path: Path, times: Any = None) -> NoReturn:
+    def denied(path: Path, *args: Any, **kwargs: Any) -> None:
+        if Path(path) == lock:
+            raise PermissionError("fixture renewal denied")
+        real_utime(path, *args, **kwargs)
+
+    def report_failure(*args: Any, **kwargs: Any) -> None:
+        real_error(*args, **kwargs)
         failed.set()
-        raise PermissionError("fixture renewal denied")
 
     def extract(archive: tarfile.TarFile, *args: Any, **kwargs: Any) -> None:
         real_extract(archive, *args, **kwargs)
@@ -565,7 +573,12 @@ def test_failed_lock_renewal_refuses_publication(
     )
     monkeypatch.setattr(seed, "_HACS_HEARTBEAT_INTERVAL_S", 0.01)
     monkeypatch.setattr(seed.os, "utime", denied)
+    monkeypatch.setattr(seed.logger, "error", report_failure)
     monkeypatch.setattr(tarfile.TarFile, "extractall", extract)
+    unrelated = state / "archive-member"
+    unrelated.write_bytes(b"fixture")
+    seed.os.utime(unrelated, None)
+    assert not failed.is_set()
     with pytest.raises(RuntimeError, match="renewal failed"):
         seed._ensure_hacs_frontend(state)
     assert not _frontend(state).exists()
