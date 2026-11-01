@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
 
+import anyio
+
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
@@ -412,9 +414,10 @@ async def _cleanup_snapshot_creation(
         return
     if failure.apply_status == "not_applied":
         try:
-            await asyncio.wait_for(
-                client.abort_config_flow(progress.flow_id), timeout=5
-            )
+            with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
+                await asyncio.wait_for(
+                    client.abort_config_flow(progress.flow_id), timeout=5
+                )
         except Exception as err:  # noqa: BLE001
             logger.warning(
                 "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
@@ -433,9 +436,14 @@ async def _cleanup_snapshot_creation(
 
 
 async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a still-pending flow without hiding the original failure."""
+    """Abort a still-pending flow without hiding the original failure.
+
+    Shielded: a cancellation arrives through an anyio cancel scope, which
+    would cancel the abort itself at its first await.
+    """
     try:
-        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
     except Exception as abort_err:  # noqa: BLE001
         logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
 
@@ -443,7 +451,10 @@ async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
 async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
     """Abort a pending subentry flow without hiding the original failure."""
     try:
-        await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(
+                client.abort_config_subentry_flow(flow_id), timeout=5.0
+            )
     except Exception as abort_err:  # noqa: BLE001
         logger.warning(
             "Failed to abort config subentry flow %s after error: %s",
@@ -861,7 +872,10 @@ async def _update_config_entry_options(
     except (Exception, asyncio.CancelledError) as flow_err:
         if progress is None or progress.apply_status == "not_applied":
             try:
-                await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
+                with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
+                    await asyncio.wait_for(
+                        client.abort_options_flow(flow_id), timeout=5.0
+                    )
             except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     "Failed to abort options flow %s for entry %s "
@@ -946,12 +960,7 @@ async def create_config_entry(
             flow=FlowRef(domain, "config"),
         )
     except (Exception, asyncio.CancelledError):
-        try:
-            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-        except Exception as abort_err:  # noqa: BLE001
-            logger.warning(
-                f"Failed to abort config flow {flow_id} after error: {abort_err}"
-            )
+        await _abort_flow_best_effort(client, flow_id)
         raise
 
     entry = result["entry"].get("result", {})

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -24,6 +25,11 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import config_entry_flow_progress
 from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    _abort_flow_best_effort,
+    _abort_subentry_flow_best_effort,
+    _cleanup_snapshot_creation,
+    _CreationFlowProgress,
     create_config_entry,
     update_config_entry_options,
 )
@@ -380,3 +386,84 @@ async def test_options_cancelled_during_the_wait_aborts_the_flow() -> None:
         await update_config_entry_options(client, "e1", {})
 
     client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+# A real cancellation (an MCP client's notifications/cancelled, a tool
+# timeout) arrives through an anyio cancel scope, which re-delivers the
+# cancellation at every later await inside it, so the abort must be shielded
+# to reach Home Assistant at all.
+
+
+def _abort_recorder() -> tuple[list[str], Any]:
+    sent: list[str] = []
+
+    async def abort(flow_id: str) -> None:
+        await asyncio.sleep(0)
+        sent.append(flow_id)
+
+    return sent, abort
+
+
+async def _cancel_scope_at_poll(client: AsyncMock, run: Any) -> None:
+    with anyio.CancelScope() as scope:
+
+        async def poll(*_args: Any, **_kwargs: Any) -> None:
+            scope.cancel()
+            await asyncio.sleep(0)
+
+        client._request.side_effect = poll
+        await run()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_add_mode_cancel_scope_still_sends_the_abort() -> None:
+    client = _client(strings={})
+    client.start_config_flow.return_value = dict(_PROGRESS)
+    sent, client.abort_config_flow.side_effect = _abort_recorder()
+
+    await _cancel_scope_at_poll(client, lambda: create_config_entry(client, "demo", {}))
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_options_cancel_scope_still_sends_the_abort() -> None:
+    client = _options_client()
+    sent, client.abort_options_flow.side_effect = _abort_recorder()
+
+    await _cancel_scope_at_poll(
+        client, lambda: update_config_entry_options(client, "e1", {})
+    )
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+async def test_best_effort_abort_is_sent_inside_a_cancelled_scope() -> None:
+    client = AsyncMock()
+    sent, client.abort_config_flow.side_effect = _abort_recorder()
+    sent_sub, client.abort_config_subentry_flow.side_effect = _abort_recorder()
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await _abort_flow_best_effort(client, "f1")
+        await _abort_subentry_flow_best_effort(client, "s1")
+
+    assert (sent, sent_sub) == (["f1"], ["s1"])
+
+
+@pytest.mark.asyncio
+async def test_helper_recreation_cleanup_is_sent_inside_a_cancelled_scope() -> None:
+    client = AsyncMock()
+    sent, client.abort_config_flow.side_effect = _abort_recorder()
+    progress = _CreationFlowProgress({})
+    progress.flow_id = "f1"
+    failure = OptionsFlowError("refused", apply_status="not_applied", entry_id="")
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await _cleanup_snapshot_creation(client, progress, failure)
+
+    assert sent == ["f1"]
