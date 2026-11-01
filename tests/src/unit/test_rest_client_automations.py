@@ -1,7 +1,6 @@
 """Unit tests for REST client automation-related methods.
 
-These tests verify error handling for automation configuration operations,
-especially the 405 Method Not Allowed error for addon proxy limitations.
+These tests verify error handling for automation configuration operations.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -81,43 +80,6 @@ class TestDeleteAutomationConfig:
             await mock_client.delete_automation_config("some_id")
 
         assert exc_info.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_delete_automation_405_addon_proxy_limitation(self, mock_client):
-        """405 error should raise HomeAssistantAPIError with helpful message.
-
-        This tests the fix for issue #414 where automations cannot be deleted
-        via the API when running ha-mcp as a Home Assistant add-on because
-        the Supervisor ingress proxy blocks DELETE HTTP method.
-        """
-        mock_client._resolve_automation_id = AsyncMock(return_value="test_unique_id")
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 405 - Method Not Allowed",
-                status_code=405,
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_automation_config("automation.test_automation")
-
-        error = exc_info.value
-        assert error.status_code == 405
-
-        # Verify the error message is helpful
-        error_message = str(error)
-        assert "cannot delete" in error_message.lower()
-
-        # Verify it mentions the addon proxy limitation
-        assert "add-on" in error_message.lower()
-        assert "supervisor" in error_message.lower()
-        assert "delete" in error_message.lower()
-
-        # Verify it provides workarounds
-        assert "workaround" in error_message.lower()
-        assert "pip" in error_message.lower() or "docker" in error_message.lower()
-        assert "delete_" in error_message.lower()  # Prefix suggestion
-        assert "home assistant ui" in error_message.lower()
 
     @pytest.mark.asyncio
     async def test_delete_automation_other_error_propagates(self, mock_client):

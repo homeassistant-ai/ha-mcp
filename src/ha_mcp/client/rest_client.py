@@ -1617,19 +1617,6 @@ class HomeAssistantClient:
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
                 ) from e
-            elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) As a fallback, disable the automation and rename it with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{identifier}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes).",
-                    status_code=405,
-                ) from e
             raise
 
     async def start_config_flow(
