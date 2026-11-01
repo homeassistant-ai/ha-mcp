@@ -42,7 +42,7 @@ from ..backup_manager import (
     get_backup_manager,
 )
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response
+from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -55,17 +55,126 @@ logger = logging.getLogger(__name__)
 _DECORATOR_TRANSIENT_ERRORS = _CAPTURE_TRANSIENT_ERRORS
 
 
-def _component_not_installed_cause(err: BaseException) -> ToolError | None:
-    """Return the ``COMPONENT_NOT_INSTALLED`` ToolError behind a capture failure.
+class PathNotAllowedError(ToolError):
+    """The File & YAML Tools component refused the file path itself.
+
+    Raised by the ``file`` capture's read. The write and delete allowlist is a
+    subset of the read gate, so a path the read refuses, the wrapped write or
+    delete would refuse too (#2908). The message names no operation and leaves
+    out the component's read allowlist, which would mislead a write; the
+    component's own text stays in ``context``.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        component_error: str,
+        *,
+        message: str | None = None,
+        suggestions: list[str] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        self.path = path
+        self.component_error = component_error
+        super().__init__(
+            json.dumps(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message or f"Path not allowed: {path}",
+                    suggestions=suggestions or _custom_path_suggestions(path),
+                    context={
+                        **(context or {}),
+                        "path": path,
+                        "component_error": component_error,
+                    },
+                ),
+                indent=2,
+                default=str,
+            ),
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
+
+
+# The component's volume roots and deny floor, which it doesn't publish to the
+# server on a refusal (custom_components/ha_mcp_tools/const.py: ALLOWED_VOLUME_
+# ROOTS, DENY_PATH_SEGMENTS, DENY_READ_BASENAMES). A unit test pins the copies.
+_VOLUME_ROOTS = ("/share", "/media", "/ssl")
+_DENY_SEGMENTS = frozenset({".storage"})
+_DENY_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
+
+
+def _custom_path_suggestions(path: str) -> list[str]:
+    """Suggest a custom path only where the settings UI can accept one."""
+    parts = path.lower().split("/")
+    if _DENY_SEGMENTS.intersection(parts) or parts[-1] in _DENY_BASENAMES:
+        return ["This path is never available to the file tools"]
+    if path.startswith("/") and not any(
+        path == root or path.startswith(root + "/") for root in _VOLUME_ROOTS
+    ):
+        return [
+            "Custom filesystem paths accept absolute paths only under "
+            f"{', '.join(_VOLUME_ROOTS)}; this one cannot be allowed"
+        ]
+    return [
+        "If it isn't listed already, add it or a folder above it under "
+        "Custom filesystem paths in the ha-mcp settings UI"
+    ]
+
+
+def path_refusal(err: BaseException) -> PathNotAllowedError | None:
+    """The component's path refusal that is, or caused, ``err``; else ``None``."""
+    if isinstance(err, PathNotAllowedError):
+        return err
+    cause = _component_refusal_cause(err)
+    return cause if isinstance(cause, PathNotAllowedError) else None
+
+
+def raise_if_snapshot_path_refused(
+    err: BaseException, action: str, backup_name: str, data: Any = None
+) -> None:
+    """Re-frame a refused live-file read during a diff or restore of a snapshot.
+
+    A snapshot of a path that is no longer allowed (a removed custom path, or
+    any ``/backup`` path after #2875) can't be compared with or written back to
+    its live file. Say that, instead of the write-oriented path refusal. A
+    restore passes its outcome as ``data``, so callers still see that nothing
+    was applied. (On-demand create has no snapshot yet and reports the plain
+    refusal.)
+    """
+    refusal = path_refusal(err)
+    if refusal is None:
+        return
+    raise PathNotAllowedError(
+        refusal.path,
+        refusal.component_error,
+        message=(
+            f"Cannot {action} {backup_name!r}: its live file {refusal.path} is "
+            "no longer readable through the file tools (the path is not allowed)"
+        ),
+        suggestions=[
+            "View the snapshot with ha_manage_backup(scope='edits', "
+            f"action='view', backup_name={backup_name!r}) to recover its content",
+            *_custom_path_suggestions(refusal.path),
+        ],
+        context={
+            "backup_name": backup_name,
+            "action": action,
+            **({"data": data} if data is not None else {}),
+        },
+    ) from None
+
+
+def _component_refusal_cause(err: BaseException) -> ToolError | None:
+    """Return the component's own refusal behind a capture failure.
 
     A mandatory pre-write snapshot reads the current content through the same
-    File & YAML Tools services the wrapped write needs, so on an install
-    without that config entry the capture fails FIRST and the write would be
-    refused as ``BACKUP_CAPTURE_FAILED`` — burying the actionable "add the
-    entry" guidance one level deep (#2292). Walk the cause chain for the
-    original structured error so the caller can surface it unchanged: retrying
-    the backup cannot succeed, and the remediation is the component's, not the
-    backup pipeline's.
+    File & YAML Tools services the wrapped write needs, so when the component
+    refuses the call the capture fails FIRST and the write would be refused as
+    ``BACKUP_CAPTURE_FAILED``, burying the real error one level deep. Two
+    refusals are surfaced unchanged: ``COMPONENT_NOT_INSTALLED`` (no tools
+    entry, #2292) and ``PathNotAllowedError`` (the path is outside the
+    allowlist, #2908). Retrying the backup cannot succeed for either, and the
+    remediation is the component's, not the backup pipeline's.
     """
     seen: set[int] = set()
     # Worklist over BOTH chain links: an explicit ``raise ... from other``
@@ -79,6 +188,8 @@ def _component_not_installed_cause(err: BaseException) -> ToolError | None:
         if id(cause) in seen:
             continue
         seen.add(id(cause))
+        if isinstance(cause, PathNotAllowedError):
+            return cause
         if isinstance(cause, ToolError):
             try:
                 payload = json.loads(str(cause))
@@ -389,19 +500,18 @@ async def _capture_pre_write_snapshot(
             # wrapped write never runs, so nothing has been changed.
             # The ToolError this raises propagates rather than being
             # swallowed by the best-effort handler below.
-            component_error = _component_not_installed_cause(err)
+            component_error = _component_refusal_cause(err)
             if component_error is not None:
-                # The capture failed because the File & YAML Tools entry is
-                # not set up — the same reason the wrapped write itself would
-                # refuse. Surface that actionable error (add the entry), not a
-                # backup complaint (#2292). The write is still blocked. ``from
-                # None`` because this IS the underlying error being unwrapped;
-                # chaining it back onto the wrapper it came out of would only
-                # print the chain twice (and B904 wants the intent explicit).
-                # ``from None`` also drops the wrapper's own text from the
-                # traceback, so record it here or the only account of WHICH
-                # mandatory capture was re-pointed at the component error is
-                # gone.
+                # The capture failed because the component refused the call —
+                # the same reason the wrapped write itself would refuse. Surface
+                # that actionable error, not a backup complaint (#2292, #2908).
+                # The write is still blocked. ``from None`` because this IS the
+                # underlying error being unwrapped; chaining it back onto the
+                # wrapper it came out of would only print the chain twice (and
+                # B904 wants the intent explicit). ``from None`` also drops the
+                # wrapper's own text from the traceback, so record it here or
+                # the only account of WHICH mandatory capture was re-pointed at
+                # the component error is gone.
                 logger.warning(
                     "Auto-backup: mandatory capture for '%s' failed (%s) — "
                     "surfacing the underlying component error instead; the "

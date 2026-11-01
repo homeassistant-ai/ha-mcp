@@ -62,6 +62,7 @@ from .const import (
 )
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
+from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
 from .yaml_rt import (
     apply_seq_indent,
@@ -692,7 +693,7 @@ def _volume_root_for(abs_path: str) -> str | None:
     ``abs_path`` falls within, or ``None`` (issue #1586).
 
     Boundary-aware on a path-separator: ``/share`` and ``/share/x`` match
-    ``/share``; ``/shared`` and ``/backups`` do NOT (a string-prefix match would
+    ``/share``; ``/shared`` and ``/medias`` do NOT (a string-prefix match would
     wrongly admit them). ``abs_path`` must already be ``posixpath.normpath``'d —
     the volume roots are inherently POSIX and the component only runs on HA Core
     (Linux), so we never use the host ``os.sep`` here.
@@ -756,8 +757,7 @@ def _normalize_volume_dir(entry: str) -> str | None:
     Returns the cleaned absolute path, or ``None`` if it is not at/under a known
     volume root or hits the deny floor. POSIX-normalized regardless of host OS
     (the roots are inherently POSIX and the component only runs on HA Core).
-    Existence is NOT required (mirrors config-relative extra dirs); an unmounted
-    volume just yields ``not found`` at use time.
+    Existence is NOT required; _write_file_sync checks the mount (issue #2875).
     """
     normalized = posixpath.normpath(entry)
     root = _volume_root_for(normalized)
@@ -1423,6 +1423,10 @@ def _write_file_sync(
     config_dir: Path,
 ) -> dict[str, Any]:
     """Bundle write_file blocking I/O for a single executor offload."""
+    # Never write into an unmounted volume (volume_mounts.py, #2875).
+    root = _volume_root_for(posixpath.normpath(str(target_file)))
+    if root is not None and not on_mounted_volume(target_file, root):
+        return {"_error": "not_mounted", "parent": root}
     exists = target_file.exists()
     if exists and not overwrite:
         return {"_error": "exists_no_overwrite"}
@@ -1430,16 +1434,12 @@ def _write_file_sync(
         target_file.parent.mkdir(parents=True, exist_ok=True)
     elif not target_file.parent.exists():
         # Config-relative parents report relative to the config dir; an absolute
-        # HAOS sibling-volume parent (issue #1586) is not under it, so report it
-        # absolute rather than raising ValueError on relative_to.
+        # volume parent (issue #1586) is not under it, so report it absolute.
         try:
             parent = str(target_file.parent.relative_to(config_dir))
         except ValueError:
             parent = str(target_file.parent)
-        return {
-            "_error": "no_parent",
-            "parent": parent,
-        }
+        return {"_error": "no_parent", "parent": parent}
     target_file.write_text(content)
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
@@ -3012,7 +3012,7 @@ def _build_write_file_handler(
             _LOGGER.error("Error writing file %s: %s", rel_path, err)
             return {
                 "success": False,
-                "error": str(err),
+                "error": os_error_text(err, rel_path),
             }
 
         err_kind = result.get("_error")
@@ -3021,10 +3021,10 @@ def _build_write_file_handler(
                 "success": False,
                 "error": f"File already exists: {rel_path}. Set overwrite=true to replace.",
             }
-        if err_kind == "no_parent":
+        if err_kind in PARENT_ERRORS:
             return {
                 "success": False,
-                "error": f"Parent directory does not exist: {result['parent']}",
+                "error": PARENT_ERRORS[err_kind].format(result["parent"]),
             }
 
         size = result["size"]
@@ -3082,7 +3082,7 @@ def _build_delete_file_handler(
             _LOGGER.error("Error deleting file %s: %s", rel_path, err)
             return {
                 "success": False,
-                "error": str(err),
+                "error": os_error_text(err, rel_path),
             }
 
         err_kind = result.get("_error")
