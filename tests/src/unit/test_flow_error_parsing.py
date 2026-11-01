@@ -576,3 +576,17 @@ def test_a_flow_ref_takes_the_flow_categories_core_has(path: str) -> None:
 def test_a_flow_ref_refuses_a_path_core_has_no_flow_for(path: str) -> None:
     with pytest.raises(ValueError, match="flow path"):
         FlowRef("demo", path)
+
+
+@pytest.mark.asyncio
+async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level() -> None:
+    client = AsyncMock()
+    client.send_websocket_message.side_effect = RuntimeError("no answer")
+    step = {"type": "form", "step_id": "user", "errors": {"base": "not_valid"}}
+
+    with pytest.raises(ToolError) as exc_info:
+        await raise_form_errors(client, FlowRef("filesize", "config"), "f1", step)
+
+    body = json.loads(str(exc_info.value))
+    assert "error_text" not in body
+    assert any("could not be read" in w for w in body["warnings"])

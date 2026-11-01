@@ -331,7 +331,10 @@ async def raise_form_errors(
         "data_schema": schema,
     }
     if isinstance(errors, dict):
-        if texts := await _flow_texts(client, flow, current_step, "error", errors):
+        texts = await _flow_texts(client, flow, current_step, "error", errors)
+        if warnings := texts.pop("warnings", None):
+            context["warnings"] = warnings
+        if texts:
             context["error_text"] = texts
     raise_tool_error(
         create_error_response(
