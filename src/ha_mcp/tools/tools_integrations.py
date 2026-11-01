@@ -1179,8 +1179,9 @@ class IntegrationTools:
         """List config entries with optional domain/query filtering and pagination."""
         # Component fast path: one in-process read (domain filtered server-side,
         # options materialized on each row) replaces the per-entry OptionsFlow
-        # probes; the REST list is still read when integration_type filters. Normalize the domain to HA's canonical lowercase:
-        # both the component and Core's REST list filter by exact match.
+        # probes; the REST list is still read when integration_type filters.
+        # Normalize the domain to HA's canonical lowercase: both the component
+        # and Core's REST list filter by exact match.
         domain_norm = domain.strip().lower() if domain else None
         params: dict[str, str] = {}
         if domain_norm:

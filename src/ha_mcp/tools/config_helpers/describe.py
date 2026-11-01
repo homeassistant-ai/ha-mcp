@@ -147,34 +147,32 @@ def _with_help(fields: list[dict[str, Any]], help_text: dict[str, str]) -> None:
 
 
 async def describe_form(
-    client: Any,
-    domain: str | None,
-    path: str,
-    step: dict[str, Any],
-    warnings: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """A flow form's fields in brief, with HA's help text for each.
+    client: Any, domain: str | None, path: str, step: dict[str, Any]
+) -> dict[str, Any]:
+    """A flow form in brief: ``fields`` with HA's help text for each,
+    ``more_forms``/``note`` when a later form follows, and ``warnings`` when
+    Core's strings could not be read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
-    or ``config_subentries.<type>``. A failed strings read is appended to
-    ``warnings``; without a ``domain`` there is no help text to read.
+    or ``config_subentries.<type>``. Without a ``domain`` there is no help
+    text to read.
     """
     fields = compact_schema(step.get("schema") or step.get("data_schema") or [])
+    described: dict[str, Any] = {"fields": fields, **_later_forms(step)}
     step_id = step.get("step_id")
     if step_id and domain:
         strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
         if strings is None:
-            if warnings is not None:
-                warnings.append(strings_unread_warning(domain))
+            described["warnings"] = [strings_unread_warning(domain)]
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
-    return fields
+    return described
 
 
 _MORE_FORMS = {False: "yes", None: "depends_on_answers"}
 
 
-def later_forms(step: dict[str, Any]) -> dict[str, Any]:
+def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
     """Say when HA asks for more fields on a later form of the same flow."""
     more = _MORE_FORMS.get(step.get("last_step"))
     if more is None:
@@ -197,14 +195,9 @@ async def _describe_flow(
                 helper_type, menu_choice, f"{helper_type} opens with a form, not a menu"
             )
         if "schema" in info:
-            warnings: list[str] = []
             return {
                 "source": "config_flow",
-                "fields": await describe_form(
-                    client, helper_type, "config", info, warnings
-                ),
-                **later_forms(info),
-                **({"warnings": warnings} if warnings else {}),
+                **await describe_form(client, helper_type, "config", info),
             }
         if "menu_options" in info:
             return {
@@ -258,14 +251,9 @@ async def _describe_flow(
                     context={"helper_type": helper_type, "helper_id": entry_id},
                 )
             )
-        options_warnings: list[str] = []
         return {
             "source": "options_flow",
-            "fields": await describe_form(
-                client, helper_type, "options", result, options_warnings
-            ),
-            **later_forms(result),
-            **({"warnings": options_warnings} if options_warnings else {}),
+            **await describe_form(client, helper_type, "options", result),
         }
     finally:
         if flow_id:

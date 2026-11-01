@@ -43,7 +43,7 @@ async def wait_for_progress(
     step: dict[str, Any],
     *,
     is_reconfigure: bool = False,
-    poll: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    poll: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]],
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
 ) -> dict[str, Any]:
@@ -55,12 +55,6 @@ async def wait_for_progress(
     text for it when the step is still in progress after
     ``PROGRESS_BUDGET_S``. The flow is left open; the walkers' callers abort it.
     """
-    if poll is None:
-
-        async def poll(url: str, _step: dict[str, Any]) -> dict[str, Any]:
-            result: dict[str, Any] = await client._request("GET", url)
-            return result
-
     resource = _FLOW_RESOURCES[flow.path.split(".")[0]]
     url = f"/config/config_entries/{resource}/{flow_id}"
     deadline = clock() + PROGRESS_BUDGET_S

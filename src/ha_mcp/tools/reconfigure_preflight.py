@@ -18,7 +18,7 @@ from .config_entry_flow_errors import FlowRef, ReconfigureStatus, abort_reason_t
 from .config_entry_flow_form import _RESERVED_CONFIG_KEYS, _extract_schema_field_names
 from .config_entry_flow_introspect import menu_choices
 from .config_entry_flow_walker import _RECONFIGURE_SUCCESS_REASONS
-from .config_helpers.describe import describe_form, later_forms
+from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error
 
 
@@ -83,13 +83,7 @@ async def read_reconfigure_form(
                 "in config. The form behind it is checked when you confirm."
             )
         elif step.get("type") == "form":
-            warnings: list[str] = []
-            form["fields"] = await describe_form(
-                client, domain, flow.path, step, warnings
-            )
-            form.update(later_forms(step))
-            if warnings:
-                form["warnings"] = warnings
+            form.update(await describe_form(client, domain, flow.path, step))
     finally:
         await _abort_flow_best_effort(client, step.get("flow_id"))
     if step.get("type") != "form":

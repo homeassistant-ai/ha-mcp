@@ -49,6 +49,7 @@ def _client(first_step: dict[str, Any], strings: dict[str, str] | None = None):
     client = AsyncMock()
     client.start_options_flow.return_value = first_step
     client.start_config_subentry_flow.return_value = first_step
+    client.start_config_flow.return_value = first_step
     client.send_websocket_message.return_value = {
         "success": True,
         "result": {"resources": strings or {}},
@@ -384,15 +385,9 @@ async def test_menu_choice_without_a_schema_is_reported_as_ignored() -> None:
 # --- the setup (config) flow of a domain, read in list mode -----------------
 
 
-def _config_client(first_step: dict[str, Any], strings: dict[str, str] | None = None):
-    client = _client(first_step, strings)
-    client.start_config_flow.return_value = first_step
-    return client
-
-
 @pytest.mark.asyncio
 async def test_setup_form_is_described_with_help_under_config() -> None:
-    client = _config_client(
+    client = _client(
         _form("user", _HOST, last_step=False),
         {"component.demo.config.step.user.data_description.host": "Device IP."},
     )
@@ -410,7 +405,7 @@ async def test_setup_form_is_described_with_help_under_config() -> None:
 
 @pytest.mark.asyncio
 async def test_setup_flow_that_aborts_returns_cores_reason_text() -> None:
-    client = _config_client(
+    client = _client(
         {
             "type": "abort",
             "flow_id": "f1",
@@ -437,7 +432,7 @@ async def test_setup_flow_that_aborts_returns_cores_reason_text() -> None:
 
 @pytest.mark.asyncio
 async def test_menu_choice_on_an_aborted_setup_flow_still_returns_the_reason() -> None:
-    client = _config_client(
+    client = _client(
         {"type": "abort", "flow_id": "f1", "reason": "single_instance_allowed"}
     )
     resp: dict[str, Any] = {}
@@ -449,7 +444,7 @@ async def test_menu_choice_on_an_aborted_setup_flow_still_returns_the_reason() -
 
 @pytest.mark.asyncio
 async def test_setup_menu_lists_branches_until_menu_choice_picks_one() -> None:
-    client = _config_client(dict(_MENU))
+    client = _client(dict(_MENU))
 
     resp: dict[str, Any] = {}
     await fetch_config_flow_schema(client, "group", resp)
@@ -478,7 +473,7 @@ def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
 async def test_setup_flow_that_creates_an_entry_names_it_even_with_menu_choice() -> (
     None
 ):
-    client = _config_client(
+    client = _client(
         {
             "type": "create_entry",
             "flow_id": "f1",
@@ -494,7 +489,7 @@ async def test_setup_flow_that_creates_an_entry_names_it_even_with_menu_choice()
 
 @pytest.mark.asyncio
 async def test_setup_flow_that_creates_an_entry_fails_and_names_the_entry() -> None:
-    client = _config_client(
+    client = _client(
         {
             "type": "create_entry",
             "flow_id": "f1",
@@ -518,7 +513,7 @@ async def test_setup_flow_that_creates_an_entry_fails_and_names_the_entry() -> N
 
 @pytest.mark.asyncio
 async def test_menu_choice_whose_step_creates_an_entry_fails() -> None:
-    client = _config_client(dict(_MENU))
+    client = _client(dict(_MENU))
     client.submit_config_flow_step.return_value = {
         "type": "create_entry",
         "flow_id": "f1",
@@ -577,7 +572,7 @@ _PROGRESS_STEP = {
 
 @pytest.mark.asyncio
 async def test_setup_flow_in_progress_is_aborted_and_named_with_cores_text() -> None:
-    client = _config_client(
+    client = _client(
         dict(_PROGRESS_STEP),
         {"component.demo.config.progress.scanning": "Scanning the network."},
     )
@@ -624,7 +619,7 @@ async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_domain_is_a_warning_not_a_failure() -> None:
-    client = _config_client({})
+    client = _client({})
     client.start_config_flow.side_effect = HomeAssistantAPIError(
         "API error: 404 - Invalid handler specified",
         status_code=404,
@@ -643,7 +638,7 @@ async def test_unknown_domain_is_a_warning_not_a_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
-    client = _config_client(_form("user", _HOST))
+    client = _client(_form("user", _HOST))
 
     with pytest.raises(ToolError):
         await fetch_config_flow_schema(client, "demo", {}, menu_choice="advanced")
@@ -653,7 +648,7 @@ async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
 
 @pytest.mark.asyncio
 async def test_list_mode_include_schema_describes_the_domains_setup_flow() -> None:
-    client = _config_client(_form("user", _HOST))
+    client = _client(_form("user", _HOST))
     tools = IntegrationTools(client)
     tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
 
@@ -665,7 +660,7 @@ async def test_list_mode_include_schema_describes_the_domains_setup_flow() -> No
 
 @pytest.mark.asyncio
 async def test_list_mode_include_schema_without_domain_is_reported_as_ignored() -> None:
-    client = _config_client(_form("user", _HOST))
+    client = _client(_form("user", _HOST))
     tools = IntegrationTools(client)
     tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
 
@@ -718,7 +713,7 @@ async def test_a_string_core_does_not_ship_is_no_warning() -> None:
 async def test_a_failed_abort_of_the_setup_describe_is_logged_as_a_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    client = _config_client(_form("user", _HOST))
+    client = _client(_form("user", _HOST))
     client.abort_config_flow.side_effect = HomeAssistantAPIError(
         "API error: 500", status_code=500
     )

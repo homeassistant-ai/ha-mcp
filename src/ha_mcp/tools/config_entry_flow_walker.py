@@ -12,7 +12,6 @@ public entry points in ``config_entry_flow`` import from here.
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 from ..client.rest_client import _NO_ANSWER_ERRORS, HomeAssistantAPIError
@@ -146,15 +145,20 @@ async def _submit_step(
         raise
 
 
-def _progress_poll(
-    client: Any, flow_id: str, *, is_reconfigure: bool
-) -> Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]:
-    """The GET for ``wait_for_progress``, classified like a submit.
+async def _wait_for_progress(
+    client: Any,
+    flow: FlowRef,
+    flow_id: str,
+    step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+) -> dict[str, Any]:
+    """``wait_for_progress`` with each GET classified like a submit.
 
     The GET re-runs the flow, so the step after ``progress_done`` may commit.
     """
 
-    async def poll(url: str, step: dict[str, Any]) -> dict[str, Any]:
+    async def poll(url: str, polled: dict[str, Any]) -> dict[str, Any]:
         return await _submit_step(
             lambda _flow_id, _payload: client._request("GET", url),
             flow_id,
@@ -162,11 +166,13 @@ def _progress_poll(
             client=client,
             helper_type=None,
             last_menu_choice=None,
-            current_step=step,
+            current_step=polled,
             is_reconfigure=is_reconfigure,
         )
 
-    return poll
+    return await wait_for_progress(
+        client, flow, flow_id, step, is_reconfigure=is_reconfigure, poll=poll
+    )
 
 
 def _raise_reconfigure_no_answer(
@@ -454,13 +460,8 @@ async def _wait_out_progress_or_refuse(
 ) -> dict[str, Any]:
     result_type = current_step.get("type")
     if result_type in PROGRESS_STEP_TYPES and flow is not None:
-        return await wait_for_progress(
-            client,
-            flow,
-            flow_id,
-            current_step,
-            is_reconfigure=is_reconfigure,
-            poll=_progress_poll(client, flow_id, is_reconfigure=is_reconfigure),
+        return await _wait_for_progress(
+            client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
         )
     raise_tool_error(
         create_error_response(
@@ -923,13 +924,8 @@ async def _handle_config_subentry_flow_steps(
             continue
 
         if result_type in PROGRESS_STEP_TYPES and flow is not None:
-            current_step = await wait_for_progress(
-                client,
-                flow,
-                flow_id,
-                current_step,
-                is_reconfigure=is_reconfigure,
-                poll=_progress_poll(client, flow_id, is_reconfigure=is_reconfigure),
+            current_step = await _wait_for_progress(
+                client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
             )
             continue
 

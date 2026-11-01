@@ -81,7 +81,13 @@ def _client(*polled: dict[str, Any], strings: dict[str, str] | None = None):
 
 async def _wait(client: Any, step: dict[str, Any], flow: FlowRef, clock: _FakeClock):
     return await wait_for_progress(
-        client, flow, "f1", step, clock=clock, sleep=clock.sleep
+        client,
+        flow,
+        "f1",
+        step,
+        poll=lambda url, _step: client._request("GET", url),
+        clock=clock,
+        sleep=clock.sleep,
     )
 
 

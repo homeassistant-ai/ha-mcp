@@ -35,7 +35,7 @@ from .config_entry_flow_errors import (
 )
 from .config_entry_flow_form import iter_schema_fields
 from .config_entry_flow_introspect import menu_choices
-from .config_helpers.describe import describe_form, later_forms
+from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ def _entry_domain(entry: dict[str, Any] | None) -> str | None:
     return domain if isinstance(domain, str) and domain else None
 
 
-def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> None:
+def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> NoReturn:
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -269,14 +269,11 @@ async def _describe_step(
                 context={"step_id": step.get("step_id"), **chosen, **progress},
             )
         )
-    warnings: list[str] = []
     return {
         "flow_type": "form",
         "step_id": step.get("step_id"),
         **chosen,
-        "fields": await describe_form(client, flow.domain, flow.path, step, warnings),
-        **later_forms(step),
-        **({"warnings": warnings} if warnings else {}),
+        **await describe_form(client, flow.domain, flow.path, step),
     }
 
 

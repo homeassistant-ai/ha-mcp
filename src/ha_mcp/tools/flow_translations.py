@@ -57,7 +57,7 @@ async def fetch_flow_strings(
 
 
 def field_help(
-    strings: Mapping[str, Any], domain: str, path: str, step_id: str | None
+    strings: Mapping[str, Any], domain: str, path: str, step_id: str
 ) -> dict[str, str]:
     """HA's help text for a flow step's fields, keyed by field name.
 
@@ -65,8 +65,6 @@ def field_help(
     or ``config_subentries.<type>``. A field with no help text of its own gets
     its UI label instead.
     """
-    if not step_id:
-        return {}
     prefix = f"component.{domain}.{path}.step.{step_id}."
     descriptions: dict[str, str] = {}
     labels: dict[str, str] = {}
