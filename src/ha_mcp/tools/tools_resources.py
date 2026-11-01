@@ -56,7 +56,6 @@ from .resource_patch import (
     check_config_hash,
     find_resource,
     load_inline_resource,
-    resource_write_lock,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -441,8 +440,7 @@ class ResourceTools:
             )
         # ``None`` stays the documented "create-new" sentinel; an explicit
         # empty/whitespace ``resource_id`` would route to the create branch
-        # of ``_upsert_resource`` and lose update intent. Checked before the
-        # lock, so an invalid ID never creates one.
+        # of ``_upsert_resource`` and lose update intent.
         if resource_id is not None:
             validate_identifier_not_empty(
                 resource_id,
@@ -453,12 +451,9 @@ class ResourceTools:
                 ],
                 context={"action": "set"},
             )
-        async with resource_write_lock(resource_id):
-            if content is not None:
-                return await self._set_inline_resource(
-                    content, resource_type, resource_id
-                )
-            return await self._set_url_resource(url, resource_type, resource_id)
+        if content is not None:
+            return await self._set_inline_resource(content, resource_type, resource_id)
+        return await self._set_url_resource(url, resource_type, resource_id)
 
     def _raise_ha_config_yaml_misroute(
         self, detected_yaml: str, resource_type: str
@@ -630,32 +625,32 @@ class ResourceTools:
             suggestions=["Pass the ID of the inline resource to patch"],
             context={"action": "patch"},
         )
-        # Held from the read through the write, so a concurrent write from
-        # this server cannot land in between and be overwritten.
-        async with resource_write_lock(resource_id):
-            try:
-                stored, resource_type = await load_inline_resource(
-                    self._client, resource_id
-                )
-            except ToolError:
-                raise
-            except Exception as e:
-                logger.error(f"Error reading dashboard resource to patch: {e}")
-                exception_to_structured_error(
-                    e,
-                    context={
-                        "tool": "ha_config_set_dashboard_resource",
-                        "action": "patch",
-                        "resource_id": resource_id,
-                    },
-                )
-                # Unreachable (exception_to_structured_error is NoReturn).
-                raise
-            check_config_hash(stored, config_hash)
-            patched = apply_resource_edits(stored, edits)
-            response = await self._set_inline_resource(
-                patched, resource_type, resource_id, check_preview=False
+        # with_auto_backup holds this resource's write lock around the whole
+        # call (resource_write_lock), so no other write through this server
+        # lands between this read and the write below.
+        try:
+            stored, resource_type = await load_inline_resource(
+                self._client, resource_id
             )
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error reading dashboard resource to patch: {e}")
+            exception_to_structured_error(
+                e,
+                context={
+                    "tool": "ha_config_set_dashboard_resource",
+                    "action": "patch",
+                    "resource_id": resource_id,
+                },
+            )
+            # Unreachable (exception_to_structured_error is NoReturn).
+            raise
+        check_config_hash(stored, config_hash)
+        patched = apply_resource_edits(stored, edits)
+        response = await self._set_inline_resource(
+            patched, resource_type, resource_id, check_preview=False
+        )
         return {**response, "action": "patched", "applied": len(edits)}
 
     async def _reject_truncated_preview_resave(

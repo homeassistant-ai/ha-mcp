@@ -10,14 +10,16 @@ import pytest
 
 from ha_mcp import backup_manager
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools import auto_backup, resource_patch
 from ha_mcp.tools.resource_codec import (
     _PREVIEW_LENGTH,
     MAX_CONTENT_SIZE,
     _data_uri_for,
     _decode_data_uri,
 )
-from ha_mcp.tools.resource_patch import resource_write_lock
+from ha_mcp.tools.resource_patch import RESOURCE_LOCK_REGISTRY, resource_write_lock
 from ha_mcp.tools.tools_resources import ResourceTools
+from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 from .test_resource_codec import _legacy_url
 
@@ -37,6 +39,7 @@ class FakeLovelace:
         self.updates: list[dict[str, Any]] = []
         # What HA stores for a written URL; Core returns the stored item.
         self.store: Callable[[str], str] = lambda url: url
+        self.reject_updates = False
 
     async def send_websocket_message(self, message: dict[str, Any]) -> Any:
         await asyncio.sleep(0)
@@ -47,6 +50,12 @@ class FakeLovelace:
             return {"success": True, "result": {"resource_mode": "storage"}}
         if kind == "lovelace/resources/update":
             self.updates.append(message)
+            if self.reject_updates:
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "error": {"message": "Unable to find resource"},
+                }
             item = {
                 "id": message["resource_id"],
                 "type": message["res_type"],
@@ -214,9 +223,17 @@ class TestPatchRefusals:
         assert error["reason"] == "unsupported_type"
         assert error["resource_type"] == "js"
 
-    async def test_oversized_edit_payload_is_refused_before_applying(self):
+    async def test_oversized_edit_payload_is_refused_before_applying(self, monkeypatch):
         fake = FakeLovelace([_inline(CARD)])
         half = "x" * (MAX_CONTENT_SIZE // 2 + 1)
+        calls: list[str] = []
+        count = resource_patch._count_occurrences
+
+        def recording_count(haystack: str, needle: str) -> int:
+            calls.append(needle)
+            return count(haystack, needle)
+
+        monkeypatch.setattr(resource_patch, "_count_occurrences", recording_count)
 
         # The final result would fit; the combined 'new' texts do not.
         error = await _patch_error(
@@ -229,15 +246,43 @@ class TestPatchRefusals:
 
         assert error["reason"] == "edits_too_large"
         assert error["size"] > error["limit"]
+        assert calls == [], "no edit may be applied before the size check"
 
-    async def test_result_over_the_size_limit_is_refused(self):
+    async def test_unpaired_surrogate_in_new_is_an_invalid_edit(self):
         fake = FakeLovelace([_inline(CARD)])
 
         error = await _patch_error(
-            fake, edits=[{"old": "'red'", "new": "'" + "r" * MAX_CONTENT_SIZE + "'"}]
+            fake,
+            edits=[
+                {"old": "'red'", "new": "'blue'"},
+                {"old": "1.5", "new": "\ud800"},
+            ],
         )
 
+        assert error["reason"] == "invalid_edit"
+        assert error["edit_index"] == 1
+
+    async def test_result_over_the_size_limit_is_refused(self):
+        near_limit = "/*" + "x" * (MAX_CONTENT_SIZE - 20) + "*/\nconst c = 'red';\n"
+        fake = FakeLovelace([_inline(near_limit)])
+
+        # The 'new' text is small; only the patched content crosses the limit.
+        error = await _patch_error(
+            fake, edits=[{"old": "'red'", "new": "'r" + "e" * 40 + "d'"}]
+        )
+
+        assert "Content too large" in error["error"]["message"]
         assert error["size"] > error["limit"]
+
+    async def test_rejected_update_is_reported_and_leaves_the_resource(self):
+        fake = FakeLovelace([_inline(CARD)])
+        fake.reject_updates = True
+
+        with pytest.raises(ToolError) as exc_info:
+            await _patch(fake, edits=[{"old": "'red'", "new": "'blue'"}])
+
+        assert _error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert _decode_data_uri(fake.resources[0]["url"]) == CARD
 
     async def test_unknown_resource_id_is_not_found(self):
         fake = FakeLovelace([_inline(CARD) | {"id": "other"}])
@@ -259,6 +304,24 @@ class TestWriteSerialization:
         stored = _decode_data_uri(fake.resources[0]["url"])
         assert stored == CARD.replace("'red'", "'blue'").replace("1.5", "2.5")
 
+    async def test_backup_capture_runs_inside_the_write_lock(self, monkeypatch):
+        held: list[bool] = []
+
+        async def capture(*_args: Any, **_kwargs: Any) -> None:
+            held.append(
+                registry_update_lock(RESOURCE_LOCK_REGISTRY, RESOURCE_ID).locked()
+            )
+
+        settings = type("Settings", (), {"enable_auto_backup": True})()
+        monkeypatch.setattr(auto_backup, "get_global_settings", lambda: settings)
+        monkeypatch.setattr(auto_backup, "_capture_pre_write_snapshot", capture)
+
+        await _patch(
+            FakeLovelace([_inline(CARD)]), edits=[{"old": "'red'", "new": "'blue'"}]
+        )
+
+        assert held == [True]
+
     async def test_restore_waits_for_the_tool_write_lock(self, monkeypatch):
         sent: list[dict[str, Any]] = []
 
@@ -276,8 +339,7 @@ class TestWriteSerialization:
             for _ in range(5):
                 await asyncio.sleep(0)
             assert sent == [], "restore must not write while a tool write runs"
-        await restore
-
+        assert await restore == {"id": RESOURCE_ID}
         assert [m["type"] for m in sent] == ["lovelace/resources/update"]
 
 

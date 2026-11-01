@@ -44,6 +44,7 @@ from ..backup_manager import (
 from ..config import get_global_settings
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from .helpers import raise_tool_error
+from .resource_patch import resource_write_lock
 
 logger = logging.getLogger(__name__)
 
@@ -398,11 +399,18 @@ def with_auto_backup(
 async def _template_write_context(
     client: Any, settings: Any, domain: str, entity_id: str
 ) -> AsyncIterator[None]:
-    """Keep a helper edit's capture and mutation in the restore critical section.
+    """Keep a write's capture and mutation in one critical section.
 
-    The lock is needed even when ordinary auto-backup is disabled: restores
-    of existing flow helpers require a safety snapshot before replacing
-    their current options.
+    Flow helpers and integrations share the restore critical section. The lock
+    is needed even when ordinary auto-backup is disabled: restores of existing
+    flow helpers require a safety snapshot before replacing their current
+    options.
+
+    Dashboard resources take their per-resource write lock here, so the
+    snapshot, the tool's own read (an ``edits=`` patch) and its write cannot
+    interleave with another write through this server, and a snapshot always
+    holds the state the write replaced. The resource tools must not take it
+    again: ``asyncio.Lock`` is not reentrant.
     """
     # Both options-update tools take stable config-entry IDs. Alias-based helper
     # removal and dotted subentry targets have separate resolution paths.
@@ -412,6 +420,9 @@ async def _template_write_context(
     if is_entry_write and entity_id and client is not None:
         manager = get_backup_manager(client, settings)
         async with manager.config_entry_write_guard(entity_id):
+            yield
+    elif domain == "dashboard_resource" and entity_id:
+        async with resource_write_lock(entity_id):
             yield
     else:
         yield

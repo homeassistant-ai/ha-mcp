@@ -33,10 +33,10 @@ RESOURCE_LOCK_REGISTRY = "dashboard_resource"
 def resource_write_lock(resource_id: str | None) -> AbstractAsyncContextManager[Any]:
     """Serialize this process's writes to one resource; a create needs none.
 
-    Hold it from any read the write depends on through the write itself.
-    Writes from the HA UI or other clients are not serialized. Never nest
-    it: ``asyncio.Lock`` is not reentrant, so take it in the tool entry
-    points, not in the shared write helpers.
+    ``with_auto_backup`` holds it around every dashboard_resource tool call,
+    from the pre-write snapshot through the write. Writes from the HA UI or
+    other clients are not serialized. Never take it inside those tools:
+    ``asyncio.Lock`` is not reentrant.
     """
     if resource_id is None:
         return nullcontext()
@@ -109,7 +109,18 @@ def apply_resource_edits(content: str, edits: list[ResourceEdit]) -> str:
         )
     # Bound the work before the loop: each edit scans and copies the whole
     # intermediate text, and the result's own size check only runs after it.
-    added = sum(len(edit["new"].encode("utf-8")) for edit in edits)
+    added = 0
+    for index, edit in enumerate(edits):
+        try:
+            added += len(edit["new"].encode("utf-8"))
+        except UnicodeEncodeError:
+            _raise_edit_error(
+                "invalid_edit",
+                f"Edit {index}: 'new' contains an unpaired surrogate, which "
+                "is not valid UTF-8",
+                {"edit_index": index, "invalid_edit_indexes": [index]},
+                ["Send 'new' as valid Unicode text"],
+            )
     if added > MAX_CONTENT_SIZE:
         _raise_edit_error(
             "edits_too_large",
