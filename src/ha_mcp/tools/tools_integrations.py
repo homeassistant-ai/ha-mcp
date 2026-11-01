@@ -1589,8 +1589,9 @@ class IntegrationTools:
 
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
-        requiring a browser step (OAuth) or an asynchronous provider step
-        error out at that step instead of completing. An aborted flow or a
+        requiring a browser step (OAuth) error out at that step. A progress
+        step (Home Assistant working in the background) is waited out for up
+        to 120 s; after that the flow is aborted. An aborted flow or a
         rejected form returns Core's own text next to the key (reason_text,
         error_text), as the HA UI shows it. Reconfigure edits the
         settings a live integration connects with: a wrong host or credential

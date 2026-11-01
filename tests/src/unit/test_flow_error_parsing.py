@@ -320,7 +320,8 @@ class TestHandleFlowStepsOptionsFlowError:
 
 
 class TestUndrivableStepTypes:
-    """External (browser/OAuth) and progress steps cannot be driven over MCP.
+    """External (browser/OAuth) steps cannot be driven over MCP, nor can a
+    progress step in a walk without a FlowRef (a snapshot restore).
 
     ``_handle_flow_steps`` must surface them as SERVICE_CALL_FAILED with an
     actionable "complete in the HA UI" suggestion — NOT fall through to the

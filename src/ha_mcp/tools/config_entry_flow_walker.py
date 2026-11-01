@@ -39,16 +39,16 @@ from .config_entry_flow_menu import (
     _flow_step_budget,
     _handle_menu_step,
 )
+from .config_entry_flow_progress import PROGRESS_STEP_TYPES, wait_for_progress
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
 # Flow step types an MCP client cannot drive: external steps need a browser
-# (OAuth / cloud authorization), progress steps wait on HA-side async work.
-# Surfaced as structured errors instead of attempted (issue #1814).
-_UNDRIVABLE_STEP_TYPES = frozenset(
-    {"external", "external_done", "progress", "progress_done"}
-)
+# (OAuth / cloud authorization). Surfaced as structured errors instead of
+# attempted (issue #1814). A progress step is waited out, except in a snapshot
+# restore (no FlowRef), which accepts only the forms it can check.
+_UNDRIVABLE_STEP_TYPES = frozenset({"external", "external_done"}) | PROGRESS_STEP_TYPES
 _RECONFIGURE_SUCCESS_REASONS = frozenset(
     {
         "reauth_successful",
@@ -420,6 +420,36 @@ def _handle_flow_create_entry(
     )
 
 
+async def _wait_out_progress_or_refuse(
+    client: Any,
+    flow: FlowRef | None,
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+) -> dict[str, Any]:
+    result_type = current_step.get("type")
+    if result_type in PROGRESS_STEP_TYPES and flow is not None:
+        return await wait_for_progress(
+            client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Flow reached a '{result_type}' step that cannot be "
+            "completed via MCP (browser/OAuth authorization or an "
+            "asynchronous provider step)",
+            suggestions=[
+                "Complete this flow in the Home Assistant UI "
+                "(Settings > Devices & Services)."
+            ],
+            context=_flow_failure_context(
+                flow_id, current_step, is_reconfigure=is_reconfigure
+            ),
+        )
+    )
+
+
 async def _handle_flow_steps(
     client: Any,
     flow_id: str,
@@ -625,20 +655,8 @@ async def _handle_flow_steps(
             )
 
         elif result_type in _UNDRIVABLE_STEP_TYPES:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Flow reached a '{result_type}' step that cannot be "
-                    "completed via MCP (browser/OAuth authorization or an "
-                    "asynchronous provider step)",
-                    suggestions=[
-                        "Complete this flow in the Home Assistant UI "
-                        "(Settings > Devices & Services)."
-                    ],
-                    context=_flow_failure_context(
-                        flow_id, current_step, is_reconfigure=is_reconfigure
-                    ),
-                )
+            current_step = await _wait_out_progress_or_refuse(
+                client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
             )
 
         else:
@@ -875,18 +893,11 @@ async def _handle_config_subentry_flow_steps(
             )
             continue
 
-        if result_type in {"progress", "progress_done"}:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Config subentry flow requires an asynchronous progress step",
-                    suggestions=[
-                        "Complete the provider setup in Home Assistant so the external resource is available.",
-                        "Retry the same ha_config_set_helper call after the resource is ready.",
-                    ],
-                    context={"flow_id": flow_id, "details": current_step},
-                )
+        if result_type in PROGRESS_STEP_TYPES and flow is not None:
+            current_step = await wait_for_progress(
+                client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
             )
+            continue
 
         raise_tool_error(
             create_error_response(

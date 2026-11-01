@@ -339,6 +339,19 @@ async def abort_reason_text(
     )
 
 
+async def progress_action_text(
+    client: Any, flow: FlowRef | None, current_step: dict[str, Any]
+) -> dict[str, str]:
+    """``{"progress_action_text": ...}`` for a progress step, or ``{}``."""
+    return await _flow_texts(
+        client,
+        flow,
+        current_step,
+        "progress",
+        {"progress_action_text": current_step.get("progress_action")},
+    )
+
+
 async def raise_flow_abort(
     client: Any,
     flow: FlowRef | None,

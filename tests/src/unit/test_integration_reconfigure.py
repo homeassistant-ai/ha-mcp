@@ -2285,13 +2285,11 @@ async def test_reconfigure_tool_wraps_transport_failures_for_the_client(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "step_type", ["external", "external_done", "progress", "progress_done"]
-)
+@pytest.mark.parametrize("step_type", ["external", "external_done"])
 async def test_reconfigure_stamps_apply_failed_on_undrivable_steps(
     reconfig_entry: dict[str, object], step_type: str
 ) -> None:
-    """An OAuth/progress step cannot be driven, and nothing was committed."""
+    """An OAuth step cannot be driven, and nothing was committed."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(
