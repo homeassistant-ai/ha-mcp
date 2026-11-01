@@ -484,9 +484,10 @@ class TestConfigEntryFlow:
     async def test_get_integration_include_schema(self, mcp_client, ha_client):
         """include_schema describes the options form in Core's own words.
 
-        The demo entry's options flow opens with form ``options_1``; each
-        field's help text must be the label Core serves for it, read here
-        from Core's translations.
+        The demo entry's options flow opens with form ``options_1``; a
+        field's help text is Core's ``data_description`` for it, or its
+        ``data`` label when Core has no description, read here from Core's
+        translations.
         """
         translations = await ha_client.send_websocket_message(
             {
@@ -496,9 +497,12 @@ class TestConfigEntryFlow:
                 "integration": ["demo"],
             }
         )
-        expected = translations["result"]["resources"][
-            "component.demo.options.step.options_1.data.bool"
-        ]
+        resources = translations["result"]["resources"]
+        step = "component.demo.options.step.options_1"
+        expected = resources.get(
+            f"{step}.data_description.bool", resources.get(f"{step}.data.bool")
+        )
+        assert expected, "Core serves a label for the demo options field"
 
         async with MCPAssertions(mcp_client) as mcp:
             list_data = await mcp.call_tool_success(

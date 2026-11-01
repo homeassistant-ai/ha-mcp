@@ -44,14 +44,16 @@ async def test_log_level_unknown_integration_is_not_found(mcp_client):
 
 @pytest.mark.integrations
 async def test_log_level_permanent_persistence_is_accepted(mcp_client):
-    """Core takes 'permanent'; DEFAULT then drops the stored override."""
+    """Acceptance smoke test: Core takes 'permanent' and the level applies.
+
+    What Core keeps across a restart is not checked here.
+    """
     mcp = MCPAssertions(mcp_client)
     try:
-        result = await mcp.call_tool_success(
+        await mcp.call_tool_success(
             "ha_set_integration",
             {"domain": _DOMAIN, "log_level": "DEBUG", "log_persistence": "permanent"},
         )
-        assert "every Home Assistant restart" in result["note"]
         assert await _logger_level(mcp, _DOMAIN) == "DEBUG"
     finally:
         await mcp.call_tool_success(

@@ -14,7 +14,12 @@ from typing import ClassVar
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -350,9 +355,13 @@ class TestIntegrationFiltering:
 
     async def test_blank_domain_is_rejected(self, mcp_client):
         """A blank domain is no filter to Core, so the tool refuses it."""
-        data = await safe_call_tool(mcp_client, "ha_get_integration", {"domain": " "})
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_integration",
+                {"domain": " "},
+                expected_error="domain must be a non-empty",
+            )
 
-        assert not data.get("success"), f"blank domain listed entries: {data}"
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.parametrize("integration_type", ["service", "not_a_type"])

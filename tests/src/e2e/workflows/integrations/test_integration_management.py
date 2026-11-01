@@ -228,32 +228,65 @@ class TestIntegrationManagement:
     ):
         """A second ``sun`` aborts; the error carries Core's text for the reason.
 
-        ``sun`` is set up in the test state and allows one entry, so Core's
-        flow manager aborts with ``single_instance_allowed`` and names the
-        ``homeassistant`` integration as the owner of that string
-        (``translation_domain``). The caller gets the text the HA UI shows,
-        read here from Core.
+        ``sun`` is set up in the test state and allows one entry. Core's own
+        abort for the same request names the reason and the integration whose
+        strings hold its text (``translation_domain``); the caller gets that
+        text, the one the HA UI shows.
         """
+        core_abort = await ha_client.start_config_flow("sun")
+        assert core_abort["type"] == "abort", core_abort
+        text_domain = core_abort.get("translation_domain") or "sun"
         translations = await ha_client.send_websocket_message(
             {
                 "type": "frontend/get_translations",
                 "language": "en",
                 "category": "config",
-                "integration": ["homeassistant"],
+                "integration": [text_domain],
             }
         )
         expected = translations["result"]["resources"][
-            "component.homeassistant.config.abort.single_instance_allowed"
+            f"component.{text_domain}.config.abort.{core_abort['reason']}"
         ]
 
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_failure(
                 "ha_set_integration",
                 {"domain": "sun", "config": {}},
-                expected_error="single_instance_allowed",
+                expected_error=core_abort["reason"],
             )
 
         assert data["reason_text"] == expected, data
+
+    async def test_a_rejected_setup_form_says_why_in_cores_words(
+        self, mcp_client, ha_client
+    ):
+        """filesize rejects a path that does not exist with ``not_valid``.
+
+        Core's filesize flow re-shows its form with ``errors={"base":
+        "not_valid"}``; the caller gets the text the HA UI shows for that
+        key, read here from Core.
+        """
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": ["filesize"],
+            }
+        )
+        expected = translations["result"]["resources"][
+            "component.filesize.config.error.not_valid"
+        ]
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_set_integration",
+                {"domain": "filesize", "config": {"file_path": "/nonexistent"}},
+                expected_error="Form validation failed",
+            )
+
+        assert data["errors"] == {"base": "not_valid"}, data
+        assert data["error_text"] == {"base": expected}, data
 
     async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
         """A one-field options patch must not reset the fields it omits (#2254).
