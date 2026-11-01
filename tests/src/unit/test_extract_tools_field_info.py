@@ -279,6 +279,17 @@ class TestFieldConstraints:
         assert info["type"] == "int | None"
         assert info["constraints"] == {"ge": 1}
 
+    def test_bounds_on_an_optional_branch_inside_annotated_are_read(self):
+        """Bounds on the list branch, the description on the whole parameter."""
+        info = _field_info(
+            "Annotated[Annotated[list[int], Field(min_length=1, max_length=5)]"
+            " | None, JSON_STRING_COERCION, Field(description='Edits.')]"
+        )
+
+        assert info["type"] == "list[int] | None"
+        assert info["constraints"] == {"min_length": 1, "max_length": 5}
+        assert info["description"] == "Edits."
+
     def test_no_constraints_key_without_bounds(self):
         assert "constraints" not in _field_info(
             "Annotated[str, Field(description='x')]"

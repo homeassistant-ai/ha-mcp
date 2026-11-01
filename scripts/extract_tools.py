@@ -476,7 +476,10 @@ def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
     if not isinstance(slice_node, ast.Tuple) or not slice_node.elts:
         return info
 
-    info["type"] = ast.unparse(slice_node.elts[0])
+    # The type may carry metadata of its own: ``Annotated[Annotated[list[X],
+    # Field(min_length=1)] | None, Field(description=...)]`` bounds the list
+    # branch (pydantic's minItems) and describes the whole parameter.
+    info.update(_extract_field_info(slice_node.elts[0], scope))
     # Everything after the type is metadata, but only ``Field(...)`` carries
     # keywords this catalog describes. A bare validator (JSON_STRING_COERCION)
     # is a name rather than a call; another metadata call's keywords are its
