@@ -19,12 +19,15 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import tools_config_automations as automations_module
+from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.tools.tools_config_automations import (
     NOT_VERIFIED_WARNING_PREFIX,
     AutomationConfigTools,
     _strip_redundant_identifier_echo,
 )
 from ha_mcp.utils.config_hash import compute_config_hash
+
+from .test_skill_content_wiring import _require_vendored_skills
 
 # Singular root keys and a legacy 'platform' trigger, as an older automation
 # sits in automations.yaml: Core accepts and stores it like this.
@@ -683,6 +686,30 @@ class TestSetAutomationCategoryValidation:
 
         assert result["success"] is True
         mock_client.upsert_automation_config.assert_called_once()
+
+
+class TestBestPracticeSectionsReachTheResponse:
+    """The sections a best-practice warning references reach skill_content."""
+
+    async def test_generic_template_trigger_sections_are_attached(self, tools):
+        """The write tool hands the warning's referenced sections to the real
+        attach_skill_content: with MandatoryBPS=False, skill_content holds
+        exactly those sections, each with its text.
+        """
+        _require_vendored_skills()
+        config = _config(
+            trigger=[{"platform": "template", "value_template": "{{ x == 1 }}"}]
+        )
+        referenced = check_automation_config(config).referenced_files
+        assert len(referenced) > 1, referenced
+
+        result = await tools.ha_config_set_automation(
+            config=config, MandatoryBPS=False, wait=False
+        )
+
+        skill_content = result["skill_content"]
+        assert set(skill_content) == referenced
+        assert all(skill_content.values())
 
 
 class TestReferenceValidationMeta:
