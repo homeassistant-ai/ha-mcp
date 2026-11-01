@@ -2,8 +2,7 @@
 
 Turns Home Assistant's answers to a flow submit (a 400/422 body, a form
 with ``errors``, an ``abort`` step) into structured ``ToolError``s, and holds
-the reconfigure outcome vocabulary those errors carry. Split out of
-``config_entry_flow_walker``, which drives the flows and raises through here.
+the reconfigure outcome vocabulary those errors carry.
 """
 
 import logging
@@ -48,16 +47,19 @@ async def _flow_texts(
 ) -> dict[str, Any]:
     """Core's text for each ``<path>.<kind>.<key>``, as the frontend looks it up.
 
-    ``keys`` maps a name (a field, or ``reason``) to its translation key; a
-    key Core ships no string for is left out, so the caller keeps the raw key.
-    A failed strings read gives ``warnings`` instead.
+    ``keys`` maps an output key (a field name, or ``reason_text`` /
+    ``progress_action_text``) to its translation key; a key Core ships no
+    string for is left out, so the caller keeps the raw key. A failed strings
+    read gives ``warnings`` instead.
     """
     if flow is None or not keys:
         return {}
     domain, path = flow.domain, flow.path
     if isinstance(step.get("translation_domain"), str):
-        # The reason belongs to another integration; for a subentry flow it
-        # is defined once under that integration's config strings.
+        # The reason belongs to another integration. A subentry abort reads
+        # it under that integration's config strings, as the frontend's dev
+        # branch does; the release Core 2026.8.0 pins reads
+        # config_subentries.<type>.abort instead.
         domain = step["translation_domain"]
         if kind == "abort" and path.startswith("config_subentries."):
             path = "config"

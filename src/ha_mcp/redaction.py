@@ -455,7 +455,8 @@ def redact_flow_schema(data_schema: Any) -> Any:
 
     HA injects the persisted option into each field's
     ``description.suggested_value`` (and static defaults into ``default`` /
-    ``value``), so an ``include_schema=True`` echo carries the live secret.
+    ``value``), so a schema handed back to a caller (a describe's fields, a
+    form-error response) would carry the live secret.
     Harvests each replaced value into the known-secrets set first.
     """
     if not isinstance(data_schema, list):

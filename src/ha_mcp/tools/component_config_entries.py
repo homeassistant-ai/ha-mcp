@@ -11,7 +11,7 @@ one frame, invalidate on ``unknown_command``, fall back on any component error.
 from every config-entry endpoint — the REST list, ``config_entries/get`` and
 ``config_entries/get_single`` all serialize ``ConfigEntry.as_json_fragment``,
 which has no ``unique_id`` key — so the component, which holds the live
-``ConfigEntry``, is the only identity anchor.
+``ConfigEntry``, is the only source of that anchor.
 
 **Three states, and callers must keep them apart.** ``unique_id`` is not a
 two-valued field here:

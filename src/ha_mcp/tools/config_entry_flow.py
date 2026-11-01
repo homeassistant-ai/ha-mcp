@@ -20,11 +20,13 @@ a different problem — it commits in place and Home Assistant reloads afterward
 — and lives in ``config_entry_reconfigure``, which depends on this module for
 the shared flow-abort and sentinel-rejection helpers.
 
-The step machinery those entry points drive lives in three sibling modules,
-imported in one direction only (menu <- form <- walker <- here):
+The step machinery those entry points drive lives in four sibling modules,
+imported in one direction only (menu <- form <- walker <- here, and
+progress <- walker):
 
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
+- ``config_entry_flow_progress``: waiting out a progress step within a budget
 - ``config_entry_flow_walker``: step submission and the two flow walkers,
   which report HA's errors through ``config_entry_flow_errors``
 """

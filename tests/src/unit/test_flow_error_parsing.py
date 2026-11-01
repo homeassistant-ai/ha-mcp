@@ -492,7 +492,8 @@ class TestFlowTextFromCore:
     ) -> None:
         # translation_domain names the integration that owns the reason; a
         # subentry flow then reads it under that domain's config strings, as
-        # the frontend does.
+        # the frontend's dev branch does (the release Core 2026.8.0 pins reads
+        # config_subentries.<type>.abort).
         client = _strings_client(
             {"component.shared.config.abort.cloud_not_connected": "Log in first."}
         )

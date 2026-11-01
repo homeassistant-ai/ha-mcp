@@ -575,9 +575,8 @@ class IntegrationTools:
         - Only service integrations: ha_get_integration(integration_type="service")
 
         OPTIONS: ``options`` reflect the entry's persisted values. Values that
-        match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. Use
-        ``include_schema=True`` to see every editable field with its type,
-        current value and help text. The shape depends on the read path, which the response
+        match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. For
+        the options form itself, see include_schema. The shape depends on the read path, which the response
         does not name: when the ha_mcp_tools custom component serves the read,
         ``options`` are the stored mapping as-is, so a field never set may be
         absent and a section's fields stay nested under the section key (e.g. a
@@ -873,12 +872,12 @@ class IntegrationTools:
             if isinstance(result, dict):
                 _normalize_ignored_entry(result)
 
-            # Surface `options` on every per-entry response (HA's REST endpoint
-            # omits the field). For entries with supports_options=True we probe
-            # via OptionsFlow — see `fetch_entry_options_with_status`. When
-            # include_schema is also requested, `fetch_options_schema` below
-            # populates options from the same flow init so we don't pay for
-            # two round-trips.
+            # Surface `options` on every per-entry response (Core's entry
+            # fragment omits the field). For entries with supports_options=True
+            # we probe via OptionsFlow — see `fetch_entry_options_with_status`.
+            # When include_schema is also requested and the flow's first step
+            # is a form, `fetch_options_schema` below populates options from
+            # the same flow init so we don't pay for two round-trips.
             probe_warnings: list[str] = []
             await self._probe_legacy_entry_options(
                 result, entry_id, include_schema, probe_warnings
@@ -990,7 +989,7 @@ class IntegrationTools:
 
         The component row already carries the entry identity, its raw persisted
         ``options`` (secret-scrubbed), and its ``subentries`` identity rows — so
-        this one read replaces the legacy REST list-all + OptionsFlow
+        this one read replaces the legacy ``get_config_entry`` read + OptionsFlow
         start/abort probe + subentries WS call. The options schema (and the
         subentry schema) still come from the legacy live flow: a schema only
         exists inside an open flow, which the component cannot serialize. When a
@@ -1003,7 +1002,7 @@ class IntegrationTools:
         """
         if not read.rows:
             # ``async_get_entry(entry_id)`` found nothing — an authoritative
-            # not-found, mapped to the same 404 the legacy REST get raises.
+            # not-found, mapped to the same 404 get_config_entry raises.
             raise HomeAssistantAPIError(
                 f"Config entry not found: {entry_id}", status_code=404
             )
@@ -1024,7 +1023,7 @@ class IntegrationTools:
         level_warnings: list[str] = []
         logger_levels = await get_logger_levels(self._client, level_warnings)
         level_info = logger_levels.get(entry.get("domain") or "")
-        # UNKNOWN, not DEFAULT — see the component path above.
+        # UNKNOWN, not DEFAULT — see the legacy path in _get_single_entry.
         resp["log_level"] = (
             "UNKNOWN"
             if level_warnings
@@ -1178,8 +1177,8 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """List config entries with optional domain/query filtering and pagination."""
         # Component fast path: one in-process read (domain filtered server-side,
-        # options materialized on each row) replaces the REST list + per-entry
-        # OptionsFlow probes. Normalize the domain to HA's canonical lowercase:
+        # options materialized on each row) replaces the per-entry OptionsFlow
+        # probes; the REST list is still read when integration_type filters. Normalize the domain to HA's canonical lowercase:
         # both the component and Core's REST list filter by exact match.
         domain_norm = domain.strip().lower() if domain else None
         params: dict[str, str] = {}
@@ -1611,7 +1610,8 @@ class IntegrationTools:
                     "Set the integration's log level, like the integration "
                     "page's Enable/Disable debug logging: pass the integration "
                     "with 'domain' (no config flow runs) or 'entry_id', and "
-                    "nothing else. Lasts through the next Home Assistant "
+                    "no other mode's parameters (log_persistence may accompany "
+                    "it). Lasts through the next Home Assistant "
                     "restart unless log_persistence says otherwise. DEFAULT "
                     "clears the override: the integration then logs at the "
                     "inherited default level, and a level set for it in "
@@ -1645,7 +1645,6 @@ class IntegrationTools:
           preflight returns as confirm_token to apply.
         - Log level: log_level + domain (or entry_id) — sets how much the
           integration logs; read it back with ha_get_integration's log_level.
-          log_persistence='permanent' keeps it across every restart.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
