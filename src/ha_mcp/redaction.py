@@ -654,6 +654,13 @@ def scrub_obj(obj: Any, secrets: Sequence[str]) -> Any:
     return obj
 
 
+def scrub_known_secrets(text: str) -> str:
+    """``text`` with every known secret value replaced, while the flag is on."""
+    if not redaction_enabled():
+        return text
+    return scrub_text(text, with_serialized_variants(known_secret_values()))
+
+
 class RedactSecretsMiddleware(Middleware):
     """Scrub known secret values from every tool response and tool error.
 
