@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import integration_reconfigure
 from ha_mcp.tools.config_entry_identity import ReconfigureIdentity
 from ha_mcp.tools.config_entry_reconfigure import PreparedReconfigure
@@ -116,6 +117,61 @@ async def test_keys_the_last_form_does_not_declare_are_refused() -> None:
     assert body["unknown_config_keys"] == ["hostname"]
     assert body["status"] == "flow_aborted_before_apply"
     client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "unknown"),
+    [
+        ({"next_step_id": "usb"}, ["next_step_id"]),
+        ({"step_values": {"other": {"a": 1}}}, ["step_values.other"]),
+    ],
+    ids=["menu-key", "other-step"],
+)
+async def test_directives_the_last_form_cannot_consume_are_refused(
+    config: dict[str, Any], unknown: list[str]
+) -> None:
+    # Only a menu consumes a selection key, and no step follows this form.
+    client = _client(_form(last_step=True))
+
+    with pytest.raises(ToolError) as exc_info:
+        await _read(client, {"host": "10.0.0.5", **config})
+
+    assert json.loads(str(exc_info.value))["unknown_config_keys"] == unknown
+
+
+@pytest.mark.asyncio
+async def test_step_values_for_the_last_form_itself_are_accepted() -> None:
+    client = _client(_form(last_step=True))
+
+    _, warnings = await _read(client, {"step_values": {"reconfigure": {"host": "h"}}})
+
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_abort_is_a_warning_on_the_preview() -> None:
+    # Core starts no reauth for an entry while its reconfigure flow is open.
+    client = _client(_form(last_step=True))
+    client.abort_config_flow.side_effect = RuntimeError("ws down")
+
+    _, warnings = await _read(client, {"host": "10.0.0.5"})
+
+    (warning,) = warnings
+    assert "reauthentication" in warning
+
+
+@pytest.mark.asyncio
+async def test_an_abort_core_answers_with_404_is_no_warning() -> None:
+    # 404: the flow is already gone.
+    client = _client(_form(last_step=True))
+    client.abort_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 404", status_code=404
+    )
+
+    _, warnings = await _read(client, {"host": "10.0.0.5"})
+
+    assert warnings == []
 
 
 @pytest.mark.asyncio

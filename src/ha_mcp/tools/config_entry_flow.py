@@ -435,8 +435,9 @@ async def _cleanup_snapshot_creation(
         )
 
 
-async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a still-pending flow without hiding the original failure.
+async def _abort_flow_best_effort(client: Any, flow_id: str) -> Exception | None:
+    """Abort a still-pending flow without hiding the original failure; return
+    the abort's own error, if any.
 
     Shielded: a cancellation arrives through an anyio cancel scope, which
     would cancel the abort itself at its first await.
@@ -446,6 +447,8 @@ async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
             await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
     except Exception as abort_err:  # noqa: BLE001
         logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
+        return abort_err
+    return None
 
 
 async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:

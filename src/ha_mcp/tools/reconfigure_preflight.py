@@ -15,11 +15,22 @@ from typing import Any
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow import _abort_flow_best_effort
 from .config_entry_flow_errors import FlowRef, ReconfigureStatus, abort_reason_text
-from .config_entry_flow_form import _RESERVED_CONFIG_KEYS, _extract_schema_field_names
+from .config_entry_flow_form import (
+    _MENU_SELECTION_KEYS,
+    _PER_STEP_VALUES_KEY,
+    _RESERVED_CONFIG_KEYS,
+    _extract_schema_field_names,
+)
 from .config_entry_flow_introspect import menu_choices
 from .config_entry_flow_walker import _RECONFIGURE_SUCCESS_REASONS
 from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error
+
+_FLOW_LEFT_OPEN = (
+    "Home Assistant did not confirm that the reconfigure flow this preview "
+    "opened was closed. While it stays open (until it ends or Home Assistant "
+    "restarts), Home Assistant starts no reauthentication for this entry."
+)
 
 
 def _declared_keys(schema: Any) -> set[str]:
@@ -42,7 +53,8 @@ async def read_reconfigure_form(
     """Describe the reconfigure flow's first step; return it and key warnings.
 
     Refuses the preview when Home Assistant aborts the flow at once, or when
-    ``config`` names keys the flow's last form does not declare.
+    ``config`` names keys the flow's last form does not declare or cannot
+    consume (a menu selection, ``step_values`` for another step).
     """
     step = await client.start_reconfigure_flow(domain, entry_id)
     flow = FlowRef(domain, "config")
@@ -85,15 +97,29 @@ async def read_reconfigure_form(
         elif step.get("type") == "form":
             form.update(await describe_form(client, domain, flow.path, step))
     finally:
-        await _abort_flow_best_effort(client, step.get("flow_id"))
+        abort_err = await _abort_flow_best_effort(client, step.get("flow_id"))
+    warnings = []
+    if abort_err is not None and getattr(abort_err, "status_code", None) != 404:
+        warnings.append(_FLOW_LEFT_OPEN)
     if step.get("type") != "form":
-        return form, []
+        return form, warnings
 
     declared = _declared_keys(step.get("data_schema")) | _RESERVED_CONFIG_KEYS
     unknown = sorted(key for key in config if key not in declared)
+    last_step = step.get("last_step") is True
+    if last_step:
+        # Only a menu consumes a selection key, and no step follows this form.
+        unknown += sorted(key for key in config if key in _MENU_SELECTION_KEYS)
+        step_values = config.get(_PER_STEP_VALUES_KEY)
+        if isinstance(step_values, dict):
+            unknown += sorted(
+                f"{_PER_STEP_VALUES_KEY}.{step_id}"
+                for step_id in step_values
+                if step_id != step.get("step_id")
+            )
     if not unknown:
-        return form, []
-    if step.get("last_step") is True:
+        return form, warnings
+    if last_step:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -107,11 +133,13 @@ async def read_reconfigure_form(
                     "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
                     "unknown_config_keys": unknown,
                     "reconfigure_form": form,
+                    **({"warnings": warnings} if warnings else {}),
                 },
             )
         )
     return form, [
+        *warnings,
         f"The first reconfigure form ({step.get('step_id')}) does not declare "
         f"{', '.join(repr(k) for k in unknown)}. A later form may; a key no "
-        "form declares is not applied on confirm."
+        "form declares is not applied on confirm.",
     ]
