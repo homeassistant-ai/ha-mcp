@@ -621,3 +621,80 @@ async def test_empty_entry_id_is_not_found_never_first_entry() -> None:
     assert len(_ce_calls(ws)) == 1
     assert _ce_calls(ws)[0].kwargs == {"entry_id": ""}
     assert client.get_config_entry_calls == 0
+
+
+# --- ignored entries (#2927) ----------------------------------------------------
+# Core never sets up an ignored entry (``source == "ignore"``, created with empty
+# ``data``), so its options flow has nothing to read and several integrations'
+# flows raise. Core may still report ``supports_options: true`` for one whenever
+# the domain's flow handler is loaded, so the tool must key on ``source``.
+_IGNORED = {"source": "ignore", "state": "not_loaded", "supports_options": True}
+_CAPSLESS = HomeAssistantCommandError("no info", "unknown_command")
+
+
+@pytest.mark.asyncio
+async def test_ignored_entry_legacy_single_is_not_probed() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(single_entry=_rest_entry("ign1", "unifi", **_IGNORED))
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(entry_id="ign1")
+
+    assert client.start_options_flow_calls == 0
+    assert resp["entry"]["supports_options"] is False
+    assert resp["entry"]["options"] == {}
+    assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_ignored_entry_legacy_single_schema_opens_no_flow() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(single_entry=_rest_entry("ign1", "zha", **_IGNORED))
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(entry_id="ign1", include_schema=True)
+
+    assert client.start_options_flow_calls == 0
+    assert "options_schema" not in resp
+    assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_ignored_entries_legacy_list_are_not_probed() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(
+        rest_entries=[
+            _rest_entry("ign1", "homeassistant_sky_connect", **_IGNORED),
+            _rest_entry("ign2", "homeassistant_sky_connect", **_IGNORED),
+        ]
+    )
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(include_options=True)
+
+    assert client.start_options_flow_calls == 0
+    assert [e["supports_options"] for e in resp["entries"]] == [False, False]
+    assert [e["options"] for e in resp["entries"]] == [{}, {}]
+    assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_ignored_entry_component_single_schema_opens_no_flow() -> None:
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("ign1", "unifi", options={}, **_IGNORED)]},
+    )
+    client = RoutingClient()
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(entry_id="ign1", include_schema=True)
+
+    assert client.start_options_flow_calls == 0
+    assert resp["entry"]["supports_options"] is False
+    assert "options_schema" not in resp
+    assert "warnings" not in resp
