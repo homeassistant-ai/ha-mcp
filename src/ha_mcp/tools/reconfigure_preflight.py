@@ -1,4 +1,4 @@
-"""The reconfigure preview reads the integration's reconfigure form (#2632).
+"""The reconfigure preview reads the integration's reconfigure form.
 
 The preview leg of ``ha_set_integration(reconfigure=True)`` starts the
 official reconfigure flow, describes its first step the way
@@ -17,6 +17,7 @@ from .config_entry_flow import _abort_flow_best_effort
 from .config_entry_flow_errors import FlowRef, ReconfigureStatus, abort_reason_text
 from .config_entry_flow_form import _RESERVED_CONFIG_KEYS, _extract_schema_field_names
 from .config_entry_flow_introspect import menu_choices
+from .config_entry_flow_walker import _RECONFIGURE_SUCCESS_REASONS
 from .config_helpers.describe import describe_form, later_forms
 from .helpers import raise_tool_error
 
@@ -26,8 +27,12 @@ def _declared_keys(schema: Any) -> set[str]:
     section passed as one dict."""
     names = _extract_schema_field_names(schema) or set()
     for field in schema if isinstance(schema, list) else []:
-        if isinstance(field, dict) and isinstance(field.get("schema"), list):
-            names.add(str(field.get("name")))
+        if (
+            isinstance(field, dict)
+            and isinstance(field.get("schema"), list)
+            and field.get("name") is not None
+        ):
+            names.add(str(field["name"]))
     return names
 
 
@@ -43,15 +48,24 @@ async def read_reconfigure_form(
     flow = FlowRef(domain, "config")
     if step.get("type") == "abort":
         reason = step.get("reason")
+        # Core aborts with a success reason only after it updated and
+        # reloaded the entry, without any value from the caller.
+        applied = reason in _RECONFIGURE_SUCCESS_REASONS
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Home Assistant aborted the {domain} reconfigure flow at its "
-                f"start: {reason}",
+                f"Home Assistant finished the {domain} reconfigure flow at its "
+                f"start ({reason}): the entry may have been updated, but not "
+                "with your config."
+                if applied
+                else f"Home Assistant aborted the {domain} reconfigure flow at "
+                f"its start: {reason}",
                 context={
                     "entry_id": entry_id,
                     "domain": domain,
-                    "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
+                    "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+                    if applied
+                    else ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
                     "reason": reason,
                     **await abort_reason_text(client, flow, step),
                 },
@@ -96,6 +110,7 @@ async def read_reconfigure_form(
                 context={
                     "entry_id": entry_id,
                     "domain": domain,
+                    "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
                     "unknown_config_keys": unknown,
                     "reconfigure_form": form,
                 },

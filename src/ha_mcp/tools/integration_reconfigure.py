@@ -154,13 +154,18 @@ def _reconfigure_preview_response(
         "title": entry.get("title"),
         # Say what was actually checked: the flow was started only to read
         # its first step and aborted, so Home Assistant has not validated
-        # any value yet.
+        # any value yet, and a menu-first flow had no form to check keys on.
         "message": (
             f"Checked: the entry exists, {domain} supports the official "
-            "reconfigure flow, its identity anchors match, no duplicate "
-            "entry shares its device, and the config keys against the first "
-            "reconfigure form (reconfigure_form). Home Assistant validates "
-            "the values only when you confirm. Nothing was applied."
+            "reconfigure flow, its identity anchors match, "
+            + (
+                "no duplicate entry shares its device, and the config keys "
+                "against the first reconfigure form (reconfigure_form)."
+                if reconfigure_form.get("flow_type") == "form"
+                else "and no duplicate entry shares its device."
+            )
+            + " Home Assistant validates the values only when you confirm. "
+            "Nothing was applied."
         ),
         "reconfigure_form": reconfigure_form,
         "confirm_token": confirm_token,

@@ -5,7 +5,7 @@ official reconfigure flow, describes its first step (fields, current values,
 Core's help text) and aborts it. Config keys that form does not declare are
 warned about, since a later form may declare them, and refused when the form
 is the flow's last. A flow Core aborts at once refuses the preview with Core's
-reason text.
+reason text; one Core finishes at once is reported as possibly applied.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ha_mcp.tools import integration_reconfigure
 from ha_mcp.tools.config_entry_identity import ReconfigureIdentity
 from ha_mcp.tools.config_entry_reconfigure import PreparedReconfigure
 from ha_mcp.tools.integration_reconfigure import ReconfigureRunner
-from ha_mcp.tools.reconfigure_preflight import read_reconfigure_form
+from ha_mcp.tools.reconfigure_preflight import _declared_keys, read_reconfigure_form
 
 _HOST = {
     "name": "host",
@@ -114,6 +114,7 @@ async def test_keys_the_last_form_does_not_declare_are_refused() -> None:
     body = json.loads(str(exc_info.value))
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert body["unknown_config_keys"] == ["hostname"]
+    assert body["status"] == "flow_aborted_before_apply"
     client.abort_config_flow.assert_awaited_once_with("f1")
 
 
@@ -140,6 +141,28 @@ async def test_a_flow_core_aborts_at_once_refuses_the_preview_with_its_text() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["reconfigure_successful", "reauth_successful"])
+async def test_a_flow_core_finishes_at_once_is_reported_as_applied(
+    reason: str,
+) -> None:
+    """Core aborts with a success reason after it updated the entry."""
+    client = _client({"type": "abort", "flow_id": "f1", "reason": reason})
+
+    with pytest.raises(ToolError) as exc_info:
+        await _read(client, {"host": "10.0.0.5"})
+
+    context = json.loads(str(exc_info.value))
+    assert context["status"] == "applied_but_unverified"
+    assert context["reason"] == reason
+
+
+def test_a_section_without_a_name_declares_no_key() -> None:
+    schema = [_HOST, {"type": "expandable", "schema": [{"name": "port"}]}]
+
+    assert _declared_keys(schema) == {"host", "port"}
+
+
+@pytest.mark.asyncio
 async def test_a_menu_first_flow_lists_its_options_without_a_key_check() -> None:
     client = _client(
         {
@@ -157,10 +180,7 @@ async def test_a_menu_first_flow_lists_its_options_without_a_key_check() -> None
     client.abort_config_flow.assert_awaited_once_with("f1")
 
 
-@pytest.mark.asyncio
-async def test_only_the_preview_leg_reads_the_form(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _prepared(monkeypatch: pytest.MonkeyPatch) -> PreparedReconfigure:
     prepared = PreparedReconfigure(
         entry_id="e1",
         entry={"entry_id": "e1", "domain": "demo", "title": "Demo"},
@@ -175,6 +195,14 @@ async def test_only_the_preview_leg_reads_the_form(
         "prepare_reconfigure_request",
         AsyncMock(return_value=prepared),
     )
+    return prepared
+
+
+@pytest.mark.asyncio
+async def test_only_the_preview_leg_reads_the_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepared(monkeypatch)
     client = _client(_form(last_step=False))
     runner = ReconfigureRunner(client)
 
@@ -208,3 +236,26 @@ async def test_a_password_fields_live_value_does_not_leak_into_the_preview(
 
     assert "sk-LIVE" not in json.dumps(form)
     assert any(f["name"] == "api_key" for f in form["fields"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_step", "keys_checked"),
+    [
+        (_form(last_step=False), True),
+        (
+            {"type": "menu", "flow_id": "f1", "step_id": "reconfigure"},
+            False,
+        ),
+    ],
+)
+async def test_the_preview_message_claims_a_key_check_only_when_one_ran(
+    monkeypatch: pytest.MonkeyPatch, first_step: dict[str, Any], keys_checked: bool
+) -> None:
+    prepared = _prepared(monkeypatch)
+
+    preview = await ReconfigureRunner(_client(first_step)).run(
+        "e1", config=prepared.flow_config
+    )
+
+    assert ("config keys" in preview["message"]) is keys_checked
