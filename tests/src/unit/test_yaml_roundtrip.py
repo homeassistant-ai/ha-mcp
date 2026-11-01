@@ -153,6 +153,9 @@ class TestInputTag:
         assert data["target"].tag == "!input"
         out = yaml_dumps(ry, data)
         assert "!input target_entity" in out
+        ry2 = make_yaml()
+        data2 = ry2.load(StringIO(out))
+        assert data2["target"].tag == "!input"
 
     def test_input_tag_jsonifies_in_source_form(self):
         _ry, data = _load("target: !input target_entity\n")
