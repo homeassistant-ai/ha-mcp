@@ -123,11 +123,12 @@ def closest_matches(key: str, candidates: list[str]) -> list[str]:
     the part a caller has right, and a renamed key's replacement lives there
     (``schedule.turned_on`` is now ``schedule.block_started``, which no
     lookalike from another domain would surface). Across every domain
-    otherwise, which also serves a misspelt domain.
+    otherwise, which also serves a misspelt domain. A key nothing comes close
+    to gets no hint: the domain's other keys are not corrections.
     """
     domain, dot, _ = key.partition(".")
-    if dot and (same := sorted(c for c in candidates if c.startswith(f"{domain}."))):
-        return difflib.get_close_matches(key, same, n=3, cutoff=0.5) or same[:5]
+    if dot and (same := [c for c in candidates if c.startswith(f"{domain}.")]):
+        return difflib.get_close_matches(key, same, n=3, cutoff=0.5)
     return difflib.get_close_matches(key, candidates, n=3, cutoff=0.5)
 
 

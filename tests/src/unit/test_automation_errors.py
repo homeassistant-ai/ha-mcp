@@ -194,8 +194,21 @@ _SCHEDULE_AND_LOOKALIKES = [
         ),
         # A key without a domain is searched across every key.
         ("stat", ["state", "tag", "zone"], ["state", "tag"]),
+        # Nothing in the domain comes close: its other keys were offered as
+        # "closest", which they are not.
+        (
+            "light.qwzxvjkpqwzxvjkpqwzxvjkp",
+            ["light.brightness_changed", "light.turned_on"],
+            [],
+        ),
     ],
-    ids=["renamed-in-domain", "near-miss-in-domain", "misspelt-domain", "no-domain"],
+    ids=[
+        "renamed-in-domain",
+        "near-miss-in-domain",
+        "misspelt-domain",
+        "no-domain",
+        "nothing-close-in-domain",
+    ],
 )
 def test_closest_keys_come_from_the_keys_domain_first(
     key: str, candidates: list[str], expected: list[str]
