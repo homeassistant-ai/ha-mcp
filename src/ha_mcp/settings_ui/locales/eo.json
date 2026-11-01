@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "Akiri Aŭtomatigan Agordon",
-      "description": "Akiri la agordon de aŭtomatigo de Home Assistant."
+      "description": "Akiri la konservitan agordon de Home Assistant aŭtomatigo."
     },
     "ha_config_get_calendar_events": {
       "title": "Akiri Kalendarajn Eventojn",

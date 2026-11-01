@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "Hämta Automatiseringskonfiguration",
-      "description": "Hämta konfiguration för Home Assistant-automatisering."
+      "description": "Hämta en Home Assistant-automations lagrade konfiguration."
     },
     "ha_config_get_calendar_events": {
       "title": "Hämta Kalenderhändelser",

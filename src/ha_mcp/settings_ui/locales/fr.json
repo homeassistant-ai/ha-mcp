@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Obtenir l'automatisation",
-      "description": "Récupère la configuration d'une automatisation Home Assistant."
+      "description": "Obtenir la configuration enregistrée d'une automatisation Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Obtenir les événements du calendrier",

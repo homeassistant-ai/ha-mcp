@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Automatisierung abrufen",
-      "description": "Rufe die Home-Assistant-Automatisierungskonfiguration ab."
+      "description": "Rufe die gespeicherte Konfiguration einer Home Assistant Automatisierung ab."
     },
     "ha_config_get_calendar_events": {
       "title": "Kalenderereignisse abrufen",

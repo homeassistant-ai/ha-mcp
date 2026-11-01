@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Avtomatlaşdırmanın konfiqurasiyasını al",
-      "description": "Home Assistant avtomatlaşdırma konfiqurasiyasını əldə edin."
+      "description": "Home Assistant avtomatlaşdırmasının yadda saxlanılan konfiqurasiyasını əldə edin."
     },
     "ha_config_get_calendar_events": {
       "title": "Təqvim hadisələrini al",

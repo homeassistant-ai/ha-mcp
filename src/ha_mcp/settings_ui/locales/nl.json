@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "Haal Automatisering Config op",
-      "description": "Haal de Home Assistant-automatiseringsconfiguratie op."
+      "description": "Haal de opgeslagen configuratie van een Home Assistant-automatisering op."
     },
     "ha_config_get_calendar_events": {
       "title": "Haal Kalendergebeurtenissen op",

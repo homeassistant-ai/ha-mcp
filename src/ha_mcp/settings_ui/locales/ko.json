@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "자동화 설정 조회",
-      "description": "Home Assistant 자동화 구성을 가져옵니다."
+      "description": "Home Assistant 자동화의 저장된 설정을 가져옵니다."
     },
     "ha_config_get_calendar_events": {
       "title": "캘린더 일정 조회",

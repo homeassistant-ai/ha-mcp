@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Получить автоматизацию",
-      "description": "Получить конфигурацию автоматизации Home Assistant."
+      "description": "Получить сохраненную конфигурацию автоматизации Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Получить события календаря",
