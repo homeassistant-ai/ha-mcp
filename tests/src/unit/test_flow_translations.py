@@ -105,3 +105,38 @@ async def test_fetch_flow_strings_is_empty_when_core_has_no_strings() -> None:
     }
 
     assert await fetch_flow_strings(client, "sun", "config") == {}
+
+
+@pytest.mark.asyncio
+async def test_same_named_fields_in_sections_keep_their_own_help() -> None:
+    # Core's frontend reads a section field's help under
+    # sections.<section>.data_description.<field>.
+    from ha_mcp.tools.config_helpers.describe import describe_form
+
+    prefix = "component.demo.config.step.user."
+    client = AsyncMock()
+    client.send_websocket_message.return_value = {
+        "success": True,
+        "result": {
+            "resources": {
+                f"{prefix}data_description.port": "Top-level port",
+                f"{prefix}sections.a.data_description.port": "Port in a",
+                f"{prefix}sections.b.data_description.port": "Port in b",
+            }
+        },
+    }
+    port = {"name": "port", "type": "integer"}
+    step = {
+        "step_id": "user",
+        "data_schema": [
+            port,
+            {"name": "a", "type": "expandable", "schema": [port]},
+            {"name": "b", "type": "expandable", "schema": [port]},
+        ],
+    }
+
+    fields = (await describe_form(client, "demo", "config", step))["fields"]
+
+    assert fields[0]["description"] == "Top-level port"
+    assert fields[1]["fields"][0]["description"] == "Port in a"
+    assert fields[2]["fields"][0]["description"] == "Port in b"

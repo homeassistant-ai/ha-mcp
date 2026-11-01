@@ -139,11 +139,14 @@ def _with_static_hints(
     return merged
 
 
-def _with_help(fields: list[dict[str, Any]], help_text: dict[str, str]) -> None:
+def _with_help(
+    fields: list[dict[str, Any]], help_text: dict[str, str], prefix: str = ""
+) -> None:
     for field in fields:
-        if field["name"] in help_text and "description" not in field:
-            field["description"] = help_text[field["name"]]
-        _with_help(field.get("fields", []), help_text)
+        key = f"{prefix}{field['name']}"
+        if key in help_text and "description" not in field:
+            field["description"] = help_text[key]
+        _with_help(field.get("fields", []), help_text, f"{field['name']}.")
 
 
 async def describe_form(

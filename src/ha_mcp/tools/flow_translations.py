@@ -59,7 +59,8 @@ async def fetch_flow_strings(
 def field_help(
     strings: Mapping[str, Any], domain: str, path: str, step_id: str
 ) -> dict[str, str]:
-    """HA's help text for a flow step's fields, keyed by field name.
+    """HA's help text for a flow step's fields, keyed by field name, or by
+    ``<section>.<field>`` for a field inside a section.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
     or ``config_subentries.<type>``. A field with no help text of its own gets
@@ -74,10 +75,13 @@ def field_help(
         # [sections.<section>.]data_description.<field> is the help text;
         # [sections.<section>.]data.<field> the field's label.
         parts = key[len(prefix) :].split(".")
-        if len(parts) >= 2 and parts[-2] == "data_description":
-            descriptions[parts[-1]] = text
-        elif len(parts) >= 2 and parts[-2] == "data":
-            labels[parts[-1]] = text
+        if len(parts) < 2 or parts[-2] not in ("data", "data_description"):
+            continue
+        name = f"{parts[1]}.{parts[-1]}" if parts[0] == "sections" else parts[-1]
+        if parts[-2] == "data_description":
+            descriptions[name] = text
+        else:
+            labels[name] = text
     return {**labels, **descriptions}
 
 
