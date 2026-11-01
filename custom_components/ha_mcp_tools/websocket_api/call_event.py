@@ -21,8 +21,11 @@ def _do_call_event(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
 
     event_type = msg["event_type"]
     context = msg["ha_mcp_context"]
-    hass.bus.async_fire(event_type, msg.get("event_data"), context=context)
+    # Read the counts BEFORE the fire: a listener that unregisters itself on
+    # dispatch (async_listen_once does) is still part of the audience this
+    # event is delivered to, so it must not be missing from the count.
     listeners = hass.bus.async_listeners()
+    hass.bus.async_fire(event_type, msg.get("event_data"), context=context)
     return {
         "event_type": event_type,
         "context": context.as_dict(),

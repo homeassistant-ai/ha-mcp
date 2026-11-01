@@ -17,6 +17,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.event_listeners import get_event_listeners
 from ..client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,

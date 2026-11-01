@@ -48,9 +48,21 @@ class _CallEventBus:
 
     def async_fire(self, event_type, event_data, context):
         self.fired.append((event_type, event_data, context))
+        # A one-shot listener unregisters while the event is dispatched. The
+        # counts describe the audience the event was delivered to, so reading
+        # them after the fire would lose this listener.
+        self.listeners.clear()
 
     def async_listeners(self):
         return dict(self.listeners)
+
+
+class _SelfRemovingListenerBus(_CallEventBus):
+    """A bus whose listener unsubscribes as the event dispatches."""
+
+    def async_fire(self, event_type, event_data, context):
+        super().async_fire(event_type, event_data, context)
+        self.listeners = {}
 
 
 class _CallEventHass:
@@ -59,6 +71,22 @@ class _CallEventHass:
 
 
 class TestCallEventCommand:
+    def test_counts_are_read_before_the_fire(self):
+        """A listener that removes itself on dispatch still counts as listening."""
+        hass = _CallEventHass(_SelfRemovingListenerBus())
+        hass.bus.listeners = {"my_event": 2, "*": 1}
+
+        result = wsapi._do_call_event(
+            hass,
+            {
+                "event_type": "my_event",
+                "ha_mcp_context": SimpleNamespace(as_dict=lambda: {"id": "ctx"}),
+            },
+        )
+
+        assert result["listener_count"] == 2
+        assert result["wildcard_listener_count"] == 1
+
     def test_fires_and_returns_context_and_counts(self):
         hass = _CallEventHass(_CallEventBus())
         hass.bus.listeners = {"my_event": 2, "*": 1}
