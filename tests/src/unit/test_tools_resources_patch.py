@@ -8,6 +8,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.resource_codec import (
+    _PREVIEW_LENGTH,
     MAX_CONTENT_SIZE,
     _data_uri_for,
     _decode_data_uri,
@@ -123,6 +124,16 @@ class TestPatchSuccess:
         assert url.startswith("data:")
         assert _decode_data_uri(url) == CARD.replace("'red'", "'green'")
 
+    async def test_suffix_deletion_leaving_preview_length_is_not_a_preview(self):
+        head = "/* " + "x" * 144 + " */"
+        assert len(head) == _PREVIEW_LENGTH
+        tail = "\nconst extra = 1;\n"
+        fake = FakeLovelace([_inline(head + tail)])
+
+        await _patch(fake, edits=[{"old": tail, "new": ""}])
+
+        assert _decode_data_uri(fake.updates[0]["url"]) == head
+
 
 class TestPatchRefusals:
     async def test_failing_second_edit_saves_nothing(self):
@@ -175,16 +186,24 @@ class TestPatchRefusals:
         assert error["reason"] == "hash_mismatch"
         assert error["actual_sha256"] == _sha(CARD)
 
-    @pytest.mark.parametrize(
-        "url", ["/local/x.js", "/hacsfiles/button-card/button-card.js"]
-    )
-    async def test_non_inline_resource_is_refused(self, url):
+    async def test_non_inline_resource_is_refused(self):
+        url = "/local/x.js"
         fake = FakeLovelace([{"id": RESOURCE_ID, "type": "module", "url": url}])
 
         error = await _patch_error(fake, edits=[{"old": "a", "new": "b"}])
 
         assert error["reason"] == "not_inline"
         assert error["url"] == url
+
+    async def test_legacy_row_of_non_inline_type_is_refused(self):
+        fake = FakeLovelace(
+            [{"id": RESOURCE_ID, "type": "js", "url": _legacy_url(CARD)}]
+        )
+
+        error = await _patch_error(fake, edits=[{"old": "'red'", "new": "'blue'"}])
+
+        assert error["reason"] == "unsupported_type"
+        assert error["resource_type"] == "js"
 
     async def test_result_over_the_size_limit_is_refused(self):
         fake = FakeLovelace([_inline(CARD)])

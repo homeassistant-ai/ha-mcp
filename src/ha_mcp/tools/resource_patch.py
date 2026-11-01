@@ -13,6 +13,7 @@ from pydantic import ConfigDict, Field
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error, ws_failure_code
 from .resource_codec import (
+    _DATA_URI_MIME,
     _MAX_ECHOED_URL,
     _check_ws_error,
     _decode_inline_content,
@@ -164,7 +165,26 @@ async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]
                 ],
             )
         )
-    return decoded[0], str(stored.get("type", "module"))
+    resource_type = str(stored.get("type", "module"))
+    if resource_type not in _DATA_URI_MIME:
+        # Legacy worker URLs could carry 'js'/'html' rows; a data: URI cannot.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Resource '{resource_id}' has type {resource_type!r}, which "
+                "edits cannot rewrite as an inline resource",
+                context={
+                    **context,
+                    "reason": "unsupported_type",
+                    "resource_type": resource_type,
+                },
+                suggestions=[
+                    "Pass the full content with resource_type='module' and "
+                    "this resource_id to convert it",
+                ],
+            )
+        )
+    return decoded[0], resource_type
 
 
 def check_expected_sha256(content: str, expected_sha256: str | None) -> None:

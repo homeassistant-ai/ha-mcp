@@ -338,8 +338,10 @@ class ResourceTools:
             str | None,
             Field(
                 description="With edits: refuse the patch unless the stored content "
-                "currently has this SHA-256 (from include_hash=True or a previous "
-                "response's sha256)."
+                "has this SHA-256 when read, just before the write (from "
+                "include_hash=True or a previous response's sha256). A preflight "
+                "check only: a change made by another client after that read is "
+                "not detected and can be overwritten."
             ),
         ] = None,
     ) -> dict[str, Any]:
@@ -473,8 +475,16 @@ class ResourceTools:
         content: str,
         resource_type: _RESOURCE_TYPE,
         resource_id: str | None,
+        *,
+        check_preview: bool = True,
     ) -> dict[str, Any]:
-        """Create or update an inline dashboard resource."""
+        """Create or update an inline dashboard resource.
+
+        ``check_preview=False`` skips the truncated-preview guard. Only edit
+        results pass it: they are derived from the stored content, not
+        copied from a list response, so a preview-shaped result (e.g. a
+        suffix deletion leaving ``_PREVIEW_LENGTH`` characters) is intended.
+        """
         if not content.strip():
             raise_tool_error(
                 create_error_response(
@@ -520,7 +530,7 @@ class ResourceTools:
                 )
             )
 
-        if resource_id is not None:
+        if resource_id is not None and check_preview:
             await self._reject_truncated_preview_resave(content, resource_id)
 
         resource_url = _data_uri_for(content, resource_type)
@@ -620,7 +630,9 @@ class ResourceTools:
             raise
         check_expected_sha256(stored, expected_sha256)
         patched = apply_resource_edits(stored, edits)
-        response = await self._set_inline_resource(patched, resource_type, resource_id)
+        response = await self._set_inline_resource(
+            patched, resource_type, resource_id, check_preview=False
+        )
         return {**response, "action": "patched", "applied": len(edits)}
 
     async def _reject_truncated_preview_resave(
