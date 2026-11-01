@@ -1562,5 +1562,5 @@ class TestCalendarCaptureRestore:
 
 # ``integration`` (config_entries/disable) still has no full-loop e2e here:
 # it needs a real integration that is safe to disable/re-enable, and the
-# base image's core integrations are unsafe to toggle. Payload-shape
-# coverage lives in tests/src/unit/test_backup_manager.py.
+# base image's core integrations are unsafe to toggle. Payload-shape: unit
+# tests; options round trip: test_integration_options_restore.py.
