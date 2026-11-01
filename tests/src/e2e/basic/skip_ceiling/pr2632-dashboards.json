@@ -1,0 +1,12 @@
+{
+  "reason": "Adds one external_only auto-backup test (tests/src/e2e/workflows/auto_backup/test_dashboard_delete_restore.py::test_changed_dashboard_settings_are_put_back_by_restore): restoring a settings snapshot puts back every setting Core's dashboard update accepts. It needs the in-process server's auto-backup env, so it skips at collection on every lane whose server runs out of process.",
+  "deltas": {
+    "haos_stdio": 1,
+    "haos_inaddon": 1,
+    "haos_inaddon_no_tools": 1,
+    "embedded": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded": 1,
+    "haos_embedded_no_tools": 1
+  }
+}

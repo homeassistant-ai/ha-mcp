@@ -45,7 +45,12 @@ async def test_reporter_dashboard_edits_and_conflicts(  # noqa: PLR0915
     try:
         await mcp.call_tool_success(
             "ha_config_set_dashboard",
-            {"url_path": path, "config": baseline, "MandatoryBPS": False},
+            {
+                "url_path": path,
+                "title": "E2E Dashboard",
+                "config": baseline,
+                "MandatoryBPS": False,
+            },
         )
         original = await mcp.call_tool_success(
             "ha_config_get_dashboard", {"url_path": path}
@@ -209,7 +214,12 @@ async def test_native_dashboard_backend_measurements(
     try:
         await mcp.call_tool_success(
             "ha_config_set_dashboard",
-            {"url_path": path, "config": baseline, "MandatoryBPS": False},
+            {
+                "url_path": path,
+                "title": "E2E Dashboard",
+                "config": baseline,
+                "MandatoryBPS": False,
+            },
         )
         current = await mcp.call_tool_success(
             "ha_config_get_dashboard", {"url_path": path}
@@ -318,6 +328,7 @@ async def test_native_concurrent_dashboard_edits_have_one_winner(
             "ha_config_set_dashboard",
             {
                 "url_path": path,
+                "title": "E2E Dashboard",
                 "config": baseline,
                 "MandatoryBPS": False,
             },

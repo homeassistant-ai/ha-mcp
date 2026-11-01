@@ -122,12 +122,12 @@ MAX_CONTENT_SIZE = 128_000
 # tool (`ha_config_set_dashboard_resource`) to "create a scene/automation/...".
 # This tool only stores Lovelace JS/CSS resources — the YAML payload would land
 # as a Lovelace module, creating orphaned, unreachable HA entities (see #1072).
-# Map: top-level key → suggested replacement tool (None where no direct tool
-# exists yet — e.g. scenes are tracked in #995).
+# Map: top-level key → the ha-mcp tool that creates that kind of config without
+# YAML (None where only YAML configuration can).
 _HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
     "automation": "ha_config_set_automation",
     "script": "ha_config_set_script",
-    "scene": None,  # Tracked in #995 — scene CRUD tools not yet shipped
+    "scene": "ha_config_set_scene",
     "group": "ha_config_set_group",
     "input_boolean": "ha_config_set_helper(helper_type='input_boolean', ...)",
     "input_number": "ha_config_set_helper(helper_type='input_number', ...)",
@@ -135,7 +135,9 @@ _HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
     "input_text": "ha_config_set_helper(helper_type='input_text', ...)",
     "input_datetime": "ha_config_set_helper(helper_type='input_datetime', ...)",
     "input_button": "ha_config_set_helper(helper_type='input_button', ...)",
-    "template": None,
+    "template": "ha_config_set_helper(helper_type='template', ...) "
+    "(trigger-based templates are YAML-only: ha_config_set_yaml when YAML "
+    "config editing is enabled, otherwise the HA UI or YAML packages)",
     "homeassistant": None,
     "sensor": None,
     "binary_sensor": None,
@@ -588,32 +590,22 @@ class ResourceTools:
     ) -> NoReturn:
         """Raise the structured error for HA-config YAML misrouted as inline resource content."""
         right_tool = _HA_CONFIG_YAML_MARKERS[detected_yaml]
-        suggestions = ["This tool stores Lovelace JavaScript/CSS resources only"]
         if right_tool:
-            suggestions.insert(
-                0,
-                f"For `{detected_yaml}:` configuration, use {right_tool} instead",
-            )
-        elif detected_yaml == "scene":
-            suggestions.insert(
-                0,
-                "Scene configuration tools are tracked in #995; "
-                "until they ship, scenes can only be created via the HA UI",
-            )
+            first = f"For `{detected_yaml}:` configuration, use {right_tool} instead"
         else:
-            suggestions.insert(
-                0,
-                f"No direct tool exists for `{detected_yaml}:` config; "
-                "configure it via the HA UI or YAML packages",
+            first = (
+                f"`{detected_yaml}:` is YAML configuration: ha_config_set_yaml "
+                "writes the keys it allows when YAML config editing is enabled; "
+                "otherwise use the HA UI or YAML packages"
             )
+        suggestions = [first, "This tool stores Lovelace JavaScript/CSS resources only"]
         raise_tool_error(
             create_error_response(
                 code=ErrorCode.VALIDATION_INVALID_PARAMETER,
                 message=(
-                    f"Content starts with HA-configuration YAML "
+                    "Content starts with HA-configuration YAML "
                     f"(`{detected_yaml}:`) — this tool only accepts Lovelace "
-                    f"JavaScript or CSS resources, not Home Assistant config "
-                    f"(see issue #1072)."
+                    "JavaScript or CSS resources, not Home Assistant config."
                 ),
                 context={
                     "detected_marker": f"{detected_yaml}:",
