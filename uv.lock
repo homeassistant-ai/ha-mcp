@@ -682,6 +682,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "authlib" },
+    { name = "certifi" },
     { name = "cryptography" },
     { name = "cyclopts" },
     { name = "exceptiongroup" },
@@ -751,6 +752,7 @@ requires-dist = [
     { name = "anyio", marker = "python_full_version < '3.14'", specifier = ">=4.9" },
     { name = "anyio", marker = "python_full_version >= '3.14'", specifier = ">=4.10" },
     { name = "authlib", specifier = ">=1.6.11" },
+    { name = "certifi", specifier = ">=2026.10.19" },
     { name = "cryptography", specifier = ">=48.0.0,<51" },
     { name = "cyclopts", specifier = ">=4.0.0" },
     { name = "exceptiongroup", specifier = ">=1.2.2" },

@@ -243,11 +243,19 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
     # into this same testcontainer and drive it over its ingress webhook. The
     # wheel name is captured here and consumed by the entrypoint preinstall below.
     embedded = _is_embedded_backend_selected()
-    config_path, temp_dir, local_blueprint, embedded_wheel_name = (
+    config_path, temp_dir, local_blueprint, embedded_wheel_name, resolved_image = (
         _prepare_testcontainer_config(embedded)
     )
 
-    container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
+    def cleanup_config() -> None:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.info("✅ Cleanup completed")
+
+    request.addfinalizer(cleanup_config)
+
+    container = _build_ha_testcontainer(
+        config_path, embedded, embedded_wheel_name, image=resolved_image
+    )
 
     with container:
         # Readiness-gate budgets for the testcontainer path. Defined at
@@ -361,8 +369,6 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
             # ``remove(force=True)`` and is non-idempotent — a second call
             # from the enclosing ``with container:`` ``__exit__`` raises
             # ``docker.errors.NotFound`` at session teardown.
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            logger.info("✅ Cleanup completed")
 
 
 @pytest.fixture(scope="session")

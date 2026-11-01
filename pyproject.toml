@@ -33,6 +33,8 @@ dependencies = [
     "anyio>=4.10; python_version >= '3.14'",
     "anyio>=4.9; python_version < '3.14'",
     "authlib>=1.6.11",
+    # 10.18 removed the compromised roots; 10.19 restores unaffected roots.
+    "certifi>=2026.10.19",
     "cyclopts>=4.0.0",
     "exceptiongroup>=1.2.2",
     "griffelib>=2.0.0",

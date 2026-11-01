@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from packaging.version import Version
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
@@ -187,6 +188,12 @@ def test_every_setup_uv_site_pins_a_full_version() -> None:
             f"{version!r} - an omitted key or 'latest' floats with uv "
             "releases and can redden CI with zero repo change"
         )
+
+
+def test_setup_uv_rejects_compromised_ca_bundle() -> None:
+    """uv before 0.13.4 bundles the compromised emSign ECC Root CA - G3."""
+    for path, step in _setup_uv_sites():
+        assert Version(step["with"]["version"]) >= Version("0.13.4"), path.name
 
 
 def test_renovate_matchstrings_actually_match_the_setup_uv_pins() -> None:

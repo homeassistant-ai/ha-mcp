@@ -106,6 +106,7 @@ class TestRepoPyprojectIsAligned:
         # Verbatim from homeassistant/package_constraints.txt @ 2026.9.0.
         frozen_2026_9_0 = "\n".join(
             [
+                "certifi>=2021.5.30",
                 "websockets>=15.0.1",
                 "httpx==0.28.1",
                 "pydantic==2.13.4",
@@ -118,6 +119,18 @@ class TestRepoPyprojectIsAligned:
             dependencies, checker.parse_requirement_lines(frozen_2026_9_0)
         )
         assert violations == []
+
+
+def test_recommended_ca_bundle_floor_remains_compatible_with_core() -> None:
+    """10.18 removed compromised roots; recommended 10.19 restores unaffected ones."""
+    dependencies = checker.direct_dependencies(
+        (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    certifi = next(dep for dep in dependencies if dep.name == "certifi")
+    assert "2026.7.22" not in certifi.specifier  # Contains compromised roots.
+    # Already fixed, but below our recommended floor (GHSA-6q48-6c7w-9gw2).
+    assert "2026.10.18" not in certifi.specifier
+    assert "2026.10.19" in certifi.specifier
 
 
 class TestMarkerAndOperatorHandling:

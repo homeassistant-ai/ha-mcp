@@ -10,9 +10,20 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Thread
+
+from packaging.version import Version
 
 logger = logging.getLogger(__name__)
+
+# HACS integration 2.0.5 scripts/install/frontend pins this release.
+_HACS_FRONTEND_VERSION = "20250128065759"
+_HACS_LOCK_BUDGET_S = 300
+_HACS_HEARTBEAT_INTERVAL_S = 30
+_HACS_STAGING_PREFIX = ".hacs_frontend-staging-"
 
 
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
@@ -167,28 +178,14 @@ def _setup_config_permissions(config_path: Path) -> None:
 
 def _clear_stale_hacs_lock(lock_dir: Path) -> None:
     """Remove an orphaned HACS frontend lock older than a safe threshold."""
-    # Staleness check: a SIGKILL during the winner's critical section (e.g.
-    # a developer hard-kills pytest mid-download) leaves an orphan
-    # ``lock_dir`` that would force every peer in the next session into the
-    # 180s polling wait below. If the lock predates any plausible download
-    # duration, clear it before the fast-path so peers recover instantly.
-    # CI tolerates the 180s wait because containers are torn down between
-    # runs; local developer iterations under a debugger don't.
-    #
-    # The 5-minute threshold is a conservative ceiling for any plausible
-    # download; legitimate winners finish well within this window.
-    #
-    # NB: ``stat().st_mtime`` is wall-clock (epoch seconds), so the age math
-    # uses ``time.time()`` — ``time.monotonic()`` measures elapsed-from-
-    # arbitrary-origin and cannot be compared to ``st_mtime``.
-    stale_lock_threshold_s = 300
+    # Compare epoch mtime with wall time, not the monotonic waiter clock.
     if lock_dir.exists():
         try:
             lock_age_s = time.time() - lock_dir.stat().st_mtime
-            if lock_age_s > stale_lock_threshold_s:
+            if lock_age_s > _HACS_LOCK_BUDGET_S:
                 logger.warning(
                     f"Removing stale HACS frontend lock at {lock_dir} "
-                    f"(age {lock_age_s:.0f}s > {stale_lock_threshold_s}s "
+                    f"(age {lock_age_s:.0f}s > {_HACS_LOCK_BUDGET_S}s "
                     f"threshold — likely orphaned by a crashed prior run)."
                 )
                 lock_dir.rmdir()
@@ -198,43 +195,79 @@ def _clear_stale_hacs_lock(lock_dir: Path) -> None:
             # will handle whatever state remains.
             pass
         except OSError as exc:
-            # Best-effort: if cleanup fails (e.g., non-empty dir from a
-            # future sentinel/pidfile refactor, or permission denied), the
-            # existing 180s polling timeout still catches the orphan.
+            # Cleanup failure is surfaced to peers by the lock wait timeout.
             logger.warning(f"Stale-lock cleanup failed at {lock_dir}: {exc}")
 
 
-def _wait_for_hacs_lock_release(lock_dir: Path) -> None:
-    """Poll until the winning worker releases the HACS frontend lock (≤180s)."""
-    wait_start = time.monotonic()
-    while lock_dir.exists():
-        if time.monotonic() - wait_start >= 180:
-            # Warn-and-continue (not ``pytest.fail``): a stuck HACS
-            # download only breaks HACS-dependent tests, while the
-            # rest of the session still produces useful signal.
-            # Clear the stale lock so a subsequent session does not
-            # also hit the 180s wait when the winner truly crashed.
-            logger.warning(
-                f"Timeout waiting for HACS frontend lock release at "
-                f"{lock_dir}; proceeding without verification."
-            )
+@contextmanager
+def _hacs_lock_heartbeat(lock_dir: Path) -> Iterator[Callable[[], None]]:
+    """Keep the owner lease fresh and check failures before publication.
+
+    Renewal can fail after the publish-point check: rename may then complete
+    before the final check raises. Waiters may accept that complete frontend.
+    This callback is not an atomic lease/publication transaction; never remove
+    the destination on a late failure, as another owner may have published it.
+    """
+    stopped = Event()
+    failures: list[OSError] = []
+
+    def check_renewal() -> None:
+        if failures:
+            raise RuntimeError("HACS bootstrap lock renewal failed") from failures[0]
+
+    def renew() -> None:
+        while not stopped.wait(_HACS_HEARTBEAT_INTERVAL_S):
             try:
-                lock_dir.rmdir()
+                os.utime(lock_dir, None)
             except OSError as exc:
-                logger.warning(f"Could not clear stale HACS lock dir: {exc}")
+                failures.append(exc)
+                logger.error("HACS bootstrap lock renewal failed: %s", exc)
+                return
+
+    heartbeat = Thread(target=renew, name="hacs-bootstrap-lock", daemon=True)
+    heartbeat.start()
+    try:
+        yield check_renewal
+    finally:
+        stopped.set()
+        heartbeat.join()
+    check_renewal()
+
+
+def _wait_for_hacs_lock_release(lock_dir: Path) -> None:
+    """Wait while ownership is renewed; fail only after an idle lease budget."""
+    last_renewal: float | None = None
+    wait_start = time.monotonic()
+    while True:
+        try:
+            renewal = lock_dir.stat().st_mtime
+        except FileNotFoundError:
             return
+        if renewal != last_renewal:
+            last_renewal = renewal
+            wait_start = time.monotonic()
+        elif time.monotonic() - wait_start >= _HACS_LOCK_BUDGET_S:
+            raise RuntimeError(
+                f"Timeout waiting for HACS frontend lock release at {lock_dir}; "
+                "owner has stopped renewing its lease. Check the bootstrap owner log; "
+                "stop remaining workers before retrying the session."
+            )
         time.sleep(2)
 
 
-def _download_hacs_frontend(frontend_dir: Path) -> None:
-    """Download the latest HACS frontend release into ``frontend_dir``."""
+def _is_valid_hacs_frontend(path: Path) -> bool:
+    """Require both the imported Python package and its browser entry point."""
+    return all((path / name).is_file() for name in ("__init__.py", "entrypoint.js"))
+
+
+def _download_hacs_frontend(
+    frontend_dir: Path, *, before_publish: Callable[[], None] | None = None
+) -> None:
+    """Download the frontend pinned by the vendored HACS integration into ``frontend_dir``."""
     import tarfile
 
     if frontend_dir.exists():
-        # Partial/corrupt directory from a prior interrupted
-        # session. Clear it so ``shutil.move`` below replaces it
-        # cleanly — moving onto an existing directory nests the
-        # fresh ``hacs_frontend/`` inside the stale one.
+        # Discard an incomplete frontend before publishing a replacement.
         logger.warning(
             f"HACS frontend at {frontend_dir} is partial or corrupt; "
             f"removing before re-download."
@@ -243,11 +276,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
     logger.info("HACS frontend not found, downloading...")
 
     try:
-        # Get the latest frontend version from GitHub API
-        api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-        with urllib.request.urlopen(api_url, timeout=30) as response:
-            release_data = json.loads(response.read())
-            tag_name = release_data["tag_name"]
+        tag_name = _HACS_FRONTEND_VERSION
 
         # Download and extract the frontend
         tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
@@ -256,10 +285,12 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
         with (
             urllib.request.urlopen(tarball_url, timeout=120) as response,
             tarfile.open(fileobj=response, mode="r:gz") as tar,
-            tempfile.TemporaryDirectory() as temp_dir_str,
+            tempfile.TemporaryDirectory(
+                dir=frontend_dir.parents[2], prefix=_HACS_STAGING_PREFIX
+            ) as temp_dir_str,
         ):
-            # Extract to temp location first; the context manager
-            # cleans up even if extractall or shutil.move raises.
+            # Stage on the destination filesystem so publication cannot fall
+            # back to a partial copy. Failed extraction/rename is cleaned up.
             temp_extract = Path(temp_dir_str)
             tar.extractall(temp_extract, filter="data")
 
@@ -267,53 +298,43 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
             extracted_frontend = (
                 temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
             )
-            if extracted_frontend.exists():
-                shutil.move(str(extracted_frontend), str(frontend_dir))
-                logger.info(f"HACS frontend installed at {frontend_dir}")
-            else:
-                logger.warning(
-                    f"Could not find hacs_frontend in downloaded archive for {tag_name}"
+            if not _is_valid_hacs_frontend(extracted_frontend):
+                raise RuntimeError(
+                    f"Incomplete HACS frontend archive for {tag_name}: "
+                    "missing __init__.py or entrypoint.js"
                 )
+            if before_publish is not None:
+                before_publish()
+            extracted_frontend.rename(frontend_dir)
+            logger.info(f"HACS frontend installed at {frontend_dir}")
 
     except (
         urllib.error.URLError,
-        json.JSONDecodeError,
-        KeyError,
         tarfile.TarError,
+        RuntimeError,
         OSError,
     ):
-        # Narrow catch + ``logger.exception`` so the full
-        # traceback surfaces in CI logs, not just the exception
-        # type — KP13's "don't green-pass a failed download"
-        # principle. HACS-dependent tests will fail at first
-        # HACS call; other tests can still run.
         logger.exception("Failed to download HACS frontend")
-        logger.warning("HACS tests may be skipped without the frontend")
+        raise
 
 
-def _ensure_hacs_frontend(initial_state_path: Path) -> None:
+def _ensure_hacs_frontend(
+    initial_state_path: Path, *, core_version: str | None = None
+) -> None:
     """Download HACS frontend if not present.
 
     HACS requires the frontend (~51MB) to be present to fully initialize.
     This is not committed to git to keep the repo size manageable.
 
     Uses a directory-based atomic lock so concurrent xdist workers don't race
-    on ``shutil.move`` into the shared ``initial_test_state`` path. One worker
+    when publishing into the shared ``initial_test_state`` path. One worker
     wins ``mkdir(exist_ok=False)`` and performs the download; the losers poll
     on the lock and exit when the winner releases it.
     """
 
-    def _is_valid_frontend(path: Path) -> bool:
-        """Best-effort check that ``path`` holds a complete HACS frontend.
-
-        A SIGKILL or partial-failure during ``tar.extractall`` →
-        ``shutil.move`` can leave a populated but incomplete ``frontend_dir``
-        from a prior session. ``entrypoint.js`` is a top-level file in every
-        release tarball published at https://github.com/hacs/frontend/releases,
-        so its absence flags an interrupted prior session and forces a clean
-        re-download instead of letting HACS boot against a broken frontend.
-        """
-        return (path / "entrypoint.js").is_file()
+    # Core 2026.11 blocks legacy HACS in favor of Marketplace.
+    if core_version is not None and Version(core_version).release[:2] >= (2026, 11):
+        return
 
     hacs_dir = initial_state_path / "custom_components" / "hacs"
     frontend_dir = hacs_dir / "hacs_frontend"
@@ -321,52 +342,47 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
 
     _clear_stale_hacs_lock(lock_dir)
 
-    # Fast path: HACS not installed (nothing to do), or frontend present
-    # AND no lock held. The lock-held check rules out the window where
-    # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
-    # exists then but its contents are partial. On the success path the
-    # move commits in the inner ``try`` before the winner's ``finally``
-    # runs ``rmdir`` — waiters observing lock-gone-and-frontend-present
-    # see a complete frontend. On any failure path the finally still
-    # releases with ``frontend_dir`` absent; waiters re-enter the slow
-    # path and the download except-branch handles the skip.
     if not hacs_dir.exists() or (
-        _is_valid_frontend(frontend_dir) and not lock_dir.exists()
+        _is_valid_hacs_frontend(frontend_dir) and not lock_dir.exists()
     ):
         return
 
-    # Cross-worker lock: atomic mkdir succeeds on exactly one xdist worker.
-    # The losers poll on the lock itself (released by the winner's finally
-    # block) so they wake immediately whether the winner finished, skipped
-    # the download, or raised — not only when ``frontend_dir`` appears. The
-    # 180s cap survives as a safety net for an ungraceful winner exit (e.g.
-    # SIGKILL) that never reaches the finally clause.
+    # Only the mkdir winner may publish or sweep staging from a prior owner.
     try:
         lock_dir.mkdir(exist_ok=False)
     except FileExistsError:
         _wait_for_hacs_lock_release(lock_dir)
+        if not _is_valid_hacs_frontend(frontend_dir):
+            raise RuntimeError(
+                "HACS frontend unavailable after bootstrap lock release; "
+                "check the bootstrap owner log for the download/extraction failure"
+            ) from None
         return
 
     # We own the lock. Outer try/finally guarantees release even when the
     # download block is skipped (e.g. hacs_dir missing) or raises.
     try:
-        # Check if HACS is installed and frontend is missing or invalid.
-        if hacs_dir.exists() and not _is_valid_frontend(frontend_dir):
-            _download_hacs_frontend(frontend_dir)
+        with _hacs_lock_heartbeat(lock_dir) as check_renewal:
+            for staging in initial_state_path.glob(f"{_HACS_STAGING_PREFIX}*"):
+                if staging.is_dir():
+                    shutil.rmtree(staging)
+            # Check if HACS is installed and frontend is missing or invalid.
+            if hacs_dir.exists() and not _is_valid_hacs_frontend(frontend_dir):
+                _download_hacs_frontend(frontend_dir, before_publish=check_renewal)
     finally:
         # Release the lock so waiting workers can proceed. A
-        # ``FileNotFoundError`` here means a timed-out waiter cleared
+        # ``FileNotFoundError`` can mean startup stale-lock cleanup removed
         # the lock first — invariant broke but the session can
         # continue; log so it's diagnosable. Other ``OSError`` classes
         # (PermissionError, Errno-39 "Directory not empty" from a
         # future sentinel/pidfile refactor) would wedge subsequent
-        # sessions into the 180s wait — let them surface.
+        # sessions into the lock wait — let them surface.
         try:
             lock_dir.rmdir()
         except FileNotFoundError:
             logger.warning(
                 f"HACS frontend lock dir {lock_dir} vanished before "
-                f"release — concurrent timeout-clear?"
+                f"release — concurrent stale-lock cleanup?"
             )
 
 
