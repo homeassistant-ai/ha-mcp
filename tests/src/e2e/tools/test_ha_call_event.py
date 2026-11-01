@@ -2,6 +2,7 @@
 E2E tests for ha_call_event tool - publish events onto the HA event bus.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -18,13 +19,16 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_call_event_no_data(mcp_client):
     """Publish a custom event without event data."""
+    event_type = f"test_mcp_event_no_data_{uuid.uuid4().hex[:8]}"
     result = await mcp_client.call_tool(
         "ha_call_event",
-        {"event_type": "test_mcp_event_no_data"},
+        {"event_type": event_type},
     )
     data = assert_mcp_success(result, "call event without data")
     assert data["success"] is True
-    assert data["event_type"] == "test_mcp_event_no_data"
+    assert data["event_type"] == event_type
+    assert data["listener_count"] == 0
+    assert "wildcard_listener_count" in data
     assert "message" in data
     logger.info("Called event without data: %s", data)
 
@@ -120,14 +124,26 @@ async def test_call_event_delivery_verified(mcp_client):
             f"Automation {automation_id} not registered within 15s"
         )
 
-        # 4. Fire the event via ha_call_event
-        event_result = await mcp_client.call_tool(
-            "ha_call_event",
-            {"event_type": event_type},
-        )
-        data = assert_mcp_success(event_result, "fire custom event")
+        # 4. Fire the event. Poll the pre-dispatch count: the config entry can
+        # be readable before Core has attached the trigger listener, and the
+        # component route reports the count without the REST round-trip that
+        # previously gave the listener time to register.
+        data: dict = {}
+        for _ in range(30):
+            event_result = await mcp_client.call_tool(
+                "ha_call_event",
+                {"event_type": event_type},
+            )
+            data = assert_mcp_success(event_result, "fire custom event")
+            if data.get("listener_count", 0) >= 1:
+                break
+            await asyncio.sleep(0.5)
         assert data["success"] is True
         assert data["event_type"] == event_type
+        assert data["listener_count"] >= 1, (
+            "The automation's event trigger must register a listener for "
+            f"{event_type!r}; got {data.get('listener_count')!r}"
+        )
         logger.info("Fired event %r: %s", event_type, data)
 
         # 5. Wait for flag to flip 'on' — proves event reached the bus

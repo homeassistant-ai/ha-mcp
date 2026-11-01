@@ -1906,17 +1906,9 @@ class _StubServiceNotFound(_base._StubHomeAssistantError):
 # binds a real class (the base module already pins ``HomeAssistantError``).
 _base._exceptions_stub.ServiceNotFound = _StubServiceNotFound
 
-# ``_call_service_prep`` imports ``EVENT_STATE_CHANGED`` from ``homeassistant.const``
-# (function-locally, only when it registers the confirmation listener). Under the
-# MagicMock stub that submodule is absent, so ensure it resolves; the fake bus
-# ignores the event-type value, so a literal is sufficient.
-# ``homeassistant.const.EVENT_STATE_CHANGED`` is guaranteed for every unit test by
-# an autouse fixture in conftest.py (the component's call_service waiter imports it
-# function-locally). The module-level default here keeps this file importable on
-# its own; conftest handles the full-suite collection-order case.
-sys.modules.setdefault(
-    "homeassistant.const", SimpleNamespace(EVENT_STATE_CHANGED="state_changed")
-)
+# ``_call_service_prep`` imports ``EVENT_STATE_CHANGED`` and ``call_event`` imports
+# ``MATCH_ALL`` from ``homeassistant.const`` function-locally; conftest's autouse
+# fixture guarantees both names for every unit test, so no module-level stub here.
 
 
 class _FakeEvent:

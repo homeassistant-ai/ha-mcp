@@ -1112,23 +1112,6 @@ class TestSweepWarningsShape:
         _assert_warnings_list_shape(result)
 
     @pytest.mark.asyncio
-    async def test_service_call_event_timeout_warnings_shape(self):
-        import httpx
-
-        from ha_mcp.tools.tools_service import ServiceTools
-
-        conn_error = HomeAssistantConnectionError("timeout")
-        conn_error.__cause__ = httpx.TimeoutException("read timed out")
-        client = MagicMock()
-        client.fire_event = AsyncMock(side_effect=conn_error)
-        tools = ServiceTools.__new__(ServiceTools)
-        tools._client = client
-        tools._device_tools = MagicMock()
-
-        result = await tools.ha_call_event("evt_x")
-        _assert_warnings_list_shape(result)
-
-    @pytest.mark.asyncio
     async def test_system_restart_warnings_shape(self):
         from ha_mcp.tools.tools_system import SystemTools
 

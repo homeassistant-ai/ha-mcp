@@ -42,6 +42,7 @@ import pytest
 
 from ._component_ws_fakes import (
     FakeRegEntry,
+    FakeServices,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
@@ -152,17 +153,6 @@ class FakeConfigEntries:
             if getattr(entry, "entry_id", None) == entry_id:
                 return entry
         return None
-
-
-class FakeServices:
-    """Stand-in for ``hass.services`` (``async_services`` mapping)."""
-
-    def __init__(self, services):
-        # services: {domain: {service_name: <anything>}}
-        self._services = {d: dict(s) for d, s in dict(services).items()}
-
-    def async_services(self):
-        return dict(self._services)
 
 
 class FakeHass:
@@ -1904,6 +1894,7 @@ class TestRegistrationAndAdminGate:
             # test_component_ws_phase2_async.py, test_component_template_diagnose.py,
             # _oauth_callbacks_ws.py and test_component_ws_logbook.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
+            wsapi.WS_CALL_EVENT,
             wsapi.WS_CALL_SERVICE,
             wsapi.WS_BULK_CALL_SERVICE,
             wsapi.WS_TEMPLATE_DIAGNOSE,
@@ -1952,7 +1943,13 @@ class TestRegistrationAndAdminGate:
             with pytest.raises(_StubHomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
-        handler(FakeHass(), conn, msg)
+        hass = FakeHass()
+        if command == wsapi.WS_CALL_EVENT:
+            hass.bus = SimpleNamespace(
+                async_fire=lambda *args, **kwargs: None,
+                async_listeners=dict,
+            )
+        handler(hass, conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)
 
