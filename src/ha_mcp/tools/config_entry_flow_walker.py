@@ -370,11 +370,11 @@ async def _handle_abort_step(
         remaining_config=remaining_config,
         reuse_state=reuse_state,
     )
-    if reconfigure_result is not None:
-        return reconfigure_result
-    await raise_flow_abort(
-        client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
-    )
+    if reconfigure_result is None:
+        await raise_flow_abort(
+            client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+        )
+    return reconfigure_result
 
 
 def _flow_form_payload(
@@ -459,24 +459,24 @@ async def _wait_out_progress_or_refuse(
     is_reconfigure: bool,
 ) -> dict[str, Any]:
     result_type = current_step.get("type")
-    if result_type in PROGRESS_STEP_TYPES and flow is not None:
-        return await _wait_for_progress(
-            client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+    if result_type not in PROGRESS_STEP_TYPES or flow is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Flow reached a '{result_type}' step that cannot be "
+                "completed via MCP (browser/OAuth authorization or an "
+                "asynchronous provider step)",
+                suggestions=[
+                    "Complete this flow in the Home Assistant UI "
+                    "(Settings > Devices & Services)."
+                ],
+                context=_flow_failure_context(
+                    flow_id, current_step, is_reconfigure=is_reconfigure
+                ),
+            )
         )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Flow reached a '{result_type}' step that cannot be "
-            "completed via MCP (browser/OAuth authorization or an "
-            "asynchronous provider step)",
-            suggestions=[
-                "Complete this flow in the Home Assistant UI "
-                "(Settings > Devices & Services)."
-            ],
-            context=_flow_failure_context(
-                flow_id, current_step, is_reconfigure=is_reconfigure
-            ),
-        )
+    return await _wait_for_progress(
+        client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
     )
 
 
