@@ -725,6 +725,9 @@ class TestLifecycleWriteWarningsShape:
         from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
         client = MagicMock()
+        # Credential-less: no component probe, Core's REST/WS is the path.
+        client.base_url = client.token = None
+        client._resolve_automation_id = AsyncMock(return_value="test_auto_id")
         client.get_automation_config = AsyncMock(return_value={"alias": "Test Auto"})
         client.upsert_automation_config = AsyncMock(
             return_value={"entity_id": "automation.test_auto"}
@@ -736,8 +739,6 @@ class TestLifecycleWriteWarningsShape:
             return_value={"state": "on", "entity_id": "automation.test_auto"}
         )
         client.get_services = AsyncMock(return_value=[])
-        # _resolve_automation_entity_id reads states; for entity_id input
-        # the short-circuit triggers and this is never consulted.
         client.get_states = AsyncMock(return_value=[])
         return AutomationConfigTools(client)
 
@@ -947,7 +948,7 @@ class TestLifecycleWriteWarningsShape:
             side_effect=ValueError("forced for test"),
         ):
             result = await automations_tools.ha_config_remove_automation(
-                identifier="automation.test_auto",
+                entity_id="automation.test_auto",
             )
         _assert_warnings_list_shape(result)
         assert any("removal verification failed" in w for w in result["warnings"])
@@ -955,16 +956,15 @@ class TestLifecycleWriteWarningsShape:
     async def test_automations_update_path_uses_updated_action_word(
         self, automations_tools
     ):
-        # identifier supplied — tools_config_automations.py:740 selects
-        # action_word = "updated". Pins the create/update branching against
-        # a regression hardcoding "created" on the update path.
+        # An existing automation is an update. Pins the create/update wording
+        # against a regression hardcoding "created" on the update path.
         with patch(
             "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
             new_callable=AsyncMock,
             side_effect=HomeAssistantConnectionError("forced for test"),
         ):
             result = await automations_tools.ha_config_set_automation(
-                identifier="automation.test_auto",
+                entity_id="automation.test_auto",
                 config={
                     "alias": "Test Auto",
                     "trigger": [{"platform": "time", "at": "07:00:00"}],

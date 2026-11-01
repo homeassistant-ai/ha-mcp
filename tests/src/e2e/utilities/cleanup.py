@@ -95,7 +95,7 @@ class TestEntityCleaner:
         """Clean up an automation entity."""
         try:
             delete_result = await self.client.call_tool(
-                "ha_config_remove_automation", {"identifier": entity_id}
+                "ha_config_remove_automation", {"entity_id": entity_id}
             )
 
             delete_data = parse_mcp_result(delete_result)
@@ -309,7 +309,7 @@ async def verify_entity_cleanup(mcp_client, entity_id: str, entity_type: str) ->
         if entity_type == "automation":
             # Try to get automation config
             result = await mcp_client.call_tool(
-                "ha_config_get_automation", {"identifier": entity_id}
+                "ha_config_get_automation", {"entity_id": entity_id}
             )
 
             result_data = parse_mcp_result(result)

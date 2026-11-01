@@ -214,35 +214,43 @@ def _restore_fastmcp_host_origin_guard():
         setattr(settings, attr, prev_setting)
 
 
-@pytest.fixture(autouse=True)
-def _ensure_event_state_changed_const():
-    """Guarantee ``homeassistant.const.EVENT_STATE_CHANGED`` for every unit test.
+# The constants the ``ha_mcp_tools`` component imports from
+# ``homeassistant.const`` function-locally, with Home Assistant's values.
+_HA_CONST_DEFAULTS = {
+    "EVENT_STATE_CHANGED": "state_changed",
+    "ENTITY_MATCH_NONE": "none",
+    "ENTITY_MATCH_ALL": "all",
+}
 
-    The ``ha_mcp_tools`` component's ``call_service`` confirmation-waiter imports
-    ``EVENT_STATE_CHANGED`` from ``homeassistant.const`` function-locally. Home
-    Assistant is not a unit-test dependency, so that submodule is whatever a test
-    module stubbed — and under full-suite collection an earlier module can install
-    a ``homeassistant.const`` stub lacking that name, making the waiter's import
-    raise (component tests + the write-path contract/routing tests then fail only
-    in the full suite, never in isolation). This adds the one constant — always
-    present in real HA — onto whatever stub is live, preserving its other
-    attributes; it never replaces a populated stub.
+
+@pytest.fixture(autouse=True)
+def _ensure_ha_const_names():
+    """Guarantee the ``homeassistant.const`` names the component imports.
+
+    The ``call_service`` confirmation-waiter imports ``EVENT_STATE_CHANGED`` and
+    ``reference_data`` imports ``ENTITY_MATCH_NONE`` / ``ENTITY_MATCH_ALL`` from
+    ``homeassistant.const`` function-locally. Home Assistant is not a unit-test
+    dependency, so that submodule is whatever a test module stubbed — and under
+    full-suite collection an earlier module can install a ``homeassistant.const``
+    stub lacking those names, making the import raise (component tests + the
+    write-path contract/routing tests then fail only in the full suite, never in
+    isolation). This adds the missing constants — always present in real HA —
+    onto whatever stub is live, preserving its other attributes; it never
+    replaces a populated stub.
     """
     import sys
     from types import SimpleNamespace
 
     mod = sys.modules.get("homeassistant.const")
     if mod is None:
-        sys.modules["homeassistant.const"] = SimpleNamespace(
-            EVENT_STATE_CHANGED="state_changed"
-        )
-    elif not getattr(mod, "EVENT_STATE_CHANGED", None):
+        sys.modules["homeassistant.const"] = SimpleNamespace(**_HA_CONST_DEFAULTS)
+    else:
         try:
-            mod.EVENT_STATE_CHANGED = "state_changed"
+            for name, value in _HA_CONST_DEFAULTS.items():
+                if not getattr(mod, name, None):
+                    setattr(mod, name, value)
         except (AttributeError, TypeError):
-            sys.modules["homeassistant.const"] = SimpleNamespace(
-                EVENT_STATE_CHANGED="state_changed"
-            )
+            sys.modules["homeassistant.const"] = SimpleNamespace(**_HA_CONST_DEFAULTS)
     yield
 
 

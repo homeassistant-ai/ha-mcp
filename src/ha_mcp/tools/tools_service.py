@@ -2497,7 +2497,7 @@ class ServiceTools:
 
         When NOT to use: for controlling entities (lights, switches, climate) — use
         ha_call_service instead. To run an automation now, use
-        ha_config_set_automation(identifier=..., run_actions=True).
+        ha_config_set_automation(entity_id=..., run_actions=True).
 
         Use this to publish custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.

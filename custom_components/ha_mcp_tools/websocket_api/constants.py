@@ -7,6 +7,7 @@ import re
 from homeassistant.generated.config_flows import FLOWS
 
 from .. import (
+    automation_config,
     card_definitions,
     core_contract,
     entity_restore,
@@ -162,6 +163,9 @@ CAPABILITIES: list[str] = [
     "dashboards_docs",
     "services_list",
     "reference_data",
+    # A flag on reference_data: gates its opt-in ``include_targets`` (device,
+    # area, floor and label registry ids for the reference validator).
+    "reference_data_targets",
     # Core's own logbook processor run in-process (REST flags: ISO ``when``,
     # entity names) with the entity/device/context filter set; the server's
     # ``ha_get_logs`` logbook source prefers it and falls back to REST/WS.
@@ -200,6 +204,7 @@ CAPABILITIES: list[str] = [
     *entity_restore.CAPABILITIES,
     core_contract.CAPABILITY,
     todo_items.CAPABILITY,
+    automation_config.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]
 

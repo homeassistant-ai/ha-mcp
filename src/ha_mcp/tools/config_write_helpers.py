@@ -29,6 +29,58 @@ from .ws_waiters import _get_waiter_ws_client, _ws_cleanup, _ws_subscribe_all
 logger = logging.getLogger(__name__)
 
 
+async def fetch_registry_entry(
+    client: Any,
+    entity_id: str,
+    warnings: list[str] | None = None,
+    *,
+    purpose: str = "registry entry",
+) -> dict[str, Any] | None:
+    """Fetch an entity's registry entry (``config/entity_registry/get``).
+
+    ``None`` is also what a failed lookup returns - a caller that passes
+    ``warnings`` gets a line naming the failure and ``purpose`` (what the
+    entry was read for) instead, so a failed read is distinguishable from an
+    entity without the field it wanted (#1947).
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+        if isinstance(result, dict) and result.get("success"):
+            entry = result.get("result")
+            # The registry entry is a dict; anything else (a list, None) is a
+            # malformed read rather than an entry without the field.
+            return entry if isinstance(entry, dict) else None
+        # Shape-guarded rather than relying on a broad except: a non-dict
+        # payload is a malformed read, not a missing field.
+        reason = (
+            (result.get("error") or "request failed")
+            if isinstance(result, dict)
+            else f"unexpected response type: {type(result).__name__}"
+        )
+        if warnings is not None:
+            warnings.append(f"{purpose} unavailable for {entity_id}: {reason}")
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as e:
+        logger.warning(f"Failed to fetch {purpose} for {entity_id}: {e}")
+        if warnings is not None:
+            warnings.append(f"{purpose} unavailable for {entity_id}: {e}")
+    return None
+
+
+def entry_category(entry: dict[str, Any] | None, scope: str) -> str | None:
+    """The category a registry entry assigns in ``scope``."""
+    categories = (entry or {}).get("categories") or {}
+    cat_id = categories.get(scope) if isinstance(categories, dict) else None
+    return str(cat_id) if cat_id is not None else None
+
+
 async def fetch_entity_category(
     client: Any, entity_id: str, scope: str, warnings: list[str] | None = None
 ) -> str | None:
@@ -40,45 +92,11 @@ async def fetch_entity_category(
         scope: Category scope (e.g., 'automation', 'script', 'helpers')
 
     Returns:
-        Category ID string if set, None otherwise
-
-    ``None`` is also what a failed lookup returns, which reads as "no category
-    assigned" - a caller that passes ``warnings`` gets a line naming the
-    failure instead, so the two are distinguishable (#1947).
+        Category ID string if set, None otherwise (see ``fetch_registry_entry``
+        for how a failed lookup is reported)
     """
-    try:
-        result = await client.send_websocket_message(
-            {"type": "config/entity_registry/get", "entity_id": entity_id}
-        )
-        if isinstance(result, dict) and result.get("success"):
-            entry = result.get("result")
-            # The registry entry is a dict; anything else (a list, None) is a
-            # malformed read rather than an entry without categories.
-            if isinstance(entry, dict):
-                categories = entry.get("categories") or {}
-                cat_id = categories.get(scope) if isinstance(categories, dict) else None
-                return str(cat_id) if cat_id is not None else None
-            return None
-        # Shape-guarded rather than relying on a broad except: a non-dict
-        # payload is a malformed read, not "no category assigned".
-        reason = (
-            (result.get("error") or "request failed")
-            if isinstance(result, dict)
-            else f"unexpected response type: {type(result).__name__}"
-        )
-        if warnings is not None:
-            warnings.append(f"category unavailable for {entity_id}: {reason}")
-    except (
-        HomeAssistantConnectionError,
-        HomeAssistantAPIError,
-        HomeAssistantAuthError,
-        TimeoutError,
-        OSError,
-    ) as e:
-        logger.warning(f"Failed to fetch category for {entity_id}: {e}")
-        if warnings is not None:
-            warnings.append(f"category unavailable for {entity_id}: {e}")
-    return None
+    entry = await fetch_registry_entry(client, entity_id, warnings, purpose="category")
+    return entry_category(entry, scope)
 
 
 async def apply_entity_category(
@@ -164,29 +182,27 @@ def merge_validation_meta(
     """Attach reference-validator output to a set-tool success ``result``.
 
     Produces a single nested ``validation`` field when there's anything
-    worth reporting - warnings, skipped templates, or a blueprint
-    short-circuit. Keeps the happy-path response unchanged.
+    worth reporting - warnings, skipped templates, a blueprint
+    short-circuit, target kinds left unchecked, or a failed registry fetch.
+    Keeps the happy-path response unchanged.
 
     Shared between ``ha_config_set_automation`` and
     ``ha_config_set_script``; see
     :mod:`ha_mcp.tools.reference_validator` for the validator itself
     and #940 for background.
     """
-    warnings = validation_meta.get("warnings") or []
-    unvalidated_templates = validation_meta.get("unvalidated_templates") or 0
-    blueprint_skipped = bool(validation_meta.get("blueprint_skipped"))
-
-    if not warnings and not unvalidated_templates and not blueprint_skipped:
-        return
-
     entry: dict[str, Any] = {}
-    if warnings:
-        entry["warnings"] = warnings
-    if unvalidated_templates:
-        entry["unvalidated_templates"] = unvalidated_templates
-    if blueprint_skipped:
+    if validation_meta.get("warnings"):
+        entry["warnings"] = validation_meta["warnings"]
+    if validation_meta.get("unvalidated_templates"):
+        entry["unvalidated_templates"] = validation_meta["unvalidated_templates"]
+    if validation_meta.get("blueprint_skipped"):
         entry["blueprint_skipped"] = True
-    result["validation"] = entry
+    for key in ("unchecked_target_kinds", "references_unchecked"):
+        if validation_meta.get(key):
+            entry[key] = validation_meta[key]
+    if entry:
+        result["validation"] = entry
 
 
 # ---------------------------------------------------------------------------

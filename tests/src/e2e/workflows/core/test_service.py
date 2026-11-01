@@ -235,7 +235,7 @@ class TestCallService:
         # Cleanup
         await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
 
     async def test_call_service_invalid_domain(self, mcp_client):

@@ -41,6 +41,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ._component_ws_fakes import (
+    FakeRegEntry,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
@@ -180,70 +181,6 @@ class FakeHass:
         # The real hass runs ``func`` in a thread pool; the tests run it inline
         # (the point under test is that the WS prep offloads it, not the pool).
         return func(*args)
-
-
-class FakeRegEntry:
-    def __init__(
-        self,
-        entity_id,
-        aliases=(),
-        area_id=None,
-        device_id=None,
-        labels=(),
-        hidden_by=None,
-        name=None,
-        unique_id=None,
-        original_name=None,
-        categories=None,
-        config_entry_id=None,
-        entity_category=None,
-        platform=None,
-        disabled_by=None,
-    ):
-        self.entity_id = entity_id
-        self.aliases = set(aliases)
-        self.area_id = area_id
-        self.device_id = device_id
-        self.labels = set(labels)
-        self.hidden_by = hidden_by
-        self.name = name
-        self.unique_id = unique_id
-        self.original_name = original_name
-        self.categories = dict(categories or {})
-        self.config_entry_id = config_entry_id
-        self.entity_category = entity_category
-        self.platform = platform
-        self.disabled_by = disabled_by
-
-    @property
-    def as_partial_dict(self):
-        # Mirrors core ``RegistryEntry.as_partial_dict`` (one
-        # ``config/entity_registry/list`` element): the shape device_get's
-        # include_entities join returns VERBATIM. Sets rendered to lists as core
-        # does; timestamps fixed floats (value irrelevant to the consumers).
-        return {
-            "area_id": self.area_id,
-            "categories": dict(self.categories),
-            "config_entry_id": self.config_entry_id,
-            "config_subentry_id": None,
-            "created_at": 0.0,
-            "device_id": self.device_id,
-            "disabled_by": self.disabled_by,
-            "entity_category": self.entity_category,
-            "entity_id": self.entity_id,
-            "has_entity_name": False,
-            "hidden_by": self.hidden_by,
-            "icon": None,
-            "id": self.unique_id,
-            "labels": sorted(self.labels),
-            "modified_at": 0.0,
-            "name": self.name,
-            "options": {},
-            "original_name": self.original_name,
-            "platform": self.platform,
-            "translation_key": None,
-            "unique_id": self.unique_id,
-        }
 
 
 class FakeEntityReg:
@@ -1978,8 +1915,8 @@ class TestRegistrationAndAdminGate:
             "ha_mcp_tools/statistics_units",
             wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
             wsapi.todo_items.WS_TODO_ITEM,  # test_component_todo_items.py
+            wsapi.automation_config.WS_AUTOMATION_CONFIG,
         }
-        # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
 
     @pytest.mark.parametrize("command", _ALL_COMMANDS)

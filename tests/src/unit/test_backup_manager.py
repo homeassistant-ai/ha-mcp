@@ -43,7 +43,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantError,
 )
 from ha_mcp.errors import ErrorCode, create_error_response
-from ha_mcp.tools.auto_backup import with_auto_backup
+from ha_mcp.tools.auto_backup import automation_backup_target, with_auto_backup
 
 # ---------------------------------------------------------------- fixtures
 
@@ -127,81 +127,67 @@ class TestAutomationBackupTarget:
     """Pins the #1404-aware backup-target resolution for automation.
 
     HA stores automations by the body's ``id`` field, not the URL's
-    ``unique_id`` — so when caller passes both ``identifier`` and a
+    ``unique_id`` — so when caller passes both ``entity_id`` and a
     ``config.id`` that differ, the backup MUST capture the entity at
     ``config.id`` (the actual victim of the write), not the entity at
-    ``identifier`` (which HA's storage layer ignores).
+    ``entity_id`` (which HA's storage layer ignores).
     """
 
-    def test_prefers_config_id_over_identifier(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
+    def test_prefers_config_id_over_entity_id(self) -> None:
         target = automation_backup_target(
-            {"identifier": "automation.foo", "config": {"id": "BBB", "alias": "x"}}
+            {"entity_id": "automation.foo", "config": {"id": "BBB", "alias": "x"}}
         )
         # config.id wins: BBB is the actual storage target HA will overwrite.
         assert target == "BBB"
 
-    def test_falls_back_to_identifier_entity_id_form_preserved(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
+    def test_falls_back_to_entity_id_form_preserved(self) -> None:
         # Regression (#auto-backup-capture): the fallback path must NOT
         # strip the ``automation.`` prefix. The capture/restore fetch
         # resolves the target via _resolve_automation_id, which only does
-        # the entity_id -> numeric unique_id state lookup when the prefix
+        # the entity_id -> numeric config id lookup when the prefix
         # is present. Stripping it to a bare slug made the resolver treat
         # the slug as a unique_id -> 404 -> snapshot silently skipped.
         target = automation_backup_target(
-            {"identifier": "automation.foo", "config": {"alias": "x"}}
+            {"entity_id": "automation.foo", "config": {"alias": "x"}}
         )
         assert target == "automation.foo"
 
-    def test_falls_back_to_identifier_bare_id_unchanged(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
-        # Bare-id identifiers (no ``automation.`` prefix) pass through
-        # unchanged so callers that already supply the unique_id form
+    def test_falls_back_to_bare_config_id_unchanged(self) -> None:
+        # Bare config ids (no ``automation.`` prefix) pass through
+        # unchanged so callers that already supply the config id form
         # aren't surprised.
         target = automation_backup_target(
-            {"identifier": "my_unique_id", "config": {"alias": "x"}}
+            {"entity_id": "my_unique_id", "config": {"alias": "x"}}
         )
         assert target == "my_unique_id"
 
     def test_parses_config_as_json_string(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
         target = automation_backup_target(
             {
-                "identifier": "automation.foo",
+                "entity_id": "automation.foo",
                 "config": '{"id": "BBB", "alias": "x"}',
             }
         )
         assert target == "BBB"
 
-    def test_invalid_json_falls_back_to_identifier(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
-        # Falls through to the identifier fallback path, which preserves
+    def test_invalid_json_falls_back_to_entity_id(self) -> None:
+        # Falls through to the entity_id fallback path, which preserves
         # the entity_id form (prefix kept so the fetch resolver can map it
         # to the numeric unique_id).
         target = automation_backup_target(
-            {"identifier": "automation.foo", "config": "not-json"}
+            {"entity_id": "automation.foo", "config": "not-json"}
         )
         assert target == "automation.foo"
 
-    def test_no_identifier_no_config_id_returns_empty(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
-        # Create path: no identifier, no config.id yet — nothing to back up.
+    def test_no_entity_id_no_config_id_returns_empty(self) -> None:
+        # Create path: no entity_id, no config.id yet — nothing to back up.
         target = automation_backup_target({"config": {"alias": "x"}})
         assert target == ""
 
-    def test_matched_id_and_identifier(self) -> None:
-        from ha_mcp.tools.auto_backup import automation_backup_target
-
+    def test_matched_id_and_entity_id(self) -> None:
         # Same target — config.id wins but both point at the same entity.
         target = automation_backup_target(
-            {"identifier": "automation.foo", "config": {"id": "automation.foo"}}
+            {"entity_id": "automation.foo", "config": {"id": "automation.foo"}}
         )
         assert target == "automation.foo"
 
@@ -775,14 +761,10 @@ class TestFetcherIdResolution:
         )
         assert got is None
 
-    async def test_fetch_automation_preserves_entity_id_form(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fetch_automation_preserves_entity_id_form(self) -> None:
         # Headline bug at the FETCH layer: the entity_id form must reach
         # client.get_automation_config UNSTRIPPED so its resolver maps it to
         # the numeric unique_id (a bare slug would 404 -> silent skip).
-        import ha_mcp.tools.tools_config_automations as autos
-
         seen: dict[str, Any] = {}
 
         class _FakeClient:
@@ -790,10 +772,19 @@ class TestFetcherIdResolution:
                 seen["id"] = identifier
                 return {"id": "1781613420568", "alias": "X"}
 
-        monkeypatch.setattr(autos, "_normalize_config_for_roundtrip", lambda c: c)
-        got = await bm._fetch_automation(_FakeClient(), "automation.kitchen_lights")
+        await bm._fetch_automation(_FakeClient(), "automation.kitchen_lights")
         assert seen["id"] == "automation.kitchen_lights"
-        assert got == {"id": "1781613420568", "alias": "X"}
+
+    async def test_fetch_automation_snapshots_the_stored_body(self) -> None:
+        # A rewritten snapshot restored a different config than the one
+        # Core held before the write.
+        stored = {"id": "1", "trigger": [{"platform": "time", "at": "07:00:00"}]}
+
+        class _FakeClient:
+            async def get_automation_config(self, identifier: str) -> Any:
+                return dict(stored)
+
+        assert await bm._fetch_automation(_FakeClient(), "1") == stored
 
     async def test_fetch_automation_returns_none_on_404(self) -> None:
         from ha_mcp.client.rest_client import HomeAssistantAPIError

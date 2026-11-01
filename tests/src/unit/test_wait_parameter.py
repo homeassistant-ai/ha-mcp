@@ -19,12 +19,16 @@ class TestAutomationWaitParameter:
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
+        # Credential-less: no component probe, Core's REST/WS is the path.
+        client.base_url = client.token = None
+        client._resolve_automation_id = AsyncMock(return_value="12345")
+        # The write reads the stored body back for its config_hash.
+        client.get_automation_config = AsyncMock(return_value={"id": "12345"})
         client.upsert_automation_config = AsyncMock(
             return_value={
                 "unique_id": "12345",
                 "entity_id": "automation.test",
                 "result": "ok",
-                "operation": "created",
             }
         )
         client.delete_automation_config = AsyncMock(
@@ -129,7 +133,7 @@ class TestAutomationWaitParameter:
         ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_remove_automation"](
-                identifier="automation.test",
+                entity_id="automation.test",
             )
             assert result["success"] is True
             mock_wait.assert_called_once()
@@ -143,7 +147,7 @@ class TestAutomationWaitParameter:
             new_callable=AsyncMock,
         ) as mock_wait:
             result = await register_tools["ha_config_remove_automation"](
-                identifier="automation.test",
+                entity_id="automation.test",
                 wait=False,
             )
             assert result["success"] is True
@@ -152,17 +156,17 @@ class TestAutomationWaitParameter:
     async def test_remove_automation_by_unique_id_still_waits(
         self, register_tools, mock_client
     ):
-        """wait=True works even when identifier is a unique_id, not an entity_id."""
+        """wait=True works even when entity_id is a config id."""
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_remove_automation"](
-                identifier="12345",  # unique_id, not entity_id
+                entity_id="12345",  # unique_id, not entity_id
             )
             assert result["success"] is True
-            # Should resolve unique_id to entity_id via get_states and still wait
+            # Should resolve the config id to entity_id via get_states and still wait
             mock_wait.assert_called_once()
             # Verify it resolved to the correct entity_id
             call_args = mock_wait.call_args
@@ -172,16 +176,18 @@ class TestAutomationWaitParameter:
         self, register_tools, mock_client
     ):
         """When get_states fails, wait is skipped but deletion still succeeds."""
-        mock_client.get_states.side_effect = Exception("connection error")
+        mock_client.get_states.side_effect = HomeAssistantConnectionError(
+            "connection error"
+        )
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             result = await register_tools["ha_config_remove_automation"](
-                identifier="12345",  # unique_id, can't resolve without get_states
+                entity_id="12345",  # unique_id, can't resolve without get_states
             )
             assert result["success"] is True
-            # wait should be skipped because entity_id_for_wait is None
+            # wait is skipped because the entity could not be resolved
             mock_wait.assert_not_called()
 
     async def test_set_automation_wait_exception_still_succeeds(

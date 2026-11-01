@@ -1,6 +1,6 @@
 """Routing tests for the entity_lookup / reference_data component consumers.
 
-Three set/remove/post-write consumers pay for a whole-collection fetch to answer
+Two set/remove/post-write consumers pay for a whole-collection fetch to answer
 a single question, and route through the ``ha_mcp_tools`` component when it
 advertises the capability:
 
@@ -11,9 +11,6 @@ advertises the capability:
   read). An AUTHORITATIVE empty recheck falls to the naive fallback; a recheck
   that itself returns ``None`` (component went unavailable mid-retry) drops to the
   legacy registry list+retry instead of trusting the empty and guessing.
-- ``AutomationConfigTools._resolve_automation_entity_id`` (config id -> entity_id)
-  scans the whole ``get_states()`` machine; the component path is one
-  ``entity_lookup`` frame.
 - ``validate_config_references`` fetches ``get_services()`` + ``get_states()``; the
   component path is one ``reference_data`` frame.
 
@@ -25,8 +22,7 @@ across every consumer — a transport failure -> legacy: both a
 ``get_websocket_client()`` failing to establish the socket fall back rather than
 propagate. None of the legacy paths dies identically on a pooled-WS drop: the
 scene resolver's legacy scan rides the ``send_websocket_message`` bridge
-(with a naive ``scene.{id}`` fallback), the automation resolver scans REST
-``get_states()``, and the validator's legacy path is the REST
+(with a naive ``scene.{id}`` fallback), and the validator's legacy path is the REST
 ``get_services()``/``get_states()`` pair — so an escaping error would abort a
 landed write / a delete the legacy path would have completed. Plus the GET-path
 invariant: with ``allow_component`` unset
@@ -54,7 +50,6 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import component_api, component_config_reads
 from ha_mcp.tools.reference_validator import validate_config_references
-from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._component_routing_helpers import (
@@ -419,170 +414,6 @@ class TestSceneResolverRouting:
 
 
 # =============================================================================
-# Automation resolver — _resolve_automation_entity_id
-# =============================================================================
-class TestAutomationResolverRouting:
-    def _states(self) -> list[dict[str, Any]]:
-        return [
-            {"entity_id": "automation.morning", "attributes": {"id": "uid-1"}},
-        ]
-
-    @pytest.mark.asyncio
-    async def test_component_preferred_no_states_scan(self) -> None:
-        """entity_lookup serves the resolve; the whole ``get_states()`` scan never
-        runs."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_result={"matches": [{"entity_id": "automation.morning"}]},
-        )
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert client.get_states.await_count == 0
-        assert _lookup_calls(ws)[0].kwargs == {
-            "unique_id": "uid-1",
-            "domain": "automation",
-        }
-
-    @pytest.mark.asyncio
-    async def test_already_entity_id_short_circuits(self) -> None:
-        """An ``automation.`` identifier is returned as-is — no component, no
-        legacy fetch (even with allow_component)."""
-        ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
-        client = RoutingClient()
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("automation.morning", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert ws.send_command.await_count == 0
-        assert client.get_states.await_count == 0
-
-    @pytest.mark.asyncio
-    async def test_component_miss_returns_none(self) -> None:
-        """An authoritative empty ``matches`` returns ``None`` — parity with the
-        legacy no-match — without scanning states."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_result={"matches": []},
-        )
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id is None
-        assert client.get_states.await_count == 0
-
-    @pytest.mark.asyncio
-    async def test_get_path_never_touches_component(self) -> None:
-        """``allow_component`` unset → the legacy state scan serves it, the
-        component WS is never touched (config-get invariant at resolver level)."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_result={"matches": [{"entity_id": "automation.wrong"}]},
-        )
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1")
-        assert entity_id == "automation.morning"
-        assert ws.send_command.await_count == 0
-        assert client.get_states.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_caps_miss_falls_back_to_states(self) -> None:
-        ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_OTHER)
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert client.get_states.await_count == 1
-        assert not _lookup_calls(ws)
-
-    @pytest.mark.asyncio
-    async def test_unknown_command_invalidates_and_falls_back(self) -> None:
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-        )
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert client.get_states.await_count == 1
-        assert client not in component_api._CAPS_CACHE
-
-    @pytest.mark.asyncio
-    async def test_command_timeout_falls_back_without_invalidating(self) -> None:
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_exc=HomeAssistantCommandTimeout("timeout"),
-        )
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert client.get_states.await_count == 1
-        assert client in component_api._CAPS_CACHE
-
-    @pytest.mark.asyncio
-    async def test_connection_error_falls_back_to_legacy(self) -> None:
-        """A WS-down error on the entity_lookup frame falls back to the legacy
-        ``get_states()`` scan (REST, plus the resolver's own broad catch), so it does
-        NOT die identically; an escaping error would abort a delete the legacy path
-        would have completed."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_exc=HomeAssistantConnectionError("ws down"),
-        )
-        client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert client.get_states.await_count == 1
-        assert client in component_api._CAPS_CACHE
-
-    @pytest.mark.asyncio
-    async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
-        """A failed establish in ``get_websocket_client()`` → legacy
-        ``get_states()`` scan."""
-        caps_ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
-        client = RoutingClient(states=self._states())
-        with patch_ws_establish_failure(
-            caps_ws,
-            component_config_reads,
-            HomeAssistantConnectionError(
-                "Failed to connect to Home Assistant WebSocket"
-            ),
-        ):
-            entity_id = await AutomationConfigTools(
-                client
-            )._resolve_automation_entity_id("uid-1", allow_component=True)
-        assert entity_id == "automation.morning"
-        assert client.get_states.await_count == 1
-        assert client in component_api._CAPS_CACHE
-
-
-# =============================================================================
 # Reference validator — validate_config_references
 # =============================================================================
 # A config with one valid + one bogus service AND one valid + one bogus entity,
@@ -599,6 +430,12 @@ _ENTITY_IDS = ["light.a"]
 
 def _warning_set(result: dict[str, Any]) -> set[tuple[str, str]]:
     return {(w["value"], w["kind"]) for w in result["warnings"]}
+
+
+def _lookup_kwargs(ws: Any, command: str) -> dict[str, Any]:
+    calls = [c for c in ws.send_command.call_args_list if c.args[0] == command]
+    assert len(calls) == 1
+    return dict(calls[0].kwargs)
 
 
 class TestReferenceDataRouting:
@@ -621,6 +458,48 @@ class TestReferenceDataRouting:
         }
         assert client.get_services.await_count == 0
         assert client.get_states.await_count == 0
+
+    @pytest.mark.parametrize("targets_advertised", [True, False])
+    @pytest.mark.asyncio
+    async def test_target_ids_are_checked_only_when_the_component_sends_them(
+        self, targets_advertised: bool
+    ) -> None:
+        """A device, area, floor or label id no registry holds was written
+        silently; an older component cannot send the ids, so nothing is asked
+        of it and nothing is guessed."""
+        caps = dict(_CAPS_REFERENCE_DATA)
+        if targets_advertised:
+            caps["capabilities"] = ["reference_data", "reference_data_targets"]
+        ws = make_ws(
+            "ha_mcp_tools/reference_data",
+            info_result=caps,
+            cmd_result={
+                "services": _SERVICES,
+                "entity_ids": _ENTITY_IDS,
+                **(
+                    {"device_ids": ["dev-1"], "area_ids": []}
+                    if targets_advertised
+                    else {}
+                ),
+            },
+        )
+        config = {
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"device_id": ["dev-1", "dev-x"]},
+                }
+            ]
+        }
+        with patch_ws(ws, component_config_reads):
+            result = await validate_config_references(RoutingClient(), config)
+        sent = _lookup_kwargs(ws, "ha_mcp_tools/reference_data")
+        if targets_advertised:
+            assert sent == {"include_targets": True}
+            assert _warning_set(result) == {("dev-x", "device")}
+        else:
+            assert sent == {}
+            assert result["warnings"] == []
 
     @pytest.mark.asyncio
     async def test_caps_miss_uses_legacy_gather(self) -> None:

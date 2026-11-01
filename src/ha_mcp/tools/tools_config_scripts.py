@@ -132,7 +132,7 @@ class ConfigScriptTools:
 
         The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
-        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve through the entity registry; scripts strip the prefix).
 
         EXAMPLES:
         - Get script (bare form): ha_config_get_script("morning_routine")

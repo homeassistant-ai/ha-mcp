@@ -96,7 +96,7 @@ class TestBareIdentifierConcealment:
             ),
             pytest.param(
                 "ha_config_set_automation",
-                {"identifier": "1700000000001", "run_actions": True},
+                {"entity_id": "1700000000001", "run_actions": True},
                 _entry("automation.buzz_door", "1700000000001", "automation"),
                 id="automation-config-id",
             ),
@@ -199,7 +199,7 @@ class TestBareIdentifierConcealment:
                 {"domain": "script", "service": "front_door"},
                 id="visible-script-service-named-like-hidden-object-id",
             ),
-            # The automation tools read a bare identifier only as a config id.
+            # The automation tools read a bare entity_id only as a config id.
             pytest.param(
                 "automation.door_auto",
                 [
@@ -207,7 +207,7 @@ class TestBareIdentifierConcealment:
                     _entry("automation.kitchen_motion", "door_auto", "automation"),
                 ],
                 "ha_config_get_automation",
-                {"identifier": "door_auto"},
+                {"entity_id": "door_auto"},
                 id="visible-automation-config-id-like-hidden-object-id",
             ),
         ],
@@ -291,8 +291,8 @@ class _NotFoundClient(FakeClient):
     async def get_script_config(self, script_id: str) -> dict[str, Any]:
         raise HomeAssistantAPIError(f"Script not found: {script_id}", status_code=404)
 
-    async def get_automation_config(self, identifier: str) -> dict[str, Any]:
-        raise HomeAssistantAPIError(f"Not found: {identifier}", status_code=404)
+    async def get_automation_config(self, config_id: str) -> dict[str, Any]:
+        raise HomeAssistantAPIError(f"Not found: {config_id}", status_code=404)
 
 
 @pytest.mark.parametrize(
@@ -312,7 +312,7 @@ class _NotFoundClient(FakeClient):
             _entry("automation.kitchen_motion", "1700000000002", "automation"),
             "available_automation_ids",
             lambda client: AutomationConfigTools(client).ha_config_get_automation(
-                identifier="no_such"
+                entity_id="no_such"
             ),
             id="automation",
         ),
@@ -345,7 +345,12 @@ async def test_genuine_not_found_lists_only_visible_ids(
 def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     if param_name in ("script_id", "scene_id", "automation_id"):
         return True
-    return param_name == "identifier" and "automation" in tool_name
+    # The automation config tools also take a bare config id as ``entity_id``.
+    return (
+        param_name == "entity_id"
+        and tool_name.startswith("ha_config_")
+        and (tool_name.endswith("_automation"))
+    )
 
 
 def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:

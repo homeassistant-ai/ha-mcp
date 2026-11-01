@@ -33,9 +33,9 @@ BARE_IDENTIFIER_ARGS: dict[str, tuple[str, str]] = {
     "ha_config_get_scene": ("scene_id", "scene"),
     "ha_config_set_scene": ("scene_id", "scene"),
     "ha_config_remove_scene": ("scene_id", "scene"),
-    "ha_config_get_automation": ("identifier", "automation"),
-    "ha_config_set_automation": ("identifier", "automation"),
-    "ha_config_remove_automation": ("identifier", "automation"),
+    "ha_config_get_automation": ("entity_id", "automation"),
+    "ha_config_set_automation": ("entity_id", "automation"),
+    "ha_config_remove_automation": ("entity_id", "automation"),
 }
 
 # Tools whose identifier carries its domain as a ``script.`` / ``automation.``
@@ -47,7 +47,7 @@ PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
 _SERVICE_TOOL = "ha_call_service"
 
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
-# The automation tools read a bare ``identifier`` only as a config ``id``, so an
+# The automation tools read a bare ``entity_id`` only as a config ``id``, so an
 # automation's object ID would only ever match a visible automation.
 _OBJECT_ID_DOMAINS = frozenset({"script", "scene"})
 # Trace records and raw trace commands name their target by ``domain`` + ``item_id``.

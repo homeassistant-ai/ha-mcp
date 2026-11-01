@@ -566,7 +566,7 @@ class BlueprintTools:
         set_tool = f"ha_config_set_{domain}"
         # The two set tools key their target differently; name the real
         # parameter so the call shape shown is one that validates.
-        id_param = "identifier" if domain == "automation" else "script_id"
+        id_param = "entity_id" if domain == "automation" else "script_id"
         suggestions = [
             (
                 f"Delete the {domain}s that use it with {remove_tool}, or re-point "

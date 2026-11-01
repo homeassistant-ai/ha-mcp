@@ -157,46 +157,41 @@ class TestConfigGetSeam:
     """The component's ``config_get`` was withdrawn before release — it served an
     entity's ``raw_config``, whose freshness lags the config file between a write
     and the next completed reload, so a get racing a reload returned a stale
-    body. All three get tools serve their reads from the legacy REST/WS pipeline
+    body. All three get tools serve the body from the legacy REST pipeline
     (which reads the fresh config file). Even against a REAL component WS whose
-    ``info`` advertises ``config_get``, the get tools skip the caps probe and
-    never send a frame — the component WS is never touched. Scenes were already
+    ``info`` advertises ``config_get``, no ``config_get`` frame is sent; the
+    script and scene gets skip the caps probe entirely, and the automation get
+    asks the component only for the registry side. Scenes were already
     legacy-only (a ``HomeAssistantScene`` has no raw storage body in memory);
     automation/script now share the pattern.
     """
 
     @pytest.mark.asyncio
     async def test_automation_get_stays_legacy_with_full_caps(self) -> None:
-        client = GetRoutingClient(
-            automation_config={
-                "id": "uid-1",
-                "alias": "UI Auto",
-                "action": [{"service": "light.turn_on"}],
-            },
-        )
+        stored = {
+            "id": "uid-1",
+            "alias": "UI Auto",
+            "action": [{"service": "light.turn_on"}],
+        }
+        client = GetRoutingClient(automation_config=dict(stored))
         # A real component WS advertising full caps (config_get included). The
-        # automation tool must never reach for it.
+        # automation tool may probe it for the registry side, never the body.
         ws = _real_component_ws(FakeHass())
         with patch.object(
             component_api, "get_websocket_client", AsyncMock(return_value=ws)
         ):
             resp = await AutomationConfigTools(client).ha_config_get_automation("uid-1")
-        assert resp["success"] is True
-        assert resp["config"]["alias"] == "UI Auto"
-        # The tool's canonicalization (singular -> plural root keys) runs on the
-        # legacy path.
-        assert resp["config"]["actions"] == [{"service": "light.turn_on"}]
-        # The component WS was never touched; the legacy config fetch served it.
-        assert ws.send_command.await_count == 0
+        # The stored body, as Core stores it, from the legacy config fetch.
+        assert resp["config"] == stored
         assert client.get_automation_config.await_count == 1
+        sent = [c.args[0] for c in ws.send_command.call_args_list]
+        assert "ha_mcp_tools/config_get" not in sent
 
     @pytest.mark.asyncio
     async def test_script_get_stays_legacy_with_full_caps(self) -> None:
         """Script analog: the legacy path returns the script BODY under
         ``config`` (category injected), the storage key staying top-level.
-        Scripts run NO root-key canonicalization (unlike automations'
-        action->actions), so the storage ``sequence`` body passes through
-        byte-exact."""
+        The storage ``sequence`` body passes through byte-exact."""
         client = GetRoutingClient(
             script_envelope={
                 "success": True,

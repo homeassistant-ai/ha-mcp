@@ -41,12 +41,12 @@ async def _update_automation(
     """Confirm intentional replacements and fail if the setup write is rejected."""
     mcp = MCPAssertions(mcp_client)
     current = await mcp.call_tool_success(
-        "ha_config_get_automation", {"identifier": identifier}
+        "ha_config_get_automation", {"entity_id": identifier}
     )
     await mcp.call_tool_success(
         "ha_config_set_automation",
         {
-            "identifier": identifier,
+            "entity_id": identifier,
             "config": config,
             "config_hash": current["config_hash"],
         },
@@ -266,7 +266,7 @@ class TestEditsCreateOnDemandSnapshot:
         mcp = MCPAssertions(mcp_client)
         await mcp.call_tool_success(
             "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
+            {"config": original, "entity_id": identifier},
         )
 
         # On-demand snapshot.
@@ -313,7 +313,7 @@ class TestEditsCreateOnDemandSnapshot:
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": identifier},
+            {"entity_id": identifier},
         )
 
     async def test_on_demand_snapshot_unknown_domain_rejected(
@@ -370,7 +370,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
+            {"config": original, "entity_id": identifier},
         )
         mcp = MCPAssertions(mcp_client)
         # Capture via (edits, create) so stored == current by
@@ -407,7 +407,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": identifier},
+            {"entity_id": identifier},
         )
 
     async def test_diff_after_edit_reports_changes(
@@ -428,7 +428,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
+            {"config": original, "entity_id": identifier},
         )
         # Edit — the decorator snapshots the pre-edit state (alias =
         # original_alias). Live state ends at alias = edited_alias.
@@ -466,7 +466,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": identifier},
+            {"entity_id": identifier},
         )
 
     async def test_diff_flags_entity_missing_after_delete(
@@ -487,7 +487,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
+            {"config": original, "entity_id": identifier},
         )
         await _update_automation(
             mcp_client,
@@ -501,7 +501,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": identifier},
+            {"entity_id": identifier},
         )
 
         mcp = MCPAssertions(mcp_client)
@@ -539,7 +539,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
+            {"config": original, "entity_id": identifier},
         )
         # Edit several fields so the captured-vs-live diff is > 1 op.
         await _update_automation(
@@ -573,7 +573,7 @@ class TestAutomationDiff:
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": identifier},
+            {"entity_id": identifier},
         )
 
 
@@ -1213,7 +1213,7 @@ class TestToggleOffSkipsCapture:
                     "trigger": [{"platform": "time", "at": "12:00:00"}],
                     "action": [{"service": "homeassistant.no_op"}],
                 },
-                "identifier": identifier,
+                "entity_id": identifier,
             },
         )
         await _update_automation(
@@ -1237,7 +1237,7 @@ class TestToggleOffSkipsCapture:
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": identifier},
+            {"entity_id": identifier},
         )
 
 

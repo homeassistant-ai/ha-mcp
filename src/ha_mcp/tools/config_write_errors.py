@@ -1,8 +1,10 @@
 """Input-validation rejections for config writes (issue #2649).
 
-Kept out of tools_config_automations.py so that file stays under its
-module-size baseline. The helpers raise through ``raise_tool_error`` and
-carry no client or Home Assistant dependency.
+These are HA-MCP's own checks, not Core rules. The tools send each config as
+written; Core validates it and stores it in its own form, which the get tool
+returns verbatim. Kept out of tools_config_automations.py so that file stays
+under its module-size baseline. The helpers raise through ``raise_tool_error``
+and carry no client or Home Assistant dependency.
 """
 
 from __future__ import annotations
@@ -33,88 +35,33 @@ def config_has_enabled(config: Any) -> bool:
     return isinstance(config, dict) and "enabled" in config
 
 
-def _missing_fields_shape(is_blueprint: bool) -> str:
-    """One-line expected config shape with copy-pasteable quoted keys."""
-    if is_blueprint:
-        return (
-            "config={'alias': 'My Automation', 'use_blueprint': "
-            "{'path': 'light.yaml', 'input': {...}}}"
-        )
-    return "config={'alias': 'My Automation', 'triggers': [...], 'actions': [...]}"
-
-
-def _missing_field_guidance(
-    missing_fields: list[str], is_blueprint: bool, source: str
-) -> tuple[str, list[str]]:
-    """Message and suggestions for missing required fields, worded by source.
-
-    For the ``config`` argument the guidance points inside ``config``; for a
-    ``python_transform`` the config came from a transform expression, so the
-    guidance points at the transform instead (telling it to send
-    ``config={...}`` would earn a write-modes rejection).
-    """
-    fields = ", ".join(missing_fields)
-    if source == "python_transform":
-        first = missing_fields[0]
-        return (
-            f"Missing required fields: {fields}. Add them in your "
-            f"python_transform expression, e.g. config['{first}'] = ... .",
-            [
-                "Set the missing field(s) on the transformed config, e.g. "
-                f"config['{first}'] = '...'."
-            ],
-        )
-    shape = _missing_fields_shape(is_blueprint)
-    return (
-        f"Missing required fields: {fields}. Required automation fields go "
-        f"inside `config`, e.g. {shape}.",
-        [f"Add the missing field(s) inside the `config` argument: {shape}."],
-    )
-
-
 def reject_sequence_misroute(
     config_dict: dict[str, Any],
-    missing_fields: list[str],
-    identifier: str | None,
+    entity_id: str | None,
     source: str = "config",
 ) -> None:
-    """Raise when a 'sequence' key shows the config is really a script.
+    """Raise when a 'sequence' key without actions shows the config is a script.
 
-    Returns silently when the config does not look script-shaped, so the
-    caller stays a one-liner. A runtime-only ``enabled`` key folds into the
-    same rejection instead of costing another round trip.
+    A runtime-only ``enabled`` key folds into the same rejection instead of
+    costing another round trip.
     """
-    if not (
-        missing_fields
-        and "sequence" in config_dict
-        and ("triggers" in missing_fields or "actions" in missing_fields)
-    ):
+    if "sequence" not in config_dict or {"actions", "action"} & config_dict.keys():
         return
-    context: dict[str, Any] = {"missing_fields": missing_fields}
-    if identifier:
-        context["identifier"] = identifier
-    message = f"Missing required fields: {', '.join(missing_fields)}"
+    context: dict[str, Any] = {"found_key": "sequence"}
+    if entity_id:
+        context["entity_id"] = entity_id
+    message = "Config has 'sequence' and no 'actions'"
     if source == "python_transform":
         automation_fix = (
-            "In the python_transform expression, replace 'sequence' with "
-            "'actions' and add 'triggers'."
+            "In the python_transform expression, replace 'sequence' with 'actions'"
         )
-        if "alias" in missing_fields:
-            automation_fix += (
-                " Set 'alias' in the expression too, e.g. config['alias'] = '...'."
-            )
     else:
-        automation_fix = (
-            "For an automation, replace 'sequence' with 'actions' and add 'triggers'."
-        )
-        if "alias" in missing_fields:
-            automation_fix += (
-                " Put 'alias' inside `config` too, e.g. "
-                f"{_missing_fields_shape(is_blueprint=False)}."
-            )
+        automation_fix = "For an automation, replace 'sequence' with 'actions'"
+    if not {"triggers", "trigger"} & config_dict.keys():
+        automation_fix += " and add 'triggers'"
     suggestions = [
         "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
-        automation_fix,
+        f"{automation_fix}.",
     ]
     if config_has_enabled(config_dict):
         context["invalid_key"] = "enabled"
@@ -134,46 +81,10 @@ def reject_sequence_misroute(
     )
 
 
-def reject_invalid_config_inputs(
-    config_dict: dict[str, Any],
-    missing_fields: list[str],
-    identifier: str | None,
-    source: str = "config",
-) -> None:
-    """Raise the structured rejection for a config write's input violations.
-
-    A missing-field rejection says where the field goes and shows the
-    expected shape in one line; a runtime-only ``enabled`` key together with
-    missing required fields surfaces in ONE rejection instead of one round
-    trip each. Returns silently when the inputs are valid.
-    """
-    enabled_in_config = config_has_enabled(config_dict)
-    if not missing_fields and not enabled_in_config:
+def reject_enabled_in_config(config_dict: dict[str, Any]) -> None:
+    """Raise when the runtime-only ``enabled`` key sits inside the config."""
+    if not config_has_enabled(config_dict):
         return
-    context: dict[str, Any] = {}
-    if identifier:
-        context["identifier"] = identifier
-    if missing_fields:
-        context["missing_fields"] = missing_fields
-        message, suggestions = _missing_field_guidance(
-            missing_fields, "use_blueprint" in config_dict, source
-        )
-        if enabled_in_config:
-            context["invalid_key"] = "enabled"
-            message = f"{message} {ENABLED_MISPLACED_GUIDANCE}"
-            suggestions = suggestions + [
-                ENABLED_REMOVE_SUGGESTION,
-                ENABLED_UNCHANGED_SUGGESTION,
-            ]
-        raise_tool_error(
-            create_error_response(
-                code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                message=message,
-                details=f"Missing required fields: {', '.join(missing_fields)}",
-                suggestions=suggestions,
-                context=context or None,
-            )
-        )
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
