@@ -39,6 +39,7 @@ from ha_mcp.tools.config_entry_flow import (
     update_config_entry_options,
 )
 from ha_mcp.tools.config_entry_flow_errors import (
+    FlowRef,
     _parse_flow_api_error,
     raise_form_errors,
 )
@@ -563,3 +564,14 @@ async def test_form_errors_redact_the_schemas_password_value(
 
     assert "sk-LIVE" not in str(exc_info.value)
     assert json.loads(str(exc_info.value))["data_schema"][0]["name"] == "api_key"
+
+
+@pytest.mark.parametrize("path", ["config", "options", "config_subentries.device"])
+def test_a_flow_ref_takes_the_flow_categories_core_has(path: str) -> None:
+    assert FlowRef("demo", path).path == path
+
+
+@pytest.mark.parametrize("path", ["", "option", "subentries.device"])
+def test_a_flow_ref_refuses_a_path_core_has_no_flow_for(path: str) -> None:
+    with pytest.raises(ValueError, match="flow path"):
+        FlowRef("demo", path)

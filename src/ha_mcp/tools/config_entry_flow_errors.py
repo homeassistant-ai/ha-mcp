@@ -34,6 +34,10 @@ class FlowRef:
     path: str
     entry_id: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.path.split(".")[0] not in {"config", "options", "config_subentries"}:
+            raise ValueError(f"Not a config entry flow path: {self.path!r}")
+
 
 async def _flow_texts(
     client: Any,
