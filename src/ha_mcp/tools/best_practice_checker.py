@@ -707,7 +707,7 @@ def _check_deprecated_trigger_behavior(
             "will be removed. Valid trigger values: `each`, `first`, "
             "`all` (conditions keep `any`/`all`).",
             skill_prefix,
-            "triggers-and-conditions.md#trigger-types",
+            "triggers-and-conditions.md#purpose-specific-triggers--conditions-default-since-20267",
         )
 
 
@@ -733,7 +733,7 @@ def _check_template_trigger(
             "use native `numeric_state` trigger instead "
             "(e.g., `platform: numeric_state, entity_id: sensor.temp, above: 30`).",
             skill_prefix,
-            "triggers-and-conditions.md#trigger-types",
+            "triggers-and-conditions.md#numeric-state-trigger",
         )
     if _RE_IS_STATE.search(vt):
         _emit(
@@ -742,7 +742,7 @@ def _check_template_trigger(
             "native `state` trigger instead "
             "(e.g., `platform: state, entity_id: light.x, to: 'on'`).",
             skill_prefix,
-            "triggers-and-conditions.md#trigger-types",
+            "triggers-and-conditions.md#state-trigger",
         )
     if duration_match:
         _emit(
@@ -754,7 +754,7 @@ def _check_template_trigger(
             "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
             "and doesn't re-evaluate on every state change.",
             skill_prefix,
-            "triggers-and-conditions.md#trigger-types",
+            "triggers-and-conditions.md#state-trigger",
         )
     # Generic fallback for unmatched template triggers.
     if len(warnings) == initial and _RE_ANY_TEMPLATE.search(vt):
@@ -765,7 +765,7 @@ def _check_template_trigger(
             "`event`), use that instead. Native triggers are event-driven; "
             "template triggers re-evaluate on every state change.",
             skill_prefix,
-            "triggers-and-conditions.md#trigger-types",
+            "triggers-and-conditions.md#template-trigger",
         )
 
 
@@ -787,7 +787,7 @@ def _check_numeric_state_trigger(
             "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
             "and doesn't re-evaluate on every state change.",
             skill_prefix,
-            "triggers-and-conditions.md#trigger-types",
+            "triggers-and-conditions.md#state-trigger",
         )
 
 

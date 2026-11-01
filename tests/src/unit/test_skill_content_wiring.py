@@ -22,7 +22,11 @@ fastmcp/pydantic stack or a running server):
   bundled skills-vendor submodule. Catches submodule heading renames and
   ``_emit()`` typos before they ship as silent skill_content drops.
 
-Both rely on the bundled submodule being initialised — they skip cleanly
+* :func:`test_trigger_warning_embeds_its_subsection` — runs each trigger
+  warning and checks that it embeds one trigger subsection rather than the
+  whole ``#trigger-types`` chapter.
+
+All of them rely on the bundled submodule being initialised — they skip cleanly
 when it's absent so a fresh clone doesn't fail collection.
 """
 
@@ -33,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.utils import skill_loader
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -414,3 +419,63 @@ def test_every_canonical_skill_file_exists(mapping_name: str, file_ref: str) -> 
         f"in the home-assistant-best-practices submodule. The owning tool "
         f"will silently ship empty skill_content."
     )
+
+
+# ---------------------------------------------------------------------------
+# A trigger warning embeds its own subsection, not the whole chapter
+# ---------------------------------------------------------------------------
+
+_RECENCY_TEMPLATE = "{{ now() - states.sensor.x.last_changed > timedelta(minutes=5) }}"
+_TRIGGER_TYPES_CHAPTER = "references/triggers-and-conditions.md#trigger-types"
+
+
+@pytest.mark.parametrize(
+    ("trigger", "fix"),
+    [
+        pytest.param(
+            {"trigger": "motion.detected", "options": {"behavior": "any"}},
+            "behavior: each",
+            id="deprecated-behavior",
+        ),
+        pytest.param(
+            {"platform": "template", "value_template": "{{ x | float(0) > 25 }}"},
+            "trigger: numeric_state",
+            id="template-numeric-comparison",
+        ),
+        pytest.param(
+            {"platform": "template", "value_template": "{{ is_state('a.b', 'on') }}"},
+            "trigger: state",
+            id="template-is-state",
+        ),
+        pytest.param(
+            {"platform": "template", "value_template": _RECENCY_TEMPLATE},
+            "trigger: state",
+            id="template-duration",
+        ),
+        pytest.param(
+            {"platform": "template", "value_template": "{{ x == 1 }}"},
+            "trigger: template",
+            id="template-generic",
+        ),
+        pytest.param(
+            {"platform": "numeric_state", "value_template": _RECENCY_TEMPLATE},
+            "trigger: state",
+            id="numeric-state-duration",
+        ),
+    ],
+)
+def test_trigger_warning_embeds_its_subsection(trigger: dict, fix: str) -> None:
+    """The embedded section contains the trigger syntax the warning points to
+    (the native fix; for the generic template fallback, the template trigger
+    itself) and stays smaller than the ``#trigger-types`` chapter, which
+    contains every trigger subsection.
+    """
+    skills_dir = _require_vendored_skills()
+    warnings = check_automation_config({"trigger": [trigger]})
+    assert len(warnings) == 1, warnings
+    (ref,) = warnings.referenced_files
+    sections = skill_loader.resolve_skill_files(
+        skills_dir, "home-assistant-best-practices", [ref, _TRIGGER_TYPES_CHAPTER]
+    )
+    assert fix in sections[ref]
+    assert len(sections[ref]) < len(sections[_TRIGGER_TYPES_CHAPTER])
