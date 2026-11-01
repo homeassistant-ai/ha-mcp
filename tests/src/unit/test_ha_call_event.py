@@ -142,7 +142,7 @@ class TestHaCallEvent:
         `warning` string and must contain the dispatched-may-still-deliver note.
         """
         conn_error = HomeAssistantConnectionError("connection timed out")
-        conn_error.__cause__ = httpx.TimeoutException("Read timed out")
+        conn_error.__cause__ = httpx.ReadTimeout("Read timed out")
         tools = _make_tools(conn_error)
 
         result = await tools.ha_call_event("my_event")
@@ -261,10 +261,19 @@ class TestHaCallEvent:
         assert "warnings" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
 
+    async def test_connect_timeout_does_not_claim_dispatch(self):
+        """Connect timeouts happen before the POST, so the event was not sent."""
+        conn_error = HomeAssistantConnectionError("connect timed out")
+        conn_error.__cause__ = httpx.ConnectTimeout("Connect timed out")
+        tools = _make_tools(conn_error)
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
     async def test_timeout_preserves_known_listener_counts(self):
         """A dispatch timeout must not discard counts read before the fire."""
         conn_error = HomeAssistantConnectionError("connection timed out")
-        conn_error.__cause__ = httpx.TimeoutException("Read timed out")
+        conn_error.__cause__ = httpx.ReadTimeout("Read timed out")
         tools = _make_tools(conn_error, {"my_event": 2, "*": 1})
 
         result = await tools.ha_call_event("my_event")

@@ -95,7 +95,8 @@ class EventCallMixin:
         Caveats: Events are fire-and-forget; a dispatch confirms the bus accepted
         the event and reports how many listeners were registered for it, not that
         any of them acted. listener_count covers the exact event type;
-        wildcard_listener_count covers match-all listeners.
+        wildcard_listener_count covers match-all listeners. Both counts are
+        returned only when the optional listener lookup succeeds.
         """
         # Validate event_type before hitting the wire — empty strings, path
         # separators, or URL delimiters produce malformed URLs at
@@ -131,7 +132,7 @@ class EventCallMixin:
         try:
             response = await self._client.fire_event(event_type, parsed_data)
         except HomeAssistantConnectionError as error:
-            if isinstance(error.__cause__, httpx.TimeoutException):
+            if isinstance(error.__cause__, httpx.ReadTimeout):
                 warnings = list(listener_fields.get("warnings", ()))
                 warnings.append(
                     "Response timed out. The event was dispatched and may still "
