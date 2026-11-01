@@ -452,7 +452,8 @@ async def test_structured_named_view_returns_ordered_responsive_images(
                 "url_path": url_path,
                 "view_path": "home",
                 "viewport_presets": ["mobile", "desktop"],
-                "theme": "backend-selected-theme",
+                # A seeded theme: a name Home Assistant does not list is refused.
+                "theme": "Test Theme A",
                 "dark_mode": True,
                 "language": "de",
                 "wait_ms": 17,
@@ -477,10 +478,8 @@ async def test_structured_named_view_returns_ordered_responsive_images(
             "1280x800",
         ]
         assert all(request["path"].endswith(f"{url_path}/home") for request in requests)
-        assert all(
-            request["params"]["theme"] == "backend-selected-theme"
-            for request in requests
-        )
+        assert all(request["params"]["theme"] == "Test Theme A" for request in requests)
+        assert any("defines no dark mode" in w for w in payload["warnings"])
         assert all(request["params"]["dark"] == "" for request in requests)
         assert all(request["params"]["lang"] == "de" for request in requests)
         assert all(request["params"]["wait"] == "17" for request in requests)
