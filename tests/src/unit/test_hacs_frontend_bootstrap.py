@@ -726,6 +726,13 @@ def test_fixture_releases_prepared_config_after_setup_or_teardown(
     def fail(*args: Any, **kwargs: Any) -> NoReturn:
         raise RuntimeError("fixture setup failure")
 
+    def build(config_path: Path, *args: Any, **kwargs: Any) -> Any:
+        assert config_path == owned
+        assert config_path.is_dir()
+        if phase == "build":
+            fail()
+        return container
+
     if phase == "enter":
         container.__enter__.side_effect = fail
     monkeypatch.setattr(e2e.os, "environ", e2e.os.environ.copy())
@@ -737,11 +744,7 @@ def test_fixture_releases_prepared_config_after_setup_or_teardown(
         "_prepare_testcontainer_config",
         lambda embedded: (owned, str(owned), {}, None, "sha256:fixture"),
     )
-    monkeypatch.setattr(
-        e2e,
-        "_build_ha_testcontainer",
-        fail if phase == "build" else lambda *a, **kw: container,
-    )
+    monkeypatch.setattr(e2e, "_build_ha_testcontainer", build)
     monkeypatch.setattr(e2e, "_reset_ha_in_process_caches", lambda: None)
     monkeypatch.setattr(
         e2e,
