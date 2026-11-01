@@ -573,8 +573,15 @@ def test_failed_lock_renewal_refuses_publication(
     assert not list(state.glob(".hacs_frontend-staging-*"))
 
 
-def test_testcontainer_uses_resolved_reference_instead_of_mutable_tag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("image", "expected"),
+    [
+        ("sha256:fixture-immutable", "sha256:fixture-immutable"),
+        (None, "homeassistant/home-assistant:stable"),
+    ],
+)
+def test_testcontainer_preserves_resolved_and_default_image_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, image: str | None, expected: str
 ) -> None:
     from tests.src.e2e import _conftest_testcontainer as containers
 
@@ -582,7 +589,7 @@ def test_testcontainer_uses_resolved_reference_instead_of_mutable_tag(
         pass
 
     def construct(image: str) -> NoReturn:
-        assert image == "sha256:fixture-immutable"
+        assert image == expected
         raise ConstructionReached
 
     monkeypatch.setattr(
@@ -590,6 +597,5 @@ def test_testcontainer_uses_resolved_reference_instead_of_mutable_tag(
     )
     monkeypatch.setattr(containers, "DockerContainer", construct)
     with pytest.raises(ConstructionReached):
-        containers._build_ha_testcontainer(
-            tmp_path, False, None, image="sha256:fixture-immutable"
-        )
+        kwargs = {} if image is None else {"image": image}
+        containers._build_ha_testcontainer(tmp_path, False, None, **kwargs)

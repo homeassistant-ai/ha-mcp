@@ -305,11 +305,15 @@ def _prepare_testcontainer_config(
 
 
 def _build_ha_testcontainer(
-    config_path: Path, embedded: bool, embedded_wheel_name: str | None, *, image: str
+    config_path: Path,
+    embedded: bool,
+    embedded_wheel_name: str | None,
+    *,
+    image: str | None = None,
 ) -> DockerContainer:
     """Construct the HA DockerContainer with ports, mounts, and preinstall entrypoint."""
     # Create testcontainer with port configuration
-    container = DockerContainer(image)
+    container = DockerContainer(HA_TEST_IMAGE if image is None else image)
 
     # Check for custom port via environment variable
     custom_port = os.environ.get("HA_TEST_PORT")
