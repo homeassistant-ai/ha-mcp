@@ -158,20 +158,25 @@ def _copy_local_blueprint_to_www(config_path: Path) -> dict[str, str]:
     }
 
 
-def _core_version_for_image(image: str) -> str:
-    """Read symbolic tags from the image itself without starting Home Assistant."""
+def _resolve_core_image(image: str) -> tuple[str, str]:
+    """Return the image reference and Core version used for this session."""
     from packaging.version import InvalidVersion, Version
 
     tag = image.rsplit(":", 1)[-1]
     try:
-        return str(Version(tag))
+        return image, str(Version(tag))
     except InvalidVersion:
         import docker
 
         client = docker.from_env()
         try:
+            try:
+                resolved_image = client.images.get(image)
+            except docker.errors.ImageNotFound:
+                resolved_image = client.images.pull(image)
+            image_id = resolved_image.id
             output = client.containers.run(
-                image,
+                image_id,
                 command=[],
                 entrypoint=[
                     "python",
@@ -181,14 +186,14 @@ def _core_version_for_image(image: str) -> str:
                 network_disabled=True,
                 remove=True,
             )
-            return str(Version(output.decode("utf-8").strip()))
+            return image_id, str(Version(output.decode("utf-8").strip()))
         finally:
             client.close()
 
 
 def _prepare_testcontainer_config(
     embedded: bool,
-) -> tuple[Path, str, dict, str | None]:
+) -> tuple[Path, str, dict, str | None, str]:
     """Stage the fresh HA config dir (custom components, seeds, recorder)."""
     embedded_wheel_name: str | None = None
 
@@ -203,9 +208,8 @@ def _prepare_testcontainer_config(
         pytest.fail(f"Initial test state not found at {initial_state_path}")
 
     # Ensure HACS frontend is downloaded (if HACS is present)
-    _ensure_hacs_frontend(
-        initial_state_path, core_version=_core_version_for_image(HA_TEST_IMAGE)
-    )
+    resolved_image, core_version = _resolve_core_image(HA_TEST_IMAGE)
+    _ensure_hacs_frontend(initial_state_path, core_version=core_version)
 
     # Copy all files from initial_test_state
     shutil.copytree(
@@ -297,15 +301,15 @@ def _prepare_testcontainer_config(
     logger.info(
         f"📁 Fresh HA config prepared at: {config_path} with proper permissions"
     )
-    return config_path, temp_dir, local_blueprint, embedded_wheel_name
+    return config_path, temp_dir, local_blueprint, embedded_wheel_name, resolved_image
 
 
 def _build_ha_testcontainer(
-    config_path: Path, embedded: bool, embedded_wheel_name: str | None
+    config_path: Path, embedded: bool, embedded_wheel_name: str | None, *, image: str
 ) -> DockerContainer:
     """Construct the HA DockerContainer with ports, mounts, and preinstall entrypoint."""
     # Create testcontainer with port configuration
-    container = DockerContainer(HA_TEST_IMAGE)
+    container = DockerContainer(image)
 
     # Check for custom port via environment variable
     custom_port = os.environ.get("HA_TEST_PORT")

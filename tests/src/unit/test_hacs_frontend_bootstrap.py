@@ -448,6 +448,7 @@ def test_live_download_renews_lock_and_stops_heartbeat_on_failure(
     lock = state / ".hacs_frontend.lock"
     real_utime = seed.os.utime
     threads = []
+    renewals = 0
 
     def make_thread(*args: Any, **kwargs: Any) -> threading.Thread:
         thread = threading.Thread(*args, **kwargs)
@@ -455,10 +456,13 @@ def test_live_download_renews_lock_and_stops_heartbeat_on_failure(
         return thread
 
     def renew(path: Path, times: Any = None) -> None:
+        nonlocal renewals
         real_utime(path, (400.0, 400.0))
-        refreshed.set()
+        renewals += 1
+        if renewals >= 3:
+            refreshed.set()
 
-    def download(target: Path) -> NoReturn:
+    def download(target: Path, **kwargs: Any) -> NoReturn:
         assert refreshed.wait(2), "Live owner never renewed its lock"
         seed._clear_stale_hacs_lock(lock)
         assert lock.is_dir()
@@ -476,14 +480,14 @@ def test_live_download_renews_lock_and_stops_heartbeat_on_failure(
 
 
 @pytest.mark.parametrize(
-    "image",
+    ("image", "probed_version"),
     [
-        "ghcr.io/home-assistant/home-assistant:stable",
-        "homeassistant/home-assistant:latest",
+        ("ghcr.io/home-assistant/home-assistant:stable", "2026.11.0"),
+        ("homeassistant/home-assistant:latest", "2026.10.4"),
     ],
 )
 def test_symbolic_core_version_comes_from_image_without_starting_ha(
-    image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    image: str, probed_version: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from unittest.mock import MagicMock
 
@@ -492,7 +496,8 @@ def test_symbolic_core_version_comes_from_image_without_starting_ha(
     from tests.src.e2e import _conftest_testcontainer as containers
 
     client = MagicMock()
-    client.containers.run.return_value = b"2026.11.0\n"
+    client.containers.run.return_value = f"{probed_version}\n".encode()
+    client.images.get.return_value.id = "sha256:fixture-immutable"
     monkeypatch.setattr(docker, "from_env", lambda: client)
     initial = tmp_path / "initial_test_state"
     initial.mkdir()
@@ -507,14 +512,14 @@ def test_symbolic_core_version_comes_from_image_without_starting_ha(
 
     def bootstrap(path: Path, *, core_version: str) -> NoReturn:
         assert path == initial
-        assert core_version == "2026.11.0"
+        assert core_version == probed_version
         raise VersionReachedBootstrap
 
     monkeypatch.setattr(containers, "_ensure_hacs_frontend", bootstrap)
     with pytest.raises(VersionReachedBootstrap):
         containers._prepare_testcontainer_config(embedded=False)
     args, kwargs = client.containers.run.call_args
-    assert args[0] == image
+    assert args[0] == "sha256:fixture-immutable"
     assert kwargs["network_disabled"] and kwargs["remove"]
     assert kwargs["entrypoint"][0] == "python"
 
@@ -530,9 +535,61 @@ def test_numeric_image_version_needs_no_docker_probe(
         pytest.fail("Numeric Core tags need no Docker version probe")
 
     monkeypatch.setattr(docker, "from_env", unexpected)
-    assert (
-        containers._core_version_for_image(
-            "ghcr.io/home-assistant/home-assistant:2026.11.0b0"
-        )
-        == "2026.11.0b0"
+    assert containers._resolve_core_image(
+        "ghcr.io/home-assistant/home-assistant:2026.11.0b0"
+    ) == ("ghcr.io/home-assistant/home-assistant:2026.11.0b0", "2026.11.0b0")
+
+
+def test_failed_lock_renewal_refuses_publication(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    failed = threading.Event()
+    real_extract = tarfile.TarFile.extractall
+
+    def denied(path: Path, times: Any = None) -> NoReturn:
+        failed.set()
+        raise PermissionError("fixture renewal denied")
+
+    def extract(archive: tarfile.TarFile, *args: Any, **kwargs: Any) -> None:
+        real_extract(archive, *args, **kwargs)
+        assert failed.wait(2), "The renewal fault was never injected"
+
+    _serve_archive(
+        seed,
+        monkeypatch,
+        _archive(
+            {"hacs_frontend/__init__.py": b"", "hacs_frontend/entrypoint.js": b""}
+        ),
     )
+    monkeypatch.setattr(seed, "_HACS_HEARTBEAT_INTERVAL_S", 0.01)
+    monkeypatch.setattr(seed.os, "utime", denied)
+    monkeypatch.setattr(tarfile.TarFile, "extractall", extract)
+    with pytest.raises(RuntimeError, match="renewal failed"):
+        seed._ensure_hacs_frontend(state)
+    assert not _frontend(state).exists()
+    assert not (state / ".hacs_frontend.lock").exists()
+    assert not list(state.glob(".hacs_frontend-staging-*"))
+
+
+def test_testcontainer_uses_resolved_reference_instead_of_mutable_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.src.e2e import _conftest_testcontainer as containers
+
+    class ConstructionReached(Exception):
+        pass
+
+    def construct(image: str) -> NoReturn:
+        assert image == "sha256:fixture-immutable"
+        raise ConstructionReached
+
+    monkeypatch.setattr(
+        containers, "HA_TEST_IMAGE", "homeassistant/home-assistant:stable"
+    )
+    monkeypatch.setattr(containers, "DockerContainer", construct)
+    with pytest.raises(ConstructionReached):
+        containers._build_ha_testcontainer(
+            tmp_path, False, None, image="sha256:fixture-immutable"
+        )

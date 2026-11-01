@@ -10,7 +10,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, Thread
@@ -200,25 +200,34 @@ def _clear_stale_hacs_lock(lock_dir: Path) -> None:
 
 
 @contextmanager
-def _hacs_lock_heartbeat(lock_dir: Path) -> Iterator[None]:
+def _hacs_lock_heartbeat(lock_dir: Path) -> Iterator[Callable[[], None]]:
     """Keep a live owner's lease fresh; stop before releasing ownership."""
     stopped = Event()
+    failures: list[OSError] = []
+
+    def check_renewal() -> None:
+        if failures:
+            raise RuntimeError(
+                "HACS bootstrap lock renewal failed; refusing publication"
+            ) from failures[0]
 
     def renew() -> None:
         while not stopped.wait(_HACS_HEARTBEAT_INTERVAL_S):
             try:
                 os.utime(lock_dir, None)
-            except FileNotFoundError:
-                logger.warning("HACS bootstrap lock disappeared during renewal")
+            except OSError as exc:
+                failures.append(exc)
+                logger.error("HACS bootstrap lock renewal failed: %s", exc)
                 return
 
     heartbeat = Thread(target=renew, name="hacs-bootstrap-lock", daemon=True)
     heartbeat.start()
     try:
-        yield
+        yield check_renewal
     finally:
         stopped.set()
         heartbeat.join()
+    check_renewal()
 
 
 def _wait_for_hacs_lock_release(lock_dir: Path) -> None:
@@ -247,7 +256,9 @@ def _is_valid_hacs_frontend(path: Path) -> bool:
     return all((path / name).is_file() for name in ("__init__.py", "entrypoint.js"))
 
 
-def _download_hacs_frontend(frontend_dir: Path) -> None:
+def _download_hacs_frontend(
+    frontend_dir: Path, *, before_publish: Callable[[], None] | None = None
+) -> None:
     """Download the frontend pinned by the vendored HACS integration into ``frontend_dir``."""
     import tarfile
 
@@ -288,6 +299,8 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
                     f"Incomplete HACS frontend archive for {tag_name}: "
                     "missing __init__.py or entrypoint.js"
                 )
+            if before_publish is not None:
+                before_publish()
             extracted_frontend.rename(frontend_dir)
             logger.info(f"HACS frontend installed at {frontend_dir}")
 
@@ -345,13 +358,13 @@ def _ensure_hacs_frontend(
     # We own the lock. Outer try/finally guarantees release even when the
     # download block is skipped (e.g. hacs_dir missing) or raises.
     try:
-        with _hacs_lock_heartbeat(lock_dir):
+        with _hacs_lock_heartbeat(lock_dir) as check_renewal:
             for staging in initial_state_path.glob(f"{_HACS_STAGING_PREFIX}*"):
                 if staging.is_dir():
                     shutil.rmtree(staging)
             # Check if HACS is installed and frontend is missing or invalid.
             if hacs_dir.exists() and not _is_valid_hacs_frontend(frontend_dir):
-                _download_hacs_frontend(frontend_dir)
+                _download_hacs_frontend(frontend_dir, before_publish=check_renewal)
     finally:
         # Release the lock so waiting workers can proceed. A
         # ``FileNotFoundError`` can mean startup stale-lock cleanup removed

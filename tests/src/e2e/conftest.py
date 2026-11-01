@@ -243,11 +243,13 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
     # into this same testcontainer and drive it over its ingress webhook. The
     # wheel name is captured here and consumed by the entrypoint preinstall below.
     embedded = _is_embedded_backend_selected()
-    config_path, temp_dir, local_blueprint, embedded_wheel_name = (
+    config_path, temp_dir, local_blueprint, embedded_wheel_name, resolved_image = (
         _prepare_testcontainer_config(embedded)
     )
 
-    container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
+    container = _build_ha_testcontainer(
+        config_path, embedded, embedded_wheel_name, image=resolved_image
+    )
 
     with container:
         # Readiness-gate budgets for the testcontainer path. Defined at
