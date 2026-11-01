@@ -15,11 +15,8 @@ content now goes straight into a ``data:`` URI: same storage location
 (the resource registry), no third-party hop on dashboard loads.
 """
 
-import base64
 import logging
-import re
 from typing import Annotated, Any, NoReturn
-from urllib.parse import urlsplit
 
 from pydantic import Field
 
@@ -28,6 +25,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -36,61 +34,37 @@ from .helpers import (
     validate_identifier_not_empty,
     ws_failure_code,
 )
+from .resource_codec import (
+    _DATA_URI_MIME,
+    _MAX_CONTENT_BUDGET,
+    MAX_CONTENT_SIZE,
+    _check_ws_error,
+    _data_uri_for,
+    _decode_inline_content,
+    _is_data_url,
+    _is_preview_of,
+    _looks_like_preview,
+    _process_resource_list,
+    _summarize_resources,
+    content_sha256,
+)
+from .resource_patch import (
+    MAX_EDITS,
+    ResourceEdit,
+    ResourceLookupError,
+    apply_resource_edits,
+    check_config_hash,
+    find_resource,
+    load_inline_resource,
+)
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
-# Legacy Cloudflare Worker URL. Only used to recognize and locally decode
-# inline resources created before the data: URI switch (#2060) — this server
-# never fetches it. The worker deployment stays up so pre-existing dashboards
-# keep loading until their resources are converted.
-LEGACY_WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
-
 # Core validates res_type against its RESOURCE_TYPES; a copy here would reject
 # a type Core adds before Core sees it, so the parameter is a plain string.
 _RESOURCE_TYPE = str
-# data: URI media types per inline resource_type ('js'/'html' are url-mode
-# only). CSS carries an explicit charset because stylesheets, unlike module
-# scripts, have no spec-mandated UTF-8 fallback.
-_DATA_URI_MIME: dict[str, str] = {
-    "module": "text/javascript",
-    "css": "text/css;charset=utf-8",
-}
-
-# URL prefixes recognized as ha-mcp inline resources — DERIVED from the media
-# types above rather than restated, so the read side cannot drift from the
-# write side (a desync would make the server fail to recognize its own
-# output, leaking raw base64 URLs into list responses). Each media type is
-# accepted with and without the charset parameter so resources written
-# before and after a charset change both still decode. Foreign data: URLs
-# match nothing here and pass through untouched instead of being claimed.
-_ALLOWED_DATA_URI_PREFIXES = tuple(
-    f"data:{base}{charset};base64,"
-    # dict.fromkeys dedupes while keeping a deterministic order.
-    for base in dict.fromkeys(mime.split(";", 1)[0] for mime in _DATA_URI_MIME.values())
-    for charset in ("", ";charset=utf-8")
-)
-# Scheme and media type are case-insensitive (RFC 3986/2397); prefixes are
-# lowercase, so matching lowercases the URL head. Longest prefix is 42 chars.
-_DATA_URI_HEAD = max(len(p) for p in _ALLOWED_DATA_URI_PREFIXES)
-
-_B64_URLSAFE_RE = re.compile(r"[A-Za-z0-9_-]*={0,2}")
-
-# Longest data: URL echoed verbatim for a resource we cannot decode.
-# Beyond this the value is truncated: a corrupt or foreign payload can be
-# ~171KB of base64, and echoing it whole would flood the response.
-_MAX_ECHOED_URL = 300
-
-# Characters of decoded content shown in list previews.
-_PREVIEW_LENGTH = 150
-
-# Total decoded content emitted per include_content=True response. A page
-# of max-size resources would otherwise return limit x MAX_CONTENT_SIZE
-# (up to ~64MB). Rows past the budget are FLAGGED, never shortened —
-# handing back a silently-truncated payload is how a resource gets
-# destroyed on write-back.
-_MAX_CONTENT_BUDGET = 512_000
 
 # Core registers lovelace/resources/{create,update,delete} only in storage
 # resource mode; in YAML mode they answer unknown_command.
@@ -109,14 +83,6 @@ _LEGACY_MIGRATION_HINT = (
     "Never pass '_preview' as content — it is truncated and would destroy "
     "the resource."
 )
-
-# Maximum inline content size, in UTF-8 bytes. The old 24KB bound was the
-# content budget derived from the worker's ~32KB encoded URL-path limit;
-# data: URIs impose no comparable limit, so the cap is now sized to fit
-# established single-file card bundles without truncation while bounding
-# what every dashboard load ships (the registered URL rides the Lovelace
-# bootstrap to every browser) and what auto-backup snapshots per edit.
-MAX_CONTENT_SIZE = 128_000
 
 # Top-level HA-config YAML keys that LLMs sometimes emit when they pick this
 # tool (`ha_config_set_dashboard_resource`) to "create a scene/automation/...".
@@ -194,167 +160,6 @@ def _detect_ha_config_yaml(content: str) -> str | None:
     return None
 
 
-def _data_uri_for(content: str, resource_type: str) -> str:
-    """Encode content as a base64 ``data:`` URI for the given resource type.
-
-    Standard base64 (not URL-safe): browsers decode data: URIs with the
-    standard alphabet. Deterministic — same content, same URI.
-    """
-    mime = _DATA_URI_MIME.get(resource_type)
-    if mime is None:
-        raise_tool_error(
-            create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message=f"Inline content does not support resource_type={resource_type!r}",
-                suggestions=["Use resource_type='module' or 'css' for inline content"],
-            )
-        )
-    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
-
-
-def _match_data_uri_prefix(url: str) -> str | None:
-    """Return the matched ha-mcp inline data: prefix of ``url``, else None.
-
-    Prefix matching is case-insensitive (scheme and media type are
-    case-insensitive per RFC 3986/2397); the payload's case is preserved.
-    """
-    head = url[:_DATA_URI_HEAD].lower()
-    for prefix in _ALLOWED_DATA_URI_PREFIXES:
-        if head.startswith(prefix):
-            return prefix
-    return None
-
-
-def _decode_data_uri(url: str) -> str | None:
-    """Decode one of our base64 ``data:`` URIs back to content.
-
-    None for foreign data: URLs (other media types, percent-encoded form) —
-    those are passed through untouched, not claimed as inline resources —
-    and for corrupt payloads (``validate=True``: a payload the browser's
-    forgiving-base64 would reject must not be reported as valid content).
-    """
-    prefix = _match_data_uri_prefix(url)
-    if prefix is None:
-        return None
-    try:
-        return base64.b64decode(url[len(prefix) :], validate=True).decode("utf-8")
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _is_data_url(url: str) -> bool:
-    """True when ``url`` parses as the ``data:`` scheme in a browser.
-
-    ``urlsplit`` applies WHATWG's leading C0-control-or-space strip and
-    ASCII tab/newline/CR removal before reading the scheme (the
-    CVE-2023-24329 hardening; this package requires Python >=3.13), and
-    lowercases it. A raw ``url[:5]`` check would miss ``" data:..."`` and
-    ``"da\\tta:..."``, which browsers still load.
-    """
-    return urlsplit(url).scheme == "data"
-
-
-def _pad_b64(encoded: str) -> str:
-    """Reject non-alphabet characters, then restore any stripped ``=`` padding.
-
-    ``urlsafe_b64decode`` has no ``validate=`` parameter, so strictness has
-    to be enforced here; the padding fix-up keeps genuine worker URLs (which
-    always carried padding) working either way.
-    """
-    if not _B64_URLSAFE_RE.fullmatch(encoded):
-        raise ValueError("non-base64 characters in payload")
-    return encoded + "=" * (-len(encoded) % 4)
-
-
-def _has_inline_url_shape(url: str) -> bool:
-    """True when ``url`` LOOKS like one of ours, regardless of decodability.
-
-    Only used to flag a recognized-but-corrupt payload; the decode result
-    itself (never this) decides what counts as an inline resource.
-    """
-    if _match_data_uri_prefix(url) is not None:
-        return True
-    prefix = f"{LEGACY_WORKER_BASE_URL}/"
-    return url[: len(prefix)].lower() == prefix.lower()
-
-
-def _looks_like_preview(content: str) -> bool:
-    """Cheap pre-filter: could ``content`` be a list-tool ``_preview``?
-
-    Previews are ``_PREVIEW_LENGTH`` characters plus a trailing ``"..."``.
-    Two shapes qualify: that signature itself (tolerating surrounding
-    whitespace), and exactly ``_PREVIEW_LENGTH`` characters, which is what
-    an agent produces by stripping the ellipsis.
-
-    Deliberately narrow. Everything matching pays a WS round-trip and, if
-    that round-trip fails, is refused — so matching ordinary short content
-    (a legitimate 20-character CSS tweak) would make routine updates
-    fragile for no safety gain, since such content cannot be a preview of
-    anything.
-    """
-    stripped = content.strip()
-    if stripped.endswith("...") and len(stripped) <= _PREVIEW_LENGTH + 3:
-        return True
-    return len(stripped) == _PREVIEW_LENGTH
-
-
-def _is_preview_of(content: str, stored: str) -> bool:
-    """True when ``content`` is the truncated preview of ``stored``.
-
-    Tolerates the ellipsis being stripped and surrounding whitespace, so a
-    lightly-mangled preview writeback is still caught.
-    """
-    if len(stored) <= _PREVIEW_LENGTH:
-        # Short resources have no truncated preview to confuse with.
-        return False
-    candidate = content.strip().removesuffix("...")
-    return bool(candidate) and stored.startswith(candidate)
-
-
-def _decode_inline_content(url: str) -> tuple[str, bool] | None:
-    """Decode an inline resource URL to ``(content, is_legacy_worker)``.
-
-    ``None`` when the URL is not one of ours, or is one of ours but holds
-    an empty/corrupt payload. This is the single source of truth for "is
-    this an inline resource we can show", so the list summary counts and
-    the per-resource markers can never disagree. Returning one ``None``
-    rather than a ``(None, bool)`` pair keeps the meaningless
-    "not-ours-but-legacy" combination unrepresentable and forces callers
-    through one check instead of indexing the tuple.
-    """
-    content = _decode_data_uri(url)
-    if content:
-        return content, False
-    legacy = _decode_legacy_worker_url(url)
-    if legacy:
-        return legacy, True
-    return None
-
-
-def _decode_legacy_worker_url(url: str) -> str | None:
-    """Decode a legacy worker inline URL back to content (pure local base64).
-
-    The worker embedded URL-safe base64 in its path; decoding needs no
-    network. Anchored to the worker origin — lookalike hosts that merely
-    contain the worker host string are not decoded. Returns None if the URL
-    is not a legacy worker URL.
-    """
-    prefix = f"{LEGACY_WORKER_BASE_URL}/"
-    # Scheme and host are case-insensitive; the base64 payload is not.
-    if url[: len(prefix)].lower() != prefix.lower():
-        return None
-    try:
-        # Extract base64 part: https://worker.dev/{base64}?type=module
-        encoded = url[len(prefix) :].split("?", maxsplit=1)[0]
-        # validate=True mirrors _decode_data_uri: urlsafe_b64decode otherwise
-        # silently DISCARDS non-alphabet characters, so a junk path could
-        # decode to plausible text and be masked as inline content.
-        return base64.urlsafe_b64decode(_pad_b64(encoded)).decode("utf-8")
-    except Exception:  # noqa: BLE001
-        return None
-
-
 class ResourceTools:
     """Dashboard resource hosting tools for Home Assistant."""
 
@@ -377,6 +182,14 @@ class ResourceTools:
                 "per-response content budget carry '_content_truncated': True instead "
                 "of '_content'; request a smaller page before copying content into an "
                 "update."
+            ),
+        ] = False,
+        include_hash: Annotated[
+            bool,
+            Field(
+                description='Add "_config_hash" (SHA-256 hex digest of the decoded '
+                "UTF-8 content) to each inline resource, e.g. to verify an edit or "
+                "to pass as config_hash without fetching the content."
             ),
         ] = False,
         limit: Annotated[
@@ -411,6 +224,7 @@ class ResourceTools:
         EXAMPLES:
         - Next page: ha_config_list_dashboard_resources(offset=100)
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
+        - Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)
 
         Home Assistant 2026.6+ exposes resource management in the UI by default;
         API access works regardless of UI availability.
@@ -436,7 +250,7 @@ class ResourceTools:
             page = resources[offset : offset + limit]
             page_decoded = [decoded_by_index.get(offset + i) for i in range(len(page))]
             paginated, truncated_count = _process_resource_list(
-                page, page_decoded, include_content
+                page, page_decoded, include_content, include_hash=include_hash
             )
 
             response: dict[str, Any] = {
@@ -511,10 +325,37 @@ class ResourceTools:
                 "Get IDs from ha_config_list_dashboard_resources()"
             ),
         ] = None,
+        edits: Annotated[
+            # Bounds on the list, not the union: there they render as
+            # minItems/maxItems instead of string-only minLength/maxLength.
+            Annotated[list[ResourceEdit], Field(min_length=1, max_length=MAX_EDITS)]
+            | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Search/replace edits for an existing inline resource, "
+                "applied in order. Requires resource_id; resource_type is ignored "
+                "and the stored type is kept.",
+            ),
+        ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description="With edits: refuse the patch unless the stored content "
+                "has this hash when read, just before the write (the list's "
+                "_config_hash with include_hash=True, or a previous write "
+                "response's config_hash). A preflight "
+                "check only: a change made by another client after that read is "
+                "not detected and can be overwritten."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Create or update a dashboard resource (inline code or external URL).
 
         Provide exactly one of:
+        - edits: Search/replace edits on an existing inline resource. Any
+          failing edit (or a config_hash mismatch) aborts the whole call
+          and saves nothing. Prefer this over content= for small changes to a
+          large card: only the changed text is sent.
         - content: Inline JavaScript or CSS code (embedded in the resource URL
           as a data: URI — no file storage or external hosting involved).
           Supports 'module' and 'css' types only; URLs are
@@ -535,10 +376,28 @@ class ResourceTools:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
         - Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
         - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
+        - Patch: ha_config_set_dashboard_resource(resource_id="abc123", edits=[{"old": "color: red", "new": "color: blue"}], config_hash="<_config_hash from the list>")
+
+        Inline writes return the stored content's config_hash.
 
         After adding a resource, a browser cache clear or hard refresh
         (Ctrl+Shift+R) is needed to load it.
         """
+        if edits is not None:
+            return await self._patch_inline_resource(
+                resource_id, edits, config_hash, other_modes=(content, url)
+            )
+        if config_hash is not None:
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="config_hash only applies together with edits",
+                    suggestions=[
+                        "Pass edits=[...] with resource_id, or drop config_hash"
+                    ],
+                )
+            )
+
         # Validate: exactly one of content or url must be provided
         if content is not None and url is not None:
             raise_tool_error(
@@ -564,9 +423,6 @@ class ResourceTools:
                 )
             )
 
-        if content is not None:
-            return await self._set_inline_resource(content, resource_type, resource_id)
-
         # Hand-built data: URLs would bypass every inline-mode guard (empty /
         # size / type checks and the #1072 YAML-misroute rejection) now that
         # the inline format is documented in this docstring. Route callers to
@@ -583,6 +439,21 @@ class ResourceTools:
                     ],
                 )
             )
+        # ``None`` stays the documented "create-new" sentinel; an explicit
+        # empty/whitespace ``resource_id`` would route to the create branch
+        # of ``_upsert_resource`` and lose update intent.
+        if resource_id is not None:
+            validate_identifier_not_empty(
+                resource_id,
+                "resource_id",
+                suggestions=[
+                    "Omit resource_id entirely to create a new resource",
+                    "Pass a valid resource_id to update an existing resource",
+                ],
+                context={"action": "set"},
+            )
+        if content is not None:
+            return await self._set_inline_resource(content, resource_type, resource_id)
         return await self._set_url_resource(url, resource_type, resource_id)
 
     def _raise_ha_config_yaml_misroute(
@@ -620,8 +491,16 @@ class ResourceTools:
         content: str,
         resource_type: _RESOURCE_TYPE,
         resource_id: str | None,
+        *,
+        check_preview: bool = True,
     ) -> dict[str, Any]:
-        """Create or update an inline dashboard resource."""
+        """Create or update an inline dashboard resource.
+
+        ``check_preview=False`` skips the truncated-preview guard. Only edit
+        results pass it: they are derived from the stored content, not
+        copied from a list response, so a preview-shaped result (e.g. a
+        suffix deletion leaving ``_PREVIEW_LENGTH`` characters) is intended.
+        """
         if not content.strip():
             raise_tool_error(
                 create_error_response(
@@ -658,7 +537,7 @@ class ResourceTools:
                 create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
                     message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
-                    context={"size": content_size},
+                    context={"size": content_size, "limit": MAX_CONTENT_SIZE},
                     suggestions=[
                         "Minify the code to reduce size",
                         "Split into multiple smaller modules",
@@ -667,7 +546,7 @@ class ResourceTools:
                 )
             )
 
-        if resource_id is not None:
+        if resource_id is not None and check_preview:
             await self._reject_truncated_preview_resave(content, resource_id)
 
         resource_url = _data_uri_for(content, resource_type)
@@ -696,6 +575,7 @@ class ResourceTools:
                 "resource_id": new_resource_id,
                 "resource_type": resource_type,
                 "size": content_size,
+                "config_hash": _stored_content_hash(result),
                 "note": "Clear browser cache or hard refresh to load changes",
             }
         except ToolError:
@@ -711,6 +591,68 @@ class ResourceTools:
             )
             # Unreachable (exception_to_structured_error is NoReturn).
             raise
+
+    async def _patch_inline_resource(
+        self,
+        resource_id: str | None,
+        edits: list[ResourceEdit],
+        config_hash: str | None,
+        other_modes: tuple[str | None, str | None],
+    ) -> dict[str, Any]:
+        """Apply search/replace edits to a stored inline resource, all or nothing."""
+        if any(mode is not None for mode in other_modes):
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Provide only one of 'edits', 'content' or 'url'",
+                    suggestions=[
+                        "Use edits= alone to change part of an existing inline resource",
+                    ],
+                )
+            )
+        if resource_id is None:
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    message="edits requires resource_id",
+                    suggestions=[
+                        "Get the ID from ha_config_list_dashboard_resources()",
+                    ],
+                )
+            )
+        validate_identifier_not_empty(
+            resource_id,
+            "resource_id",
+            suggestions=["Pass the ID of the inline resource to patch"],
+            context={"action": "patch"},
+        )
+        # with_auto_backup holds this resource's write lock around the whole
+        # call (resource_write_lock), so no other write through this server
+        # lands between this read and the write below.
+        try:
+            stored, resource_type = await load_inline_resource(
+                self._client, resource_id
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error reading dashboard resource to patch: {e}")
+            exception_to_structured_error(
+                e,
+                context={
+                    "tool": "ha_config_set_dashboard_resource",
+                    "action": "patch",
+                    "resource_id": resource_id,
+                },
+            )
+            # Unreachable (exception_to_structured_error is NoReturn).
+            raise
+        check_config_hash(stored, config_hash)
+        patched = apply_resource_edits(stored, edits)
+        response = await self._set_inline_resource(
+            patched, resource_type, resource_id, check_preview=False
+        )
+        return {**response, "action": "patched", "applied": len(edits)}
 
     async def _reject_truncated_preview_resave(
         self, content: str, resource_id: str
@@ -759,42 +701,28 @@ class ResourceTools:
             )
 
         try:
-            result = await self._client.send_websocket_message(
-                {"type": "lovelace/resources"}
-            )
+            found = await find_resource(self._client, resource_id)
+        except ResourceLookupError as e:
+            _unverifiable(e.detail)
         except Exception as e:  # noqa: BLE001
             _unverifiable(f"listing the resources failed: {e}")
-        error_msg = _check_ws_error(result)
-        if error_msg:
-            _unverifiable(f"Home Assistant rejected the listing: {error_msg}")
-        resources = result.get("result") if isinstance(result, dict) else result
-        if not isinstance(resources, list):
-            _unverifiable("Home Assistant returned an unreadable resource list")
-        for res in resources:
-            # Element type is guarded too: a malformed entry must not raise a
-            # bare AttributeError out of the tool.
-            if not isinstance(res, dict) or str(res.get("id")) != str(resource_id):
-                continue
-            url = res.get("url", "")
-            stored = None
-            if isinstance(url, str):
-                decoded = _decode_inline_content(url)
-                stored = decoded[0] if decoded else None
-            if stored and _is_preview_of(content, stored):
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message="Content is the truncated preview from "
-                        "ha_config_list_dashboard_resources, not the full "
-                        "resource code — saving it would destroy the resource",
-                        context={"resource_id": resource_id},
-                        suggestions=[
-                            "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
-                            "Then re-save with the complete content",
-                        ],
-                    )
-                )
+        if found is None:
             return
+        stored = found[1]
+        if stored and _is_preview_of(content, stored):
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Content is the truncated preview from "
+                    "ha_config_list_dashboard_resources, not the full "
+                    "resource code — saving it would destroy the resource",
+                    context={"resource_id": resource_id},
+                    suggestions=[
+                        "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
+                        "Then re-save with the complete content",
+                    ],
+                )
+            )
 
     async def _set_url_resource(
         self,
@@ -905,22 +833,12 @@ class ResourceTools:
         url: str | None,
         resource_type: _RESOURCE_TYPE,
     ) -> tuple[dict[str, Any], str]:
-        """Create or update a lovelace resource. Returns (result, action)."""
-        # ``None`` stays the documented "create-new" sentinel; explicit
-        # empty/whitespace ``resource_id`` would silently route to the
-        # ``else`` create branch below and lose update intent (destructive
-        # intent-loss class, same as the registry-metadata twins).
+        """Create or update a lovelace resource. Returns (result, action).
+
+        Callers validate ``resource_id`` first: None creates, anything else
+        updates.
+        """
         if resource_id is not None:
-            validate_identifier_not_empty(
-                resource_id,
-                "resource_id",
-                suggestions=[
-                    "Omit resource_id entirely to create a new resource",
-                    "Pass a valid resource_id to update an existing resource",
-                ],
-                context={"action": "set"},
-            )
-        if resource_id:
             result = await self._client.send_websocket_message(
                 {
                     "type": "lovelace/resources/update",
@@ -1020,122 +938,6 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, ResourceTools(client))
 
 
-def _summarize_resources(
-    resources: list[Any],
-    keep_start: int,
-    keep_stop: int,
-) -> tuple[dict[str, int], int, dict[int, tuple[str, bool]]]:
-    """Count resources by type, and decode every inline one exactly once.
-
-    Returns ``(by_type_counts, inline_count, {index: (content, is_legacy)})``.
-
-    Decoding is deliberately WHOLE-SET: ``inline_count`` reports the full
-    registry and must agree with the per-resource ``_inline`` markers, and
-    only a real decode can tell a genuine inline resource from a corrupt
-    payload that merely looks like one.
-
-    RETENTION, by contrast, is page-scoped: only indices in
-    ``[keep_start, keep_stop)`` are kept in the returned map. Holding every
-    decoded payload would mean a ``limit=1`` call sat on the whole
-    registry's content — up to ``MAX_CONTENT_SIZE`` per resource — for a
-    one-row response. Because the page's entries are retained, nothing is
-    decoded twice.
-    """
-    by_type_counts: dict[str, int] = {}
-    inline_count = 0
-    decoded_by_index: dict[int, tuple[str, bool]] = {}
-    for index, resource in enumerate(resources):
-        res = resource if isinstance(resource, dict) else {}
-        res_type = res.get("type")
-        if isinstance(res_type, str):
-            by_type_counts[res_type] = by_type_counts.get(res_type, 0) + 1
-        url = res.get("url", "")
-        if isinstance(url, str):
-            decoded = _decode_inline_content(url)
-            if decoded:
-                inline_count += 1
-                if keep_start <= index < keep_stop:
-                    decoded_by_index[index] = decoded
-    return by_type_counts, inline_count, decoded_by_index
-
-
-def _process_resource_list(
-    resources: list[Any],
-    decoded_page: list[tuple[str, bool] | None],
-    include_content: bool,
-) -> tuple[list[dict[str, Any]], int]:
-    """Render one page of resources. Returns ``(rows, truncated_count)``.
-
-    ``decoded_page`` carries the already-decoded ``(content, is_legacy)`` for
-    each row (``None`` when the resource is not a decodable inline one), so
-    this never re-decodes and can never classify a resource differently than
-    the caller's summary did.
-
-    With ``include_content``, content is emitted until the per-response byte
-    budget is spent; rows past it are marked ``_content_truncated`` rather
-    than silently shortened, because a truncated value written back would
-    destroy the resource.
-    """
-    processed: list[dict[str, Any]] = []
-    truncated_count = 0
-    content_budget = _MAX_CONTENT_BUDGET
-
-    for resource, decoded in zip(resources, decoded_page, strict=True):
-        res = dict(resource) if isinstance(resource, dict) else {"url": resource}
-        url = res.get("url", "")
-        content, is_legacy = decoded if decoded else (None, False)
-
-        if content:
-            content_bytes = len(content.encode("utf-8"))
-            res["_inline"] = True
-            res["_size"] = content_bytes
-            if is_legacy:
-                # The full remediation text lives once at response level;
-                # repeating it per resource wasted ~330 chars each.
-                res["_legacy_worker"] = True
-
-            if include_content:
-                cost = content_bytes
-                if cost <= content_budget:
-                    res["_content"] = content
-                    content_budget -= cost
-                else:
-                    res["_content_truncated"] = True
-                    truncated_count += 1
-            else:
-                preview = content[:_PREVIEW_LENGTH]
-                if len(content) > _PREVIEW_LENGTH:
-                    preview += "..."
-                res["_preview"] = preview
-
-            res["url"] = "[inline]"
-        elif isinstance(url, str) and _has_inline_url_shape(url):
-            # Recognized as one of ours but the payload does not decode
-            # (empty, corrupt, or not UTF-8). Say so explicitly: without a
-            # marker this reads as "an external resource, not my problem",
-            # which is the wrong conclusion for someone debugging a card
-            # that stopped rendering. The real URL stays visible (truncated
-            # if huge) because that is what diagnosis needs.
-            res["_decode_error"] = True
-            if len(url) > _MAX_ECHOED_URL:
-                res["_url_length"] = len(url)
-                res["url"] = url[:_MAX_ECHOED_URL] + "…[truncated]"
-
-        processed.append(res)
-    return processed, truncated_count
-
-
-def _check_ws_error(result: Any) -> str | None:
-    """Check a WebSocket result for errors. Returns error message or None."""
-    if isinstance(result, dict) and not result.get("success", True):
-        error = result.get("error", {})
-        if isinstance(error, dict):
-            msg: str = error.get("message", str(error)) or "Unknown error"
-            return msg
-        return str(error) or "Unknown error"
-    return None
-
-
 def _extract_resource_id(result: Any, fallback_id: str | None) -> str | None:
     """Extract resource ID from a WebSocket result.
 
@@ -1148,6 +950,19 @@ def _extract_resource_id(result: Any, fallback_id: str | None) -> str | None:
     if isinstance(resource_info, dict):
         return resource_info.get("id", fallback_id)
     return fallback_id
+
+
+def _stored_content_hash(result: Any) -> str | None:
+    """Hash the content Home Assistant stored, decoded from the write's result.
+
+    ``lovelace/resources/create`` and ``/update`` return the stored item;
+    hashing its URL rather than the string sent keeps the hash tied to what
+    HA holds. None when the result carries no decodable inline URL.
+    """
+    item = result.get("result") if isinstance(result, dict) else None
+    url = item.get("url") if isinstance(item, dict) else None
+    decoded = _decode_inline_content(url) if isinstance(url, str) else None
+    return content_sha256(decoded[0]) if decoded else None
 
 
 def _require_created_resource_id(resource_id: str | None, action: str) -> None:

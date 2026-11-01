@@ -2179,16 +2179,16 @@ async def _dashboard_resource_like(client: Any, config: dict[str, Any]) -> Any:
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    # Core imported old ``resources:`` entries without a type (RESOURCE_FIELDS).
     payload = _strip_readonly(config, "id", "type")
-    if "type" in config:
+    if "type" in config:  # Core imported old ``resources:`` entries without one
         payload["res_type"] = config["type"]
     update = {"type": "lovelace/resources/update", "resource_id": entity_id}
-    try:
-        return await _ws_send(client, {**update, **payload})
-    except HomeAssistantCommandError as err:
-        if err.code != "not_found":  # not_found: deleted since the snapshot
-            raise
+    async with registry_update_lock("dashboard_resource", entity_id):  # the tool's lock
+        try:
+            return await _ws_send(client, {**update, **payload})
+        except HomeAssistantCommandError as err:
+            if err.code != "not_found":  # not_found: deleted since the snapshot
+                raise
     live = await _dashboard_resource_like(client, config)
     if live is not None:  # an earlier restore re-created it
         return live
