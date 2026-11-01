@@ -856,7 +856,7 @@ async def _update_config_entry_options(
             # A restore reports its own refusal, never the flow's text.
             flow=FlowRef(actual_domain, "options") if progress is None else None,
         )
-    except Exception as flow_err:
+    except (Exception, asyncio.CancelledError) as flow_err:
         if progress is None or progress.apply_status == "not_applied":
             try:
                 await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
@@ -943,7 +943,7 @@ async def create_config_entry(
             helper_type=domain,
             flow=FlowRef(domain, "config"),
         )
-    except Exception:
+    except (Exception, asyncio.CancelledError):
         try:
             await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
         except Exception as abort_err:  # noqa: BLE001

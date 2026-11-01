@@ -1,10 +1,12 @@
 """Waiting out a config-entry flow's ``progress`` step.
 
 A progress step waits on work Home Assistant runs itself (a scan, a download).
-When that work finishes, Core moves the flow to ``progress_done``; a GET on the
-flow runs ``async_configure`` again, which steps past ``progress_done`` and
-answers the step the flow is at now. That is the call the frontend makes when
-Core reports the flow progressed, so polling it drives the flow the same way.
+When that work finishes, Core moves the flow to ``progress_done``. The frontend
+GETs the flow when Core reports it progressed; ha-mcp polls the same GET. Each
+GET runs ``async_configure`` again, re-running the progress step, which Core's
+documented progress pattern makes safe by starting its task only once
+(``if not self.task``); past ``progress_done`` it answers the step the flow is
+at now, which may finish the flow.
 """
 
 import asyncio
@@ -41,15 +43,24 @@ async def wait_for_progress(
     step: dict[str, Any],
     *,
     is_reconfigure: bool = False,
+    poll: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
 ) -> dict[str, Any]:
     """Poll the flow until it leaves its progress step; return the step it reaches.
 
+    ``poll(url, step)`` sends the GET; the walkers pass one that classifies a
+    lost answer like a lost submit, since the GET can finish the flow.
     Raises ``TIMEOUT_OPERATION`` with the step's ``progress_action`` and Core's
     text for it when the step is still in progress after
     ``PROGRESS_BUDGET_S``. The flow is left open; the walkers' callers abort it.
     """
+    if poll is None:
+
+        async def poll(url: str, _step: dict[str, Any]) -> dict[str, Any]:
+            result: dict[str, Any] = await client._request("GET", url)
+            return result
+
     resource = _FLOW_RESOURCES[flow.path.split(".")[0]]
     url = f"/config/config_entries/{resource}/{flow_id}"
     deadline = clock() + PROGRESS_BUDGET_S
@@ -77,5 +88,5 @@ async def wait_for_progress(
             )
         await sleep(min(interval, remaining))
         interval = min(interval * 1.5, _POLL_INTERVAL_MAX_S)
-        step = await client._request("GET", url)
+        step = await poll(url, step)
     return step

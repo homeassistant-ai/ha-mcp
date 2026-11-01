@@ -9,6 +9,7 @@ give up with Core's text for the progress action.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,7 +18,15 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import config_entry_flow_progress
+from ha_mcp.tools.config_entry_flow import (
+    create_config_entry,
+    update_config_entry_options,
+)
 from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
 from ha_mcp.tools.config_entry_flow_progress import (
     PROGRESS_BUDGET_S,
@@ -241,3 +250,133 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
     assert payload["error"]["code"] == "TIMEOUT_OPERATION"
     assert payload["status"] == ReconfigureStatus.APPLY_FAILED
     client.abort_config_flow.assert_awaited_once_with("flow-progress")
+
+
+# --- a poll that gets no answer may have committed ---------------------------
+#
+# The GET re-runs async_configure: past progress_done that is the step that
+# finishes the flow. A lost answer to it is the same applied_but_unverified
+# ambiguity as a lost answer to a submit.
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+@pytest.mark.parametrize(
+    "no_answer",
+    [
+        TimeoutError(),
+        HomeAssistantConnectionError("reset"),
+        HomeAssistantAPIError("API error: 504", status_code=504),
+    ],
+    ids=["timeout", "connection", "http-504"],
+)
+async def test_reconfigure_poll_without_an_answer_is_applied_but_unverified(
+    no_answer: Exception,
+) -> None:
+    client = _client(strings={})
+    client._request.side_effect = no_answer
+    client.start_reconfigure_flow.return_value = dict(_PROGRESS)
+
+    with pytest.raises(ToolError) as exc_info:
+        await _run_reconfigure_flow(
+            client,
+            domain="demo",
+            entry_id="e1",
+            flow_config={"host": "h"},
+            rollback_metadata={},
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+    client.abort_config_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_a_poll_on_a_flow_that_is_gone_reaches_the_caller_as_the_404() -> None:
+    client = _client(strings={})
+    client._request.side_effect = HomeAssistantAPIError(
+        "API error: 404 - Invalid flow specified", status_code=404
+    )
+    client.abort_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 404", status_code=404
+    )
+    client.start_reconfigure_flow.return_value = dict(_PROGRESS)
+
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await _run_reconfigure_flow(
+            client,
+            domain="demo",
+            entry_id="e1",
+            flow_config={"host": "h"},
+            rollback_metadata={},
+        )
+
+    assert "Invalid flow specified" in str(exc_info.value)
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+# --- every caller aborts a flow it leaves in progress ------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_add_mode_progress_timeout_aborts_the_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
+    client = _client(strings={})
+    client.start_config_flow.return_value = dict(_PROGRESS)
+
+    with pytest.raises(ToolError) as exc_info:
+        await create_config_entry(client, "demo", {})
+
+    assert json.loads(str(exc_info.value))["error"]["code"] == "TIMEOUT_OPERATION"
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_options_progress_timeout_aborts_the_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
+    client = _options_client()
+
+    with pytest.raises(ToolError) as exc_info:
+        await update_config_entry_options(client, "e1", {})
+
+    assert json.loads(str(exc_info.value))["error"]["code"] == "TIMEOUT_OPERATION"
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+def _options_client() -> AsyncMock:
+    client = _client(strings={})
+    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
+    client.start_options_flow.return_value = dict(_PROGRESS)
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_add_mode_cancelled_during_the_wait_aborts_the_flow() -> None:
+    client = _client(strings={})
+    client._request.side_effect = asyncio.CancelledError()
+    client.start_config_flow.return_value = dict(_PROGRESS)
+
+    with pytest.raises(asyncio.CancelledError):
+        await create_config_entry(client, "demo", {})
+
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_wait")
+async def test_options_cancelled_during_the_wait_aborts_the_flow() -> None:
+    client = _options_client()
+    client._request.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_config_entry_options(client, "e1", {})
+
+    client.abort_options_flow.assert_awaited_once_with("f1")
