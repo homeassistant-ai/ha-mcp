@@ -151,17 +151,6 @@ _SERVICE_KEYS = ("service", "action")
 # ``any``/``all`` — conditions are never flagged.
 _DEPRECATED_TRIGGER_BEHAVIOR = {"any": "each", "last": "all"}
 
-# Sections for the seven native triggers the generic template-trigger warning
-# names (``time_pattern`` is covered under Time Trigger).
-_NATIVE_TRIGGER_ANCHORS = (
-    "state-trigger",
-    "numeric-state-trigger",
-    "time-trigger",
-    "sun-trigger",
-    "zone-trigger",
-    "event-trigger",
-)
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -329,6 +318,12 @@ def _check_template_string(
             "instead. Templates fail silently at runtime and bypass schema validation.",
             skill_prefix,
             "template-guidelines.md#when-to-avoid-templates",
+            # The table there covers state, numeric_state, time and sun; these
+            # cover the two other native conditions the message names.
+            also_embed=(
+                "triggers-and-conditions.md#zone-condition",
+                "triggers-and-conditions.md#device-trigger-use-sparingly",
+            ),
         )
 
 
@@ -777,10 +772,16 @@ def _check_template_trigger(
             "template triggers re-evaluate on every state change.",
             skill_prefix,
             "triggers-and-conditions.md#template-trigger",
-        )
-        warnings.referenced_files.update(
-            f"references/triggers-and-conditions.md#{anchor}"
-            for anchor in _NATIVE_TRIGGER_ANCHORS
+            # One section per native trigger the message names; `time_pattern`
+            # is covered under Time Trigger.
+            also_embed=(
+                "triggers-and-conditions.md#state-trigger",
+                "triggers-and-conditions.md#numeric-state-trigger",
+                "triggers-and-conditions.md#time-trigger",
+                "triggers-and-conditions.md#sun-trigger",
+                "triggers-and-conditions.md#zone-trigger",
+                "triggers-and-conditions.md#event-trigger",
+            ),
         )
 
 

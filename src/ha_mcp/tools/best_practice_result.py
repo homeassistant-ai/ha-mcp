@@ -19,9 +19,7 @@ class BestPracticeCheckResult(list[str]):
     and embed the relevant skill bodies into responses.
 
     Use :func:`_emit` to append warnings; direct ``append``/``extend``
-    skip the ``referenced_files`` mirror. A check may also add sections its
-    warning names inline straight to ``referenced_files`` (the generic
-    template-trigger warning does). Slicing, ``list()`` coercion,
+    skip the ``referenced_files`` mirror. Slicing, ``list()`` coercion,
     and ``copy.copy``/``copy.deepcopy`` all return plain ``list[str]``
     without the attribute — no current call site does any of these.
     """
@@ -45,6 +43,8 @@ def _emit(
     message: str,
     skill_prefix: str | None,
     file_ref: str,
+    *,
+    also_embed: tuple[str, ...] = (),
 ) -> None:
     """Append a warning with the 2-route ' See ...' suffix and track the file.
 
@@ -62,9 +62,14 @@ def _emit(
             display, and in ``referenced_files`` so the auto-embed path
             ships only the matching markdown section instead of the
             whole 10-20 KB reference file.
+        also_embed: Further refs in the ``file_ref`` format, embedded but
+            not cited in the ``See ...`` suffix — for a warning whose
+            message names alternatives that ``file_ref`` does not cover.
     """
     warnings.append(message + _skill_route_suffix(skill_prefix, file_ref))
-    warnings.referenced_files.add(f"references/{file_ref}")
+    warnings.referenced_files.update(
+        f"references/{ref}" for ref in (file_ref, *also_embed)
+    )
 
 
 def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:

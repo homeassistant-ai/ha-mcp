@@ -11,22 +11,27 @@ These tests address that bug class without trying to spin up the full
 fastmcp stack (they need only the source tree, not an installed
 fastmcp/pydantic stack or a running server):
 
-* :class:`TestWriteToolAttachCoverage` — AST-scans each of the six write
-  tools, finds every successful return path inside the public ``@tool``
-  method, and asserts each path is preceded by an attach call. Static,
-  fast, catches the wrap-missing bug class deterministically.
+* :func:`test_write_tool_attaches_skill_content_somewhere` — AST-scans each
+  of the six write tools, finds every successful return path inside the
+  public ``@tool`` method, and asserts each path is preceded by an attach
+  call. Static, fast, catches the wrap-missing bug class deterministically.
 
-* :class:`TestEveryEmittedAnchorResolves` — iterates every literal anchor
-  the best-practice checker passes to ``_emit()``, plus every canonical
-  file mapping the six tools declare, and resolves each against the real
-  bundled skills-vendor submodule. Catches submodule heading renames and
-  ``_emit()`` typos before they ship as silent skill_content drops. The
-  extra sections the generic template-trigger warning embeds are not
-  ``_emit()`` arguments; the subsection test below resolves them.
+* :func:`test_every_checker_anchor_resolves_against_real_skills` and
+  :func:`test_every_canonical_skill_file_exists` — iterate every literal
+  anchor the best-practice checker passes to ``_emit()``, plus every
+  canonical file mapping the six tools declare, and resolve each against
+  the real bundled skills-vendor submodule. Catches submodule heading
+  renames and ``_emit()`` typos before they ship as silent skill_content
+  drops. :func:`test_anchor_scan_covers_every_ref_a_warning_embeds` checks
+  that the scan reads ``also_embed`` too.
 
 * :func:`test_trigger_warning_embeds_its_subsections` — runs each trigger
   warning and checks that it embeds the trigger subsections it points to
   rather than the whole ``#trigger-types`` chapter.
+
+* :func:`test_condition_template_warning_embeds_every_native_it_names` —
+  checks that the generic condition-template warning embeds syntax for every
+  native condition its message names.
 
 All of them rely on the bundled submodule being initialised — they skip cleanly
 when it's absent so a fresh clone doesn't fail collection.
@@ -304,8 +309,15 @@ def test_write_tool_attaches_skill_content_somewhere(
 # ---------------------------------------------------------------------------
 
 
+_GENERIC_TEMPLATE_TRIGGER = {"platform": "template", "value_template": "{{ x == 1 }}"}
+_GENERIC_TEMPLATE_CONDITION = {
+    "condition": "template",
+    "value_template": "{{ x == 1 }}",
+}
+
+
 def _emit_file_refs() -> list[str]:
-    """Statically extract every ``file_ref`` literal passed to _emit()."""
+    """Statically extract every ``file_ref``/``also_embed`` literal passed to _emit()."""
     # Every best_practice_* module, not just the checker: the checks are split
     # across modules, and scanning one of them would silently stop covering
     # the anchors emitted by the others.
@@ -327,6 +339,13 @@ def _emit_file_refs() -> list[str]:
             for kw in node.keywords:
                 if kw.arg == "file_ref" and isinstance(kw.value, ast.Constant):
                     file_ref = kw.value.value
+                if kw.arg == "also_embed":
+                    # Only literal strings can be scanned; anything else would
+                    # drop its refs from this check unnoticed, so literal_eval
+                    # raises on it.
+                    also_embed = ast.literal_eval(kw.value)
+                    assert isinstance(also_embed, tuple), ast.unparse(kw.value)
+                    refs.extend(also_embed)
             if isinstance(file_ref, str):
                 refs.append(file_ref)
     return refs
@@ -373,8 +392,8 @@ def _require_vendored_skills() -> Path:
 
 @pytest.mark.parametrize("file_ref", _emit_file_refs())
 def test_every_checker_anchor_resolves_against_real_skills(file_ref: str) -> None:
-    """Every ``_emit(file_ref=...)`` literal must resolve to a real section
-    in the bundled skill files.
+    """Every ``file_ref``/``also_embed`` literal passed to ``_emit()`` must
+    resolve to a real section in the bundled skill files.
 
     Catches:
 
@@ -402,6 +421,22 @@ def test_every_checker_anchor_resolves_against_real_skills(file_ref: str) -> Non
         f"_emit anchor {file_ref!r} resolved to empty content — heading "
         f"matched but section body is empty (possibly a one-liner heading)."
     )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param({"trigger": [_GENERIC_TEMPLATE_TRIGGER]}, id="trigger"),
+        pytest.param({"condition": [_GENERIC_TEMPLATE_CONDITION]}, id="condition"),
+    ],
+)
+def test_anchor_scan_covers_every_ref_a_warning_embeds(config: dict) -> None:
+    """The generic template warnings embed ``also_embed`` refs; each of them
+    must be in the static scan, or the test above never resolves it.
+    """
+    scanned = set(_emit_file_refs())
+    embedded = check_automation_config(config).referenced_files
+    assert {ref.removeprefix("references/") for ref in embedded} <= scanned
 
 
 @pytest.mark.parametrize(("mapping_name", "file_ref"), _canonical_files_mappings())
@@ -455,7 +490,7 @@ _TRIGGER_TYPES_CHAPTER = "references/triggers-and-conditions.md#trigger-types"
             id="template-duration",
         ),
         pytest.param(
-            {"platform": "template", "value_template": "{{ x == 1 }}"},
+            _GENERIC_TEMPLATE_TRIGGER,
             (
                 "trigger: template",
                 "trigger: state",
@@ -497,3 +532,30 @@ def test_trigger_warning_embeds_its_subsections(
     for ref in refs:
         assert any(fix in sections[ref] for fix in fixes), ref
     assert len(embedded) < len(sections[_TRIGGER_TYPES_CHAPTER])
+
+
+def test_condition_template_warning_embeds_every_native_it_names() -> None:
+    """The generic condition-template warning names six native conditions;
+    the sections it embeds show the syntax of each, and each section shows
+    at least one of them.
+    """
+    skills_dir = _require_vendored_skills()
+    warnings = check_automation_config({"condition": [_GENERIC_TEMPLATE_CONDITION]})
+    assert len(warnings) == 1, warnings
+    refs = sorted(warnings.referenced_files)
+    sections = skill_loader.resolve_skill_files(
+        skills_dir, "home-assistant-best-practices", refs
+    )
+    shapes = (
+        "condition: state",
+        "condition: numeric_state",
+        "condition: time",
+        "condition: sun",
+        "condition: zone",
+        "condition: device",
+    )
+    embedded = "".join(sections[ref] for ref in refs)
+    for shape in shapes:
+        assert shape in embedded
+    for ref in refs:
+        assert any(shape in sections[ref] for shape in shapes), ref
