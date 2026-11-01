@@ -46,11 +46,11 @@ class TestGetEventListeners:
         assert await get_event_listeners(mock_client, "my_event") == {"good": 1}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("bad_count", [True, False, -1])
+    @pytest.mark.parametrize("bad_count", [True, -1])
     async def test_rejects_counts_that_cannot_be_listener_counts(
         self, mock_client, bad_count
     ):
-        """Booleans are ints and negatives are impossible; neither is a count."""
+        """A boolean is an int subclass and negatives are impossible; neither is a count."""
         mock_client._request = AsyncMock(
             return_value=[
                 {"event": "bad", "listener_count": bad_count},

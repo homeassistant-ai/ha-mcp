@@ -132,6 +132,11 @@ class EventCallMixin:
             response = await self._client.fire_event(event_type, parsed_data)
         except HomeAssistantConnectionError as error:
             if isinstance(error.__cause__, httpx.TimeoutException):
+                warnings = list(listener_fields.get("warnings", ()))
+                warnings.append(
+                    "Response timed out. The event was dispatched and may still "
+                    "have been delivered to subscribers."
+                )
                 return {
                     "success": True,
                     "partial": True,
@@ -140,10 +145,12 @@ class EventCallMixin:
                         f"Event {event_type} was dispatched but Home Assistant "
                         "did not respond within the timeout period."
                     ),
-                    "warnings": [
-                        "Response timed out. The event was dispatched and may still "
-                        "have been delivered to subscribers."
-                    ],
+                    **{
+                        key: value
+                        for key, value in listener_fields.items()
+                        if key != "warnings"
+                    },
+                    "warnings": warnings,
                 }
             exception_to_structured_error(
                 error,

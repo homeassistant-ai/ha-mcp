@@ -13,7 +13,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import event_call
+from ha_mcp.tools import tools_event
 from ha_mcp.tools.tools_service import ServiceTools
 
 
@@ -222,7 +222,7 @@ class TestHaCallEvent:
             return []
 
         tools._client._request = AsyncMock(side_effect=_stalled)
-        monkeypatch.setattr(event_call, "EVENT_LISTENER_LOOKUP_BUDGET_SECONDS", 0.05)
+        monkeypatch.setattr(tools_event, "EVENT_LISTENER_LOOKUP_BUDGET_SECONDS", 0.05)
 
         result = await tools.ha_call_event("my_event")
 
@@ -235,7 +235,7 @@ class TestHaCallEvent:
         """A timing-out lookup is optional enrichment, never a fire blocker."""
         tools = _make_tools({"message": "ok"}, TimeoutError("events timed out"))
 
-        with caplog.at_level(logging.DEBUG, logger=event_call.__name__):
+        with caplog.at_level(logging.DEBUG, logger=tools_event.__name__):
             result = await tools.ha_call_event("my_event")
 
         assert result["success"] is True
@@ -260,6 +260,19 @@ class TestHaCallEvent:
         assert "wildcard_listener_count" not in result
         assert "warnings" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_timeout_preserves_known_listener_counts(self):
+        """A dispatch timeout must not discard counts read before the fire."""
+        conn_error = HomeAssistantConnectionError("connection timed out")
+        conn_error.__cause__ = httpx.TimeoutException("Read timed out")
+        tools = _make_tools(conn_error, {"my_event": 2, "*": 1})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["partial"] is True
+        assert result["listener_count"] == 2
+        assert result["wildcard_listener_count"] == 1
+        assert any("timed out" in w.lower() for w in result["warnings"])
 
     async def test_zero_listener_warning_does_not_claim_delivery(self):
         """A pre-dispatch count cannot establish whether the event was delivered."""

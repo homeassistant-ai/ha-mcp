@@ -50,7 +50,6 @@ from .component_api import (
     is_unknown_command,
 )
 from .config_entry_flow import is_component_domain
-from .event_call import EventCallMixin
 from .helpers import (
     _parse_json_dict_param,
     exception_to_structured_error,
@@ -60,6 +59,7 @@ from .helpers import (
 )
 from .response_helpers import compact_service_result, project_entity_record
 from .tool_hints import read_only_hints, write_hints
+from .tools_event import EventCallMixin
 from .util_helpers import (
     _SERVICE_TO_STATE,
     is_single_entity_target,
