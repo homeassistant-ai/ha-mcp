@@ -4,8 +4,8 @@
 The stable (``homeassistant-addon-webhook-proxy``) and dev
 (``homeassistant-addon-webhook-proxy-dev``) flavors are a hand-maintained
 duplicate: the same code with a fixed *identity* rewrite between them. This
-module encodes that identity as two :class:`Flavor` profiles that are exact
-inverses of each other, and applies it mechanically:
+module encodes that identity as two :class:`Flavor` profiles, each naming the
+other as its sibling, and applies it mechanically:
 
 * ``--direction promote``  copies dev -> stable (SRC=dev, DST=stable)
 * ``--direction reset``    copies stable -> dev (SRC=stable, DST=dev)
@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
-# Flavor identity profiles (exact inverses of each other)
+# Flavor identity profiles (each one's sibling is the other)
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Flavor:
@@ -55,18 +55,18 @@ class Flavor:
     config_description: str
     boot: str
     stage: str | None
-    sibling_slug_base: str
     mutex_notification_id: str
-    sibling_mutex_notification_id: str
+    # Not derivable from the other profile: no field there carries the short
+    # label ("Webhook Proxy" / "Webhook Proxy (Dev)") start.py uses for it.
     sibling_label: str
     async_register_name: str
     dockerfile_hass_name: str
     dockerfile_hass_description: str
     manifest_name: str
     # The flavor-descriptor comment in start.py flips like the mutex constants:
-    # "This is the {flavor_word} flavor: its sibling is the {sibling_word} add-on."
+    # "This is the {flavor_word} flavor: its sibling is the <sibling's
+    # flavor_word, lowercased> add-on."
     flavor_word: str
-    sibling_word: str
 
 
 STABLE = Flavor(
@@ -80,16 +80,13 @@ STABLE = Flavor(
     ),
     boot="auto",
     stage=None,
-    sibling_slug_base="ha_mcp_webhook_proxy_dev",
     mutex_notification_id="mcp_proxy_mutex",
-    sibling_mutex_notification_id="mcp_proxy_dev_mutex",
     sibling_label="Webhook Proxy (Dev)",
     async_register_name="MCP Proxy",
     dockerfile_hass_name="Nabu Casa - Webhook Proxy for HA MCP",
     dockerfile_hass_description="Remote access proxy for HA MCP via webhook",
     manifest_name="MCP Webhook Proxy",
     flavor_word="STABLE",
-    sibling_word="dev",
 )
 
 DEV = Flavor(
@@ -103,16 +100,13 @@ DEV = Flavor(
     ),
     boot="manual",
     stage="experimental",
-    sibling_slug_base="ha_mcp_webhook_proxy",
     mutex_notification_id="mcp_proxy_dev_mutex",
-    sibling_mutex_notification_id="mcp_proxy_mutex",
     sibling_label="Webhook Proxy",
     async_register_name="MCP Proxy (Dev)",
     dockerfile_hass_name="Nabu Casa - Webhook Proxy for HA MCP (Dev)",
     dockerfile_hass_description="DEV channel — remote access proxy for HA MCP via webhook",
     manifest_name="MCP Webhook Proxy (Dev)",
     flavor_word="DEV",
-    sibling_word="stable",
 )
 
 
@@ -204,18 +198,20 @@ def apply_start_py_identity(text: str, dst: Flavor) -> str:
     The four mutual-exclusion constants and the flavor-descriptor comment do
     NOT follow the blanket rename (the sibling relationship flips), so each is
     rewritten explicitly and robustly regardless of what the rename produced.
+    The sibling's identity is the other profile's own.
     """
+    sibling = DEV if dst is STABLE else STABLE
     for name, value in (
-        ("SIBLING_SLUG_BASE", dst.sibling_slug_base),
+        ("SIBLING_SLUG_BASE", sibling.slug),
         ("MUTEX_NOTIFICATION_ID", dst.mutex_notification_id),
-        ("SIBLING_MUTEX_NOTIFICATION_ID", dst.sibling_mutex_notification_id),
+        ("SIBLING_MUTEX_NOTIFICATION_ID", sibling.mutex_notification_id),
         ("SIBLING_LABEL", dst.sibling_label),
     ):
         text = re.sub(rf'^{name} = "[^"]*"', f'{name} = "{value}"', text, flags=re.M)
     text = re.sub(
         r"# This is the \w+ flavor: its sibling is the \w+ add-on\.",
         f"# This is the {dst.flavor_word} flavor: its sibling is the "
-        f"{dst.sibling_word} add-on.",
+        f"{sibling.flavor_word.lower()} add-on.",
         text,
     )
     return text
@@ -344,20 +340,6 @@ def transform_config_yaml(src_text: str, dst: Flavor, version: str) -> str:
         lines.insert(insert_at, f"stage: {dst.stage}")
 
     return "\n".join(lines)
-
-
-def profiles_are_inverse(a: Flavor, b: Flavor) -> bool:
-    """True if two flavor profiles are exact identity inverses of each other."""
-    return (
-        a.slug == b.sibling_slug_base
-        and b.slug == a.sibling_slug_base
-        and a.mutex_notification_id == b.sibling_mutex_notification_id
-        and b.mutex_notification_id == a.sibling_mutex_notification_id
-        and a.flavor_word.lower() == b.sibling_word
-        and b.flavor_word.lower() == a.sibling_word
-        and a.sibling_label != b.sibling_label
-        and a.component != b.component
-    )
 
 
 # ---------------------------------------------------------------------------
