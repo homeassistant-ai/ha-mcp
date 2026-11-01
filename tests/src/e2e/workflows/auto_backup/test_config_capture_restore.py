@@ -39,11 +39,11 @@ class TestAutomationCaptureRestore:
             "action": [{"service": "homeassistant.no_op"}],
         }
         mcp = MCPAssertions(mcp_client)
-        # Create — pass identifier so the tool doesn't reject the call as
+        # Create — pass entity_id so the tool doesn't reject the call as
         # an ambiguous create-with-explicit-id.
         await mcp.call_tool_success(
             "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
+            {"config": original, "entity_id": identifier},
         )
 
         backup_name = None
@@ -87,7 +87,7 @@ class TestAutomationCaptureRestore:
             # The restore puts the pre-edit alias back.
             async with MCPAssertions(mcp_client) as mcp:
                 restored = await mcp.call_tool_success(
-                    "ha_config_get_automation", {"identifier": identifier}
+                    "ha_config_get_automation", {"entity_id": identifier}
                 )
             assert restored["config"]["alias"] == original["alias"]
 
@@ -103,7 +103,7 @@ class TestAutomationCaptureRestore:
             await safe_call_tool(
                 mcp_client,
                 "ha_config_remove_automation",
-                {"identifier": identifier},
+                {"entity_id": identifier},
             )
             await _delete_leftover_backup(mcp_client, backup_name)
 

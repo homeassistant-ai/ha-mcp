@@ -187,8 +187,7 @@
   "3612c8892dd9": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetAutomationMissingSurfacesAvailableIds.tools",
     "tests/src/unit/test_error_code_consistency_1297.py::TestRemoveAutomationMissingSurfacesAvailableIds.tools",
-    "tests/src/unit/test_error_code_consistency_1297.py::TestSetAutomationMissingSurfacesAvailableIds.tools",
-    "tests/src/unit/test_identifier_validation_family.py::TestAutomationsIdentifierValidation.tools"
+    "tests/src/unit/test_error_code_consistency_1297.py::TestSetAutomationMissingSurfacesAvailableIds.tools"
   ],
   "36579b7ba470": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_resolve_public_addresses",
@@ -816,7 +815,7 @@
     "tests/src/unit/test_radio_thread.py::_client"
   ],
   "ccee7dfe7b8e": [
-    "tests/src/unit/test_astro_setup_js_behavior.py::_assert_clean_init",
+    "tests/src/unit/_astro_setup_wizard.py::_assert_clean_init",
     "tests/src/unit/test_astro_tools_js_behavior.py::_assert_clean_init",
     "tests/src/unit/test_settings_ui_js_behavior.py::_assert_clean_init"
   ],

@@ -16,7 +16,7 @@ You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://ho
 
 If you *do* run the app, you don't also need `uvx` — that would be a second, separate instance. HTTP-native clients (Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. Codex is HTTP-native too, but as of early 2026 its HTTP MCP support has a [known initialization bug](https://github.com/openai/codex/issues/11284) where it loads no tools; if you hit that, run ha-mcp locally over stdio with `uvx` instead.
 
-**Don't run both for the same client.** If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running `uvx ha-mcp@latest` with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses `uvx fastmcp-remote` with the app's URL and **no** token.
+**Don't run both for the same client.** If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running `uvx ha-mcp@latest` with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses `npx mcp-remote` with the app's URL and **no** token.
 
 ### What's the difference between ha-mcp and Home Assistant's built-in MCP?
 
@@ -35,6 +35,7 @@ Built-in = operate devices. ha-mcp = administer your system.
 ha-mcp ships a web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. How you reach it depends on how ha-mcp is running:
 
 - **Claude Desktop / Claude Code / any stdio install (`uvx ha-mcp`):** a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to **ask the AI** something like *"how do I open the ha-mcp settings page?"* — the URL is included in `ha_get_overview`'s response. You can also read it directly from `~/.ha-mcp/ui.url` (Windows: `%USERPROFILE%\.ha-mcp\ui.url`). The URL is bound to `127.0.0.1` only and gated by a random secret path generated on first launch and reused afterwards, so the URL stays stable. To rotate it, stop the sidecar with the **Permanently disable settings server** button at the bottom of the settings page's Server tab, then delete **both** `~/.ha-mcp/ui.state` and `~/.ha-mcp/ui.url`, and remove the `~/.ha-mcp/settings_ui_disabled` sentinel that button writes so the next launch spawns again. Deleting `ui.state` alone is not enough: the next startup re-seeds it from a surviving `ui.url` and serves the same secret path, and since the sidecar outlives the client that spawned it, quitting your client does not stop it.
+- **Docker as a stdio server (`docker run --rm -i …` in a client config):** the settings server starts inside the container, bound to the container's own `127.0.0.1`, and writes its URL into the `ha-mcp-data` volume, so it is not reachable from your machine. Run ha-mcp as an HTTP server instead (the `ha-mcp-web` / Docker bullet below) to use the settings page.
 - **HA Custom Component (in-process server):** open the admin-only **HA-MCP** panel in the Home Assistant sidebar — it serves the settings page through Home Assistant itself, no URL or secret needed.
 - **HA App:** easiest is the **"Open Web UI"** button on the app page (served over Home Assistant ingress — no secret needed). For direct access outside the HA UI **on your trusted LAN**, the page lives behind the app's secret path: `http://<home-assistant-ip>:9583/<secret-path>/settings`. That URL is plain HTTP, so it carries the secret path in cleartext — don't use it across an untrusted network. Reach it remotely through ingress or an HTTPS reverse proxy instead (see the Remote bullet below). Find `<secret-path>` in the app's **Configuration** tab ("Secret path override") or in `/data/secret_path.txt`. The bare `:9583/settings` without the secret path is rejected for non-ingress callers.
 - **`ha-mcp-web` / Docker (HTTP):** append `/settings` to your MCP secret-path URL. The default `MCP_SECRET_PATH` is `/mcp`, so the page is at `http://<host>:8086/mcp/settings`; if you set a custom secret path, use that instead (e.g. `http://<host>:8086/private_xxx/settings`).
@@ -255,13 +256,13 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
 
 ### mcp-proxy fails with `ImportError: cannot import name 'request_ctx'`
 
-Switch to `fastmcp-remote` or [`mcp-remote`](https://github.com/punkpeye/mcp-remote#usage) (requires Node.js/`npx` and `--allow-http` for trusted LAN HTTP URLs). We no longer recommend `mcp-proxy` for connecting to ha-mcp.
+Switch to [`mcp-remote`](https://github.com/punkpeye/mcp-remote#usage) (requires Node.js 20.18.1 or newer for `npx`, plus `--allow-http` for a trusted LAN `http://` URL). We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
-The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates a `fastmcp-remote` configuration for Claude Desktop and other stdio-only clients. Replace your old server entry with the generated configuration, keep your connect URL, and fully restart the client.
+The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates an `mcp-remote` configuration for Claude Desktop and other stdio-only clients. Replace your old server entry with the generated configuration, keep your connect URL, and fully restart the client.
 
 ### uvx fails with `invalid peer certificate: UnknownIssuer`
 
-If `uvx` can't download ha-mcp (or `fastmcp-remote`, if you connect to the app through it) and the log shows a certificate error fetching from PyPI, the failure is in `uv`'s package download — it never reaches Home Assistant:
+If `uvx` can't download ha-mcp and the log shows a certificate error fetching from PyPI, the failure is in `uv`'s package download — it never reaches Home Assistant:
 
 ```text
 Failed to fetch: https://pypi.org/simple/ha-mcp/
@@ -290,7 +291,9 @@ In Claude Desktop this often shows up as the server briefly connecting, then "tr
 }
 ```
 
-Connecting to the HA app through `uvx fastmcp-remote` instead? Add the same `UV_NATIVE_TLS=1` entry to that config's `env` block. The equivalent `--native-tls` flag also works, but it is a global `uv` option, so it must come before the package name. See [#1506](https://github.com/homeassistant-ai/ha-mcp/issues/1506).
+The equivalent `--native-tls` flag also works, but it is a global `uv` option, so it must come before the package name. See [#1506](https://github.com/homeassistant-ai/ha-mcp/issues/1506).
+
+Connecting to the HA app through `npx mcp-remote` instead? Node.js also ignores the operating-system certificate store by default. Set `NODE_EXTRA_CA_CERTS` in that config's `env` block to the path of the intercepting proxy's root certificate (a `.pem` file), as described in [mcp-remote's VPN certificate notes](https://github.com/punkpeye/mcp-remote#vpn-certs).
 
 ### Windows: pywin32 installation fails
 
@@ -575,7 +578,7 @@ ChatGPT (web, including Codex Work Mode) caches a connector's tool list and some
 - **"Unexpected server output" error:** Add `FASTMCP_SHOW_SERVER_BANNER=false` to your stdio env config. This disables the startup banner that Antigravity misinterprets as unexpected output.
 - **"EOF" errors:** Use absolute paths for the command, not relative paths.
 - **First run timeout:** Run `uvx ha-mcp@latest --version` in your terminal first to download and cache the package before Antigravity tries to start it.
-- **`sending "subscriptions/listen": failed to connect (session ID: ): session not found`:** A bug in Antigravity's built-in MCP client, not a server or config problem: it opens a `subscriptions/listen` stream the server never offered, then misreads the spec-mandated `404 Method not found` reply as a lost session (request sequence in [#2545](https://github.com/homeassistant-ai/ha-mcp/issues/2545); fixed in Go MCP SDK v1.8.0 by [modelcontextprotocol/go-sdk#1193](https://github.com/modelcontextprotocol/go-sdk/pull/1193), which Antigravity has not shipped yet; the same error is reported in [google-antigravity/antigravity-cli#877](https://github.com/google-antigravity/antigravity-cli/issues/877)). Until Antigravity ships a fix, connect through the `fastmcp-remote` stdio bridge: `"command": "uvx", "args": ["fastmcp-remote", "<your MCP server URL>"]`.
+- **`sending "subscriptions/listen": failed to connect (session ID: ): session not found`:** A bug in Antigravity's built-in MCP client, not a server or config problem: it opens a `subscriptions/listen` stream the server never offered, then misreads the spec-mandated `404 Method not found` reply as a lost session (request sequence in [#2545](https://github.com/homeassistant-ai/ha-mcp/issues/2545); fixed in Go MCP SDK v1.8.0 by [modelcontextprotocol/go-sdk#1193](https://github.com/modelcontextprotocol/go-sdk/pull/1193), which Antigravity has not shipped yet; the same error is reported in [google-antigravity/antigravity-cli#877](https://github.com/google-antigravity/antigravity-cli/issues/877)). Until Antigravity ships a fix, connect through the `mcp-remote` stdio bridge: `"command": "npx", "args": ["-y", "mcp-remote", "<your MCP server URL>"]` (append `"--allow-http"` for a LAN `http://` URL).
 - **Tools load but fail when called:** Try switching to stdio mode instead of HTTP. HTTP mode can experience "connection closed" or reconnection errors with this client.
 - **Connection issues after config changes:** Restart the Agent session in Antigravity after saving any config changes.
 

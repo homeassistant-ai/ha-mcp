@@ -53,6 +53,44 @@ class _FakeClient:
         self.calls.append((domain, service, data))
         return {"success": True}
 
+    async def get_automation_config(self, config_id: str) -> dict[str, Any]:
+        return {"id": config_id, **_MORNING}
+
+
+_MORNING = {"alias": "Morning", "triggers": [], "actions": []}
+
+
+async def _update(
+    tools: Any,
+    entity_id: str | None,
+    config: dict[str, Any] | None = None,
+    *,
+    wait: bool = False,
+    operation: str = "updated",
+    **runtime: Any,
+) -> dict[str, Any]:
+    """``_run_config_update`` with the target ``ha_config_set_automation`` resolves."""
+    named = entity_id if entity_id and entity_id.startswith("automation.") else None
+    target = (
+        None
+        if entity_id is None
+        else tools_config_automations._Target(
+            "stored-id" if named else entity_id, named, None
+        )
+    )
+    return await tools._run_config_update(
+        dict(config or _MORNING),
+        entity_id,
+        target,
+        operation,
+        None,
+        wait,
+        tools_config_automations.BestPracticeCheckResult(),
+        {},
+        False,
+        **runtime,
+    )
+
 
 @pytest.mark.unit
 @pytest.mark.anyio
@@ -61,16 +99,7 @@ async def test_config_update_applies_enabled_without_writing_config_key() -> Non
     client.upsert_entity_id = "automation.morning"
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "automation.morning",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=True,
-    )
+    result = await _update(tools, "automation.morning", enabled=True)
 
     assert result["enabled"] is True
     assert "enabled" not in client.upserted[0]
@@ -91,16 +120,7 @@ async def test_config_update_resolves_unique_id_before_enabling() -> None:
     ]
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "stored-id",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-    )
+    result = await _update(tools, "stored-id", enabled=False)
 
     assert result["enabled"] is False
     assert client.calls == [
@@ -142,16 +162,7 @@ async def test_config_update_waits_for_reregistration_when_wait_false(
         wait_for_unique_id,
     )
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "stored-id",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-    )
+    result = await _update(tools, "stored-id", enabled=False)
 
     assert discovered == ["stored-id"]
     assert result["enabled_applied"] is True
@@ -174,11 +185,9 @@ async def test_python_transform_reports_entity_resolved_for_enabled(
         "actions": [{"action": "logbook.log", "data": {"message": "x"}}],
     }
 
-    async def fetch_and_verify_hash(identifier, config_hash, action):
-        return dict(config), "stored-id"
-
-    async def get_config(identifier):
-        return config, "new-hash"
+    async def get_config(entity_id):
+        target = tools_config_automations._Target("stored-id", None, None)
+        return dict(config), "old-hash", target
 
     async def validate_registry_ids(*_args, **_kwargs):
         return None
@@ -186,7 +195,6 @@ async def test_python_transform_reports_entity_resolved_for_enabled(
     async def wait_for_unique_id(client, identifier):
         return "automation.actual"
 
-    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch_and_verify_hash)
     monkeypatch.setattr(tools, "_get_automation_config_internal", get_config)
     monkeypatch.setattr(
         tools_config_automations, "validate_registry_ids", validate_registry_ids
@@ -227,16 +235,7 @@ async def test_config_update_reports_resolved_entity_id_when_upsert_omits_it() -
     ]
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "stored-id",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-    )
+    result = await _update(tools, "stored-id", enabled=False)
 
     assert result["automation_id"] == "automation.actual"
 
@@ -270,16 +269,7 @@ async def test_config_update_reports_runtime_state_failure_as_partial_success() 
     client.service_error = HomeAssistantAPIError("service unavailable")
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "automation.morning",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-    )
+    result = await _update(tools, "automation.morning", enabled=False)
 
     assert result["success"] is True
     assert result["enabled_requested"] is False
@@ -307,7 +297,7 @@ async def test_standalone_enabled_attaches_skill_content(monkeypatch) -> None:
     )
 
     result = await tools.ha_config_set_automation(
-        identifier="automation.morning",
+        entity_id="automation.morning",
         enabled=True,
         MandatoryBPS=True,
         wait=False,
@@ -330,7 +320,7 @@ async def test_standalone_enabled_service_failure_raises_tool_error() -> None:
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_automation(
-            identifier="automation.morning",
+            entity_id="automation.morning",
             enabled=True,
             MandatoryBPS=False,
             wait=False,
@@ -378,7 +368,7 @@ async def test_standalone_enabled_verifies_requested_state(
     )
 
     result = await tools.ha_config_set_automation(
-        identifier="automation.morning",
+        entity_id="automation.morning",
         enabled=True,
         MandatoryBPS=False,
         wait=True,
@@ -394,7 +384,7 @@ async def test_standalone_enabled_verifies_requested_state(
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_standalone_prefixed_identifier_must_exist() -> None:
+async def test_standalone_prefixed_entity_id_must_exist() -> None:
     client = _FakeClient()
     tools = tools_config_automations.AutomationConfigTools(client)
 
@@ -438,14 +428,12 @@ async def test_raw_unique_id_creation_waits_for_registration_before_enabling(
         tools_config_automations, "wait_for_state_change", wait_for_state
     )
 
-    result = await tools._run_config_update(
-        {"alias": "Generated", "triggers": [], "actions": []},
+    result = await _update(
+        tools,
         unique_id,
-        None,
-        True,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
+        {"alias": "Generated", "triggers": [], "actions": []},
+        wait=True,
+        operation="created",
         enabled=True,
     )
 
@@ -489,14 +477,12 @@ async def test_generated_creation_resolves_unique_id_before_enabling(
         tools_config_automations, "wait_for_state_change", wait_for_state
     )
 
-    result = await tools._run_config_update(
+    result = await _update(
+        tools,
+        None,
         {"alias": "Generated", "triggers": [], "actions": []},
-        None,
-        None,
-        True,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
+        wait=True,
+        operation="created",
         enabled=True,
     )
 
@@ -532,7 +518,7 @@ async def test_standalone_runtime_toggle_skips_auto_backup(monkeypatch) -> None:
     )
 
     result = await tools.ha_config_set_automation(
-        identifier="automation.morning", enabled=True, wait=False
+        entity_id="automation.morning", enabled=True, wait=False
     )
 
     assert result["enabled_applied"] is True
@@ -543,26 +529,26 @@ async def test_standalone_runtime_toggle_skips_auto_backup(monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [
-        ({"identifier": "automation.morning", "enabled": True}, True),
+        ({"entity_id": "automation.morning", "enabled": True}, True),
         (
             {
-                "identifier": "automation.morning",
+                "entity_id": "automation.morning",
                 "enabled": True,
                 "take_control_of_blueprint": True,
             },
             False,
         ),
-        ({"identifier": "automation.morning", "enabled": True, "config": {}}, False),
-        ({"identifier": "automation.morning", "run_actions": True}, True),
+        ({"entity_id": "automation.morning", "enabled": True, "config": {}}, False),
+        ({"entity_id": "automation.morning", "run_actions": True}, True),
         (
             {
-                "identifier": "automation.morning",
+                "entity_id": "automation.morning",
                 "run_actions": True,
                 "python_transform": "config['alias'] = 'x'",
             },
             False,
         ),
-        ({"identifier": "automation.morning", "run_actions": False}, False),
+        ({"entity_id": "automation.morning", "run_actions": False}, False),
     ],
 )
 def test_runtime_backup_skip_excludes_config_writes(kwargs, expected) -> None:
@@ -583,7 +569,7 @@ async def test_standalone_enabled_rejects_category_without_config_update() -> No
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_automation(
-            identifier="stored-id",
+            entity_id="stored-id",
             enabled=True,
             category="morning",
             wait=False,
@@ -626,22 +612,13 @@ async def test_config_update_unresolved_entity_reports_not_applied(
         _no_entity,
     )
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "stored-id",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-    )
+    result = await _update(tools, "stored-id", enabled=False)
 
     assert client.calls == []
     assert result["enabled_requested"] is False
     assert result["enabled_applied"] is False
     assert any(
-        "could not be resolved" in w and "identifier='stored-id'" in w
+        "could not be resolved" in w and "entity_id='stored-id'" in w
         for w in result["warnings"]
     )
 
@@ -663,16 +640,7 @@ async def test_config_update_does_not_repeat_registration_poll(monkeypatch) -> N
         wait_for_unique_id,
     )
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "stored-id",
-        None,
-        True,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=True,
-    )
+    result = await _update(tools, "stored-id", wait=True, enabled=True)
 
     assert polls == ["stored-id"]
     assert result["enabled_applied"] is False
@@ -687,16 +655,7 @@ async def test_unexpected_service_exception_propagates() -> None:
     tools = tools_config_automations.AutomationConfigTools(client)
 
     with pytest.raises(TypeError):
-        await tools._run_config_update(
-            {"alias": "Morning", "triggers": [], "actions": []},
-            "automation.morning",
-            None,
-            False,
-            tools_config_automations.BestPracticeCheckResult(),
-            {},
-            False,
-            enabled=False,
-        )
+        await _update(tools, "automation.morning", enabled=False)
 
 
 @pytest.mark.unit
@@ -707,14 +666,11 @@ async def test_python_transform_rejects_injected_enabled_before_write(
     client = _FakeClient()
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    async def fetch_and_verify_hash(identifier, config_hash, action):
-        return {
-            "alias": "Morning",
-            "triggers": [{"trigger": "event", "event_type": "test_event"}],
-            "actions": [{"action": "logbook.log", "data": {"message": "x"}}],
-        }, "stored-id"
+    async def get_config(entity_id):
+        target = tools_config_automations._Target("stored-id", None, None)
+        return dict(_MORNING), "old-hash", target
 
-    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch_and_verify_hash)
+    monkeypatch.setattr(tools, "_get_automation_config_internal", get_config)
 
     with pytest.raises(ToolError) as exc_info:
         await tools._run_python_transform(
@@ -741,7 +697,7 @@ async def test_standalone_enabled_resolves_raw_unique_id() -> None:
     tools = tools_config_automations.AutomationConfigTools(client)
 
     result = await tools.ha_config_set_automation(
-        identifier="morning-id", enabled=False, MandatoryBPS=False, wait=False
+        entity_id="morning-id", enabled=False, MandatoryBPS=False, wait=False
     )
 
     assert result["automation_id"] == "automation.morning"
@@ -752,14 +708,14 @@ async def test_standalone_enabled_resolves_raw_unique_id() -> None:
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_standalone_enabled_requires_identifier() -> None:
+async def test_standalone_enabled_requires_entity_id() -> None:
     client = _FakeClient()
     tools = tools_config_automations.AutomationConfigTools(client)
 
     with pytest.raises(ToolError) as exc_info:
         await tools._set_runtime_only(None, False, wait=False)
 
-    assert "identifier is required" in str(exc_info.value)
+    assert "entity_id is required" in str(exc_info.value)
     assert client.calls == []
 
 
@@ -780,7 +736,7 @@ async def test_standalone_enabled_verification_error_is_warning(monkeypatch) -> 
     )
 
     result = await tools.ha_config_set_automation(
-        identifier="automation.morning", enabled=True, MandatoryBPS=False, wait=True
+        entity_id="automation.morning", enabled=True, MandatoryBPS=False, wait=True
     )
 
     assert result["enabled_applied"] is True
@@ -890,16 +846,7 @@ async def test_config_update_applies_enabled_only_after_reload(monkeypatch) -> N
     monkeypatch.setattr(tools_config_automations, "config_reload_waiter", _Waiter)
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "automation.morning",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-    )
+    result = await _update(tools, "automation.morning", enabled=False)
 
     assert order == ["subscribe", "write", "reloaded", "unsubscribe", "turn_off"]
     assert any("did not confirm the automation reload" in w for w in result["warnings"])
@@ -915,16 +862,7 @@ async def test_config_update_without_reload_subscription_warns_only_for_enabled(
     client.upsert_entity_id = "automation.morning"
     tools = tools_config_automations.AutomationConfigTools(client)
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "automation.morning",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=enabled,
-    )
+    result = await _update(tools, "automation.morning", enabled=enabled)
 
     has_warning = any(
         "could not be watched for the automation reload" in w
@@ -943,7 +881,7 @@ async def test_standalone_run_actions_triggers_automation() -> None:
     tools = tools_config_automations.AutomationConfigTools(client)
 
     result = await tools.ha_config_set_automation(
-        identifier="morning-id", run_actions=True, MandatoryBPS=False, wait=False
+        entity_id="morning-id", run_actions=True, MandatoryBPS=False, wait=False
     )
 
     assert result["action"] == "run_actions"
@@ -964,7 +902,7 @@ async def test_standalone_enabled_then_run_actions_in_order() -> None:
     tools = tools_config_automations.AutomationConfigTools(client)
 
     result = await tools.ha_config_set_automation(
-        identifier="automation.morning",
+        entity_id="automation.morning",
         enabled=True,
         run_actions=True,
         MandatoryBPS=False,
@@ -992,7 +930,7 @@ async def test_standalone_run_actions_failure_raises_tool_error() -> None:
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_automation(
-            identifier="automation.morning",
+            entity_id="automation.morning",
             run_actions=True,
             MandatoryBPS=False,
             wait=False,
@@ -1016,27 +954,15 @@ async def _write_with_run_actions(
         "actions": [{"action": "logbook.log", "data": {"message": "x"}}],
     }
     if mode == "config":
-        return await tools._run_config_update(
-            config,
-            "automation.morning",
-            None,
-            False,
-            tools_config_automations.BestPracticeCheckResult(),
-            {},
-            False,
-            run_actions=True,
-        )
+        return await _update(tools, "automation.morning", config, run_actions=True)
 
-    async def fetch_and_verify_hash(identifier, config_hash, action):
-        return dict(config), "morning"
-
-    async def get_config(identifier):
-        return config, "new-hash"
+    async def get_config(entity_id):
+        target = tools_config_automations._Target("morning", entity_id, None)
+        return dict(config), "old-hash", target
 
     async def validate_registry_ids(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch_and_verify_hash)
     monkeypatch.setattr(tools, "_get_automation_config_internal", get_config)
     monkeypatch.setattr(
         tools_config_automations, "validate_registry_ids", validate_registry_ids
@@ -1091,7 +1017,7 @@ async def test_config_update_skips_run_actions_when_reload_unconfirmed(
     assert result["actions_triggered"] is False
     assert any(
         "actions were not run" in w
-        and "identifier='automation.morning', run_actions=True" in w
+        and "entity_id='automation.morning', run_actions=True" in w
         for w in result["warnings"]
     )
 
@@ -1132,22 +1058,12 @@ async def test_unresolved_entity_retry_names_every_requested_change(
         tools_config_automations, "config_reload_waiter", _ConfirmedReload
     )
 
-    result = await tools._run_config_update(
-        {"alias": "Morning", "triggers": [], "actions": []},
-        "stored-id",
-        None,
-        False,
-        tools_config_automations.BestPracticeCheckResult(),
-        {},
-        False,
-        enabled=False,
-        run_actions=True,
-    )
+    result = await _update(tools, "stored-id", enabled=False, run_actions=True)
 
     assert client.calls == []
     assert result["actions_triggered"] is False
     assert any(
-        "identifier='stored-id', enabled=False, run_actions=True" in w
+        "entity_id='stored-id', enabled=False, run_actions=True" in w
         for w in result["warnings"]
     )
 
@@ -1172,7 +1088,7 @@ async def test_standalone_enabled_kept_when_run_actions_then_fails() -> None:
     tools = tools_config_automations.AutomationConfigTools(client)
 
     result = await tools.ha_config_set_automation(
-        identifier="automation.morning",
+        entity_id="automation.morning",
         enabled=True,
         run_actions=True,
         MandatoryBPS=False,

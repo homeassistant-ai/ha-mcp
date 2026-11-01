@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 
 from .test_tools_entities_p2 import _make_client, _register
 
@@ -66,3 +71,65 @@ async def test_lost_connection_keeps_what_the_bulk_run_already_removed() -> None
     assert result["errors"][0]["entity_id"] == "sensor.b"
     assert result["errors"][0]["code"] == "CONNECTION_FAILED"
     assert result["not_attempted"] == ["sensor.c"]
+
+
+async def test_token_rejected_on_reconnect_is_reported_as_auth() -> None:
+    """A token rejected on reconnect arrives as a command that was never sent,
+    raised from the auth error: the per-id error names the auth failure, and
+    the failing id is listed as not attempted too."""
+    client = _make_client()
+    rejected = HomeAssistantCommandNotSent("WebSocket authentication failed")
+    rejected.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+    client.send_websocket_message = AsyncMock(side_effect=rejected)
+    tool = _register(client)["ha_remove_entity"]
+
+    result = await tool(entity_id=["sensor.a", "sensor.b"])
+
+    assert result["errors"][0]["code"] == "AUTH_INVALID_TOKEN"
+    assert result["not_attempted"] == ["sensor.a", "sensor.b"]
+
+
+@pytest.mark.parametrize(
+    ("cause", "code"),
+    [
+        (
+            HomeAssistantAuthError("WebSocket authentication failed"),
+            "AUTH_INVALID_TOKEN",
+        ),
+        (HomeAssistantConnectionError("Connection refused"), "CONNECTION_FAILED"),
+    ],
+    ids=["rejected_token", "refused"],
+)
+async def test_unsent_removal_mid_run_lists_only_the_ids_not_removed(
+    cause: BaseException, code: str
+) -> None:
+    client = _make_client()
+    unsent = HomeAssistantCommandNotSent(str(cause))
+    unsent.__cause__ = cause
+    client.send_websocket_message = AsyncMock(
+        side_effect=[{"success": True, "result": None}, unsent]
+    )
+    tool = _register(client)["ha_remove_entity"]
+
+    result = await tool(entity_id=["sensor.a", "sensor.b", "sensor.c"])
+
+    assert result["removed"] == ["sensor.a"]
+    assert result["errors"][0]["entity_id"] == "sensor.b"
+    assert result["errors"][0]["code"] == code
+    assert result["not_attempted"] == ["sensor.b", "sensor.c"]
+
+
+async def test_timed_out_removal_is_reported_as_a_timeout() -> None:
+    """send_websocket_message raises a connection error from the command
+    timeout; the per-id error names it as a timeout by that cause, whatever
+    the timeout's text says."""
+    client = _make_client()
+    timed_out = HomeAssistantConnectionError("Response deadline exceeded")
+    timed_out.__cause__ = HomeAssistantCommandTimeout("Response deadline exceeded")
+    client.send_websocket_message = AsyncMock(side_effect=timed_out)
+    tool = _register(client)["ha_remove_entity"]
+
+    result = await tool(entity_id=["sensor.a", "sensor.b"])
+
+    assert result["errors"][0]["code"] == "CONNECTION_TIMEOUT"
+    assert result["not_attempted"] == ["sensor.b"]

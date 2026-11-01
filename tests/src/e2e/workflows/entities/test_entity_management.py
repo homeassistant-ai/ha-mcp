@@ -689,7 +689,7 @@ class TestSetEntityNegativeInputs:
 
         Introduced in #796: automation and script entities cannot be registry-disabled
         via ha_set_entity(enabled=False) because it removes them from the state machine.
-        Use ha_config_set_automation(identifier=..., enabled=False) instead.
+        Use ha_config_set_automation(entity_id=..., enabled=False) instead.
         """
         data = await safe_call_tool(
             mcp_client,

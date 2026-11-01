@@ -1,7 +1,6 @@
 """Unit tests for REST client automation-related methods.
 
-These tests verify error handling for automation configuration operations,
-especially the 405 Method Not Allowed error for addon proxy limitations.
+These tests verify error handling for automation configuration operations.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,13 +46,15 @@ class TestDeleteAutomationConfig:
         )
 
     @pytest.mark.asyncio
-    async def test_delete_automation_not_found_404(self, mock_client):
-        """404 error should raise HomeAssistantAPIError with 'not found' message."""
+    async def test_deleting_a_missing_automation_reports_not_found(self, mock_client):
+        """Core answers a DELETE of a missing id with 400 "Resource not found";
+        reported as a 400 the caller reads it as a malformed request."""
         mock_client._resolve_automation_id = AsyncMock(return_value="nonexistent_id")
         mock_client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found",
-                status_code=404,
+                "API error: 400 - Resource not found",
+                status_code=400,
+                response_data={"message": "Resource not found"},
             )
         )
 
@@ -64,41 +65,21 @@ class TestDeleteAutomationConfig:
         assert "not found" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_delete_automation_405_addon_proxy_limitation(self, mock_client):
-        """405 error should raise HomeAssistantAPIError with helpful message.
-
-        This tests the fix for issue #414 where automations cannot be deleted
-        via the API when running ha-mcp as a Home Assistant add-on because
-        the Supervisor ingress proxy blocks DELETE HTTP method.
-        """
-        mock_client._resolve_automation_id = AsyncMock(return_value="test_unique_id")
+    async def test_delete_rejection_other_than_not_found_stays_a_400(self, mock_client):
+        """Only Core's not-found text means the automation is missing."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="some_id")
         mock_client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
-                "API error: 405 - Method Not Allowed",
-                status_code=405,
+                "API error: 400 - Key malformed",
+                status_code=400,
+                response_data={"message": "Key malformed: expected str"},
             )
         )
 
         with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_automation_config("automation.test_automation")
+            await mock_client.delete_automation_config("some_id")
 
-        error = exc_info.value
-        assert error.status_code == 405
-
-        # Verify the error message is helpful
-        error_message = str(error)
-        assert "cannot delete" in error_message.lower()
-
-        # Verify it mentions the addon proxy limitation
-        assert "add-on" in error_message.lower()
-        assert "supervisor" in error_message.lower()
-        assert "delete" in error_message.lower()
-
-        # Verify it provides workarounds
-        assert "workaround" in error_message.lower()
-        assert "pip" in error_message.lower() or "docker" in error_message.lower()
-        assert "delete_" in error_message.lower()  # Prefix suggestion
-        assert "home assistant ui" in error_message.lower()
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_delete_automation_other_error_propagates(self, mock_client):
@@ -200,7 +181,6 @@ class TestUpsertAutomationConfigIdMismatch:
         )
 
         assert result["unique_id"] == "AAA"
-        assert result["operation"] == "updated"
         mock_client._request.assert_called_once()
         method, url = mock_client._request.call_args.args
         assert method == "POST"
@@ -288,9 +268,10 @@ class TestUpsertAutomationConfigIdMismatch:
         result = await mock_client.upsert_automation_config(
             {"alias": "x", "trigger": [], "action": []},
             identifier=None,
+            wait_for_entity=True,
         )
 
-        assert result["operation"] == "created"
+        assert result["unique_id"].isdigit()
         assert result["entity_id"] == "automation.new"
 
 
@@ -329,7 +310,6 @@ class TestUpsertAutomationResolvedShortCircuit:
         )
 
         assert result["unique_id"] == "AAA"
-        assert result["operation"] == "updated"
         mock_client._resolve_automation_id.assert_not_called()
         method, url = mock_client._request.call_args.args
         assert url == "/config/automation/config/AAA"
@@ -388,15 +368,124 @@ class TestUpsertAutomationResolvedShortCircuit:
             _resolved=True,
         )
 
-        assert result["operation"] == "created"
+        assert result["unique_id"].isdigit()
         mock_client._resolve_automation_id.assert_not_called()
 
 
-def _resolver_client(state_error: Exception) -> HomeAssistantClient:
-    """A client whose automation state read fails with ``state_error``."""
+class TestUpsertAutomationEntityWait:
+    """The caller decides whether a write waits for a new entity, and the tool
+    alone reports the operation (#2903)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            client = HomeAssistantClient()
+            client._request = AsyncMock(return_value={"result": "ok"})
+            client._poll_for_automation_entity = AsyncMock(
+                return_value="automation.fresh"
+            )
+            return client
+
+    @pytest.mark.asyncio
+    async def test_a_fresh_explicit_id_has_its_entity_found_when_asked(
+        self, mock_client
+    ):
+        """Guessing from the id never looked for a new automation's entity."""
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x"}, "fresh_id", _resolved=True, wait_for_entity=True
+        )
+
+        assert result["entity_id"] == "automation.fresh"
+        mock_client._poll_for_automation_entity.assert_awaited_once_with("fresh_id")
+
+    @pytest.mark.asyncio
+    async def test_a_write_guesses_no_operation_and_waits_only_when_asked(
+        self, mock_client
+    ):
+        """A second owner of ``operation`` reported a guess the tool's own
+        reading could contradict; a backup restore waits for nothing."""
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x"}, identifier="some_id"
+        )
+
+        assert "operation" not in result
+        mock_client._poll_for_automation_entity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cores_rejection_text_survives_the_rewrap(self, mock_client):
+        """The tool leads its error with Core's text, read from the body."""
+        body = {"message": "Message malformed: Invalid trigger 'x' specified"}
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 400 - ...", status_code=400, response_data=body
+            )
+        )
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.upsert_automation_config(
+                {"alias": "x"}, "some_id", _resolved=True
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response_data == body
+
+
+def _resolver_client(
+    state_error: Exception | None = None,
+    *,
+    registry: dict | Exception | None = None,
+    state: dict | None = None,
+) -> HomeAssistantClient:
+    """A client whose registry answer and automation state read are given."""
     client = HomeAssistantClient.__new__(HomeAssistantClient)
-    client.get_entity_state = AsyncMock(side_effect=state_error)  # type: ignore[method-assign]
+    client.send_websocket_message = AsyncMock(  # type: ignore[method-assign]
+        side_effect=registry
+        if isinstance(registry, Exception)
+        else [registry or {"success": False, "error": "not found"}]
+    )
+    client.get_entity_state = AsyncMock(  # type: ignore[method-assign]
+        side_effect=state_error, return_value=state
+    )
     return client
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_automation_resolves_through_the_registry() -> None:
+    """A disabled automation has no state; resolving by state reported it
+    missing, so it could not be read or removed."""
+    client = _resolver_client(
+        registry={"success": True, "result": {"unique_id": "1700000000000"}},
+        state_error=HomeAssistantAPIError("missing", status_code=404),
+    )
+
+    assert await client._resolve_automation_id("automation.kitchen") == "1700000000000"
+    client.get_entity_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "registry",
+    [{"success": False, "error": "not found"}, HomeAssistantConnectionError("down")],
+    ids=["registry-miss", "registry-unreachable"],
+)
+async def test_the_state_id_resolves_when_the_registry_does_not(
+    registry: dict | Exception,
+) -> None:
+    """The state's ``id`` attribute is Core's own value, so it stays the
+    fallback rather than a guess."""
+    client = _resolver_client(
+        registry=registry, state={"attributes": {"id": "1700000000000"}}
+    )
+
+    assert await client._resolve_automation_id("automation.kitchen") == "1700000000000"
+
+
+@pytest.mark.asyncio
+async def test_a_config_id_needs_no_lookup() -> None:
+    client = _resolver_client()
+
+    assert await client._resolve_automation_id("1700000000000") == "1700000000000"
+    client.send_websocket_message.assert_not_called()
 
 
 @pytest.mark.asyncio

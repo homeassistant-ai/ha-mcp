@@ -373,8 +373,8 @@ async def test_delete_in_use_names_consumers() -> None:
     assert "ha_config_remove_automation" in joined
     assert "does NOT release the blueprint" in joined
     # The take-control call it names must be a valid call shape: the
-    # automation tool keys on ``identifier`` (CodeRabbit).
-    assert "ha_config_set_automation(identifier=" in joined
+    # automation tool keys on ``entity_id`` (CodeRabbit).
+    assert "ha_config_set_automation(entity_id=" in joined
     assert 'action="delete"' in joined
 
 

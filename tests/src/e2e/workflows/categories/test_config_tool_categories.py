@@ -61,7 +61,7 @@ class TestConfigToolCategories:
         get_data = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_config_get_automation",
-            arguments={"identifier": entity_id},
+            arguments={"entity_id": entity_id},
             predicate=lambda d: d.get("config", {}).get("category") == category_id,
             description="automation GET includes category",
         )
@@ -73,7 +73,7 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_automation", {"identifier": entity_id}
+            "ha_config_remove_automation", {"entity_id": entity_id}
         )
         await mcp_client.call_tool(
             "ha_config_remove_category",
@@ -177,7 +177,7 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_automation", {"identifier": entity_id}
+            "ha_config_remove_automation", {"entity_id": entity_id}
         )
         await mcp_client.call_tool(
             "ha_config_remove_category",
@@ -236,7 +236,7 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_automation", {"identifier": entity_id}
+            "ha_config_remove_automation", {"entity_id": entity_id}
         )
         await mcp_client.call_tool(
             "ha_config_remove_category",
@@ -284,7 +284,7 @@ class TestConfigToolCategories:
         update_result = await mcp_client.call_tool(
             "ha_config_set_automation",
             {
-                "identifier": entity_id,
+                "entity_id": entity_id,
                 "config": {
                     "alias": "E2E Update Category Test",
                     "trigger": [{"platform": "time", "at": "06:00:00"}],
@@ -303,7 +303,7 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_automation", {"identifier": entity_id}
+            "ha_config_remove_automation", {"entity_id": entity_id}
         )
         await mcp_client.call_tool(
             "ha_config_remove_category",

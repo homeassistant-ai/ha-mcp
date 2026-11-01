@@ -87,7 +87,7 @@ class TestAutomationTraces:
                 cleanup_data = await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": automation_id},
+                    {"entity_id": automation_id},
                 )
                 assert cleanup_data.get("success") is True, (
                     f"Failed to remove test automation: {cleanup_data}"

@@ -108,13 +108,13 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
     """Resolve the actual storage target for an automation write.
 
     HA's automation storage uses the body's ``id`` field as the primary
-    key (#1404). When the caller passes both ``identifier`` and a
+    key (#1404). When the caller passes both ``entity_id`` and a
     ``config.id`` that differ, HA writes to ``config.id`` — the
     snapshot must capture *that* entity, not the user-provided
-    ``identifier`` whose target is left untouched.
+    ``entity_id`` whose target is left untouched.
 
     Returns ``str(config["id"])`` when present, else
-    ``str(identifier or "")``. Empty string skips capture (matches the
+    ``str(entity_id or "")``. Empty string skips capture (matches the
     create path where there's nothing to back up yet).
 
     ``config`` accepts dict or JSON-string per the tool signature; both
@@ -130,7 +130,7 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
         config_id = config.get("id")
         if config_id:
             return str(config_id)
-    # Return the identifier UNCHANGED — do NOT strip the ``automation.``
+    # Return the entity_id UNCHANGED — do NOT strip the ``automation.``
     # prefix. Capture and restore resolve the target through
     # ``client.get_automation_config`` -> ``_resolve_automation_id``, which
     # converts an entity_id ("automation.<slug>") to the real numeric
@@ -142,8 +142,8 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
     # would POST to the wrong key and create a stray automation). The
     # doubled domain segment in the snapshot filename
     # ("automation.automation.<slug>.<ts>.yaml") is purely cosmetic and is
-    # exactly what the remove path (id_param="identifier") already produces.
-    return _resolve_str(kw.get("identifier"))
+    # exactly what the remove path (id_param="entity_id") already produces.
+    return _resolve_str(kw.get("entity_id"))
 
 
 def with_auto_backup(

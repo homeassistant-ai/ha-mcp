@@ -107,6 +107,6 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": _PROBE_ENTITY_ID},
+            {"entity_id": _PROBE_ENTITY_ID},
         )
         logger.info("🧹 Cleaned up probe automation")

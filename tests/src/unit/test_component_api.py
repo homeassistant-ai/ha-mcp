@@ -435,25 +435,30 @@ async def test_strict_discovery_recovers_after_cached_failure_expires(
     clock = _clock()
     monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     client = _client()
+    info_exc = {
+        "connection": HomeAssistantConnectionError("down"),
+        "timeout": HomeAssistantCommandTimeout("slow info"),
+        "command": HomeAssistantCommandError("broken info", "unknown_error"),
+        "unexpected": RuntimeError("broken probe"),
+    }.get(failure)
     ws = _make_ws(
-        info_exc={
-            "connection": HomeAssistantConnectionError("down"),
-            "timeout": HomeAssistantCommandTimeout("slow info"),
-            "command": HomeAssistantCommandError("broken info", "unknown_error"),
-            "unexpected": RuntimeError("broken probe"),
-        }.get(failure),
+        info_exc=info_exc,
         info_result={**_INFO_OK, "capabilities": ["search", 17]}
         if failure == "malformed_caps"
         else None,
     )
     with _patch_ws(ws):
         if strict_first:
-            with pytest.raises(component_api.ComponentDiscoveryError):
+            with pytest.raises(component_api.ComponentDiscoveryError) as fresh:
                 await get_component_caps(client, strict=True)
+            # The strict caller whose own probe failed gets that exception.
+            assert fresh.value.__cause__ is info_exc
         first_read = await get_component_caps(client)
         assert component_supports(first_read, "search") is (failure == "malformed_caps")
-        with pytest.raises(component_api.ComponentDiscoveryError):
+        with pytest.raises(component_api.ComponentDiscoveryError) as cached:
             await get_component_caps(client, strict=True)
+        # A failure read back from the cache carries only its text.
+        assert cached.value.__cause__ is None
         assert ws.send_command.await_count == 1
         # Discovery has recovered, but callers still honor the short cooldown.
         ws.send_command.side_effect = None

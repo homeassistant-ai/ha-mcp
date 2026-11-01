@@ -168,14 +168,18 @@ class TestHaCallEvent:
         assert result["wildcard_listener_count"] == 0
         assert "warnings" not in result
 
-    async def test_wildcard_listener_suppresses_the_no_listener_warning(self):
+    async def test_wildcard_only_warns_with_match_all_context(self):
+        """Recorder and other match-all listeners must not hide a zero count."""
         tools = _make_tools({"message": "ok"}, {"*": 3})
 
         result = await tools.ha_call_event("my_event")
 
         assert result["listener_count"] == 0
         assert result["wildcard_listener_count"] == 3
-        assert "warnings" not in result
+        warning = " ".join(result["warnings"]).lower()
+        assert "no event listeners" in warning
+        assert "match-all" in warning
+        assert "recorder" in warning
 
     async def test_warns_when_no_listener_is_registered(self):
         tools = _make_tools({"message": "ok"}, {})

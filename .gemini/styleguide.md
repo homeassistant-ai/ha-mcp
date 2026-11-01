@@ -294,7 +294,7 @@ with magic docstring keywords.
 - Missing examples on tools with obvious single-parameter calls
 - Multi-line docstrings that stay focused and on-topic
 
-Python type hints and async/await usage are canonical in [`AGENTS.md` → Code Conventions](../AGENTS.md#code-conventions); flag unannotated signatures and inconsistent async/await for I/O.
+Python type hints and async/await usage are canonical in [`AGENTS.md` → Code Conventions](../AGENTS.md#code-conventions); flag unannotated signatures outside `tests/` and inconsistent async/await for I/O.
 
 ## Documentation Standards
 

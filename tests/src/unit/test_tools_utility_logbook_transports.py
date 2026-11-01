@@ -18,9 +18,12 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_logs import LogTools
 
 from ._logbook_fallback import call_kwargs as _call_kwargs
@@ -212,6 +215,34 @@ class TestLogbookTransports:
         client.get_logbook.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_component_refused_connection_falls_back_to_rest(
+        self, logbook_component_caps: ComponentCaps
+    ) -> None:
+        # The shape send_websocket_message raises when Core refused the connection.
+        unsent = HomeAssistantCommandNotSent("Failed to connect")
+        unsent.__cause__ = HomeAssistantConnectionError("Failed to connect")
+        client = self._client(ws_error=unsent)
+        client.get_logbook = AsyncMock(return_value=self._component_rows())
+        tools = LogTools(client)
+        result = await tools.get_logs(**_call_kwargs(source="logbook"))
+        assert result["data"]["total_entries"] == 2
+        client.get_logbook.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_component_rejected_token_surfaces_without_a_rest_fallback(
+        self, logbook_component_caps: ComponentCaps
+    ) -> None:
+        unsent = HomeAssistantCommandNotSent("WebSocket authentication failed")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        client = self._client(ws_error=unsent)
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "AUTH_INVALID_TOKEN"
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_direct_timeout_surfaces_without_a_rest_fallback(
         self, logbook_component_caps
     ) -> None:
@@ -314,6 +345,21 @@ class TestLogbookTransports:
             await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
         payload = json.loads(str(exc_info.value))
         assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert "Last error: no WS" in payload["error"]["message"]
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_device_filter_with_a_rejected_token_is_an_auth_error(
+        self,
+    ) -> None:
+        unsent = HomeAssistantCommandNotSent("WebSocket authentication failed")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        client = self._client(ws_error=unsent)
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "AUTH_INVALID_TOKEN"
         client.get_logbook.assert_not_awaited()
 
     @pytest.mark.parametrize(

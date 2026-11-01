@@ -158,11 +158,20 @@ class ComponentDiscoveryError(RuntimeError):
 
 
 def _checked_caps(
-    client: Any, caps: ComponentCaps | None, strict: bool
+    client: Any,
+    caps: ComponentCaps | None,
+    strict: bool,
+    *,
+    cause: Exception | None = None,
 ) -> ComponentCaps | None:
-    """Keep read fallbacks while exposing failed discovery to write callers."""
+    """Keep read fallbacks while exposing failed discovery to write callers.
+
+    ``cause`` is the exception that failed this call's own probe; a strict caller
+    gets it as ``__cause__``. A failure cached by an earlier call gets no cause:
+    the OAuth proxy client is one cache key for every user's token.
+    """
     if strict and (failure := _PROBE_FAILURES.get(client)):
-        raise ComponentDiscoveryError(failure)
+        raise ComponentDiscoveryError(failure) from cause
     return caps
 
 
@@ -282,6 +291,7 @@ async def get_component_caps(
 
     With ``strict=True``, failed or malformed discovery raises
     ``ComponentDiscoveryError``, including failures cached by earlier read tools.
+    When this call's own probe failed, its exception is the ``__cause__``.
     A definitive unknown command, unsupported schema, or valid capability list
     without the requested command still permits legacy routing. The default
     retains best-effort read behavior. Inconclusive failures expire after 30
@@ -342,8 +352,8 @@ async def get_component_caps(
             else:
                 _store_transient_negative(client)
                 _PROBE_FAILURES[client] = f"{INFO_COMMAND} failed: {exc}"
-            return _checked_caps(client, None, strict)
-        except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
+            return _checked_caps(client, None, strict, cause=exc)
+        except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as exc:
             logger.debug(
                 "%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=True
             )
@@ -351,14 +361,14 @@ async def get_component_caps(
             _PROBE_FAILURES[client] = (
                 f"{INFO_COMMAND} probe could not reach Home Assistant"
             )
-            return _checked_caps(client, None, strict)
-        except Exception:
+            return _checked_caps(client, None, strict, cause=exc)
+        except Exception as exc:
             # Read callers retain best-effort fallback; strict write callers
             # must not confuse an unexpected fault with capability absence.
             logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
             _store_transient_negative(client)
             _PROBE_FAILURES[client] = f"{INFO_COMMAND} probe failed unexpectedly"
-            return _checked_caps(client, None, strict)
+            return _checked_caps(client, None, strict, cause=exc)
 
         caps = _parse_caps(response)
         if caps is not None and caps.schema_version != SUPPORTED_SCHEMA_VERSION:

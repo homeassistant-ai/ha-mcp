@@ -358,7 +358,7 @@ def _validate_enabled_constraint(
     state machine entirely, making it invisible in the UI and
     unqueryable via state APIs until re-enabled AND the integration is
     reloaded.  For automations, use
-    ha_config_set_automation(identifier=..., enabled=...) to control their
+    ha_config_set_automation(entity_id=..., enabled=...) to control their
     runtime enabled state.  For scripts,
     ha_config_set_script(script_id=..., run="stop") only stops a currently
     running execution; it does not disable the script, and Home Assistant
@@ -391,13 +391,13 @@ def _validate_enabled_constraint(
                     "ha_set_entity(enabled=False). This removes the entity from the "
                     "state machine and hides it from the UI until it is re-enabled "
                     f"AND the {_domain}s are reloaded. Use "
-                    f"ha_config_set_automation(identifier='{blocked[0]}', "
+                    f"ha_config_set_automation(entity_id='{blocked[0]}', "
                     "enabled=False) instead to disable it without removing it."
                 )
                 suggestions = [
-                    "Use ha_config_set_automation(identifier=..., enabled=...) to "
+                    "Use ha_config_set_automation(entity_id=..., enabled=...) to "
                     + "disable the automation (keeps it visible and manageable)",
-                    "Use ha_config_set_automation(identifier=..., enabled=True) to "
+                    "Use ha_config_set_automation(entity_id=..., enabled=True) to "
                     + "re-enable it later",
                     "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
                 ]
@@ -1680,7 +1680,7 @@ class EntityTools:
         NOT the same as "turning off" an entity.
 
         For automations and scripts, enabled=False is blocked. For automations,
-        use ha_config_set_automation(identifier="automation.xxx", enabled=False)
+        use ha_config_set_automation(entity_id="automation.xxx", enabled=False)
         (or enabled=True to re-enable).
         For scripts, ha_config_set_script(script_id="script.xxx", run="stop")
         only stops a currently running execution; it does not disable the script.
@@ -2087,9 +2087,9 @@ class EntityTools:
         clearing the restored=true orphans an integration leaves behind after
         its filters change. Removals run sequentially and return:
           {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
-        where skipped = ids already absent (not-found is idempotent, not an
-        error). A lost connection stops the run; not_attempted lists the ids
-        left, safe to retry. Only single-id removal is auto-backed-up.
+        where skipped = ids already absent (not-found is idempotent). A lost connection
+        stops the run; not_attempted lists the ids never sent (the failing one too if
+        it never left), safe to retry. Only single-id removal is auto-backed-up.
 
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")

@@ -11,7 +11,11 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_todo import unbacked_removals
-from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantError,
+)
 from ha_mcp.tools.tools_todo import TodoTools
 
 from .test_tools_todo import LIST, _error, _FakeClient, _no_component  # noqa: F401
@@ -289,6 +293,26 @@ class TestBridge:
         assert error["code"] == "CONNECTION_FAILED"
         # The move goes with the update, so nothing was moved either.
         assert not [c for c in client.calls if c["type"] == "todo/item/move"]
+
+    async def test_rejected_token_does_not_fall_back_to_core(
+        self, tools: TodoTools, client: _FakeClient
+    ) -> None:
+        # Core's WebSocket commands would connect again with the rejected token.
+        unsent = HomeAssistantCommandNotSent("rejected")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        with (
+            patch(
+                "ha_mcp.tools.component_todo.todo_item",
+                AsyncMock(side_effect=unsent),
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.ha_set_todo_item(LIST, summary="Eggs")
+        body = _error(excinfo)
+        assert body["error"]["code"] == "AUTH_INVALID_TOKEN"
+        assert "write_outcome_unknown" not in str(body)
+        assert not [c for c in client.calls if c["type"] == "call_service"]
+        assert "Eggs" not in [i["summary"] for i in client.items]
 
     async def test_removal_still_on_the_list_read_back_is_a_warning(
         self, tools: TodoTools, bridge: _Bridge

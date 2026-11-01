@@ -25,7 +25,12 @@ from ha_mcp.backup_todo import (
     restore_todo_item,
     safety_target,
 )
-from ha_mcp.client.rest_client import HomeAssistantCommandError, HomeAssistantError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantError,
+)
 from ha_mcp.settings_ui import _handlers_backups as settings_ui
 
 from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
@@ -716,6 +721,23 @@ class TestRestoreThroughTheComponent:
             ("update", {"uid": "101", "data": {"status": "completed"}}),
         ]
         assert fake.items[-1]["status"] == "completed"
+
+    @pytest.mark.parametrize("removed", [False, True], ids=["edited", "removed"])
+    async def test_rejected_token_does_not_fall_back_to_core(
+        self, fake: _FakeList, removed: bool
+    ) -> None:
+        # Core's todo services would connect again with the rejected token.
+        snapshot = await fetch_todo_item(object(), f"{LIST}::Pay")
+        if removed:
+            fake.items.pop(1)
+        unsent = HomeAssistantCommandNotSent("rejected")
+        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        with (
+            patch("ha_mcp.backup_todo.todo_item", AsyncMock(side_effect=unsent)),
+            pytest.raises(HomeAssistantCommandNotSent),
+        ):
+            await restore_todo_item(object(), f"{LIST}::Pay", snapshot)
+        assert fake.calls == []
 
     async def test_refusal_is_not_applied(
         self, fake: _FakeList, bridge: _Bridge

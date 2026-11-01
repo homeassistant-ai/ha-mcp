@@ -191,7 +191,8 @@ await mcp.call_tool("ha_config_get_script", {})
 await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 ```
 
-**HA automation config uses plural root keys (HA 2024.10+):** `triggers`/`actions`/`conditions` (singular `trigger`/`action`/`condition` are still accepted as aliases). The tool canonicalizes to plural, so `ha_config_get_automation` returns the plural shape and `python_transform` operates on it.
+**Automation configs come back as Core stores them:** the automation tools send the config to Core as written and `ha_config_get_automation` returns Core's stored body verbatim, so `python_transform` operates on that body. Core itself renames the singular root keys `trigger`/`condition`/`action` to the plural forms and `service` to `action` while validating a write (Core's backward-compat validators: `cv.renamed` for the root keys, the service schema's own rename for `service`; both rename in place and the config view stores that dict), and refuses a config holding both forms of one key; a trigger's `platform` key is kept. So a config written with singular keys reads back plural, and `test_data_factory.automation_config`'s singular `trigger`/`action` defaults must be overridden with the same singular keys, never the plural ones.
+An automation the registry knows but Core's config API answers "Resource not found" for (defined in YAML or a package) is CONFIG_NOT_FOUND on get, set and remove. The component's lookup reports `loaded`; while Core has not loaded the automation, `references` is None and the get tool warns. With `reference_data_targets`, `reference_data` carries Core's match sentinels (`none`/`all`), which the reference validator skips; without the target ids it reports `validation.unchecked_target_kinds`.
 
 **Poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
 ```python
@@ -240,7 +241,7 @@ The harness fakes `setTimeout` / `setInterval` / `Date.now` on a virtual clock, 
 
 Each pytest worker sends all its runs to one long-lived node process, and every run gets a fresh JSDOM window. A run that times out, crashes node or garbles its reply ends that process; the next run starts a new one. `tests/src/unit/test_js_harness_worker.py` covers this.
 
-Astro `<script>` blocks without `define:vars` / `is:inline` are TypeScript by default — pass `language="ts"` to `run_script`. For Astro pages needing wizard data, use `extract_astro_frontmatter_vars` + `astro_vars_prelude` to inject production data.
+Astro `<script>` blocks without `define:vars` / `is:inline` are TypeScript by default — pass `language="ts"` to `run_script`. A page whose `<script>` imports modules (the setup wizard) is bundled first with `bundle_inline_script`, which resolves the imports from the page's directory and returns plain JS; `module_exports` reads a module's exported data (the wizard's `data.ts`) so tests use production data instead of a copy.
 
 CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips. Each harness run has a 15s node timeout; set `HA_MCP_JS_HARNESS_TIMEOUT=<seconds>` to raise it on slower hardware.
 

@@ -5,18 +5,19 @@ release: it served an entity's ``raw_config``, which is only the storage body as
 of the last COMPLETED async reload, with no version marker to tell a fresh body
 from a stale one. A get racing a reload returned the pre-edit body and broke the
 get -> python_transform -> set round-trip (caught live by the automation/script
-config e2e on the arm/HAOS runners). All three get tools now serve their reads
-from the legacy REST/WS pipeline (which reads the fresh config FILE), exactly as
-scenes always have. Scenes were already legacy-only for a different reason — a
+config e2e on the arm/HAOS runners). All three get tools now serve the body
+from the legacy REST pipeline (which reads the fresh config FILE), exactly as
+scenes always have. The automation get still asks the component for the
+registry side (``automation_config`` lookup), never for the body. Scenes were already legacy-only for a different reason — a
 ``HomeAssistantScene`` holds no raw storage body in memory at all — so they lead
 the pattern the automation/script gets now follow. A file-reading ``config_get``
 may return later (issue #1813).
 
 These pin, for all three domains, that:
 
-- the get is fully served by the legacy path EVEN WHEN the component advertises
-  ``config_get`` — the tool skips the caps probe entirely, so the component WS is
-  never touched (no ``info`` frame, no ``config_get`` frame),
+- the body is served by the legacy path EVEN WHEN the component advertises
+  ``config_get`` — no ``config_get`` frame is ever sent (the script and scene
+  gets skip the caps probe entirely),
 - a missing item still maps onto the exact legacy not-found error (automation /
   script -> ``RESOURCE_NOT_FOUND``; scene -> ``ENTITY_NOT_FOUND``), served
   without any component involvement.
@@ -46,9 +47,8 @@ from ._component_routing_helpers import make_ws
 
 # --- Fixtures / bodies -------------------------------------------------------
 
-# Automation body carries a legacy ``platform`` trigger + ``service`` action so
-# the response check also exercises the roundtrip normalization the legacy path
-# runs (platform->trigger, singular->plural root keys).
+# Automation body carries a legacy ``platform`` trigger + ``service`` action,
+# which the get returns as Core stores it.
 _AUTO_BODY: dict[str, Any] = {
     "id": "171",
     "alias": "Morning Routine",
@@ -103,6 +103,7 @@ class RoutingClient:
         self._categories = categories or {}
         self._registry_list = registry_list or []
         self.get_states = AsyncMock(return_value=[])
+        self._resolve_automation_id = AsyncMock(return_value="171")
         self.get_automation_config = AsyncMock(
             return_value=automation_config, side_effect=automation_config_exc
         )
@@ -222,20 +223,17 @@ def _scene_legacy_client(category: str | None = "cat_x") -> RoutingClient:
 
 
 class TestAutomationConfigGetAlwaysLegacy:
-    """Automation gets are legacy-only: the component's config_get was withdrawn
-    (its ``raw_config`` freshness lagged the config file between write and
-    reload), so ``ha_config_get_automation`` never routes through it. The tool
-    skips the caps probe entirely and serves the read from the legacy REST/WS
-    pipeline — so the component WS is never touched, even with ``config_get``
-    advertised.
+    """Automation bodies are legacy-only: the component's config_get was
+    withdrawn (its ``raw_config`` freshness lagged the config file between write
+    and reload), so ``ha_config_get_automation`` never asks it for the body,
+    even with ``config_get`` advertised.
     """
 
     async def test_get_served_by_legacy_despite_config_get_caps(self) -> None:
-        """config_get advertised, yet the automation read is fully legacy-served
-        and no frame ever reaches the component."""
+        """config_get advertised, yet the body comes from Core's REST read and
+        no config_get frame reaches the component."""
         client = _auto_legacy_client()
-        # A component WS that WOULD serve config_get if asked — the point is that
-        # the automation tool never asks it (no caps probe, no config_get frame).
+        # A component WS that WOULD serve config_get if asked.
         ws = make_ws(
             "ha_mcp_tools/config_get",
             info_result=_CAPS_CONFIG_GET,
@@ -244,21 +242,18 @@ class TestAutomationConfigGetAlwaysLegacy:
         factory = AsyncMock(return_value=ws)
         with patch.object(component_api, "get_websocket_client", factory):
             resp = await AutomationConfigTools(client).ha_config_get_automation(
-                identifier="automation.morning"
+                entity_id="automation.morning"
             )
-        assert resp["success"] is True
         assert resp["automation_id"] == "automation.morning"
-        # Legacy path canonicalizes (platform->trigger, singular->plural) and
-        # injects the category from the registry.
-        assert resp["config"]["triggers"] == [{"trigger": "time", "at": "07:00:00"}]
-        assert resp["config"]["category"] == "cat_a"
-        # Legacy pipeline ran; the component WS was never touched.
+        # The stored body, verbatim, plus the category from the registry.
+        assert resp["config"] == {**_AUTO_BODY, "category": "cat_a"}
         assert client.get_automation_config.await_count == 1
-        assert ws.send_command.await_count == 0
+        sent = [c.args[0] for c in ws.send_command.call_args_list]
+        assert "ha_mcp_tools/config_get" not in sent
 
     async def test_not_found_raises_resource_not_found_on_legacy(self) -> None:
-        """A missing automation raises the exact legacy RESOURCE_NOT_FOUND, with
-        ``config_get`` advertised but never sent."""
+        """A config id nothing knows raises the exact legacy RESOURCE_NOT_FOUND,
+        with ``config_get`` advertised but never sent."""
         client = RoutingClient(
             automation_config_exc=HomeAssistantAPIError(
                 "Automation not found", status_code=404
@@ -272,12 +267,13 @@ class TestAutomationConfigGetAlwaysLegacy:
             pytest.raises(ToolError) as exc_info,
         ):
             await AutomationConfigTools(client).ha_config_get_automation(
-                identifier="automation.ghost"
+                entity_id="ghost"
             )
         err = _error_payload(exc_info.value)
         assert err["code"] == "RESOURCE_NOT_FOUND"
-        assert err["message"] == "Automation not found: automation.ghost"
-        assert ws.send_command.await_count == 0
+        assert err["message"] == "Automation not found: ghost"
+        sent = [c.args[0] for c in ws.send_command.call_args_list]
+        assert "ha_mcp_tools/config_get" not in sent
 
 
 # =============================================================================

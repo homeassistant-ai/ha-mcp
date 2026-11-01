@@ -9,10 +9,12 @@ and production environments. Entity references are dynamically discovered.
 """
 
 import logging
+import uuid
 
 import pytest
 
 from ...utilities.assertions import (
+    MCPAssertions,
     assert_mcp_success,
     parse_mcp_result,
     safe_call_tool,
@@ -254,13 +256,13 @@ class TestAutomationLifecycle:
 
         before_update = parse_mcp_result(
             await mcp_client.call_tool(
-                "ha_config_get_automation", {"identifier": automation_entity}
+                "ha_config_get_automation", {"entity_id": automation_entity}
             )
         )
         update_result = await mcp_client.call_tool(
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 "config_hash": before_update["config_hash"],
             },
@@ -302,7 +304,7 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Deleting automation...")
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
 
         assert_mcp_success(delete_result, "automation deletion")
@@ -324,7 +326,7 @@ class TestAutomationLifecycle:
         final_data = await safe_call_tool(
             mcp_client,
             "ha_config_get_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
         # Automation should not exist anymore - this should fail
         assert not final_data.get("success"), (
@@ -430,7 +432,7 @@ class TestAutomationLifecycle:
         # Clean up
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
         assert_mcp_success(delete_result, "automation cleanup")
         logger.info("🗑️ Automation cleaned up")
@@ -482,7 +484,7 @@ class TestAutomationLifecycle:
 
         # Verify configuration structure
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
 
         get_data = assert_mcp_success(get_result, "configuration retrieval")
@@ -510,41 +512,30 @@ class TestAutomationLifecycle:
 
         logger.info("✅ Configuration structure validated")
 
-        # Test invalid configuration (should fail gracefully)
+        # A trigger key Core does not know is rejected with Core's own text,
+        # and the hint names the live trigger platform the agent most likely
+        # meant: battery.low is not a key, battery.became_low is.
         logger.info("🧪 Testing invalid automation configuration...")
         invalid_config = {
             "alias": "Invalid Config E2E",
-            "trigger": [
-                {"platform": "invalid_platform"}
-            ],  # Invalid: platform doesn't exist
-            "action": [{"service": "nonexistent.service"}],  # Invalid service
+            "triggers": [{"trigger": "battery.low"}],
+            "actions": [{"delay": {"seconds": 1}}],
         }
-
-        try:
-            invalid_result = await mcp_client.call_tool(
-                "ha_config_set_automation", {"config": invalid_config}
-            )
-
-            invalid_data = parse_mcp_result(invalid_result)
-
-            # Invalid config should fail
-            if invalid_data.get("success"):
-                logger.warning("Invalid configuration was unexpectedly accepted")
-                # If it was accepted, clean it up
-                if invalid_data.get("entity_id"):
-                    cleanup_tracker.track("automation", invalid_data["entity_id"])
-            else:
-                logger.info("✅ Invalid configuration properly rejected")
-
-        except Exception as e:  # noqa: BLE001
-            logger.info(
-                f"✅ Invalid configuration properly rejected with exception: {e}"
-            )
+        rejected = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_config_set_automation", {"config": invalid_config}
+        )
+        message = rejected["error"]["message"]
+        assert rejected["error"]["code"] == "VALIDATION_FAILED", rejected
+        assert message.startswith("Home Assistant rejected the automation: "), message
+        assert "Invalid trigger 'battery.low' specified" in message, message
+        assert rejected["failed_section"] == "triggers", rejected
+        assert "battery.became_low" in rejected["closest_matches"], rejected
+        logger.info("✅ Invalid configuration rejected with Core's text")
 
         # Clean up valid automation
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
         assert_mcp_success(delete_result, "valid automation cleanup")
         logger.info("🗑️ Test automations cleaned up")
@@ -643,7 +634,7 @@ class TestAutomationLifecycle:
         # Verify complex configuration
         logger.info("🔍 Verifying complex automation configuration...")
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
 
         get_data = assert_mcp_success(get_result, "complex automation retrieval")
@@ -654,7 +645,8 @@ class TestAutomationLifecycle:
                 f"No configuration returned for complex automation {automation_entity}"
             )
 
-        # Home Assistant API returns plural forms
+        # Core stores the plural root keys even when the factory wrote the
+        # singular ones; read either form.
         triggers = config.get("triggers") or config.get("trigger", [])
         conditions = config.get("conditions") or config.get("condition", [])
         actions = config.get("actions") or config.get("action", [])
@@ -677,7 +669,7 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Cleaning up complex automation...")
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": automation_entity},
+            {"entity_id": automation_entity},
         )
 
         assert_mcp_success(delete_result, "complex automation deletion")
@@ -740,7 +732,7 @@ class TestAutomationLifecycle:
             # Verify mode is set correctly
             get_result = await mcp_client.call_tool(
                 "ha_config_get_automation",
-                {"identifier": automation_entity},
+                {"entity_id": automation_entity},
             )
 
             get_data = assert_mcp_success(
@@ -768,7 +760,7 @@ class TestAutomationLifecycle:
             # Cleanup immediately to avoid entity ID conflicts
             delete_result = await mcp_client.call_tool(
                 "ha_config_remove_automation",
-                {"identifier": automation_entity},
+                {"entity_id": automation_entity},
             )
 
             assert_mcp_success(delete_result, f"{mode} mode automation deletion")
@@ -829,20 +821,19 @@ async def test_automation_search_and_discovery(mcp_client):
 
 
 @pytest.mark.automation
-async def test_automation_with_choose_block(mcp_client):
+async def test_choose_block_nested_keys_survive_the_round_trip(mcp_client):
     """
-    Test automation with choose blocks to verify conditions (plural) is preserved.
+    A choose block's nested ``conditions`` and ``sequence`` keys come back
+    exactly as written.
 
-    This test ensures that the normalization bug is fixed where 'conditions'
-    was incorrectly being converted to 'condition' inside choose blocks,
-    causing API validation failures.
+    The tool hands the body to Core untouched and reads Core's stored body back
+    verbatim, so a rewrite of nested keys (which once turned a choose option's
+    ``conditions`` into ``condition`` and had Core reject the save with "extra
+    keys not allowed") cannot reach the stored automation.
     """
-    logger.info("🧪 Testing automation with choose block...")
 
-    # Find a test light entity (poll — entities may not be loaded yet on slow runners)
     def _has_light(data: dict) -> bool:
-        results = data.get("entities", [])
-        return len(results) > 0
+        return len(data.get("entities", [])) > 0
 
     search_data = await wait_for_tool_result(
         mcp_client,
@@ -852,148 +843,71 @@ async def test_automation_with_choose_block(mcp_client):
         timeout=15,
         description="light entities available",
     )
-    entities = search_data.get("entities", [])
-    light_entity = entities[0]["entity_id"]
-    logger.info(f"🔦 Using test light: {light_entity}")
+    light_entity = search_data["entities"][0]["entity_id"]
 
-    automation_id = "test_choose_block_normalization"
-
-    # Create automation with choose block that has conditions (plural)
+    automation_id = f"e2e_choose_block_{uuid.uuid4().hex[:8]}"
     config = {
-        "alias": "Test Choose Block Normalization",
-        "description": "Test that choose block conditions (plural) are preserved",
-        "triggers": [  # Using plural to test normalization
+        "alias": f"E2E Choose Block {automation_id}",
+        "triggers": [
             {
-                "platform": "state",
+                "trigger": "state",
                 "entity_id": light_entity,
                 "to": "on",
                 "id": "light_on",
             },
             {
-                "platform": "state",
+                "trigger": "state",
                 "entity_id": light_entity,
                 "to": "off",
                 "id": "light_off",
             },
         ],
-        "actions": [  # Using plural to test normalization
+        "actions": [
             {
                 "choose": [
                     {
-                        "conditions": [  # MUST remain plural in choose blocks
+                        "conditions": [{"condition": "trigger", "id": "light_on"}],
+                        "sequence": [
                             {
-                                "condition": "trigger",
-                                "id": "light_on",
-                            }
-                        ],
-                        "sequences": [  # Test sequence normalization too
-                            {
-                                "service": "persistent_notification.create",
-                                "data": {
-                                    "title": "Choose Test",
-                                    "message": "Light turned on",
-                                },
+                                "action": "persistent_notification.create",
+                                "data": {"message": "Light turned on"},
                             }
                         ],
                     },
                     {
-                        "conditions": [  # MUST remain plural
+                        "conditions": [{"condition": "trigger", "id": "light_off"}],
+                        "sequence": [
                             {
-                                "condition": "trigger",
-                                "id": "light_off",
-                            }
-                        ],
-                        "sequence": [  # Test singular form too
-                            {
-                                "service": "persistent_notification.create",
-                                "data": {
-                                    "title": "Choose Test",
-                                    "message": "Light turned off",
-                                },
+                                "action": "persistent_notification.create",
+                                "data": {"message": "Light turned off"},
                             }
                         ],
                     },
                 ],
                 "default": [
                     {
-                        "service": "persistent_notification.create",
-                        "data": {
-                            "title": "Choose Test",
-                            "message": "Default action",
-                        },
+                        "action": "persistent_notification.create",
+                        "data": {"message": "Default action"},
                     }
                 ],
             }
         ],
     }
 
-    # Create the automation - THIS IS THE KEY TEST
-    # If normalization is broken, this will fail with:
-    # "extra keys not allowed @ data['actions'][0]['choose'][0]['condition']"
-    logger.info("📝 Creating automation with choose block...")
-    create_result = await mcp_client.call_tool(
-        "ha_config_set_automation",
-        {
-            "identifier": automation_id,
-            "config": config,
-        },
-    )
-
-    assert_mcp_success(create_result)
-    logger.info("✅ Automation with choose block created successfully")
-
-    # Wait for automation to be registered
-    await wait_for_automation(mcp_client, automation_id)
-
-    # Retrieve the automation to verify structure
-    get_result = await mcp_client.call_tool(
-        "ha_config_get_automation",
-        {"identifier": automation_id},
-    )
-
-    automation_data = parse_mcp_result(get_result)
-    logger.info("📥 Retrieved automation configuration")
-
-    # Extract config from response
-    config_data = automation_data.get("config", automation_data)
-
-    # Verify the automation has the correct structure
-    assert "trigger" in config_data or "triggers" in config_data, (
-        "Automation should have triggers"
-    )
-
-    actions = config_data.get("action", config_data.get("actions", []))
-    assert len(actions) > 0, "Automation should have actions"
-
-    choose_action = actions[0]
-    assert "choose" in choose_action, "First action should be a choose block"
-    assert len(choose_action["choose"]) == 2, "Choose should have 2 options"
-
-    # Verify that conditions are preserved in choose options
-    for i, option in enumerate(choose_action["choose"]):
-        # The key could be 'conditions' or 'condition' depending on HA version
-        # But our normalization should have sent 'conditions' to the API
-        has_conditions = "conditions" in option or "condition" in option
-        assert has_conditions, f"Choose option {i} should have conditions defined"
-        logger.info(f"✅ Choose option {i} has condition key: {list(option.keys())}")
-
-    # The fact that we successfully created and retrieved the automation
-    # with choose blocks proves the normalization fix works.
-    # Execution testing would require more complex setup (triggering actual
-    # entity state changes) which is beyond the scope of this normalization test.
-    logger.info(
-        "✅ Choose block normalization verified - automation API accepted the config"
-    )
-
-    # Clean up
-    logger.info("🧹 Cleaning up test automation...")
-    delete_result = await mcp_client.call_tool(
-        "ha_config_remove_automation",
-        {"identifier": automation_id},
-    )
-    assert_mcp_success(delete_result)
-
-    logger.info("✅ Choose block normalization test completed successfully")
+    mcp = MCPAssertions(mcp_client)
+    try:
+        await mcp.call_tool_success(
+            "ha_config_set_automation",
+            {"entity_id": automation_id, "config": config},
+        )
+        stored = await wait_for_automation(mcp_client, automation_id)
+        assert stored is not None, f"{automation_id} not readable after creation"
+        assert stored["triggers"] == config["triggers"], stored
+        assert stored["actions"] == config["actions"], stored
+    finally:
+        await safe_call_tool(
+            mcp_client, "ha_config_remove_automation", {"entity_id": automation_id}
+        )
 
 
 @pytest.mark.automation
@@ -1065,7 +979,7 @@ async def test_duplicate_automation_prevention(mcp_client, cleanup_tracker):
     # Clean up
     delete_result = await mcp_client.call_tool(
         "ha_config_remove_automation",
-        {"identifier": automation_entity},
+        {"entity_id": automation_entity},
     )
     assert_mcp_success(delete_result, "duplicate prevention test cleanup")
     logger.info("Duplicate automation prevention test passed")
@@ -1124,7 +1038,7 @@ async def test_automation_creation_returns_verified_entity(
     # Clean up
     delete_result = await mcp_client.call_tool(
         "ha_config_remove_automation",
-        {"identifier": entity_id},
+        {"entity_id": entity_id},
     )
     assert_mcp_success(delete_result, "verified entity test cleanup")
     logger.info("Automation creation verified entity test passed")
@@ -1183,7 +1097,7 @@ class TestConfigHashMismatch:
         # 2. GET the automation — extract the real config_hash
         await wait_for_automation(mcp_client, automation_entity)
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
         get_data = parse_mcp_result(get_result)
         real_hash = get_data.get("config_hash")
@@ -1206,7 +1120,7 @@ class TestConfigHashMismatch:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 "config_hash": stale_hash,
             },
@@ -1246,7 +1160,7 @@ class TestConfigHashMismatch:
         # 2. GET — real hash
         await wait_for_automation(mcp_client, automation_entity)
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation", {"identifier": automation_entity}
+            "ha_config_get_automation", {"entity_id": automation_entity}
         )
         get_data = parse_mcp_result(get_result)
         real_hash = get_data.get("config_hash")
@@ -1262,7 +1176,7 @@ class TestConfigHashMismatch:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 "config_hash": real_hash,
             },
@@ -1303,7 +1217,7 @@ class TestConfigHashMismatch:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": automation_entity,
+                "entity_id": automation_entity,
                 "config": update_config,
                 # config_hash intentionally omitted — guard must not fire
             },
@@ -1339,11 +1253,11 @@ class TestSetAutomationNegativeInputs:
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "both config and python_transform" in result["error"]["message"].lower()
 
-    async def test_python_transform_requires_identifier(self, mcp_client) -> None:
-        """Rejects python_transform when identifier is absent.
+    async def test_python_transform_requires_entity_id(self, mcp_client) -> None:
+        """Rejects python_transform when entity_id is absent.
 
         Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
-        before any WebSocket I/O when python_transform is set but identifier is None.
+        before any WebSocket I/O when python_transform is set but entity_id is None.
         """
         result = await safe_call_tool(
             mcp_client,
@@ -1355,7 +1269,7 @@ class TestSetAutomationNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "identifier is required" in result["error"]["message"].lower()
+        assert "entity_id is required" in result["error"]["message"].lower()
 
     async def test_python_transform_requires_config_hash(self, mcp_client) -> None:
         """Rejects python_transform when config_hash is absent.
@@ -1367,7 +1281,7 @@ class TestSetAutomationNegativeInputs:
             mcp_client,
             "ha_config_set_automation",
             {
-                "identifier": "automation.test",
+                "entity_id": "automation.test",
                 "python_transform": "config['alias'] = 'Modified'",
             },
         )
@@ -1396,34 +1310,27 @@ class TestAutomationDestructiveNegativeInputs:
     """
     A7 negative-input tests for ha_config_remove_automation.
 
-    Covers two structurally distinct failure paths not exercised by the
-    existing CRUD lifecycle tests:
-    - Removing a nonexistent automation (direct 404 path on the remove tool itself)
-    - Double-delete: second remove after successful deletion (same 404 path,
-      separate test because it validates idempotency behaviour)
+    Both pass an ``automation.x`` entity_id that the entity registry does not
+    hold, which the tool answers with RESOURCE_NOT_FOUND:
+    - Removing an automation that never existed
+    - Double-delete: the second remove after a successful deletion (separate
+      test because Core dropped the registry entry moments ago)
 
-    Methodology: source-verified against tools_config_automations.py.
-    Both inputs reach the RESOURCE_NOT_FOUND branch → raise_tool_error (ToolError).
-    The existing lifecycle tests verify deletion via ha_config_get_automation, not
-    by calling ha_config_remove_automation on a nonexistent identifier directly.
+    A bare config id that Core does not store goes the other way, through
+    Core's own DELETE answer; test_native_contract.py covers it.
     """
 
     async def test_remove_automation_nonexistent(self, mcp_client):
         """
-        Test: ha_config_remove_automation with a nonexistent identifier returns a
+        Test: ha_config_remove_automation with a nonexistent entity_id returns a
         structured error, not success=True.
-
-        Source path: Exception with "404"/"not found" in str →
-        RESOURCE_NOT_FOUND branch → raise_tool_error.
         """
-        logger.info(
-            "Testing ha_config_remove_automation with nonexistent identifier..."
-        )
+        logger.info("Testing ha_config_remove_automation with nonexistent entity_id...")
 
         data = await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": "automation.nonexistent_a7_e2e_xyz_404"},
+            {"entity_id": "automation.nonexistent_a7_e2e_xyz_404"},
         )
 
         assert not data.get("success"), (
@@ -1447,10 +1354,9 @@ class TestAutomationDestructiveNegativeInputs:
         Test: Second ha_config_remove_automation call on an already-deleted automation
         returns a structured error, not success=True (idempotency failure behaviour).
 
-        Source path: first delete succeeds; second delete hits the same 404 branch
-        (RESOURCE_NOT_FOUND → raise_tool_error) as the nonexistent test.
-        Tests a distinct scenario: the identifier was valid moments ago, so any
-        caching or stale-state issue would cause a silent false success here.
+        The first delete succeeds; the second must not resolve the entity_id.
+        It was valid moments ago, so any caching or stale-state issue would
+        cause a silent false success here.
         """
         automation_name = "A7 Double Delete E2E Test"
         config = test_data_factory.automation_config(
@@ -1477,7 +1383,7 @@ class TestAutomationDestructiveNegativeInputs:
         # First delete — must succeed
         first_delete = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            {"identifier": entity_id, "wait": True},
+            {"entity_id": entity_id, "wait": True},
         )
         assert_mcp_success(first_delete, "first automation deletion")
         logger.info("First delete succeeded")
@@ -1486,7 +1392,7 @@ class TestAutomationDestructiveNegativeInputs:
         second_delete = await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
-            {"identifier": entity_id},
+            {"entity_id": entity_id},
         )
         assert not second_delete.get("success"), (
             f"Second delete of {entity_id} returned success=True — "

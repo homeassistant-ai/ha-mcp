@@ -280,10 +280,11 @@ def test_dashboard_python_transform_result_is_named() -> None:
 async def test_automation_python_transform_result_is_named(monkeypatch) -> None:
     tools = AutomationConfigTools(object())
 
-    async def fetch(_identifier, _hash, _action):
-        return {"alias": "x", "triggers": [_TRIGGER], "actions": [_ACTION]}, "id"
+    async def fetch(_entity_id):
+        config = {"alias": "x", "triggers": [_TRIGGER], "actions": [_ACTION]}
+        return config, "h", None
 
-    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch)
+    monkeypatch.setattr(tools, "_get_automation_config_internal", fetch)
     with pytest.raises(ToolError) as exc_info:
         await tools._run_python_transform(
             "id", "h", "config['actions'] = ''", None, False, None, False

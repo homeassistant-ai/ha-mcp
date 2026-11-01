@@ -403,7 +403,7 @@ def _make_config_set_like_mcp() -> FastMCP:
     @mcp.tool()
     async def ha_config_set_automation(
         config: dict | None = None,
-        identifier: str | None = None,
+        entity_id: str | None = None,
         python_transform: str | None = None,
     ) -> dict:
         return {"ok": True}
@@ -431,7 +431,7 @@ async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> No
     msg = body["error"]["message"]
     assert "`alias`: unknown parameter" in msg
     assert "inside `config`" in msg
-    assert msg.endswith("Valid parameters: config, identifier, python_transform.")
+    assert msg.endswith("Valid parameters: config, entity_id, python_transform.")
     # The guidance is repeated in the suggestions, not only in the message.
     error = body["error"]
     all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])

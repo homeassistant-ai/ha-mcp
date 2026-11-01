@@ -22,6 +22,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
@@ -351,6 +352,10 @@ async def get_connected_ws_client(
             if isinstance(reason, str)
             else "WebSocket connection could not be established"
         )
+        if isinstance(ws_client.last_connect_exception, HomeAssistantAuthError):
+            return None, create_auth_error(
+                "Home Assistant rejected the WebSocket token", details=details
+            )
         return None, create_connection_error(
             "Failed to connect to Home Assistant WebSocket",
             details=details,
@@ -395,9 +400,20 @@ def _classify_exception(
 
     # Type-based classification
     match error:
+        case HomeAssistantConnectionError() if isinstance(
+            error.__cause__, HomeAssistantAuthError
+        ):
+            # send_websocket_message wraps a failure to obtain a client in a
+            # connection error raised from the original, so a token rejected
+            # on (re)connect arrives here wrapped: classify the cause by its
+            # own text.
+            cause = error.__cause__
+            return _classify_exception(cause, str(cause).lower(), error_msg, context)
         case HomeAssistantConnectionError():
+            # send_websocket_message raises a command timeout as the cause.
+            timeout = isinstance(error.__cause__, HomeAssistantCommandTimeout)
             result = create_connection_error(
-                error_msg, timeout="timeout" in error_str, context=context
+                error_msg, timeout=timeout or "timeout" in error_str, context=context
             )
         case HomeAssistantAdminRequiredError():
             result = create_error_response(

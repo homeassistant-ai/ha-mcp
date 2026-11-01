@@ -108,11 +108,12 @@ from .backup_todo import fetch_todo_item, restore_todo_item
 from .backup_todo import snapshot_item as todo_snapshot_item
 from .backup_zones import fetch_zone, restore_zone
 from .client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
-from .errors import ErrorCode
+from .errors import ErrorCode, get_error_code
 from .storage_helper_types import SIMPLE_HELPER_TYPES
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
@@ -2021,9 +2022,8 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         client.base_url, client.token, verify_ssl=client.verify_ssl
     )
     if error or ws_client is None:
-        # ``error`` is a structured-error envelope; the message can live
-        # under either error.error.message (nested) or error.message
-        # (flat, as ``create_error_response`` actually produces).
+        # ``error`` is get_connected_ws_client's nested envelope; the flat
+        # ``error["message"]`` read is a defensive fallback.
         if isinstance(error, dict):
             err_obj = error.get("error", error)
             msg = (
@@ -2031,11 +2031,10 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
             ) or error.get("message", "WS connect failed")
         else:
             msg = "WS connect failed"
-        # Typed connection error so the outer ``_CAPTURE_TRANSIENT_ERRORS``
-        # tuple catches it; a bare ``RuntimeError`` would propagate past
-        # ``maybe_snapshot``'s catch and break the wrapped write — exactly
-        # what the best-effort contract on the decorator forbids.
-        raise HomeAssistantConnectionError(msg)
+        # Typed so ``_CAPTURE_TRANSIENT_ERRORS`` catches it (a bare ``RuntimeError``
+        # would break the best-effort write); a rejected token reports AUTH_*.
+        auth = str(get_error_code(error or {})).startswith("AUTH_")
+        raise (HomeAssistantAuthError if auth else HomeAssistantConnectionError)(msg)
     try:
         cmd_type = message.pop("type")
         envelope = await ws_client.send_command(cmd_type, **message)
@@ -2071,25 +2070,13 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
-    """Fetch an automation through the same path the get tool uses.
-
-    Applies ``_normalize_config_for_roundtrip`` so the snapshot matches
-    what ``ha_config_get_automation`` returns and round-trips cleanly
-    back through ``ha_config_set_automation`` on restore. Imported lazily
-    to keep the manager import-cycle-free.
-    """
-    # Lazy import to avoid backup_manager → tools → backup_manager cycle.
-    from .tools.tools_config_automations import _normalize_config_for_roundtrip
-
+    """Fetch the stored body verbatim."""
     try:
-        raw = await client.get_automation_config(entity_id)
+        return await client.get_automation_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
-    if not isinstance(raw, dict):
-        return raw
-    return _normalize_config_for_roundtrip(raw)
 
 
 async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:

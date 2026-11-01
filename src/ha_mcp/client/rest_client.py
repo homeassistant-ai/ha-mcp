@@ -90,16 +90,17 @@ class HomeAssistantConnectionError(HomeAssistantError):
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
     """A WS command that provably never left the process.
 
-    Raised by ``HomeAssistantWebSocketClient.send_command`` ONLY at its single
-    provably-never-sent site: the entry-guard reject (socket not authenticated), where
-    nothing is transmitted. Subclass of ``HomeAssistantConnectionError`` so every
-    existing broad handler is unaffected, yet a write consumer can catch this type
-    FIRST to fall back to the legacy path safely — the write provably never happened,
-    so a legacy first fire cannot double-apply. A ``send_json_message`` failure is NOT
-    this type: ``websocket.send()`` raising does not prove the frame was untransmitted
-    (bytes may already be on the socket when the close surfaces), so send_command
-    re-raises the original exception and the consumer treats it as ambiguous. A
-    post-send socket close (mid-await) likewise raises a plain
+    Raised by ``HomeAssistantWebSocketClient.send_command``'s entry guard (socket not
+    authenticated) and by ``send_websocket_message`` when no attempt obtained a client
+    (raised from the acquisition error, so a rejected token survives as ``__cause__``).
+    A subclass of ``HomeAssistantConnectionError``, so broad handlers are unaffected,
+    yet a write consumer can catch it FIRST: the write provably never happened, so a
+    legacy first fire cannot double-apply. Check ``__cause__`` before such a fallback:
+    resending a rejected token over REST adds a 401 toward Home Assistant's IP ban. A
+    ``send_json_message`` failure is NOT this type: ``websocket.send()`` raising does
+    not prove the frame was untransmitted (bytes may already be on the socket when the
+    close surfaces), so send_command re-raises the original exception and the consumer
+    treats it as ambiguous. A post-send socket close (mid-await) likewise raises a plain
     ``HomeAssistantConnectionError`` (the close handler sets it on the pending future),
     so type alone distinguishes never-sent from sent-then-dropped/ambiguous.
     """
@@ -1376,40 +1377,44 @@ class HomeAssistantClient:
     # Automation Configuration Management
 
     async def _resolve_automation_id(self, identifier: str) -> str:
-        """Convert entity_id to unique_id if needed, or return unique_id as-is.
+        """Return the config id of ``identifier`` (an entity_id or a config id).
 
-        Args:
-            identifier: Either entity_id (automation.xxx) or unique_id
-
-        Returns:
-            The unique_id for configuration API
+        An entity_id resolves through the entity registry first, so a disabled
+        automation (no state) resolves too; the state's ``id`` attribute is the
+        fallback when the registry does not answer with a ``unique_id``.
 
         Raises:
             HomeAssistantAPIError: 404 if not found; other read failures propagate
         """
-        if identifier.startswith("automation."):
-            try:
-                state = await self.get_entity_state(identifier)
-                unique_id = state.get("attributes", {}).get("id")
-                if not unique_id:
-                    raise HomeAssistantAPIError(
-                        f"Automation {identifier} has no unique_id attribute",
-                        status_code=404,
-                    )
-                logger.debug(
-                    f"Converted entity_id {identifier} to unique_id {unique_id}"
-                )
-                return str(unique_id)
-            except HomeAssistantAPIError as e:
-                if e.status_code != 404:  # a failed read is not a missing one
-                    raise
-                raise HomeAssistantAPIError(
-                    f"Failed to resolve automation {identifier}: {str(e)}",
-                    status_code=404,
-                ) from e
-        else:
-            # Assume it's already a unique_id
+        if not identifier.startswith("automation."):
             return identifier
+        try:
+            entry = await self.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": identifier}
+            )
+        except HomeAssistantConnectionError as e:
+            logger.debug(f"Registry lookup for {identifier} failed: {e}")
+            entry = {}
+        if entry.get("success"):
+            unique_id = (entry.get("result") or {}).get("unique_id")
+            if unique_id:
+                return str(unique_id)
+        try:
+            state = await self.get_entity_state(identifier)
+        except HomeAssistantAPIError as e:
+            if e.status_code != 404:  # a failed read is not a missing one
+                raise
+            raise HomeAssistantAPIError(
+                f"Failed to resolve automation {identifier}: {str(e)}",
+                status_code=404,
+            ) from e
+        unique_id = state.get("attributes", {}).get("id")
+        if not unique_id:
+            raise HomeAssistantAPIError(
+                f"Automation {identifier} has no unique_id attribute",
+                status_code=404,
+            )
+        return str(unique_id)
 
     async def get_automation_config(self, identifier: str) -> dict[str, Any]:
         """Get automation configuration by unique_id or entity_id.
@@ -1445,19 +1450,19 @@ class HomeAssistantClient:
         identifier: str | None = None,
         *,
         _resolved: bool = False,
+        wait_for_entity: bool = False,
     ) -> dict[str, Any]:
         """
         Create new automation or update existing one.
 
         Args:
-            config: Automation configuration dictionary
-            identifier: Optional automation entity_id or unique_id (None = create new)
-            _resolved: When True, ``identifier`` is already the resolved unique_id
-                (the caller ran ``_resolve_automation_id``), so the redundant
-                entity_id→unique_id lookup is skipped. Ignored on the create path
-                (``identifier is None``). The #1404 config-id mismatch guard below
-                is unaffected — it still compares ``config['id']`` to the resolved
-                unique_id.
+            config: Automation configuration dictionary, sent as given
+            identifier: Optional automation entity_id or config id (None = create new)
+            _resolved: When True, ``identifier`` is already the config id (the
+                caller resolved it), so the entity_id lookup is skipped. The
+                #1404 config-id mismatch guard below still applies.
+            wait_for_entity: Poll for the entity the write registers, as a
+                creation does, and report it as ``entity_id``.
 
         Returns:
             Result with automation unique_id and status
@@ -1465,19 +1470,14 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAPIError: If configuration invalid or API error
         """
-        # Generate unique_id for new automation if not provided
         if identifier is None:
             unique_id = str(int(time.time() * 1000))
-            operation = "created"
-            logger.debug(f"Creating new automation with unique_id: {unique_id}")
         else:
             unique_id = (
                 identifier
                 if _resolved
                 else await self._resolve_automation_id(identifier)
             )
-            operation = "updated"
-            logger.debug(f"Updating automation with unique_id: {unique_id}")
 
         # Reject mismatch between resolved storage key and inner ``config["id"]``.
         # HA stores by the inner id field even though the URL carries one too —
@@ -1490,20 +1490,20 @@ class HomeAssistantClient:
                     "Cannot create automation with explicit config['id']="
                     f"{config_id!r}: Home Assistant stores by the inner id, "
                     "which would silently overwrite an existing automation. "
-                    "Omit 'id' from config to auto-generate, or pass identifier "
+                    "Omit 'id' from config to auto-generate, or pass entity_id "
                     "to update an existing automation.",
                     status_code=400,
                 )
             raise HomeAssistantAPIError(
-                f"Mismatched automation id: identifier={identifier!r} resolves "
-                f"to unique_id={unique_id!r}, but config['id']={config_id!r}. "
+                f"Mismatched automation id: the target's config id is "
+                f"{unique_id!r}, but config['id']={config_id!r}. "
                 "Refusing to write to prevent overwriting the wrong automation. "
-                f"Remove 'id' from config or set it to the resolved unique_id "
+                f"Remove 'id' from config or set it to the target's config id "
                 f"({unique_id!r}).",
                 status_code=400,
             )
 
-        # Add unique_id to config for updates
+        # Core stores by the body's id, so it carries the target's.
         if unique_id and "id" not in config:
             config = {**config, "id": unique_id}
 
@@ -1512,10 +1512,9 @@ class HomeAssistantClient:
                 "POST", f"/config/automation/config/{unique_id}", json=config
             )
 
-            # For new automations, query Home Assistant to get the actual entity_id that was assigned
             actual_entity_id = None
             entity_not_verified = False
-            if operation == "created":
+            if wait_for_entity:
                 actual_entity_id = await self._poll_for_automation_entity(unique_id)
                 if not actual_entity_id:
                     entity_not_verified = True
@@ -1524,7 +1523,6 @@ class HomeAssistantClient:
                 "unique_id": unique_id,
                 "entity_id": actual_entity_id,
                 "result": response.get("result", "ok"),
-                "operation": operation,
             }
             if entity_not_verified:
                 result["entity_not_verified"] = True
@@ -1532,7 +1530,9 @@ class HomeAssistantClient:
         except HomeAssistantAPIError as e:
             if e.status_code == 400:
                 raise HomeAssistantAPIError(
-                    f"Invalid automation configuration: {str(e)}", status_code=400
+                    f"Invalid automation configuration: {str(e)}",
+                    status_code=400,
+                    response_data=e.response_data,
                 ) from e
             raise
 
@@ -1609,27 +1609,11 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
-                raise HomeAssistantAPIError(
-                    f"Automation not found: {identifier} (unique_id: {unique_id})",
-                    status_code=404,
-                ) from e
-            elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) As a fallback, disable the automation and rename it with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{identifier}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes).",
-                    status_code=405,
-                ) from e
-            raise
-        except Exception as e:
-            if "404" in str(e):
+            # Core's DELETE answers a missing id with 400, not 404.
+            if (
+                e.status_code == 400
+                and (e.response_data or {}).get("message") == "Resource not found"
+            ):
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -1955,12 +1939,11 @@ class HomeAssistantClient:
 
         max_retries = 2
         retry_delay = 0.5  # seconds
+        # Whether an earlier attempt got past acquisition, so may have sent.
+        sent_before = False
 
         for attempt in range(max_retries):
             # Whether the failure happened before a usable connection existed.
-            # Failing to obtain one is transport death whatever class the
-            # manager raises; an auth failure or the pool-lock guard's bare
-            # ``Exception`` is not a connection error; type cannot decide this.
             acquiring = True
             try:
                 # Use per-client WebSocket keyed to this client's credentials
@@ -1996,34 +1979,33 @@ class HomeAssistantClient:
                         f"retrying after {retry_delay}s: {error_str}"
                     )
                     await asyncio.sleep(retry_delay)
+                    sent_before = sent_before or not acquiring
                     continue
 
                 # Phase first, type second. Failing before a client exists is
-                # evidence about the transport whatever class was raised; an
-                # auth failure or the pool-lock guard's bare ``Exception`` is not
-                # a no-answer class, so that case cannot be decided by type.
-                # Past acquisition only the no-answer classes count:
-                # ``send_command`` deliberately re-raises the original
-                # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
-                # rather than wrapping it, to keep at-most-once semantics for
-                # write callers, so those arrive here untranslated. Anything
-                # else (a ``ValueError`` from building the message, say) is a
-                # bug rather than evidence about the connection.
+                # transport evidence whatever was raised: an auth failure or the
+                # pool-lock guard's bare ``Exception`` is no no-answer class.
+                # Past acquisition only those classes count (``send_command``
+                # re-raises the original ``ConnectionClosed`` /
+                # ``ConnectionResetError`` to keep writes at-most-once); anything
+                # else is Home Assistant's own answer or a local bug.
                 if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
                     # One error channel for "no answer came back" (#1947): the
-                    # caller decides the policy, rather than every consumer
-                    # having to notice a marker on an otherwise ordinary
-                    # failure envelope. Callers that legitimately continue on a
-                    # missing answer catch this and say in ``warnings`` what
-                    # they skipped; callers whose output would read as a
-                    # negative finding let it propagate.
+                    # caller decides the policy. Callers that legitimately continue
+                    # on a missing answer catch this and say in ``warnings`` what
+                    # they skipped; callers whose output would read as a negative
+                    # finding let it propagate.
                     logger.error(
                         f"WebSocket transport failed ({message.get('type')}): {e}"
                     )
-                    if isinstance(e, HomeAssistantConnectionError):
-                        # Already the right class — re-raise unchanged so
-                        # subtypes (``HomeAssistantCommandNotSent``) and the
-                        # original traceback survive.
+                    if acquiring and not sent_before:
+                        # No attempt obtained a client, so nothing was sent.
+                        raise HomeAssistantCommandNotSent(error_str) from e
+                    if isinstance(e, HomeAssistantConnectionError) and not (
+                        sent_before and isinstance(e, HomeAssistantCommandNotSent)
+                    ):
+                        # Re-raised unchanged so subtypes and the traceback
+                        # survive; not "never sent" once an attempt may have sent.
                         raise
                     raise HomeAssistantConnectionError(error_str) from e
 
