@@ -370,6 +370,8 @@ async def get_component_caps(
         # silently unreachable on an HTTPS + verify_ssl=False install. ``None`` is
         # the pool's settings default, so a client without the attr is unchanged.
         verify_ssl = getattr(client, "verify_ssl", None)
+        # This probe alone decides the auth marker; never carry a stale one.
+        _PROBE_AUTH_REJECTED.pop(client, None)
 
         try:
             ws = await get_websocket_client(
