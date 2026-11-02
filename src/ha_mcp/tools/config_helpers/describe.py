@@ -158,8 +158,8 @@ async def describe_form(
     client: Any, domain: str | None, path: str, step: dict[str, Any]
 ) -> dict[str, Any]:
     """A flow form in brief: ``fields`` with HA's help text for each,
-    ``more_forms``/``note`` when a later form follows, and ``warnings`` when
-    Core's strings could not be read.
+    ``more_forms``/``note`` unless the form is the flow's last, and
+    ``warnings`` when Core's strings could not be read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
     or ``config_subentries.<type>``. Without a ``domain`` there is no help
@@ -178,23 +178,27 @@ async def describe_form(
 
 
 _LATER_FORM_TAIL = (
-    "whose fields can depend on these answers. Pass them in the same config; "
-    "a missing one comes back in the error with that form's fields."
+    "Pass them in the same config; a missing one comes back in the error with "
+    "that form's fields."
 )
 # ``last_step`` is False when a later form follows and None when the flow does
-# not say, which many single-form flows do.
+# not say, which many flows do, single-form ones included.
 _MORE_FORMS = {
-    False: ("yes", "Home Assistant asks for more fields on a later form, "),
+    False: (
+        "yes",
+        "Home Assistant asks for more fields on a later form, whose fields can "
+        "depend on these answers. ",
+    ),
     None: (
         "depends_on_answers",
-        "This form does not say whether it is the last one. Home Assistant "
-        "may ask for more fields on a later form, ",
+        "Home Assistant did not say whether more forms follow. If one does, its "
+        "fields can depend on these answers. ",
     ),
 }
 
 
 def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
-    """Say when HA asks, or may ask, for more fields on a later form."""
+    """Say whether HA asks for more fields on a later form, or leaves it open."""
     more = _MORE_FORMS.get(step.get("last_step"))
     if more is None:
         return {}
