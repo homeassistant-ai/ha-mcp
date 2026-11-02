@@ -279,6 +279,37 @@ async def _find_yaml_key_files(
     )
 
 
+async def _resolve_all_targets(
+    client: Any, file: str, yaml_path: str
+) -> tuple[list[tuple[str, bool]], list[str]]:
+    """Merge Core-discovered files with the glob resolver's matches.
+
+    Discovery sees only what Core loaded, so a package file Core rejected is
+    absent and the resolver still runs. A resolver failure becomes a warning
+    when discovery already produced targets, because those reads are still
+    valid. Each target keeps the resolver's named-vs-expanded provenance.
+    """
+    targets: list[tuple[str, bool]] = []
+    if _has_glob(file):
+        discovered = await _find_yaml_key_files(client, file, yaml_path)
+        if discovered:
+            named_literal = _names_a_file(file.rpartition("/")[2])
+            targets = [
+                (path, not (named_literal and path == file)) for path in discovered
+            ]
+    resolved: list[tuple[str, bool]] = []
+    try:
+        resolved, warnings = await _resolve_target_files(client, file)
+    except Exception as err:
+        if not targets:
+            raise
+        warnings = [f"Glob expansion failed: {err}"]
+    seen = {path for path, _ in targets}
+    targets.extend((path, expanded) for path, expanded in resolved if path not in seen)
+    targets.sort(key=lambda target: target[0])
+    return targets, warnings
+
+
 async def _list_files_matching(
     client: Any, file: str, directory: str, pattern: str
 ) -> list[str]:
@@ -489,30 +520,9 @@ class YamlReadTools:
         try:
             await _assert_mcp_tools_available(self._client)
 
-            # Strictness is a property of each target, not of the request, so
-            # the resolver reports which targets were named rather than expanded.
-            targets: list[tuple[str, bool]] | None = None
-            resolve_warnings: list[str] = []
-            if _has_glob(file):
-                discovered = await _find_yaml_key_files(self._client, file, yaml_path)
-                if discovered:
-                    # Discovery sees only what Core loaded, so a package file
-                    # Core rejected is absent. Keep the glob resolver in play
-                    # and merge its matches below, or that file vanishes from
-                    # the search without a trace.
-                    named_literal = _names_a_file(file.rpartition("/")[2])
-                    targets = [
-                        (path, not (named_literal and path == file))
-                        for path in discovered
-                    ]
-            resolved, resolve_warnings = await _resolve_target_files(self._client, file)
-            if targets is None:
-                targets = resolved
-            else:
-                seen = {path for path, _ in targets}
-                targets.extend(
-                    (path, expanded) for path, expanded in resolved if path not in seen
-                )
+            targets, resolve_warnings = await _resolve_all_targets(
+                self._client, file, yaml_path
+            )
             await refuse_reading_hidden_definitions(
                 self._client, "ha_config_get_yaml", [target for target, _ in targets]
             )

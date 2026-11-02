@@ -163,13 +163,13 @@ async def test_tool_merges_glob_matches_that_discovery_missed():
         {
             "find_yaml_key": {
                 "success": True,
-                "files": ["custom_packages/good.yaml"],
+                "files": ["custom_packages/zgood.yaml"],
             },
             "list_files": {
                 "success": True,
                 "files": [
-                    {"path": "custom_packages/good.yaml", "is_dir": False},
-                    {"path": "custom_packages/rejected.yaml", "is_dir": False},
+                    {"path": "custom_packages/zgood.yaml", "is_dir": False},
+                    {"path": "custom_packages/a-rejected.yaml", "is_dir": False},
                 ],
             },
             "read_file": _read_ok("template:\n"),
@@ -179,10 +179,31 @@ async def test_tool_merges_glob_matches_that_discovery_missed():
     out = await fn(yaml_path="template", file="custom_packages/*.yaml")
 
     assert out["count"] == 2
-    assert {match["file"] for match in out["matches"]} == {
-        "custom_packages/good.yaml",
-        "custom_packages/rejected.yaml",
-    }
+    assert [match["file"] for match in out["matches"]] == [
+        "custom_packages/a-rejected.yaml",
+        "custom_packages/zgood.yaml",
+    ]
+
+
+async def test_tool_warns_when_glob_expansion_fails_after_discovery():
+    """A listing failure must not discard files discovery already found."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {
+                "success": True,
+                "files": ["custom_packages/good.yaml"],
+            },
+            "list_files": {"success": False, "error": "listing failed"},
+            "read_file": _read_ok("template:\n"),
+        }
+    )
+
+    out = await fn(yaml_path="template", file="custom_packages/*.yaml")
+
+    assert out["count"] == 1
+    assert any("glob expansion failed" in w.lower() for w in out["warnings"])
 
 
 async def test_discovered_bracketed_literal_keeps_strict_parse_errors():
