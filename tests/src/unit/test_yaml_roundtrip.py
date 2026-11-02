@@ -57,6 +57,7 @@ _FastSafeLoader.yaml_constructors = {
 }
 annotatedyaml_loader.FastSafeLoader = _FastSafeLoader
 annotatedyaml.loader = annotatedyaml_loader
+annotatedyaml.Secrets = MagicMock
 sys.modules["annotatedyaml"] = annotatedyaml
 sys.modules["annotatedyaml.loader"] = annotatedyaml_loader
 
