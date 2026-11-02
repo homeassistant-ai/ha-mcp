@@ -22,7 +22,7 @@ from ha_mcp.tools import (
 )
 from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
 from ha_mcp.tools.config_entry_flow import set_config_subentry
-from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
+from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
 from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
 from ha_mcp.tools.config_entry_identity import (
     ReconfigureIdentity,
@@ -2157,7 +2157,7 @@ async def test_subentry_reconfigure_rejects_unconsumed_values() -> None:
             {"type": "abort", "reason": "reconfigure_successful"},
             {"unexpected": True},
             is_reconfigure=True,
-            flow=None,
+            flow=FlowRef(None, "config_subentries.demo", "entry-123"),
         )
 
     payload = json.loads(str(exc_info.value))
@@ -2473,7 +2473,7 @@ async def test_subentry_reconfigure_rejects_create_entry_result() -> None:
             {"type": "create_entry", "result": {"subentry_id": "new"}},
             {},
             is_reconfigure=True,
-            flow=None,
+            flow=FlowRef(None, "config_subentries.demo", "entry-123"),
         )
 
     payload = json.loads(str(exc_info.value))

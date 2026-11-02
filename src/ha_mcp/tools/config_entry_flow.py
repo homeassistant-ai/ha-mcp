@@ -22,7 +22,8 @@ sentinel rejection and ``config_entry_flow_abort``'s flow abort.
 
 The step machinery those entry points drive lives in six sibling modules,
 imported in one direction only (menu <- form <- walker <- abort <- here,
-progress <- walker, and introspect <- walker, abort and here):
+progress <- walker, introspect <- errors <- progress and walker, and
+introspect <- walker, abort and here):
 
 - ``config_entry_flow_abort``: aborting a failed walk's flow, shielded
 - ``config_entry_flow_introspect``: the flow-type vocabulary, the abort

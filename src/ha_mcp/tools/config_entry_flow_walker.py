@@ -874,7 +874,7 @@ async def _handle_config_subentry_flow_steps(
     *,
     is_reconfigure: bool,
     keep_current_values: bool = False,
-    flow: FlowRef | None,
+    flow: FlowRef,
 ) -> dict[str, Any]:
     """Walk a config subentry flow and accept HA's reconfigure-success abort.
 
