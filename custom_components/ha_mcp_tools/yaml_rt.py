@@ -242,7 +242,7 @@ def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
         return False, None
     # secrets.yaml values are secret payloads, not config definitions; a
     # mapping-valued !secret is nested under its secret name, not a file root.
-    if root_file.rsplit("/", 1)[-1] == "secrets.yaml":
+    if re.split(r"[\\/]", root_file)[-1] == "secrets.yaml":
         return False, None
     current = node
     for part in parts:

@@ -530,6 +530,15 @@ class TestFindYamlKeyEdges:
 
         assert find_yaml_key_files(root, "template") == []
 
+    def test_keys_nested_in_a_secret_mapping_with_windows_path(self):
+        """The secrets guard also recognizes backslash config paths."""
+        root = _AnnotatedDict("/config/configuration.yaml")
+        secret = _AnnotatedDict(r"C:\config\secrets.yaml")
+        secret["template"] = {}
+        root["shell_command"] = secret
+
+        assert find_yaml_key_files(root, "template") == []
+
     def test_key_nested_below_a_top_level_mapping_is_not_a_root(self):
         """A nested ``sensor`` under ``template`` is not a top-level sensor."""
         root = _AnnotatedDict("/config/configuration.yaml")
