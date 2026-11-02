@@ -21,7 +21,6 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
-from ..read_only import is_read_only, read_only_error_response
 from ..redaction import (
     redaction_enabled,
 )
@@ -184,8 +183,6 @@ async def fetch_entry_options_with_status(
       raised, or its first step was not a form (a menu / abort / create_entry),
       so no options could be harvested.
 
-    In Read Only Mode no flow is opened and the result is ``({}, False)``.
-
     The flag lets callers surface degraded reads instead of passing ``{}``
     off as real options: ``smart_search`` flips ``partial`` when a probe
     fails mid-search, and ``ha_get_integration`` attaches a ``warnings``
@@ -212,10 +209,6 @@ async def fetch_entry_options_with_status(
     ``smart_search._search_flow_helpers`` can probe flow-helper config
     without instantiating ``IntegrationTools``.
     """
-    if is_read_only():
-        # The probe opens the options flow, and a flow whose first step
-        # finishes saves the options before Core answers.
-        return {}, False
     log_probe_failure = logger.debug if quiet else logger.warning
     flow_id: str | None = None
     try:
@@ -257,37 +250,6 @@ def _split_component_entry_row(
     if not isinstance(subentries, list):
         subentries = []
     return entry, subentries
-
-
-def options_probe_cause() -> str:
-    """Why flow-entry options went unread: Read Only Mode, or a failed read."""
-    if is_read_only():
-        return "Read Only Mode does not open the OptionsFlow that reads them"
-    return "the OptionsFlow could not be read"
-
-
-def _refuse_an_entry_flow_describe_in_read_only(
-    *, entry_id: str | None, include_schema: bool, include_subentry_schema: bool
-) -> None:
-    """Refuse, in read-only mode, describing an entry's options or subentry flow.
-
-    The describe starts the flow, and a flow whose first step or menu choice
-    finishes it saves the options or a subentry before Core answers.
-    """
-    if (
-        is_read_only()
-        and entry_id is not None
-        and (include_schema or include_subentry_schema)
-    ):
-        raise_tool_error(
-            read_only_error_response(
-                "ha_get_integration",
-                blocked_operation="describing an entry's options or subentry "
-                "flow starts that flow, which can finish and save",
-                allowed="listing and reading entries; options that only the "
-                "options flow can read are left out",
-            )
-        )
 
 
 def _reject_log_persistence_without_level(
@@ -655,11 +617,6 @@ class IntegrationTools:
             if domain is not None:
                 validate_identifier_not_empty(domain, "domain")
                 include_opts = True
-            _refuse_an_entry_flow_describe_in_read_only(
-                entry_id=entry_id,
-                include_schema=include_schema_bool,
-                include_subentry_schema=include_subentry_schema_bool,
-            )
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:
@@ -910,8 +867,7 @@ class IntegrationTools:
             if level_warnings:
                 resp.setdefault("warnings", []).extend(level_warnings)
 
-            # Describe the options flow: started and aborted, refused by the caller
-            # in Read Only Mode because its first step can finish and save.
+            # Describe the options flow's first step: started and aborted.
             if include_schema and result.get("supports_options"):
                 await fetch_options_schema(self._client, entry_id, resp)
 
@@ -966,8 +922,8 @@ class IntegrationTools:
                 result["options"] = options
                 if not probe_ok:
                     probe_warnings.append(
-                        f"options of {entry_id} not read: "
-                        f"{options_probe_cause()}, so 'options' may "
+                        f"options of {entry_id} not read: the OptionsFlow "
+                        "could not be read, so 'options' may "
                         "be incomplete — empty options does not mean the "
                         "entry has none"
                     )
@@ -1385,8 +1341,8 @@ class IntegrationTools:
             result_data.setdefault("warnings", []).append(
                 f"options of {len(probe_failures)} "
                 f"entr{'y' if len(probe_failures) == 1 else 'ies'} not read "
-                f"({', '.join(probe_failures)}): {options_probe_cause()}, "
-                "so their 'options' may be incomplete; empty options does "
+                f"({', '.join(probe_failures)}): the OptionsFlow could not "
+                "be read, so their 'options' may be incomplete; empty options does "
                 "not mean an entry has none"
             )
         return result_data

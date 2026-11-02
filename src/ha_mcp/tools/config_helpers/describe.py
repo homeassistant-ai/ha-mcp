@@ -15,7 +15,6 @@ from typing import Any, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...errors import ErrorCode, create_error_response
-from ...read_only import is_read_only, read_only_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
@@ -202,24 +201,9 @@ def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
     return {"more_forms": answer, "note": lead + _LATER_FORM_TAIL}
 
 
-def _refuse_a_flow_describe_in_read_only() -> None:
-    """Starting the setup or options flow, or submitting its menu, can finish
-    it, and Core creates the helper or saves its options before it answers."""
-    if is_read_only():
-        raise_tool_error(
-            read_only_error_response(
-                "ha_config_list_helpers",
-                blocked_operation="describing a flow-based helper starts its "
-                "setup or options flow, which can finish and save",
-                allowed="listing helpers and describing a storage helper type",
-            )
-        )
-
-
 async def _describe_flow(
     client: Any, helper_type: str, menu_choice: str | None, entry_id: str | None
 ) -> dict[str, Any]:
-    _refuse_a_flow_describe_in_read_only()
     if entry_id is None:
         info = await fetch_helper_flow_info(client, helper_type, menu_choice)
         if menu_choice and "schema" in info and "branch" not in info:

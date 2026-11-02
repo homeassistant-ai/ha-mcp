@@ -20,7 +20,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
-from ..read_only import is_read_only
 from ..redaction import (
     harvest_secret_strings,
     is_password_flow_field,
@@ -130,16 +129,14 @@ async def redact_component_options(
     fields cannot be told apart, so this fails closed. Entries without
     an options flow carry no password markers anywhere (the documented
     metadata limit of the toggle); their options pass through and the
-    known-value scrub remains the only line for them. Read Only Mode runs
-    no probe, so it takes the same fail-closed path.
+    known-value scrub remains the only line for them.
     """
     options = entry.get("options")
     if not isinstance(options, dict) or not options:
         return
     if not entry.get("supports_options"):
         return
-    read_only = is_read_only()
-    data_schema = None if read_only else await _options_form_schema(client, entry_id)
+    data_schema = await _options_form_schema(client, entry_id)
     if isinstance(data_schema, list):
         entry["options"] = redact_options_by_flow_schema(options, data_schema)
     else:
@@ -147,8 +144,7 @@ async def redact_component_options(
             key: sentinel_replacement(value) for key, value in options.items()
         }
         warnings.append(
-            f"redact_secrets: no options schema readable for {entry_id}"
-            f"{' (Read Only Mode opens no options flow)' if read_only else ''} — "
+            f"redact_secrets: no options schema readable for {entry_id} — "
             "every option value was redacted conservatively (the password "
             "fields cannot be told apart without the schema)"
         )

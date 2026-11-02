@@ -229,8 +229,7 @@ secret redaction, reporting a submit or progress GET whose answer is lost as
 `applied_but_unverified` and leaving that flow open (Core may have committed
 it), reporting an ignored entry as `supports_options: false` and
 `supports_reconfigure: false` and starting neither flow on it (Core never sets
-it up, so its flows can fail), starting no flow from a read in Read Only Mode
-(options only the options flow can read are left out), and failing a describe whose step Core finishes (naming
+it up, so its flows can fail), and failing a describe whose step Core finishes (naming
 what Core saved, not undoing it) or that reaches a step without a form.
 
 Some API meanings are not discoverable as schemas: Core declares Energy

@@ -320,22 +320,31 @@ async def test_an_options_flow_abort_that_never_answers_does_not_hold_the_descri
     [("sensor", None), (None, None), (None, "entry1")],
     ids=["setup-menu", "setup", "existing"],
 )
-async def test_read_only_refuses_a_flow_describe_before_it_starts(
+async def test_read_only_still_describes_a_flow_based_helper(
     client: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
     menu_choice: str | None,
     helper_id: str | None,
 ) -> None:
-    info = AsyncMock()
+    info = AsyncMock(return_value={"menu_options": ["sensor"]})
     monkeypatch.setattr(mod, "fetch_helper_flow_info", info)
+    client.get_config_entry.return_value = {"domain": "template"}
+    client.start_options_flow.return_value = {
+        "type": "menu",
+        "flow_id": "f1",
+        "menu_options": ["sensor"],
+    }
 
-    with read_only_request(), pytest.raises(ToolError, match="READ_ONLY_MODE"):
-        await mod.describe_helper(
+    with read_only_request():
+        result = await mod.describe_helper(
             client, "template", menu_choice=menu_choice, helper_id=helper_id
         )
 
-    info.assert_not_awaited()
-    client.start_options_flow.assert_not_awaited()
+    assert result["menu_options"] == ["sensor"]
+    if helper_id is None:
+        info.assert_awaited_once_with(client, "template", menu_choice)
+    else:
+        client.start_options_flow.assert_awaited_once_with("entry1")
 
 
 @pytest.mark.asyncio
