@@ -59,6 +59,25 @@ async def _get(client: MagicMock, domain: str | None = "knx", **kwargs: Any) -> 
         return await IntegrationTools(client).ha_get_integration(**kwargs)
 
 
+def _bridge(answer: dict[str, Any] | Exception) -> Any:
+    """The real bridge, talking to a component that answers ``answer``."""
+    from contextlib import ExitStack
+
+    caps = ComponentCaps(1, "test", frozenset({"integration_commands"}), {})
+    ws = Mock(
+        send_command=AsyncMock(
+            side_effect=answer if isinstance(answer, Exception) else None,
+            return_value={"result": answer},
+        )
+    )
+    stack = ExitStack()
+    for name, value in (("get_component_caps", caps), ("get_websocket_client", ws)):
+        stack.enter_context(
+            patch(f"ha_mcp.tools.core_contract.{name}", AsyncMock(return_value=value))
+        )
+    return stack, ws
+
+
 class TestListing:
     async def test_lists_commands_and_lifts_their_warnings(self) -> None:
         listing = json.loads(json.dumps(_COMMAND_LIST))
@@ -101,6 +120,19 @@ class TestListing:
             "ws_commands not listed: Could not obtain the listing and validation "
             "of an integration's own WebSocket commands: ws down"
         ]
+
+    async def test_a_malformed_listing_names_the_bridge_and_logs_one_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        stack, _ws = _bridge({"status": "weird"})
+        with stack, caplog.at_level("WARNING"):
+            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
+        assert result["warnings"] == [
+            "ws_commands not listed: Could not obtain the listing and validation "
+            "of an integration's own WebSocket commands: malformed "
+            "ha_mcp_tools/integration_commands response"
+        ]
+        assert [r.exc_info is not None for r in caplog.records] == [True, False]
 
     async def test_not_requested_means_no_bridge_call(self) -> None:
         bridge = AsyncMock()

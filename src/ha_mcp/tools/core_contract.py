@@ -95,7 +95,7 @@ async def _contract_bridge(
             "unavailable",
         }:
             return result
-        raise ValueError("Malformed Core contract response")
+        raise ValueError(f"malformed ha_mcp_tools/{capability} response")
     except Exception as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)

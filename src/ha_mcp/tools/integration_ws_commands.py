@@ -67,9 +67,8 @@ async def attach_ws_commands(client: Any, resp: dict[str, Any]) -> None:
         try:
             listing = await integration_commands(client, domain)
         except ToolError as err:
-            logger.warning(
-                "Listing %s's WebSocket commands failed", domain, exc_info=True
-            )
+            # The bridge logged the cause's traceback.
+            logger.warning("Listing %s's WebSocket commands failed", domain)
             listing = {
                 "status": "unavailable",
                 "reason": extract_tool_error_message(err),
