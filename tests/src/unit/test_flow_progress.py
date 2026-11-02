@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -320,47 +321,95 @@ async def test_a_failed_write_says_when_its_flow_may_still_be_open(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("run", "submit", "abort", "consequence"),
+    ("run", "submit", "abort", "consequence", "status"),
     [
         pytest.param(
             "create", "submit_config_flow_step", "abort_config_flow",
-            "already_in_progress", id="create",
+            "already_in_progress", 500, id="create",
         ),
         pytest.param(
             "subentry", "submit_config_subentry_flow_step",
-            "abort_config_subentry_flow", "subentry flow f1", id="subentry",
+            "abort_config_subentry_flow", "subentry flow f1", 500, id="subentry",
         ),
         pytest.param(
             "options", "submit_options_flow_step", "abort_options_flow",
-            "options flow f1", id="options",
+            "options flow f1", 500, id="options",
+        ),
+        # Any 5xx on a reconfigure submit may follow its write: a 403 is an answer.
+        pytest.param(
+            "reconfigure", "submit_config_flow_step", "abort_config_flow",
+            "reauthentication", 403, id="reconfigure",
         ),
     ],
 )  # fmt: skip
 @pytest.mark.parametrize("left_open", [False, True], ids=["aborted", "timeout"])
+@pytest.mark.parametrize("cancelled", [False, True], ids=["answered", "cancelled"])
 async def test_a_raw_write_error_left_open_comes_back_with_the_warning(
-    run: str, submit: str, abort: str, consequence: str, left_open: bool
+    caplog: pytest.LogCaptureFixture,
+    run: str,
+    submit: str,
+    abort: str,
+    consequence: str,
+    status: int,
+    left_open: bool,
+    cancelled: bool,
 ) -> None:
-    # Home Assistant answered the submit with a 500: nothing was committed.
+    # Home Assistant answered the submit with an error, which the walk treats
+    # as not committed, so it aborts the flow. A cancellation stays one.
     client = _client(strings={})
-    getattr(client, submit).side_effect = HomeAssistantAPIError(
-        "API error: 500", status_code=500
+    getattr(client, submit).side_effect = (
+        asyncio.CancelledError()
+        if cancelled
+        else HomeAssistantAPIError(f"API error: {status}", status_code=status)
     )
     getattr(client, abort).side_effect = TimeoutError() if left_open else None
     write = {
         "create": _create_entry,
         "subentry": _create_subentry,
         "options": _update_options,
+        "reconfigure": _reconfigure,
     }[run]
+    converted = left_open and not cancelled
+    raised = (
+        asyncio.CancelledError
+        if cancelled
+        else ToolError
+        if converted
+        else HomeAssistantAPIError
+    )
 
-    with pytest.raises(ToolError if left_open else HomeAssistantAPIError) as exc_info:
+    with caplog.at_level(logging.ERROR), pytest.raises(raised) as exc_info:
         await write(client, dict(_FORM))
 
     getattr(client, abort).assert_awaited_once_with("f1")
-    if left_open:
-        payload = json.loads(str(exc_info.value))
-        assert "API error: 500" in payload["error"]["message"]
-        (warning,) = payload["warnings"]
+    # Off the tool's handler, the error it would have logged is logged here.
+    logged = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert [f"API error: {status}" in r.getMessage() for r in logged] == (
+        [True] if converted else []
+    )
+    if converted:
+        error = json.loads(str(exc_info.value))
+        assert f"API error: {status}" in error["error"]["message"]
+        assert error["error"]["suggestions"][-1].endswith("may not have been applied.")
+        assert not any("target entity" in s for s in error["error"]["suggestions"])
+        (warning,) = error["warnings"]
         assert consequence in warning
+
+
+@pytest.mark.asyncio
+async def test_an_unclassified_write_error_left_open_is_logged_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = _client(strings={})
+    client.submit_config_flow_step.side_effect = RuntimeError("PRIMARY")
+    client.abort_config_flow.side_effect = TimeoutError()
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ToolError):
+        await _create_entry(client, dict(_FORM))
+
+    (record,) = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert "PRIMARY" in record.getMessage()
+    assert record.exc_info is not None
 
 
 # --- a submit or poll that gets no answer may have committed -----------------

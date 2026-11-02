@@ -13,6 +13,7 @@ import anyio
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..errors import ErrorCode
 from .config_entry_flow_introspect import (
     _ABORT_TIMEOUT_S,
     abort_left_flow_open,
@@ -72,14 +73,31 @@ async def abort_failed_flow_type_only(
     return None
 
 
+# Replaces the classified suggestions, which name a service and an entity.
+_UNCONFIRMED_SUGGESTION = (
+    "A describe changed nothing; after a write, check the config entries before "
+    "retrying, since the change may or may not have been applied."
+)
+
+
 def _raise_with_warning(flow_error: BaseException, warning: str) -> None:
     """Raise ``flow_error`` again as a structured error with ``warning`` in its
-    warnings. A raw error (a lost connection, an HTTP error) becomes the error
-    the tool's own handler would build from it; a cancellation passes."""
+    warnings; a cancellation is left to the caller to re-raise.
+
+    A raw error (a lost connection, an HTTP error) is classified by
+    ``exception_to_structured_error`` and logged at error, as the tool's handler
+    would have done, but without the handler's context, and with a suggestion
+    that fits a flow instead of the classified service ones.
+    """
     if isinstance(flow_error, ToolError):
         payload = flow_error_payload(flow_error)
     elif isinstance(flow_error, Exception):
-        payload = exception_to_structured_error(flow_error, raise_error=False)
+        payload = exception_to_structured_error(
+            flow_error, raise_error=False, suggestions=[_UNCONFIRMED_SUGGESTION]
+        )
+        # An unclassified error is logged there already, with its traceback.
+        if payload["error"].get("code") != ErrorCode.INTERNAL_ERROR:
+            logger.error("Flow failed and its abort is unconfirmed: %s", flow_error)
     else:
         return
     if payload:
@@ -91,7 +109,9 @@ def raise_if_flow_left_open(
     flow_error: BaseException, abort_err: Exception | None, left_open: str
 ) -> None:
     """If the abort after ``flow_error`` is not confirmed, raise ``flow_error``
-    again as a structured error with ``left_open`` in its warnings."""
+    again as a structured error with ``left_open`` in its warnings (see
+    ``_raise_with_warning``). A cancellation is not converted: the caller
+    re-raises it as it is, without the warning."""
     if abort_left_flow_open(abort_err):
         _raise_with_warning(flow_error, left_open)
 
@@ -108,10 +128,11 @@ async def closing_probe_flow(
     """Abort the flow ``flow_id``, opened only to read it, when the block ends.
 
     If Home Assistant does not confirm the abort, ``left_open`` goes into
-    ``resp``'s warnings and, when the block raised, into that error's warnings
-    too: a raw error is raised again as a structured one. ``keep_raw_errors``
-    lets a raw error through unchanged, for a caller that turns it into a
-    warning in ``resp``.
+    ``resp``'s warnings. When the block raised, it also goes into that error's
+    warnings: a raw error is raised again as a structured one (see
+    ``_raise_with_warning``), and a cancellation passes unchanged, without it.
+    ``keep_raw_errors`` lets a raw error through unchanged, for a caller that
+    turns it into a warning in ``resp``.
     """
     try:
         yield
