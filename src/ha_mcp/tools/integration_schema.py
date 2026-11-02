@@ -262,7 +262,7 @@ async def _describe_step(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"The flow reached a {step_type!r} step, which has no form to "
-                "describe; the flow is aborted",
+                "describe; the flow is being aborted",
                 suggestions=[
                     "Run this flow in the Home Assistant UI "
                     "(Settings > Devices & Services)."

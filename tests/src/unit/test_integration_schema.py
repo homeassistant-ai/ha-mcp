@@ -762,12 +762,16 @@ async def test_menu_choice_whose_step_creates_an_entry_fails() -> None:
 @pytest.mark.parametrize("kind", ["options", "subentry"])
 async def test_an_entry_flow_that_finishes_gets_the_no_form_error(kind: str) -> None:
     client = _client({"type": "create_entry", "flow_id": "f1", "title": "Chat"})
+    getattr(client, _ABORTS[kind]).side_effect = TimeoutError()
 
     with pytest.raises(ToolError) as exc_info:
         await _describe(kind, client, None)
 
+    # The abort comes after the error; the error does not claim it worked.
     message = _error(exc_info)["error"]["message"]
     assert "'create_entry' step, which has no form" in message
+    assert message.endswith("the flow is being aborted")
+    assert "did not confirm" in _error(exc_info)["warnings"][0]
 
 
 _PROGRESS_STEP = {
