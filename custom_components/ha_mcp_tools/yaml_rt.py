@@ -240,6 +240,10 @@ def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
     root_file = getattr(node, "__config_file__", None)
     if not isinstance(root_file, str):
         return False, None
+    # secrets.yaml values are secret payloads, not config definitions; a
+    # mapping-valued !secret is nested under its secret name, not a file root.
+    if root_file.rsplit("/", 1)[-1] == "secrets.yaml":
+        return False, None
     current = node
     for part in parts:
         if not isinstance(current, dict) or part not in current:
@@ -298,8 +302,8 @@ def find_yaml_key_files(config: Any, yaml_path: str) -> list[str]:
     included folders that a one-level glob cannot see. Values are never
     returned; only the source file names leave this function.
     """
-    parts = [part for part in yaml_path.split(".") if part]
-    if not parts:
+    parts = yaml_path.split(".")
+    if not all(parts):
         return []
     found: set[str] = set()
     _walk_yaml_mappings(config, parts, set(), found)
