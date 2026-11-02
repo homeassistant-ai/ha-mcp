@@ -54,7 +54,7 @@
   "tests/src/unit/test_astro_setup_js_behavior.py": 1090,
   "tests/src/unit/test_automation_enabled.py": 1100,
   "tests/src/unit/test_backup_manager.py": 3547,
-  "tests/src/unit/test_best_practice_checker.py": 2979,
+  "tests/src/unit/test_best_practice_checker.py": 2963,
   "tests/src/unit/test_bulk_selector.py": 1568,
   "tests/src/unit/test_caller_token_auth.py": 1079,
   "tests/src/unit/test_categorized_search.py": 1422,
