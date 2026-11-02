@@ -410,6 +410,21 @@ async def _handle_abort_step(
     return reconfigure_result
 
 
+def _rejected_on_submit(
+    step: dict[str, Any], submitted_form: dict[str, Any] | None
+) -> bool:
+    """Whether ``step`` is the form just submitted, back with ``errors``.
+
+    A form's first render can carry advisory errors and still accept the
+    submit (KNX's routing step opens with ``no_router_discovered``).
+    """
+    return (
+        bool(step.get("errors"))
+        and submitted_form is not None
+        and submitted_form.get("step_id") == step.get("step_id")
+    )
+
+
 def _flow_form_payload(
     current_step: dict[str, Any],
     *,
@@ -533,7 +548,8 @@ async def _handle_flow_steps(
 
     HA flows can present steps in sequence:
     - ``menu``: caller supplies selection via ``group_type``/``next_step_id`` key
-    - ``form``: caller supplies field values; aborts immediately on validation errors
+    - ``form``: caller supplies field values; aborts when HA returns the
+      submitted form with ``errors``
     - ``create_entry``: flow complete
     - ``abort``: flow terminated by HA
 
@@ -626,6 +642,7 @@ async def _handle_flow_steps(
     )
     saw_form_step = False
     any_form_key_consumed = False
+    submitted_form: dict[str, Any] | None = None
     max_steps = _flow_step_budget(config)
 
     for step_num in range(max_steps):
@@ -667,6 +684,7 @@ async def _handle_flow_steps(
                 consumed_menu_selection_keys,
             )
             last_menu_choice = menu_choice
+            submitted_form = None
             logger.debug(
                 f"Flow step {step_num}: menu '{menu_choice}' "
                 f"(step_id={current_step.get('step_id')})"
@@ -689,9 +707,10 @@ async def _handle_flow_steps(
             # statistics: user step then pick-characteristic step), and records
             # what it consumed for any later step that redeclares the same
             # field.
-            if current_step.get("errors"):
+            if _rejected_on_submit(current_step, submitted_form):
                 await raise_form_errors(client, flow, flow_id, current_step)
             saw_form_step = True
+            submitted_form = current_step
             form_data, consumed_any = _flow_form_payload(
                 current_step,
                 flow_id=flow_id,
@@ -874,6 +893,7 @@ async def _handle_config_subentry_flow_steps(
     consumed_menu_selection_keys: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
+    submitted_form: dict[str, Any] | None = None
     max_steps = _flow_step_budget(config)
 
     for step_num in range(max_steps):
@@ -910,6 +930,7 @@ async def _handle_config_subentry_flow_steps(
                 consumed_menu_selection_keys,
             )
             last_menu_choice = menu_choice
+            submitted_form = None
             logger.debug(
                 "Config subentry flow step %s: menu %s (step_id=%s)",
                 step_num,
@@ -929,8 +950,9 @@ async def _handle_config_subentry_flow_steps(
             continue
 
         if result_type == _FlowType.FORM:
-            if current_step.get("errors"):
+            if _rejected_on_submit(current_step, submitted_form):
                 await raise_form_errors(client, flow, flow_id, current_step)
+            submitted_form = current_step
             form_data = _handle_form_step(
                 flow_id,
                 current_step,

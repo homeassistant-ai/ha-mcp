@@ -441,11 +441,15 @@ class TestFlowTextFromCore:
             {"component.demo.options.error.cannot_connect": "Cannot reach {host}."}
         )
         client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
-        client.start_options_flow.return_value = {
+        form = {
             "type": "form",
             "flow_id": "opt-flow",
             "step_id": "init",
-            "data_schema": [{"name": "host"}],
+            "data_schema": [{"name": "host", "required": True}],
+        }
+        client.start_options_flow.return_value = form
+        client.submit_options_flow_step.return_value = {
+            **form,
             "errors": {"base": "cannot_connect", "host": "no_string_for_this"},
             "description_placeholders": {"host": "10.0.0.2"},
         }
@@ -461,8 +465,97 @@ class TestFlowTextFromCore:
             "host": "no_string_for_this",
         }
         assert body["error_text"] == {"base": "Cannot reach 10.0.0.2."}
+        assert body["fields"] == [{"name": "host", "required": True}]
+        assert "data_schema" not in body
         assert _translation_requests(client) == [("options", ["demo"])]
-        client.submit_options_flow_step.assert_not_called()
+        client.submit_options_flow_step.assert_awaited_once()
+
+    async def test_a_first_render_with_advisory_errors_is_submitted(self) -> None:
+        # KNX's routing step opens with no_router_discovered when no router
+        # answers the scan, and creates the entry from the submit anyway.
+        client = AsyncMock()
+        client.start_config_flow.return_value = {
+            "type": "form",
+            "flow_id": "knx-flow",
+            "step_id": "connection_type",
+            "data_schema": [{"name": "connection_type", "required": True}],
+        }
+        client.submit_config_flow_step.side_effect = [
+            {
+                "type": "form",
+                "flow_id": "knx-flow",
+                "step_id": "routing",
+                "data_schema": [{"name": "individual_address", "required": True}],
+                "errors": {"base": "no_router_discovered"},
+            },
+            {
+                "type": "create_entry",
+                "flow_id": "knx-flow",
+                "result": {"entry_id": "k1"},
+            },
+        ]
+
+        result = await create_config_entry(
+            client,
+            "knx",
+            {"connection_type": "routing", "individual_address": "0.0.240"},
+        )
+
+        assert result["success"] is True
+        assert client.submit_config_flow_step.await_args_list[-1].args == (
+            "knx-flow",
+            {"individual_address": "0.0.240"},
+        )
+
+    async def test_a_subentry_first_render_with_advisory_errors_is_submitted(
+        self,
+    ) -> None:
+        client = _strings_client({})
+        form = {
+            "type": "form",
+            "flow_id": "sub-flow",
+            "step_id": "user",
+            "data_schema": [{"name": "name", "required": True}],
+        }
+        client.start_config_subentry_flow.return_value = {
+            **form,
+            "errors": {"base": "no_device_discovered"},
+        }
+        client.submit_config_subentry_flow_step.return_value = {
+            "type": "create_entry",
+            "flow_id": "sub-flow",
+            "result": {"subentry_id": "s1"},
+        }
+
+        result = await set_config_subentry(client, "e1", "device", {"name": "x"})
+
+        assert result["success"] is True
+        client.submit_config_subentry_flow_step.assert_awaited_once()
+
+    async def test_a_subentry_form_back_with_errors_after_its_submit_is_refused(
+        self,
+    ) -> None:
+        client = _strings_client({})
+        client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
+        form = {
+            "type": "form",
+            "flow_id": "sub-flow",
+            "step_id": "user",
+            "data_schema": [{"name": "name", "required": True}],
+        }
+        client.start_config_subentry_flow.return_value = form
+        client.submit_config_subentry_flow_step.return_value = {
+            **form,
+            "errors": {"name": "already_configured"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_config_subentry(client, "e1", "device", {"name": "x"})
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["errors"] == {"name": "already_configured"}
+        client.submit_config_subentry_flow_step.assert_awaited_once()
 
     async def test_subentry_abort_reads_its_type_under_the_parent_domain(
         self,
@@ -564,7 +657,7 @@ async def test_form_errors_redact_the_schemas_password_value(
         await raise_form_errors(AsyncMock(), None, "f1", step)
 
     assert "sk-LIVE" not in str(exc_info.value)
-    assert json.loads(str(exc_info.value))["data_schema"][0]["name"] == "api_key"
+    assert json.loads(str(exc_info.value))["fields"][0]["name"] == "api_key"
 
 
 @pytest.mark.parametrize("path", ["config", "options", "config_subentries.device"])

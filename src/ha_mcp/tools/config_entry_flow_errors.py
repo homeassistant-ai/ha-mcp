@@ -329,13 +329,17 @@ def redacted_step(step: dict[str, Any]) -> dict[str, Any]:
 async def raise_form_errors(
     client: Any, flow: FlowRef | None, flow_id: str, current_step: dict[str, Any]
 ) -> NoReturn:
-    """Raise for a form HA returned with ``errors``, with Core's text for each."""
+    """Raise for a form HA returned with ``errors``, with Core's text for each
+    and the form's ``fields`` in the describe shape."""
+    # describe imports config_entry_flow, which imports this module.
+    from .config_helpers.describe import compact_schema
+
     errors = current_step["errors"]
     context: dict[str, Any] = {
         "flow_id": flow_id,
         "step_id": current_step.get("step_id"),
         "errors": errors,
-        "data_schema": redacted_step(current_step).get("data_schema"),
+        "fields": compact_schema(current_step.get("data_schema") or []),
     }
     if isinstance(errors, dict):
         texts = await _flow_texts(client, flow, current_step, "error", errors)
