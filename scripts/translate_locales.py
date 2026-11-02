@@ -807,7 +807,11 @@ def _accept_or_retry(
 ) -> None:
     """Validate one translated string, retrying once with the reason."""
     reason = _validate(item, translated)
-    if reason is not None:
+    if reason is not None and _out_of_time():
+        # _call_gemini refuses past the deadline anyway; skipping it here also
+        # skips the pacing sleep, which per rejected string outruns the slack.
+        reason += " (time budget exhausted; not retrying)"
+    elif reason is not None:
         try:
             retry = _call_gemini(
                 _prompt(locale, {_string_id(item): item.english}, surface, queued_keys)

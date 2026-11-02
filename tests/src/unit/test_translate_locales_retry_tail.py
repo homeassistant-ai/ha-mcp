@@ -1,9 +1,11 @@
-"""The retry tail of ``scripts/translate_locales.py``'s ``_call_gemini``.
+"""The retries of ``scripts/translate_locales.py`` and its time budget.
 
-Every retryable failure, a transport error as much as an unusable answer,
-ends in one shared tail: stop after the fifth attempt, stop once the time
-budget is spent, otherwise wait and retry. These tests drive it through the
-transport-error path with a monkeypatched transport and a recorded sleep.
+Every retryable failure in ``_call_gemini``, a transport error as much as an
+unusable answer, ends in one shared tail: stop after the fifth attempt, stop
+once the time budget is spent, otherwise wait and retry. The first tests drive
+it through the transport-error path with a monkeypatched transport. The
+corrective retry ``_accept_or_retry`` asks for a rejected string runs only
+while the same budget lasts. Every test records the sleeps.
 """
 
 from __future__ import annotations
@@ -65,3 +67,76 @@ def test_spent_budget_stops_the_retries(
         translate_locales._call_gemini("prompt")
     assert len(calls) == 1
     assert sleeps == []
+
+
+@pytest.fixture
+def retries(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Stands in for the engine: records each retry prompt and answers it
+    with a valid translation of the one string these tests use."""
+    prompts: list[str] = []
+
+    def engine(prompt: str) -> dict[str, Any]:
+        prompts.append(prompt)
+        return {"messages:greeting": "Hallo"}
+
+    monkeypatch.setattr(translate_locales, "_call_gemini", engine)
+    return prompts
+
+
+def _accept(
+    results: dict[tuple[str, str], str],
+    failures: list[str],
+    translated: str | None = None,
+) -> set[tuple[str, str]]:
+    """Run ``_accept_or_retry`` on one string; by default the engine answered
+    it with nothing."""
+    failed: set[tuple[str, str]] = set()
+    item = translate_locales.WorkItem("de", "messages", "greeting", "Hello")
+    translate_locales._accept_or_retry(
+        "de", item, translated, results, failures, failed, "messages", frozenset()
+    )
+    return failed
+
+
+def test_rejected_string_gets_one_retry_while_the_budget_lasts(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
+) -> None:
+    monkeypatch.setattr(
+        translate_locales, "_DEADLINE", translate_locales.time.monotonic() + 3600
+    )
+    results: dict[tuple[str, str], str] = {}
+    failed = _accept(results, [])
+    assert len(retries) == 1
+    assert "previous attempt was rejected" in retries[0]
+    assert len(sleeps) == 1, "the retry is paced like any other request"
+    assert results == {("messages", "greeting"): "Hallo"}
+    assert failed == set()
+
+
+def test_spent_budget_skips_the_validation_retry(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
+) -> None:
+    """An answer can arrive after the deadline; each string it got wrong must
+    then fail at once, without a retry call and its pacing wait."""
+    monkeypatch.setattr(
+        translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
+    )
+    failures: list[str] = []
+    failed = _accept({}, failures)
+    assert retries == []
+    assert sleeps == []
+    assert failed == {("messages", "greeting")}
+    assert failures[0].endswith("(time budget exhausted; not retrying)")
+
+
+def test_late_answer_keeps_the_strings_it_got_right(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
+) -> None:
+    monkeypatch.setattr(
+        translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
+    )
+    results: dict[tuple[str, str], str] = {}
+    failed = _accept(results, [], translated="Hallo")
+    assert results == {("messages", "greeting"): "Hallo"}
+    assert failed == set()
+    assert retries == []
