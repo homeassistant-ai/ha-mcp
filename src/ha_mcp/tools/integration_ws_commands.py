@@ -13,7 +13,11 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from .backup_access import guard_snapshot_route
 from .config_entry_flow import is_component_domain, refuse_component_entry
-from .core_contract import command_payload, integration_commands
+from .core_contract import (
+    UPDATE_COMPONENT_SUGGESTION,
+    command_payload,
+    integration_commands,
+)
 from .helpers import extract_tool_error_message, raise_tool_error
 from .util_helpers import is_streaming_ws_command, websocket_error_message
 
@@ -125,12 +129,19 @@ async def send_ws_command(
     validation = await integration_commands(client, domain, command, payload)
     validated = validation["status"] == "validated"
     if validated and not isinstance(validation.get("valid"), bool):
+        logger.warning(
+            "The component answered status %r for %s without a verdict; "
+            "nothing was sent",
+            validation["status"],
+            command,
+        )
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                "The component returned a validation without a verdict; "
-                "nothing was sent",
+                f"The component answered status {validation['status']!r} "
+                "without a verdict; nothing was sent",
                 context=context,
+                suggestions=[UPDATE_COMPONENT_SUGGESTION],
             )
         )
     if validated and validation["valid"] is False:

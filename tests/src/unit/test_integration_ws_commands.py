@@ -10,6 +10,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import integration_ws_commands as module
 from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.tools.core_contract import UPDATE_COMPONENT_SUGGESTION
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_component_ws_search import _REAL_VOL, FakeHass
@@ -130,7 +131,7 @@ class TestListing:
         assert result["warnings"] == [
             "ws_commands not listed: Could not obtain the listing and validation "
             "of an integration's own WebSocket commands: malformed "
-            "ha_mcp_tools/integration_commands response"
+            "ha_mcp_tools/integration_commands response (status 'weird')"
         ]
         assert [r.exc_info is not None for r in caplog.records] == [True, False]
 
@@ -298,21 +299,49 @@ class TestSend:
 
     @pytest.mark.parametrize("verdict", [{}, {"valid": None}, {"valid": "yes"}])
     async def test_a_validation_without_a_verdict_sends_nothing(
-        self, verdict: dict[str, Any]
+        self, verdict: dict[str, Any], caplog: pytest.LogCaptureFixture
     ) -> None:
         # A malformed bridge answer, not a schema rejection of the ws_data.
         client = _client()
         bridge = AsyncMock(return_value={"status": "validated", **verdict})
         with (
             patch.object(module, "integration_commands", bridge),
+            caplog.at_level("WARNING"),
             pytest.raises(ToolError) as exc_info,
         ):
             await IntegrationTools(client).ha_set_integration(
+                entry_id="e1", ws_command="knx/delete_entity", ws_data={"pin": "1234"}
+            )
+        error = _error(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "status 'validated' without a verdict" in error["message"]
+        assert error["suggestion"] == UPDATE_COMPONENT_SUGGESTION
+        (_record,) = [r for r in caplog.records if "without a verdict" in r.message]
+        assert "1234" not in caplog.text
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("answer", "shown"),
+        [
+            ({"status": "weird", "pin": "1234"}, "(status 'weird')"),
+            ({"status": {"pin": "1234"}}, "(a dict status)"),
+            (RuntimeError("ws down"), "ws down"),
+        ],
+        ids=["status", "odd-status", "failed"],
+    )
+    async def test_a_malformed_answer_names_its_status_and_the_component_update(
+        self, answer: dict[str, Any] | Exception, shown: str
+    ) -> None:
+        stack, _ws = _bridge(answer)
+        with stack, pytest.raises(ToolError) as exc_info:
+            await IntegrationTools(_client()).ha_set_integration(
                 entry_id="e1", ws_command="knx/delete_entity"
             )
-        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
-        assert "without a verdict" in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
+        error = _error(exc_info)
+        assert error["message"].endswith(shown)
+        assert "1234" not in str(exc_info.value)
+        malformed = not isinstance(answer, Exception)
+        assert (error["suggestion"] == UPDATE_COMPONENT_SUGGESTION) is malformed
 
     async def test_a_validation_sends_the_command_and_its_payload(self) -> None:
         stack, ws = _bridge(_VALID)
