@@ -231,6 +231,24 @@ def _evaluate_read(
     return match, None
 
 
+def _matches_discovered_file(path: str, pattern: str) -> bool:
+    """Match a Core-discovered path against the caller's glob.
+
+    The directory is literal: the tool resolves folders by name, so a bracket
+    in ``pack[a]ges`` must not select the sibling ``packages``. The file name
+    keeps fnmatch expansion, and an exact path is kept because a bracketed name
+    cannot match itself (the same ambiguity ``_resolve_target_files`` handles
+    with its escaped-literal lookup).
+    """
+    if path == pattern:
+        return True
+    directory, _, name = pattern.rpartition("/")
+    if directory and not path.startswith(directory + "/"):
+        return False
+    candidate = path[len(directory) + 1 :] if directory else path
+    return fnmatch.fnmatch(candidate, name)
+
+
 async def _find_yaml_key_files(
     client: Any, file: str, yaml_path: str
 ) -> list[str] | None:
@@ -257,7 +275,7 @@ async def _find_yaml_key_files(
     return sorted(
         str(path)
         for path in files
-        if isinstance(path, str) and fnmatch.fnmatch(path, file)
+        if isinstance(path, str) and _matches_discovered_file(str(path), file)
     )
 
 

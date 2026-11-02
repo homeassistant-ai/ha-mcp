@@ -44,6 +44,42 @@ class TestFindYamlKeyFiles:
 
         assert files == ["custom_packages/nested/mcp.yaml"]
 
+    async def test_bracketed_directory_is_literal(self, monkeypatch):
+        """A class in a folder name must not select a sibling folder."""
+        from ha_mcp.tools import tools_yaml_read
+
+        async def fake_service(client, service, data):
+            return {
+                "success": True,
+                "files": ["pack[a]ges/svc.yaml", "packages/svc.yaml"],
+            }
+
+        monkeypatch.setattr(tools_yaml_read, "call_mcp_tools_service", fake_service)
+
+        files = await tools_yaml_read._find_yaml_key_files(
+            object(), "pack[a]ges/*.yaml", "template"
+        )
+
+        assert files == ["pack[a]ges/svc.yaml"]
+
+    async def test_bracketed_file_name_keeps_the_literal(self, monkeypatch):
+        """A file named svc[a].yaml cannot fnmatch itself; keep it exactly."""
+        from ha_mcp.tools import tools_yaml_read
+
+        async def fake_service(client, service, data):
+            return {
+                "success": True,
+                "files": ["packages/svc[a].yaml", "packages/svca.yaml"],
+            }
+
+        monkeypatch.setattr(tools_yaml_read, "call_mcp_tools_service", fake_service)
+
+        files = await tools_yaml_read._find_yaml_key_files(
+            object(), "packages/svc[a].yaml", "template"
+        )
+
+        assert files == ["packages/svc[a].yaml", "packages/svca.yaml"]
+
     async def test_non_list_files_falls_back(self, monkeypatch):
         from ha_mcp.tools import tools_yaml_read
 
