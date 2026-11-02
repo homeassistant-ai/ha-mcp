@@ -1829,7 +1829,7 @@ class TestDurationMathDetector:
         assert not _has_warning_containing(warnings, "last_changed", "for:")
 
     def test_warning_contains_skill_ref(self):
-        """Condition-path warning links to ``#native-conditions`` (cf. ``#trigger-types`` for triggers)."""
+        """Condition-path warning links to ``#native-conditions`` (trigger warnings cite a trigger subsection)."""
         config = {
             "condition": [
                 {
@@ -1861,22 +1861,6 @@ class TestDurationMathDetector:
         assert not generic_warnings, (
             "Generic fallback should not fire alongside specific detector"
         )
-
-    def test_trigger_warning_uses_trigger_types_anchor(self):
-        """Trigger-specific warning links to trigger-types, not native-conditions."""
-        config = {
-            "trigger": [
-                {
-                    "platform": "template",
-                    "value_template": "{{ (now() - states.sensor.x.last_updated).total_seconds() > 60 }}",
-                }
-            ],
-            "action": [],
-        }
-        warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
-        assert _has_warning_containing(
-            warnings, "triggers-and-conditions.md#trigger-types"
-        ), "Trigger warning should reference #trigger-types anchor"
 
     def test_no_false_positive_bare_last_changed_variable(self):
         """A Jinja variable literally named ``last_changed`` must not trigger the detector."""
