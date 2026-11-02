@@ -108,9 +108,12 @@ async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
             candidate = flow.get("data_schema")
             if isinstance(candidate, list) and candidate:
                 data_schema = candidate
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
-            "redact_secrets: options-flow probe failed for %s: %r", entry_id, exc
+            "redact_secrets: options-flow probe failed for %s: %r",
+            entry_id,
+            exc,
+            exc_info=True,
         )
     finally:
         if flow_id:
@@ -341,7 +344,8 @@ async def fetch_options_schema(
             raise
         logger.warning(
             f"Failed to fetch options schema for {entry_id}: "
-            f"{type(schema_err).__name__}: {schema_err}"
+            f"{type(schema_err).__name__}: {schema_err}",
+            exc_info=True,
         )
         schema_warnings: list[str] = resp.setdefault("warnings", [])
         schema_warnings.append(

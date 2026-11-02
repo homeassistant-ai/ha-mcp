@@ -24,6 +24,7 @@ from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import (
     config_entry_flow_introspect,
 )
+from ha_mcp.tools.config_entry_flow_abort import abort_failed_flow
 from ha_mcp.tools.integration_schema import (
     fetch_config_flow_schema,
     fetch_config_subentry_schema,
@@ -944,3 +945,40 @@ async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> No
         "The domain of config entry e1 could not be read, so Home Assistant's "
         "error and reason texts are missing"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["probe", "entry_schema"])
+async def test_a_swallowed_options_flow_failure_logs_its_traceback(
+    kind: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _client(_form("init", _HOST))
+    client.start_options_flow.side_effect = RuntimeError("ws down")
+
+    with caplog.at_level("WARNING", logger="ha_mcp.tools.integration_schema"):
+        if kind == "probe":
+            entry = {"supports_options": True, "options": {"host": "h"}}
+            await redact_component_options(client, "e1", entry, [])
+        else:
+            await fetch_options_schema(client, "e1", _resp())
+
+    (record,) = [
+        r for r in caplog.records if r.name == "ha_mcp.tools.integration_schema"
+    ]
+    assert record.exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_abort_after_an_error_logs_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    abort = AsyncMock(side_effect=RuntimeError("ws down"))
+
+    with caplog.at_level("WARNING"):
+        await abort_failed_flow(abort, "f1", kind="config subentry flow")
+
+    (record,) = [r for r in caplog.records if "f1" in r.getMessage()]
+    assert record.getMessage().startswith(
+        "Failed to abort config subentry flow f1 after error"
+    )
+    assert record.exc_info is not None
