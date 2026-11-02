@@ -120,6 +120,7 @@ async def test_tool_uses_core_discovery_for_a_glob():
                 "success": True,
                 "files": ["custom_packages/nested/mcp.yaml", "other.yaml"],
             },
+            "list_files": {"success": True, "files": []},
             "read_file": _read_ok("template:\n  - trigger: []\n"),
         }
     )
@@ -152,3 +153,66 @@ async def test_tool_falls_back_when_discovery_has_no_files():
 
     assert out["count"] == 1
     assert any(c.args[1] == "list_files" for c in client.call_service.await_args_list)
+
+
+async def test_tool_merges_glob_matches_that_discovery_missed():
+    """A package Core rejected is absent from discovery but must stay visible."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {
+                "success": True,
+                "files": ["custom_packages/good.yaml"],
+            },
+            "list_files": {
+                "success": True,
+                "files": [
+                    {"path": "custom_packages/good.yaml", "is_dir": False},
+                    {"path": "custom_packages/rejected.yaml", "is_dir": False},
+                ],
+            },
+            "read_file": _read_ok("template:\n"),
+        }
+    )
+
+    out = await fn(yaml_path="template", file="custom_packages/*.yaml")
+
+    assert out["count"] == 2
+    assert {match["file"] for match in out["matches"]} == {
+        "custom_packages/good.yaml",
+        "custom_packages/rejected.yaml",
+    }
+
+
+async def test_discovered_bracketed_literal_keeps_strict_parse_errors():
+    """A named bracketed file must not soften a parse failure into a warning."""
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
+    from .test_yaml_read_tool import _make_tool
+
+    def read(payload):
+        return {
+            "success": True,
+            "path": payload["path"],
+            "content": "...",
+            "subtree": None,
+            "parse_error": "not valid YAML at line 3, column 5",
+        }
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {
+                "success": True,
+                "files": ["packages/svc[a].yaml"],
+            },
+            "list_files": {
+                "success": True,
+                "files": [{"path": "packages/svc[a].yaml", "is_dir": False}],
+            },
+            "read_file": read,
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")
