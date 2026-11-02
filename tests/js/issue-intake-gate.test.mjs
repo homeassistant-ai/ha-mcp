@@ -79,6 +79,9 @@ test("a report, or any answer in the report field or reason section, keeps an is
   const cases = [
     [(s) => (s.issue.body += `\n\n${report}`), null],
     [(s) => (s.issue.body = report.replace("🚨", "🤖")), null],
+    // A copy path that drops emoji leaves the heading without its icon (#2950).
+    [(s) => (s.issue.body = report.replace("🚨 ", "")), null],
+    [(s) => (s.issue.body = report.replace("🚨", "")), null],
     // Pasted into the form field, or with the fence the tool shows it in.
     [(s) => (s.issue.body = section(reportFieldLabel, report)), null],
     [(s) => (s.issue.body = `\`\`\`\`markdown\n${report}\n\`\`\`\``), null],
