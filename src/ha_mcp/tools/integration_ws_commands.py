@@ -58,21 +58,7 @@ async def attach_ws_commands(client: Any, resp: dict[str, Any]) -> None:
             "include_ws_commands was ignored: ha-mcp's own entries take no ws_command"
         )
         return
-    listing: dict[str, Any] = {
-        "status": "unavailable",
-        "reason": "the entry carries no domain",
-    }
-    if isinstance(domain, str):
-        # Optional detail: a failed listing must not discard the entry read.
-        try:
-            listing = await integration_commands(client, domain)
-        except ToolError as err:
-            # The bridge logged the cause's traceback.
-            logger.warning("Listing %s's WebSocket commands failed", domain)
-            listing = {
-                "status": "unavailable",
-                "reason": extract_tool_error_message(err),
-            }
+    listing = await _list_commands(client, domain)
     if listing["status"] != "available":
         resp.setdefault("warnings", []).append(
             f"ws_commands not listed: {listing['reason']}"
@@ -85,6 +71,19 @@ async def attach_ws_commands(client: Any, resp: dict[str, Any]) -> None:
     resp["ws_commands"] = commands
     if warnings:
         resp.setdefault("warnings", []).extend(sorted(warnings))
+
+
+async def _list_commands(client: Any, domain: Any) -> dict[str, Any]:
+    """The bridge's listing of ``domain``'s commands; a failure is an
+    ``unavailable`` listing, so it never discards the entry read."""
+    if not isinstance(domain, str):
+        return {"status": "unavailable", "reason": "the entry carries no domain"}
+    try:
+        return await integration_commands(client, domain)
+    except ToolError as err:
+        # The bridge logged the cause's traceback.
+        logger.warning("Listing %s's WebSocket commands failed", domain)
+        return {"status": "unavailable", "reason": extract_tool_error_message(err)}
 
 
 async def send_ws_command(
