@@ -664,38 +664,15 @@ async def test_menu_choice_whose_step_creates_an_entry_fails() -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_flow_that_creates_an_entry_fails_and_says_options_saved() -> (
-    None
-):
-    client = _client({"type": "create_entry", "flow_id": "f1", "title": ""})
-    resp = _resp()
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_options_schema(client, "e1", resp)
-
-    assert "options were saved" in _error(exc_info)["error"]["message"]
-    assert "options_schema" not in resp
-
-
-@pytest.mark.asyncio
-async def test_subentry_flow_that_creates_an_entry_fails_and_names_the_subentry() -> (
-    None
-):
+@pytest.mark.parametrize("kind", ["options", "subentry"])
+async def test_an_entry_flow_that_finishes_gets_the_no_form_error(kind: str) -> None:
     client = _client({"type": "create_entry", "flow_id": "f1", "title": "Chat"})
 
     with pytest.raises(ToolError) as exc_info:
-        await fetch_config_subentry_schema(
-            client,
-            "e1",
-            _resp("ollama"),
-            subentry_type="conversation",
-            subentry_id=None,
-            show_advanced_options=False,
-        )
+        await _describe(kind, client, None)
 
-    body = _error(exc_info)
-    assert "subentry" in body["error"]["message"]
-    assert body["title"] == "Chat"
+    message = _error(exc_info)["error"]["message"]
+    assert "'create_entry' step, which has no form" in message
 
 
 _PROGRESS_STEP = {

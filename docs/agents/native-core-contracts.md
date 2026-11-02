@@ -229,8 +229,9 @@ secret redaction, reporting a submit or progress GET whose answer is lost as
 `applied_but_unverified` and leaving that flow open (Core may have committed
 it), reporting an ignored entry as `supports_options: false` and
 `supports_reconfigure: false` and starting neither flow on it (Core never sets
-it up, so its flows can fail), and failing a describe whose step Core finishes (naming
-what Core saved, not undoing it) or that reaches a step without a form.
+it up, so its flows can fail), and failing a setup describe whose step Core finishes
+(naming the entry Core created, not undoing it) or any describe that reaches a
+step without a form.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

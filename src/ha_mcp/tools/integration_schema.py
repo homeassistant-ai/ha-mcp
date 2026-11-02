@@ -1,13 +1,14 @@
-"""ha_get_integration's setup, options and subentry flow schemas.
+"""The setup, options and subentry flow schemas of ha_get_integration and
+ha_set_integration(describe=True).
 
 A schema only exists inside an open flow: the domain's config flow (or the
 entry's options or subentry flow) is started, its form described in the same
 compact shape the helper describe uses (fields, HA's help text, current
 values), and the flow aborted. A flow that opens with a menu lists its
-branches; ``menu_choice`` submits one of them, which runs that step in Home
-Assistant, and describes the form behind it. A flow Home Assistant aborts is
-reported with Core's reason text. A step that finishes the flow (Core has
-then saved it) or waits on work Core runs fails the call.
+branches; ``menu_choice`` (ha_set_integration only) submits one of them, which
+runs that step in Home Assistant, and describes the form behind it. A flow
+Home Assistant aborts is reported with Core's reason text. A step without a
+form fails the call; a setup flow Core finishes names the entry it created.
 """
 
 from __future__ import annotations
@@ -167,34 +168,22 @@ def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> NoReturn:
     )
 
 
-def _raise_flow_finished(step: dict[str, Any], path: str) -> NoReturn:
-    """Report a describe step Core answered with ``create_entry``: it committed."""
-    title = step.get("title")
-    context: dict[str, Any] = {}
-    suggestions: list[str] = []
-    if path == "config":
-        result = step.get("result")
-        result = result if isinstance(result, dict) else {}
-        title = result.get("title", title)
-        context = {"entry_id": result.get("entry_id"), "title": title}
-        what = (
-            f"the setup flow and created config entry {result.get('entry_id')} "
-            f"({title!r})"
-        )
-        suggestions.append(
-            "Remove the entry with ha_remove_helpers_integrations if it is not wanted."
-        )
-    elif path == "options":
-        what = "the options flow; the options were saved"
-    else:
-        context = {"title": title}
-        what = f"the subentry flow and created a subentry ({title!r})"
+def _raise_setup_flow_finished(step: dict[str, Any]) -> NoReturn:
+    """Report a setup describe Core answered with ``create_entry``: it committed."""
+    result = step.get("result")
+    result = result if isinstance(result, dict) else {}
+    title = result.get("title", step.get("title"))
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
-            f"Home Assistant finished {what} instead of showing a form to describe",
-            suggestions=suggestions,
-            context=context,
+            "Home Assistant finished the setup flow and created config entry "
+            f"{result.get('entry_id')} ({title!r}) instead of showing a form "
+            "to describe",
+            suggestions=[
+                "Remove the entry with ha_remove_helpers_integrations if it is "
+                "not wanted."
+            ],
+            context={"entry_id": result.get("entry_id"), "title": title},
         )
     )
 
@@ -236,7 +225,7 @@ async def _describe_step(
         step = await submit(step["flow_id"], {"next_step_id": menu_choice})
         chosen = {"menu_choice": menu_choice}
     elif menu_choice is not None and step.get("type") not in ("abort", "create_entry"):
-        # An abort is reported, and a finished flow must say what it saved.
+        # An abort is reported, and a finished setup flow names its entry.
         _refuse_menu_choice(
             menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
         )
@@ -255,8 +244,8 @@ async def _describe_step(
             **chosen,
             "menu_options": menu_choices(step),
         }
-    if step_type == "create_entry":
-        _raise_flow_finished(step, flow.path)
+    if step_type == "create_entry" and flow.path == "config":
+        _raise_setup_flow_finished(step)
     if step_type != "form":
         progress: dict[str, Any] = {}
         if step_type == "progress":

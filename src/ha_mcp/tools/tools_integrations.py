@@ -343,9 +343,7 @@ class IntegrationTools:
                 "Assistant aborts gives aborted, plus reason_text when Home "
                 "Assistant has a string for the reason. Only applies "
                 "when supports_options=true. The flow is started, described "
-                "and aborted. If Home Assistant finishes it instead of showing "
-                "a form, the call fails and says what was saved. For an "
-                "integration's setup form, use ha_set_integration(domain=..., "
+                "and aborted. For an integration's setup form, use ha_set_integration(domain=..., "
                 "describe=True).",
                 default=False,
             ),
@@ -366,9 +364,7 @@ class IntegrationTools:
                 description=(
                     "When entry_id is set, describe a config subentry flow's "
                     "form as subentry_schema.fields (same shape as "
-                    "include_schema); the flow is aborted afterwards, and if "
-                    "Home Assistant finishes it instead of showing a form, the "
-                    "call fails and says what was created. Pair with "
+                    "include_schema); the flow is aborted afterwards. Pair with "
                     "subentry_type, and optionally subentry_id for the "
                     "reconfigure form."
                 ),
@@ -1603,9 +1599,9 @@ class IntegrationTools:
                     "menu_choice), and a flow Home Assistant aborts gives "
                     "aborted, plus reason_text when Home Assistant has a "
                     "string for the reason. The flow is started, described "
-                    "and aborted. If Home Assistant finishes it instead of "
-                    "showing a form, the call fails and says what was saved "
-                    "(e.g. the new entry)."
+                    "and aborted. If Home Assistant finishes the setup flow "
+                    "instead of showing a form, the call fails and names the "
+                    "new entry."
                 ),
             ),
         ] = False,
@@ -1617,11 +1613,11 @@ class IntegrationTools:
                     "With describe=True, when the flow opens with a "
                     "menu: the menu option whose form to describe. Without it "
                     "the menu options are listed. Choosing an option runs that "
-                    "step in Home Assistant; if it finishes the flow at once, "
-                    "the call fails and reports what was saved. Refused when "
-                    "the flow opens with anything but a menu (an abort, or a "
-                    "flow Home Assistant finishes, is still reported), or the "
-                    "menu lacks the option."
+                    "step in Home Assistant; if it finishes the setup flow at "
+                    "once, the call fails and names the new entry. Refused "
+                    "when the flow opens with anything but a menu (an abort, "
+                    "or a setup flow Home Assistant finishes, is still "
+                    "reported), or the menu lacks the option."
                 ),
             ),
         ] = None,
