@@ -5,7 +5,8 @@ unusable answer, ends in one shared tail: stop after the fifth attempt, stop
 once the time budget is spent, otherwise wait and retry. The first tests drive
 it through the transport-error path with a monkeypatched transport. The
 corrective retry ``_accept_or_retry`` asks for a rejected string runs only
-while the same budget lasts. Every test records the sleeps.
+while the same budget lasts. Every test records the sleeps and runs on a
+stopped clock.
 """
 
 from __future__ import annotations
@@ -19,11 +20,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 import translate_locales
 
+_NOW = 1e12  # no real monotonic clock gets here: losing the stop fails the tests
+
 
 @pytest.fixture
 def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record every wait and stop the clock the time budget reads, so only
+    ``_deadline_in`` decides whether the budget is spent."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(translate_locales, "_DEADLINE", None)
+    monkeypatch.setattr(translate_locales.time, "monotonic", lambda: _NOW)
     recorded: list[float] = []
     monkeypatch.setattr(translate_locales.time, "sleep", recorded.append)
     return recorded
@@ -31,9 +37,7 @@ def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 def _deadline_in(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
     """Put the time budget's deadline ``seconds`` from now (negative: spent)."""
-    monkeypatch.setattr(
-        translate_locales, "_DEADLINE", translate_locales.time.monotonic() + seconds
-    )
+    monkeypatch.setattr(translate_locales, "_DEADLINE", _NOW + seconds)
 
 
 def test_failed_attempts_wait_before_each_retry_but_not_after_the_last(
