@@ -84,7 +84,6 @@ async def test_explicit_empty_section_completes_without_false_key_error() -> Non
 )
 def test_ordinary_edit_section_backfill_and_clear_unchanged(values, expected) -> None:
     payload = _handle_form_step(
-        "restore-flow",
         _step(),
         values,
         reuse_state=_ReuseState(),

@@ -93,7 +93,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {"name": "Avg Temp", "entity_id": "sensor.foo"}
         # Keys not in this step's schema must stay for later steps.
@@ -120,7 +120,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "state": "{{ 1 }}",
@@ -150,7 +150,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "state": "{{ 1 }}",
@@ -194,7 +194,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "stream_source": "rtsp://camera.example/stream",
@@ -237,7 +237,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "stream_source": "rtsp://camera.example/stream",
@@ -267,7 +267,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "advanced": {
@@ -304,7 +304,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "advanced": {
@@ -332,7 +332,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {"stream_source": "rtsp://camera.example/stream"}
         assert remaining == {}
@@ -352,7 +352,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {"state": "{{ 2 }}"}
         assert remaining == {}
@@ -374,7 +374,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "advanced_options": {"availability": "{{ true }}"},
@@ -401,7 +401,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "advanced_options": {
@@ -418,7 +418,7 @@ class TestHandleFormStepFiltering:
         }
         step = {"type": "form", "step_id": "user", "data_schema": None}
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {
             "name": "Legacy",
@@ -440,7 +440,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {"advanced_options": "invalid"}
         assert remaining == {}
@@ -459,7 +459,7 @@ class TestHandleFormStepFiltering:
         }
         for value in (0, False, "", []):
             remaining = {"advanced_options": value}
-            form_data = _handle_form_step("flow-1", step, remaining)
+            form_data = _handle_form_step(step, remaining)
             assert form_data == {"advanced_options": value}
             assert remaining == {}
 
@@ -476,7 +476,7 @@ class TestHandleFormStepFiltering:
             ],
         }
 
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
 
         assert form_data == {"availability": "{{ true }}"}
         assert remaining == {}
@@ -493,7 +493,7 @@ class TestHandleFormStepFiltering:
                 {"name": "group_type"},
             ],
         }
-        form_data = _handle_form_step("flow-1", step, remaining)
+        form_data = _handle_form_step(step, remaining)
         assert form_data == {"name": "x"}
         # group_type was popped from remaining only via the menu-key skip
         # branch — it stays put because the schema-field branch is not reached.
@@ -1610,7 +1610,7 @@ class TestReuseScoping:
         }
         remaining = {"name": "X"}
 
-        form_data = _handle_form_step("flow-1", step, remaining, reuse_state=state)
+        form_data = _handle_form_step(step, remaining, reuse_state=state)
 
         assert form_data == {"name": "X", "advanced": {"name": "X"}}
         assert remaining == {}

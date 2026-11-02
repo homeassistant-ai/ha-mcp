@@ -45,8 +45,8 @@ async def fetch_flow_strings(
                 "integration": [domain],
             }
         )
-    except Exception as err:  # noqa: BLE001
-        logger.warning("translations for %s failed: %s", domain, err)
+    except Exception:
+        logger.warning("translations for %s failed", domain, exc_info=True)
         return None
     if not isinstance(result, dict) or result.get("success") is False:
         logger.warning("translations for %s failed: %s", domain, result)

@@ -1032,7 +1032,6 @@ def _step_values_applied(
 
 
 def _handle_form_step(
-    flow_id: str,
     current_step: dict[str, Any],
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,

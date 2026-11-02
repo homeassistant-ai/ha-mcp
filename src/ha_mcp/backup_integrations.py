@@ -162,7 +162,9 @@ def _enabled_then_failed(entity_id: str, err: BackupRestoreError) -> BackupResto
     return failed
 
 
-def _options_not_restored(config: Any, current: dict[str, Any]) -> Any:
+def _options_not_restored(
+    config: Any, current: dict[str, Any]
+) -> tuple[str, str] | None:
     """``(verification_status, why)`` for options a restore cannot put back."""
     if "options_unavailable" in config or "options" not in config:
         why = config.get("options_unavailable", "taken before options were captured")

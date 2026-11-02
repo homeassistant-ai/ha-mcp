@@ -68,8 +68,10 @@ async def _flow_texts(
     elif domain is None and flow.entry_id:
         try:
             domain = (await client.get_config_entry(flow.entry_id)).get("domain")
-        except Exception as err:  # noqa: BLE001 - the text is best effort
-            logger.debug("domain of %s for flow text failed: %s", flow.entry_id, err)
+        except Exception:  # the text is best effort
+            logger.debug(
+                "domain of %s for flow text failed", flow.entry_id, exc_info=True
+            )
     if not isinstance(domain, str):
         return {}
     strings = await fetch_flow_strings(client, domain, path.split(".")[0])
@@ -191,6 +193,20 @@ def _build_flow_error_context(
     return context
 
 
+def _flow_error_subject(
+    helper_type: str | None, *, is_reconfigure: bool, validation: bool
+) -> str:
+    """What a rejected flow submit's message names; ``helper_type`` carries
+    the integration domain under ``is_reconfigure``."""
+    if is_reconfigure and helper_type:
+        subject = f"{helper_type} reconfigure"
+    elif is_reconfigure:
+        subject = "Reconfigure" if validation else "reconfigure"
+    else:
+        subject = "Helper" if validation else helper_type or "flow"
+    return f"{subject} validation" if validation else subject
+
+
 async def _raise_flow_api_error(
     api_error: HomeAssistantAPIError,
     *,
@@ -266,12 +282,8 @@ async def _raise_flow_api_error(
         code = ErrorCode.VALIDATION_INVALID_PARAMETER
         context["field_errors"] = field_errors
         readable = ", ".join(f"{k}: {v}" for k, v in field_errors.items())
-        subject = (
-            f"{helper_type} reconfigure validation"
-            if is_reconfigure and helper_type
-            else "Reconfigure validation"
-            if is_reconfigure
-            else "Helper validation"
+        subject = _flow_error_subject(
+            helper_type, is_reconfigure=is_reconfigure, validation=True
         )
         message = f"{subject} failed — {readable}"
         suggestions.append(
@@ -280,12 +292,8 @@ async def _raise_flow_api_error(
     else:
         # Unstructured — attach the data_schema so the LLM has something to use.
         code = ErrorCode.SERVICE_CALL_FAILED
-        subject = (
-            f"{helper_type} reconfigure"
-            if is_reconfigure and helper_type
-            else "reconfigure"
-            if is_reconfigure
-            else helper_type or "flow"
+        subject = _flow_error_subject(
+            helper_type, is_reconfigure=is_reconfigure, validation=False
         )
         message = (
             f"Home Assistant rejected the {subject} request "

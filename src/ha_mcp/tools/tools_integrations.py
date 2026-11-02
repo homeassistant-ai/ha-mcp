@@ -1157,7 +1157,7 @@ class IntegrationTools:
                 rows = [row for row in rows if row.get("entry_id") in matching]
             listed = await self._list_entries_from_component(
                 rows,
-                domain,
+                domain_norm,
                 query,
                 include_opts,
                 exact_match,
@@ -1208,7 +1208,7 @@ class IntegrationTools:
 
         return self._finalize_entry_list(
             formatted_entries,
-            domain,
+            domain_norm,
             query,
             exact_match,
             limit_int,
@@ -1334,7 +1334,7 @@ class IntegrationTools:
             "query": query if query else None,
         }
         if domain:
-            result_data["domain_filter"] = domain.strip().lower()
+            result_data["domain_filter"] = domain
         if extra_warnings:
             result_data.setdefault("warnings", []).extend(extra_warnings)
         if probe_failures:

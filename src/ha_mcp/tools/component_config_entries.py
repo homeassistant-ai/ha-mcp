@@ -64,9 +64,10 @@ class EntryUniqueId(NamedTuple):
 UNKNOWN_UNIQUE_ID = EntryUniqueId(known=False, value=None)
 
 
+# Worded like the component's and ha_config_list_helpers' degraded-scrub warnings.
 SCRUB_DEGRADED_WARNING = (
-    "options: the ha_mcp_tools component could not read secrets.yaml, so "
-    "option values that match a secret were not replaced with '**redacted**'"
+    "secrets.yaml could not be read, so config entry options in this response "
+    "were not scrubbed of resolved !secret values."
 )
 
 

@@ -431,7 +431,6 @@ def _rejected_on_submit(
 def _flow_form_payload(
     current_step: dict[str, Any],
     *,
-    flow_id: str,
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str],
     reuse_state: _ReuseState,
@@ -448,7 +447,6 @@ def _flow_form_payload(
     form_data = _auto_confirm_form_payload(current_step)
     if form_data is None:
         form_data = _handle_form_step(
-            flow_id,
             current_step,
             remaining_config,
             ignored_config_keys,
@@ -724,7 +722,6 @@ async def _handle_flow_steps(
             submitted_form = current_step
             form_data, consumed_any = _flow_form_payload(
                 current_step,
-                flow_id=flow_id,
                 remaining_config=remaining_config,
                 ignored_config_keys=ignored_config_keys,
                 reuse_state=reuse_state,
@@ -975,7 +972,6 @@ async def _handle_config_subentry_flow_steps(
                 )
             submitted_form = current_step
             form_data = _handle_form_step(
-                flow_id,
                 current_step,
                 remaining_config,
                 ignored_config_keys,
