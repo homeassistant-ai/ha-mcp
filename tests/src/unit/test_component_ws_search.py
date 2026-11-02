@@ -2191,6 +2191,9 @@ class TestNewCommandSchemas:
         # Both filters are optional (a no-filter call lists every entry).
         defaults = {"type": wsapi.WS_CONFIG_ENTRIES, "include_subentry_data": False}
         assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == defaults
+        # The server's integration_type filter; Core would refuse an unknown key.
+        typed = schema({"type": wsapi.WS_CONFIG_ENTRIES, "type_filter": ["hub"]})
+        assert typed["type_filter"] == ["hub"]
 
     @pytest.mark.parametrize(
         "bad",
@@ -2198,6 +2201,7 @@ class TestNewCommandSchemas:
             {"type": "ha_mcp_tools/config_entries", "entry_id": 5},  # not str/None
             {"type": "ha_mcp_tools/config_entries", "domain": 5},  # not str/None
             {"type": "ha_mcp_tools/config_entries", "bogus": "x"},  # extra key
+            {"type": "ha_mcp_tools/config_entries", "type_filter": "hub"},  # not list
         ],
     )
     def test_config_entries_malformed_rejected(self, monkeypatch, bad):

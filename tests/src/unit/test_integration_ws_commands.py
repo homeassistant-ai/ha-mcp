@@ -134,6 +134,16 @@ class TestListing:
         ]
         assert [r.exc_info is not None for r in caplog.records] == [True, False]
 
+    async def test_the_listing_asks_for_the_domain_only(self) -> None:
+        # A command or payload key would turn the listing into a validation.
+        stack, ws = _bridge(json.loads(json.dumps(_COMMAND_LIST)))
+        with stack:
+            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
+        ws.send_command.assert_awaited_once_with(
+            "ha_mcp_tools/integration_commands", domain="knx"
+        )
+        assert len(result["ws_commands"]) == 2
+
     async def test_not_requested_means_no_bridge_call(self) -> None:
         bridge = AsyncMock()
         with patch.object(module, "integration_commands", bridge):
@@ -302,6 +312,50 @@ class TestSend:
             )
         assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
         assert "without a verdict" in _error(exc_info)["message"]
+        client.send_websocket_message.assert_not_awaited()
+
+    async def test_a_validation_sends_the_command_and_its_payload(self) -> None:
+        stack, ws = _bridge(_VALID)
+        with stack:
+            await IntegrationTools(_client()).ha_set_integration(
+                entry_id="e1", ws_command="knx/delete_entity", ws_data={"a": 1}
+            )
+        ws.send_command.assert_awaited_once_with(
+            "ha_mcp_tools/integration_commands",
+            domain="knx",
+            command="knx/delete_entity",
+            payload={"a": 1},
+        )
+
+    async def test_a_failed_bridge_keeps_the_ws_data_out_of_the_error(self) -> None:
+        stack, _ws = _bridge(RuntimeError("ws down"))
+        with stack, pytest.raises(ToolError) as exc_info:
+            await IntegrationTools(_client()).ha_set_integration(
+                entry_id="e1", ws_command="knx/delete_entity", ws_data={"pin": "1234"}
+            )
+        body = json.loads(str(exc_info.value))
+        assert "pin" not in str(exc_info.value)
+        assert (body["domain"], body["command"]) == ("knx", "knx/delete_entity")
+
+    @pytest.mark.parametrize("ws_data", [{"type": "call_service"}, {"id": 1}])
+    async def test_ws_data_cannot_set_the_message_envelope(
+        self, ws_data: dict[str, Any]
+    ) -> None:
+        # Without the component's validation only this guard stands.
+        client = _client()
+        caps = ComponentCaps(1, "test", frozenset({"core_contract"}), {})
+        with (
+            patch(
+                "ha_mcp.tools.core_contract.get_component_caps",
+                AsyncMock(return_value=caps),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await IntegrationTools(client).ha_set_integration(
+                entry_id="e1", ws_command="knx/get_knx_project", ws_data=ws_data
+            )
+        assert _error(exc_info)["code"] == "VALIDATION_FAILED"
+        assert "reserved" in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
 
     async def test_a_failed_bridge_sends_nothing(self) -> None:
