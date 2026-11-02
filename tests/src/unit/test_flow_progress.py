@@ -27,13 +27,15 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import config_entry_flow_progress
 from ha_mcp.tools.config_entry_flow import (
     OptionsFlowError,
-    _abort_flow_best_effort,
-    _abort_subentry_flow_best_effort,
     _cleanup_snapshot_creation,
     _CreationFlowProgress,
     create_config_entry,
     set_config_subentry,
     update_config_entry_options,
+)
+from ha_mcp.tools.config_entry_flow_abort import (
+    _abort_flow_best_effort,
+    _abort_subentry_flow_best_effort,
 )
 from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
 from ha_mcp.tools.config_entry_flow_progress import (
@@ -265,6 +267,50 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
     assert payload["error"]["code"] == "TIMEOUT_OPERATION"
     assert payload["status"] == ReconfigureStatus.APPLY_FAILED
     client.abort_config_flow.assert_awaited_once_with("flow-progress")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run", "consequence"),
+    [
+        pytest.param("create", "already_in_progress", id="create"),
+        pytest.param("reconfigure", "reauthentication", id="reconfigure"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("abort_error", "left_open"),
+    [
+        pytest.param(None, False, id="aborted"),
+        pytest.param(
+            HomeAssistantAPIError("API error: 404", status_code=404), False, id="gone"
+        ),
+        pytest.param(
+            HomeAssistantAPIError("API error: 500", status_code=500),
+            True,
+            id="http-500",
+        ),
+    ],
+)
+async def test_a_failed_write_says_when_its_flow_may_still_be_open(
+    monkeypatch: pytest.MonkeyPatch,
+    run: str,
+    consequence: str,
+    abort_error: Exception | None,
+    left_open: bool,
+) -> None:
+    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
+    client = _client(strings={})
+    client.abort_config_flow.side_effect = abort_error
+    write = _create_entry if run == "create" else _reconfigure
+
+    with pytest.raises(ToolError) as exc_info:
+        await write(client, dict(_PROGRESS))
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+    warnings = payload.get("warnings", [])
+    assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
+    assert len(warnings) == int(left_open)
 
 
 # --- a submit or poll that gets no answer may have committed -----------------

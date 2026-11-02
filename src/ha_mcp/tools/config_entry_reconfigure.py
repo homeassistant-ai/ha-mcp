@@ -20,11 +20,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from .component_config_entries import fetch_domain_unique_ids
-from .config_entry_flow import (
-    _abort_flow_best_effort,
-    _reject_redaction_sentinels,
-    refuse_component_entry,
-)
+from .config_entry_flow import _reject_redaction_sentinels, refuse_component_entry
+from .config_entry_flow_abort import _abort_after_flow_error
 from .config_entry_flow_errors import FlowRef, ReconfigureStatus
 from .config_entry_flow_walker import (
     POST_COMMIT_STATUSES,
@@ -55,6 +52,12 @@ from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
+
+FLOW_LEFT_OPEN = (
+    "Home Assistant did not confirm that the reconfigure flow this call opened "
+    "was closed. While it stays open (until it ends or Home Assistant "
+    "restarts), Home Assistant starts no reauthentication for this entry."
+)
 
 _VERIFICATION_ATTEMPTS = 5
 
@@ -617,7 +620,7 @@ async def _run_reconfigure_flow(
                 domain=domain,
                 rollback_metadata=rollback_metadata,
             )
-        await _abort_flow_best_effort(client, flow_id)
+        await _abort_after_flow_error(client, flow_id, flow_error, FLOW_LEFT_OPEN)
         raise
     return flow_id, result
 

@@ -17,13 +17,14 @@ helpers: ``ha_set_integration`` creates entries for arbitrary domains through
 ``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
 through ``set_config_subentry``. Changing a live entry's connection settings is
 a different problem — it commits in place and Home Assistant reloads afterwards
-— and lives in ``config_entry_reconfigure``, which depends on this module for
-the shared flow-abort and sentinel-rejection helpers.
+— and lives in ``config_entry_reconfigure``, which shares this module's
+sentinel rejection and ``config_entry_flow_abort``'s flow abort.
 
-The step machinery those entry points drive lives in four sibling modules,
-imported in one direction only (menu <- form <- walker <- here, and
+The step machinery those entry points drive lives in five sibling modules,
+imported in one direction only (menu <- form <- walker <- abort <- here, and
 progress <- walker):
 
+- ``config_entry_flow_abort``: aborting a failed walk's flow, shielded
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
 - ``config_entry_flow_progress``: waiting out a progress step within a budget
@@ -48,6 +49,10 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
+from .config_entry_flow_abort import (
+    _abort_after_flow_error,
+    _abort_subentry_flow_best_effort,
+)
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_introspect import _ABORT_TIMEOUT_S
@@ -412,7 +417,7 @@ async def _cleanup_snapshot_creation(
         return
     if failure.apply_status == "not_applied":
         try:
-            with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
+            with anyio.CancelScope(shield=True):  # see config_entry_flow_abort
                 await asyncio.wait_for(
                     client.abort_config_flow(progress.flow_id), timeout=_ABORT_TIMEOUT_S
                 )
@@ -430,39 +435,6 @@ async def _cleanup_snapshot_creation(
             progress.flow_id,
             failure.apply_status,
             failure.reason,
-        )
-
-
-async def _abort_flow_best_effort(client: Any, flow_id: str) -> Exception | None:
-    """Abort a still-pending flow without hiding the original failure; return
-    the abort's own error, if any.
-
-    Shielded: a cancellation arrives through an anyio cancel scope, which
-    would cancel the abort itself at its first await.
-    """
-    try:
-        with anyio.CancelScope(shield=True):
-            await asyncio.wait_for(
-                client.abort_config_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-            )
-    except Exception as abort_err:  # noqa: BLE001
-        logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
-        return abort_err
-    return None
-
-
-async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a pending subentry flow without hiding the original failure."""
-    try:
-        with anyio.CancelScope(shield=True):
-            await asyncio.wait_for(
-                client.abort_config_subentry_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-            )
-    except Exception as abort_err:  # noqa: BLE001
-        logger.warning(
-            "Failed to abort config subentry flow %s after error: %s",
-            flow_id,
-            abort_err,
         )
 
 
@@ -872,7 +844,7 @@ async def _update_config_entry_options(
             should_abort = not leaves_flow_open(flow_err)
         if should_abort:
             try:
-                with anyio.CancelScope(shield=True):  # see _abort_flow_best_effort
+                with anyio.CancelScope(shield=True):  # see config_entry_flow_abort
                     await asyncio.wait_for(
                         client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
                     )
@@ -963,7 +935,15 @@ async def create_config_entry(
         )
     except (Exception, asyncio.CancelledError) as flow_error:
         if not leaves_flow_open(flow_error):
-            await _abort_flow_best_effort(client, flow_id)
+            await _abort_after_flow_error(
+                client,
+                flow_id,
+                flow_error,
+                f"Home Assistant did not confirm that the setup flow {flow_id} "
+                "was closed. While it stays open (until it ends or Home "
+                "Assistant restarts), a new setup of the same device or account "
+                "can abort with already_in_progress.",
+            )
         raise
 
     entry = result["entry"].get("result", {})

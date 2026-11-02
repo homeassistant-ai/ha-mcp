@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
-from .config_entry_flow import _abort_flow_best_effort
+from .config_entry_flow_abort import _abort_flow_best_effort, abort_left_flow_open
 from .config_entry_flow_errors import FlowRef, ReconfigureStatus, abort_reason_text
 from .config_entry_flow_form import (
     _MENU_SELECTION_KEYS,
@@ -23,14 +23,9 @@ from .config_entry_flow_form import (
 )
 from .config_entry_flow_introspect import menu_choices
 from .config_entry_flow_walker import _RECONFIGURE_SUCCESS_REASONS
+from .config_entry_reconfigure import FLOW_LEFT_OPEN
 from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error
-
-_FLOW_LEFT_OPEN = (
-    "Home Assistant did not confirm that the reconfigure flow this preview "
-    "opened was closed. While it stays open (until it ends or Home Assistant "
-    "restarts), Home Assistant starts no reauthentication for this entry."
-)
 
 
 def _declared_keys(schema: Any) -> set[str]:
@@ -100,8 +95,8 @@ async def read_reconfigure_form(
     finally:
         abort_err = await _abort_flow_best_effort(client, step.get("flow_id"))
     warnings = form.pop("warnings", [])
-    if abort_err is not None and getattr(abort_err, "status_code", None) != 404:
-        warnings.append(_FLOW_LEFT_OPEN)
+    if abort_left_flow_open(abort_err):
+        warnings.append(FLOW_LEFT_OPEN)
     if step.get("type") != "form":
         return form, warnings
 
