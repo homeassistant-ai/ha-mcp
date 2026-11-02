@@ -49,6 +49,10 @@ def _make_tools(
     return tools
 
 
+def _ws_success(payload: object) -> dict:
+    return {"success": True, "result": payload}
+
+
 class TestHaCallEvent:
     async def test_fires_event_with_no_data(self):
         tools = _make_tools({"message": "Event my_event fired."})
@@ -284,12 +288,14 @@ class TestHaCallEvent:
         """A capable component fulfils the fire, counts, and context in one call."""
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={
-                "event_type": "my_event",
-                "context": {"id": "component-context"},
-                "listener_count": 2,
-                "wildcard_listener_count": 1,
-            }
+            return_value=_ws_success(
+                {
+                    "event_type": "my_event",
+                    "context": {"id": "component-context"},
+                    "listener_count": 2,
+                    "wildcard_listener_count": 1,
+                }
+            )
         )
         monkeypatch.setattr(
             event_call,
@@ -324,7 +330,7 @@ class TestHaCallEvent:
         tools._client.send_websocket_message = AsyncMock(
             side_effect=[
                 HomeAssistantCommandNotSent("no component socket"),
-                {"context": {"id": "ws-context"}},
+                _ws_success({"context": {"id": "ws-context"}}),
             ]
         )
         monkeypatch.setattr(
@@ -338,6 +344,20 @@ class TestHaCallEvent:
         assert result["context_id"] == "ws-context"
 
     async def test_component_invalid_result_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value=_ws_success("not a dict")
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_component_non_dict_reply_is_an_error(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
             return_value=["not", "a", "dict"]
@@ -356,7 +376,7 @@ class TestHaCallEvent:
         tools._client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": False, "error_code": "unknown_command"},
-                {"context": {"id": "ws-context"}},
+                _ws_success({"context": {"id": "ws-context"}}),
             ]
         )
         monkeypatch.setattr(
@@ -386,7 +406,7 @@ class TestHaCallEvent:
     async def test_component_non_dict_context_is_omitted(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={"context": "not-a-dict", "listener_count": 0}
+            return_value=_ws_success({"context": "not-a-dict", "listener_count": 0})
         )
         monkeypatch.setattr(
             event_call,
@@ -403,7 +423,7 @@ class TestHaCallEvent:
         """Without the component, Core's fire_event still returns the context."""
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={"context": {"id": "ws-context"}}
+            return_value=_ws_success({"context": {"id": "ws-context"}})
         )
         monkeypatch.setattr(
             event_call, "get_component_caps", AsyncMock(return_value=None)
@@ -419,7 +439,7 @@ class TestHaCallEvent:
         """The WS route carries the event type in JSON, not a URL path."""
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={"context": {"id": "ws-context"}}
+            return_value=_ws_success({"context": {"id": "ws-context"}})
         )
         monkeypatch.setattr(
             event_call, "get_component_caps", AsyncMock(return_value=None)
@@ -443,6 +463,18 @@ class TestHaCallEvent:
             await tools.ha_call_event("my_event")
 
     async def test_ws_invalid_result_is_an_error(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value=_ws_success("nope")
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+
+    async def test_ws_non_dict_reply_is_an_error(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(return_value="nope")
         monkeypatch.setattr(
@@ -481,7 +513,7 @@ class TestHaCallEvent:
     async def test_ws_non_dict_context_is_omitted(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={"context": "bad"}
+            return_value=_ws_success({"context": "bad"})
         )
         monkeypatch.setattr(
             event_call, "get_component_caps", AsyncMock(return_value=None)
@@ -539,7 +571,7 @@ class TestHaCallEvent:
         """Core types event_data as a dict, so an explicit null is refused."""
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={"context": {"id": "ctx"}}
+            return_value=_ws_success({"context": {"id": "ctx"}})
         )
         caps = (
             SimpleNamespace(capabilities=["call_event"]) if component_capable else None
@@ -556,7 +588,7 @@ class TestHaCallEvent:
     async def test_payload_is_sent_when_given(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
-            return_value={"context": {"id": "ctx"}}
+            return_value=_ws_success({"context": {"id": "ctx"}})
         )
         monkeypatch.setattr(
             event_call,

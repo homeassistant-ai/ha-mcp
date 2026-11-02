@@ -233,13 +233,22 @@ class EventCallMixin:
                     context={"event_type": event_type},
                 )
             )
-        context = raw.get("context")
+        payload = raw.get("result")
+        if not isinstance(payload, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The component returned an invalid call_event result",
+                    context={"event_type": event_type},
+                )
+            )
+        context = payload.get("context")
         if not isinstance(context, dict):
             context = {}
         fields = event_listener_fields(
             {
-                event_type: raw.get("listener_count", 0),
-                "*": raw.get("wildcard_listener_count", 0),
+                event_type: payload.get("listener_count", 0),
+                "*": payload.get("wildcard_listener_count", 0),
             },
             event_type,
         )
@@ -296,7 +305,16 @@ class EventCallMixin:
                     context={"event_type": event_type},
                 )
             )
-        context = raw.get("context")
+        payload = raw.get("result")
+        if not isinstance(payload, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Home Assistant returned an invalid fire_event result",
+                    context={"event_type": event_type},
+                )
+            )
+        context = payload.get("context")
         if not isinstance(context, dict):
             context = {}
         return {
