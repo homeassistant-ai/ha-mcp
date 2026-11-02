@@ -628,6 +628,68 @@ class TestFlowTextFromCore:
         assert body["reason_text"] == "Wrong device."
         assert body["status"] == "apply_failed"
 
+    async def test_a_reconfigure_form_back_with_errors_is_apply_failed(
+        self,
+    ) -> None:
+        client = _strings_client({})
+        form = {
+            "type": "form",
+            "flow_id": "rc-flow",
+            "step_id": "reconfigure",
+            "data_schema": [{"name": "file_path", "required": True}],
+        }
+        client.start_reconfigure_flow.return_value = form
+        client.submit_config_flow_step.return_value = {
+            **form,
+            "errors": {"base": "not_valid"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _run_reconfigure_flow(
+                client,
+                domain="filesize",
+                entry_id="e1",
+                flow_config={"file_path": "/nope/x.txt"},
+                rollback_metadata={},
+            )
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["errors"] == {"base": "not_valid"}
+        assert body["status"] == "apply_failed"
+        client.submit_config_flow_step.assert_awaited_once()
+        client.abort_config_flow.assert_awaited_once_with("rc-flow")
+
+    @pytest.mark.parametrize(
+        ("subentry_id", "status"), [("s1", "apply_failed"), (None, None)]
+    )
+    async def test_a_subentry_form_back_with_errors_is_apply_failed_on_reconfigure(
+        self, subentry_id: str | None, status: str | None
+    ) -> None:
+        client = _strings_client({})
+        client.get_config_entry.return_value = {
+            "entry_id": "e1",
+            "domain": "demo",
+            "subentries": [],
+        }
+        form = {
+            "type": "form",
+            "flow_id": "sub-flow",
+            "step_id": "reconfigure" if subentry_id else "user",
+            "data_schema": [{"name": "name", "required": True}],
+        }
+        client.start_config_subentry_flow.return_value = form
+        client.submit_config_subentry_flow_step.return_value = {
+            **form,
+            "errors": {"base": "cannot_connect"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_config_subentry(
+                client, "e1", "device", {"name": "x"}, subentry_id=subentry_id
+            )
+
+        assert _parse_tool_error(exc_info.value).get("status") == status
+
 
 @pytest.mark.asyncio
 async def test_form_errors_redact_the_schemas_password_value(

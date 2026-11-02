@@ -327,7 +327,12 @@ def redacted_step(step: dict[str, Any]) -> dict[str, Any]:
 
 
 async def raise_form_errors(
-    client: Any, flow: FlowRef | None, flow_id: str, current_step: dict[str, Any]
+    client: Any,
+    flow: FlowRef | None,
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool = False,
 ) -> NoReturn:
     """Raise for a form HA returned with ``errors``, with Core's text for each
     and the form's ``fields`` in the describe shape."""
@@ -341,6 +346,8 @@ async def raise_form_errors(
         "errors": errors,
         "fields": compact_schema(current_step.get("data_schema") or []),
     }
+    if is_reconfigure:
+        context["status"] = ReconfigureStatus.APPLY_FAILED
     if isinstance(errors, dict):
         texts = await _flow_texts(client, flow, current_step, "error", errors)
         if warnings := texts.pop("warnings", None):

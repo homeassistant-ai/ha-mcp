@@ -708,7 +708,9 @@ async def _handle_flow_steps(
             # what it consumed for any later step that redeclares the same
             # field.
             if _rejected_on_submit(current_step, submitted_form):
-                await raise_form_errors(client, flow, flow_id, current_step)
+                await raise_form_errors(
+                    client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+                )
             saw_form_step = True
             submitted_form = current_step
             form_data, consumed_any = _flow_form_payload(
@@ -951,7 +953,9 @@ async def _handle_config_subentry_flow_steps(
 
         if result_type == _FlowType.FORM:
             if _rejected_on_submit(current_step, submitted_form):
-                await raise_form_errors(client, flow, flow_id, current_step)
+                await raise_form_errors(
+                    client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+                )
             submitted_form = current_step
             form_data = _handle_form_step(
                 flow_id,
