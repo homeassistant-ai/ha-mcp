@@ -306,6 +306,7 @@ async def fetch_options_schema(
             flow_id,
             flow_left_open("options", flow_id),
             resp,
+            keep_raw_errors=not strict,
         ):
             if flow_result.get("type") == "form" and entry is not None:
                 if populate_options:

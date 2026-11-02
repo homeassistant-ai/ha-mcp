@@ -11,6 +11,8 @@ from typing import Any
 
 import anyio
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
 from .config_entry_flow_introspect import (
     _ABORT_TIMEOUT_S,
     abort_probe_flow,
@@ -18,7 +20,7 @@ from .config_entry_flow_introspect import (
     shielded_abort,
 )
 from .config_entry_flow_walker import flow_error_payload
-from .helpers import raise_tool_error
+from .helpers import exception_to_structured_error, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +80,16 @@ def abort_left_flow_open(abort_err: Exception | None) -> bool:
 
 
 def _raise_with_warning(flow_error: BaseException, warning: str) -> None:
-    """Raise a structured ``flow_error`` again with ``warning`` in its warnings;
-    do nothing for any other error."""
-    if payload := flow_error_payload(flow_error):
+    """Raise ``flow_error`` again as a structured error with ``warning`` in its
+    warnings. A raw error (a lost connection, an HTTP error) becomes the error
+    the tool's own handler would build from it; a cancellation passes."""
+    if isinstance(flow_error, ToolError):
+        payload = flow_error_payload(flow_error)
+    elif isinstance(flow_error, Exception):
+        payload = exception_to_structured_error(flow_error, raise_error=False)
+    else:
+        return
+    if payload:
         payload.setdefault("warnings", []).append(warning)
         raise_tool_error(payload)
 
@@ -88,8 +97,8 @@ def _raise_with_warning(flow_error: BaseException, warning: str) -> None:
 def raise_if_flow_left_open(
     flow_error: BaseException, abort_err: Exception | None, left_open: str
 ) -> None:
-    """If the abort after ``flow_error`` is not confirmed, raise a structured
-    ``flow_error`` again with ``left_open`` in its warnings."""
+    """If the abort after ``flow_error`` is not confirmed, raise ``flow_error``
+    again as a structured error with ``left_open`` in its warnings."""
     if abort_left_flow_open(abort_err):
         _raise_with_warning(flow_error, left_open)
 
@@ -100,19 +109,24 @@ async def closing_probe_flow(
     flow_id: str | None,
     left_open: str,
     resp: dict[str, Any],
+    *,
+    keep_raw_errors: bool = False,
 ) -> AsyncIterator[None]:
     """Abort the flow ``flow_id``, opened only to read it, when the block ends.
 
     If Home Assistant does not confirm the abort, ``left_open`` goes into
-    ``resp``'s warnings and, when the block raised a structured error, into
-    that error's warnings too.
+    ``resp``'s warnings and, when the block raised, into that error's warnings
+    too: a raw error is raised again as a structured one. ``keep_raw_errors``
+    lets a raw error through unchanged, for a caller that turns it into a
+    warning in ``resp``.
     """
     try:
         yield
     except (Exception, asyncio.CancelledError) as flow_error:
         if flow_id and await abort_probe_flow(abort, flow_id):
             resp.setdefault("warnings", []).append(left_open)
-            _raise_with_warning(flow_error, left_open)
+            if not keep_raw_errors or isinstance(flow_error, ToolError):
+                _raise_with_warning(flow_error, left_open)
         raise
     if flow_id and await abort_probe_flow(abort, flow_id):
         resp.setdefault("warnings", []).append(left_open)

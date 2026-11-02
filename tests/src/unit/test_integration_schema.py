@@ -21,9 +21,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
-from ha_mcp.tools import (
-    config_entry_flow_introspect,
-)
+from ha_mcp.tools import config_entry_flow_introspect, integration_schema
 from ha_mcp.tools.config_entry_flow_abort import abort_failed_flow
 from ha_mcp.tools.integration_schema import (
     fetch_config_flow_schema,
@@ -300,41 +298,62 @@ async def _described(
         await fetch_config_flow_schema(client, "demo", resp, menu_choice=menu_choice)
 
 
+# How the describe ends: (first step, menu_choice, the error it raises).
+_ENDINGS = {
+    "described": (_form("init", _HOST), None, None),
+    # menu_choice on a flow that opens with a form: refused after the start.
+    "refused": (_form("init", _HOST), "advanced", ToolError),
+    # The menu submit fails with Home Assistant's raw error.
+    "raw-error": (_MENU, "advanced", HomeAssistantAPIError),
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", list(_LEFT_OPEN))
+@pytest.mark.parametrize("ending", list(_ENDINGS))
 @pytest.mark.parametrize(("abort_error", "left_open"), _ABORT_ANSWERS)
 async def test_a_describe_says_when_its_flow_may_still_be_open(
-    kind: str, abort_error: Exception | None, left_open: bool
+    kind: str, ending: str, abort_error: Exception | None, left_open: bool
 ) -> None:
-    client = _client(_form("init", _HOST))
+    first_step, menu_choice, error = _ENDINGS[ending]
+    client = _client(first_step)
     abort, consequence = _LEFT_OPEN[kind]
     getattr(client, abort).side_effect = abort_error
+    getattr(client, _FLOW_METHODS[kind][0]).side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
     resp = _resp()
 
-    await _described(kind, client, resp)
+    if error is None:
+        await _described(kind, client, resp)
+        warnings = resp.get("warnings", [])
+    else:
+        # A raw error left open comes back structured, carrying the warning.
+        with pytest.raises(ToolError if left_open else error) as exc_info:
+            await _described(kind, client, resp, menu_choice=menu_choice)
+        is_tool_error = isinstance(exc_info.value, ToolError)
+        warnings = _error(exc_info).get("warnings", []) if is_tool_error else []
 
-    warnings = resp.get("warnings", [])
     assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
     assert len(warnings) == int(left_open)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", list(_LEFT_OPEN))
-@pytest.mark.parametrize(("abort_error", "left_open"), _ABORT_ANSWERS)
-async def test_a_refused_describe_says_when_its_flow_may_still_be_open(
-    kind: str, abort_error: Exception | None, left_open: bool
+async def test_a_raw_error_left_open_stays_a_warning_on_the_entry_read(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # menu_choice on a flow that opens with a form: refused after the start.
+    # ha_get_integration's options probe (not strict) degrades to warnings.
+    monkeypatch.setattr(
+        integration_schema, "describe_form", AsyncMock(side_effect=RuntimeError("x"))
+    )
     client = _client(_form("init", _HOST))
-    abort, consequence = _LEFT_OPEN[kind]
-    getattr(client, abort).side_effect = abort_error
+    client.abort_options_flow.side_effect = TimeoutError()
+    resp = _resp()
 
-    with pytest.raises(ToolError) as exc_info:
-        await _described(kind, client, _resp(), menu_choice="advanced")
+    await fetch_options_schema(client, "e1", resp)
 
-    warnings = _error(exc_info).get("warnings", [])
-    assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
-    assert len(warnings) == int(left_open)
+    assert "the options flow f1 was closed" in resp["warnings"][0]
+    assert resp["warnings"][1].startswith("options schema probe failed for e1")
 
 
 @pytest.mark.asyncio

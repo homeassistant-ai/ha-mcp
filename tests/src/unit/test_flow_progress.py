@@ -318,6 +318,51 @@ async def test_a_failed_write_says_when_its_flow_may_still_be_open(
     assert len(warnings) == int(left_open)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run", "submit", "abort", "consequence"),
+    [
+        pytest.param(
+            "create", "submit_config_flow_step", "abort_config_flow",
+            "already_in_progress", id="create",
+        ),
+        pytest.param(
+            "subentry", "submit_config_subentry_flow_step",
+            "abort_config_subentry_flow", "subentry flow f1", id="subentry",
+        ),
+        pytest.param(
+            "options", "submit_options_flow_step", "abort_options_flow",
+            "options flow f1", id="options",
+        ),
+    ],
+)  # fmt: skip
+@pytest.mark.parametrize("left_open", [False, True], ids=["aborted", "timeout"])
+async def test_a_raw_write_error_left_open_comes_back_with_the_warning(
+    run: str, submit: str, abort: str, consequence: str, left_open: bool
+) -> None:
+    # Home Assistant answered the submit with a 500: nothing was committed.
+    client = _client(strings={})
+    getattr(client, submit).side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
+    getattr(client, abort).side_effect = TimeoutError() if left_open else None
+    write = {
+        "create": _create_entry,
+        "subentry": _create_subentry,
+        "options": _update_options,
+    }[run]
+
+    with pytest.raises(ToolError if left_open else HomeAssistantAPIError) as exc_info:
+        await write(client, dict(_FORM))
+
+    getattr(client, abort).assert_awaited_once_with("f1")
+    if left_open:
+        payload = json.loads(str(exc_info.value))
+        assert "API error: 500" in payload["error"]["message"]
+        (warning,) = payload["warnings"]
+        assert consequence in warning
+
+
 # --- a submit or poll that gets no answer may have committed -----------------
 #
 # The GET re-runs async_configure: past progress_done that is the step that
