@@ -54,7 +54,8 @@ async def read_reconfigure_form(
 
     Refuses the preview when Home Assistant aborts the flow at once, or when
     ``config`` names keys the flow's last form does not declare or cannot
-    consume (a menu selection, ``step_values`` for another step).
+    consume (a menu selection, ``step_values`` for another step, a field or
+    a second list item in its own ``step_values`` entry).
     """
     step = await client.start_reconfigure_flow(domain, entry_id)
     flow = FlowRef(domain, "config")
@@ -104,19 +105,11 @@ async def read_reconfigure_form(
     if step.get("type") != "form":
         return form, warnings
 
-    declared = _declared_keys(step.get("data_schema")) | _RESERVED_CONFIG_KEYS
-    unknown = sorted(key for key in config if key not in declared)
+    fields = _declared_keys(step.get("data_schema"))
+    unknown = sorted(config.keys() - fields - _RESERVED_CONFIG_KEYS)
     last_step = step.get("last_step") is True
     if last_step:
-        # Only a menu consumes a selection key, and no step follows this form.
-        unknown += sorted(key for key in config if key in _MENU_SELECTION_KEYS)
-        step_values = config.get(_PER_STEP_VALUES_KEY)
-        if isinstance(step_values, dict):
-            unknown += sorted(
-                f"{_PER_STEP_VALUES_KEY}.{step_id}"
-                for step_id in step_values
-                if step_id != step.get("step_id")
-            )
+        unknown += _unconsumable_on_last_form(config, step.get("step_id"), fields)
     if not unknown:
         return form, warnings
     if last_step:
@@ -143,3 +136,29 @@ async def read_reconfigure_form(
         f"{', '.join(repr(k) for k in unknown)}. A later form may; a key no "
         "form declares is not applied on confirm.",
     ]
+
+
+def _unconsumable_on_last_form(
+    config: dict[str, Any], step_id: Any, fields: set[str]
+) -> list[str]:
+    """Directives in ``config`` that a last form leaves unconsumed."""
+    # Only a menu consumes a selection key, and no step follows this form.
+    unknown = sorted(_MENU_SELECTION_KEYS & config.keys())
+    step_values = config.get(_PER_STEP_VALUES_KEY)
+    if not isinstance(step_values, dict):
+        return unknown
+    unknown += sorted(
+        f"{_PER_STEP_VALUES_KEY}.{other}" for other in step_values if other != step_id
+    )
+    # This form is the only one left to consume its own entry, and it takes
+    # one item of a list: the walker applies one per visit.
+    own = step_values.get(step_id)
+    if isinstance(own, list):
+        if len(own) > 1:
+            unknown.append(f"{_PER_STEP_VALUES_KEY}.{step_id}[1:]")
+        own = own[0] if own else None
+    if isinstance(own, dict):
+        unknown += sorted(
+            f"{_PER_STEP_VALUES_KEY}.{step_id}.{key}" for key in own.keys() - fields
+        )
+    return unknown

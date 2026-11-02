@@ -125,8 +125,20 @@ async def test_keys_the_last_form_does_not_declare_are_refused() -> None:
     [
         ({"next_step_id": "usb"}, ["next_step_id"]),
         ({"step_values": {"other": {"a": 1}}}, ["step_values.other"]),
+        (
+            {"step_values": {"reconfigure": {"host": "h", "hostname": "x"}}},
+            ["step_values.reconfigure.hostname"],
+        ),
+        (
+            {"step_values": {"reconfigure": [{"host": "h", "hostname": "x"}]}},
+            ["step_values.reconfigure.hostname"],
+        ),
+        (
+            {"step_values": {"reconfigure": [{"host": "a"}, {"hostname": "x"}]}},
+            ["step_values.reconfigure[1:]"],
+        ),
     ],
-    ids=["menu-key", "other-step"],
+    ids=["menu-key", "other-step", "own-step-field", "own-list-field", "list-tail"],
 )
 async def test_directives_the_last_form_cannot_consume_are_refused(
     config: dict[str, Any], unknown: list[str]
@@ -141,10 +153,11 @@ async def test_directives_the_last_form_cannot_consume_are_refused(
 
 
 @pytest.mark.asyncio
-async def test_step_values_for_the_last_form_itself_are_accepted() -> None:
+@pytest.mark.parametrize("own", [{"host": "h"}, [{"host": "h"}]], ids=["dict", "list"])
+async def test_step_values_for_the_last_form_itself_are_accepted(own: Any) -> None:
     client = _client(_form(last_step=True))
 
-    _, warnings = await _read(client, {"step_values": {"reconfigure": {"host": "h"}}})
+    _, warnings = await _read(client, {"step_values": {"reconfigure": own}})
 
     assert warnings == []
 
