@@ -184,7 +184,7 @@ class TestFetchFailurePath:
 
     def _patch_fetch(self, monkeypatch, *, sleeps, attempts):
         def boom(*_args, **_kwargs):
-            attempts.append(1)
+            attempts.append(len(sleeps))  # waits taken before this attempt
             raise checker.urllib.error.URLError("network down")
 
         monkeypatch.setattr(checker.urllib.request, "urlopen", boom)
@@ -263,11 +263,12 @@ class TestFetchFailurePath:
         attempts: list[int] = []
         self._patch_fetch(monkeypatch, sleeps=sleeps, attempts=attempts)
         checker.main(["--ha-version", "2026.8.0"])
-        assert len(attempts) == checker._FETCH_ATTEMPTS == 3
+        assert attempts == [0, 1, 2], "each retry follows one more wait"
         assert len(sleeps) == checker._FETCH_ATTEMPTS - 1, (
             "a sleep after the final attempt is pure waste and pushes the "
             "worst case toward the job timeout"
         )
+        assert all(delay > 0 for delay in sleeps), "a retry must wait"
 
     def test_worst_case_fits_well_inside_the_job_timeout(self):
         budget = checker._FETCH_ATTEMPTS * checker._FETCH_TIMEOUT_SECONDS + sum(
@@ -277,7 +278,7 @@ class TestFetchFailurePath:
         assert budget <= 60, (
             f"worst-case fetch is {budget}s; the Fast Checks lane shares one "
             "timeout-minutes across every fast check, so keep this well under "
-            "it or exit 2 becomes an opaque kill"
+            "it or the fail-open exit becomes an opaque kill"
         )
 
     def test_unreadable_local_file_exits_two(self, tmp_path):

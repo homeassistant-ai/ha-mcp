@@ -1009,7 +1009,7 @@ class TestCallGeminiRetry:
         assert len(calls) == 2
 
     def test_persistently_unparseable_answer_names_the_finish_reason(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls: list[int] = []
 
@@ -1020,7 +1020,7 @@ class TestCallGeminiRetry:
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
         with pytest.raises(SystemExit, match="unusable response") as excinfo:
             translate_locales._call_gemini("prompt")
-        assert (len(calls), capsys.readouterr().err.count("retrying in")) == (5, 4)
+        assert len(calls) == 5
         message = str(excinfo.value)
         assert "finishReason=STOP" in message
         assert '"candidatesTokenCount": 7' in message

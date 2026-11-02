@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,6 +18,12 @@ _spec = importlib.util.spec_from_file_location("generate_star_history", _SCRIPT)
 assert _spec and _spec.loader
 generator = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(generator)
+
+
+class _FrozenClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return datetime(2026, 3, 2, 12, tzinfo=tz)
 
 
 class _Response(io.BytesIO):
@@ -149,7 +156,10 @@ def test_chart_is_valid_accessible_svg(mode: str) -> None:
     assert root.find("svg:desc", namespace) is not None
     assert "private-user" not in svg
     assert "homeassistant-ai/ha-mcp" in svg
-    assert "4" in svg
+    assert root.findtext("svg:desc", namespaces=namespace) == (
+        "homeassistant-ai/ha-mcp grew from 2 stars on January 1, 2026 "
+        "to 4 stars on January 6, 2026."
+    )
 
 
 def test_write_charts_uses_stable_production_names(tmp_path: Path) -> None:
@@ -168,10 +178,25 @@ def test_main_charts_the_fetched_stars_of_the_requested_repository(
         fetched.append((repository, token))
         return [datetime(2026, 1, 5, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)]
 
+    charted: list[tuple[Any, Path]] = []
+
+    def fake_write(history: Any, output_dir: Path) -> list[Path]:
+        charted.append((history, output_dir))
+        return [output_dir / "light.svg", output_dir / "dark.svg"]
+
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(generator, "fetch_starred_at", fake_fetch)
+    monkeypatch.setattr(generator, "write_charts", fake_write)
+    # main() ends the chart on the clock's date.
+    monkeypatch.setattr(generator, "datetime", _FrozenClock)
 
     argv = ["--repository", "owner/repo", "--output-dir", str(tmp_path)]
     assert generator.main(argv) == 0
     assert fetched == [("owner/repo", "token")]
-    assert "Star history for owner/repo" in (tmp_path / "light.svg").read_text("utf-8")
+    [(history, output_dir)] = charted
+    assert output_dir == tmp_path
+    assert (history.repository, history.total) == ("owner/repo", 2)
+    assert (history.started_on, history.generated_on) == (
+        date(2026, 1, 5),
+        date(2026, 3, 2),
+    )
