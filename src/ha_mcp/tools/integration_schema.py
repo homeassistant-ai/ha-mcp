@@ -17,6 +17,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
+import anyio
+
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import HomeAssistantAPIError
@@ -42,6 +44,26 @@ from .helpers import raise_tool_error
 logger = logging.getLogger(__name__)
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+async def _abort_describe_flow(
+    abort: Callable[[str], Awaitable[Any]], flow_id: str
+) -> None:
+    """Abort the flow a describe opened, shielded: a cancelled describe still
+    closes it."""
+    try:
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
+    except Exception as abort_err:  # noqa: BLE001
+        # A flow that already finished (abort, create_entry) is gone: Core
+        # answers 404, which is expected here.
+        gone = getattr(abort_err, "status_code", None) == 404
+        logger.log(
+            logging.DEBUG if gone else logging.WARNING,
+            "flow %s abort failed: %s",
+            flow_id,
+            abort_err,
+        )
 
 
 def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -113,16 +135,7 @@ async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
         )
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    "redact_secrets: failed to abort probe flow %s: %r",
-                    flow_id,
-                    abort_err,
-                )
+            await _abort_describe_flow(client.abort_options_flow, flow_id)
     return data_schema
 
 
@@ -365,15 +378,7 @@ async def fetch_options_schema(
         )
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    f"Failed to abort options flow {flow_id}: "
-                    f"{type(abort_err).__name__}: {abort_err}"
-                )
+            await _abort_describe_flow(client.abort_options_flow, flow_id)
 
 
 async def fetch_config_subentry_schema(
@@ -432,17 +437,7 @@ async def fetch_config_subentry_schema(
         )
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_subentry_flow(flow_id),
-                    timeout=_ABORT_TIMEOUT_S,
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    "Failed to abort config subentry introspection flow %s: %s",
-                    flow_id,
-                    abort_err,
-                )
+            await _abort_describe_flow(client.abort_config_subentry_flow, flow_id)
 
 
 async def fetch_config_flow_schema(
@@ -479,18 +474,5 @@ async def fetch_config_flow_schema(
         )
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                # A flow that already finished (abort, create_entry) is gone:
-                # Core answers 404, which is expected here.
-                gone = getattr(abort_err, "status_code", None) == 404
-                logger.log(
-                    logging.DEBUG if gone else logging.WARNING,
-                    "config flow %s abort failed: %s",
-                    flow_id,
-                    abort_err,
-                )
+            await _abort_describe_flow(client.abort_config_flow, flow_id)
     _put_payload(resp, "config_flow_schema", schema)

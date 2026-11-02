@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -171,7 +172,10 @@ async def test_a_menu_choice_core_does_not_offer_is_refused_with_its_options() -
 
 
 async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
-    if kind == "options":
+    if kind == "probe":
+        entry = {"supports_options": True, "options": {"host": "h"}}
+        await redact_component_options(client, "e1", entry, [])
+    elif kind == "options":
         await fetch_options_schema(client, "e1", _resp(), menu_choice=menu_choice)
     elif kind == "subentry":
         await fetch_config_subentry_schema(
@@ -207,6 +211,47 @@ async def test_a_failed_menu_choice_submit_fails_every_describe(kind: str) -> No
         await _describe(kind, client, "advanced")
 
     getattr(client, abort).assert_awaited_once_with("f1")
+
+
+_ABORTS = {"probe": "abort_options_flow"} | {
+    kind: methods[1] for kind, methods in _FLOW_METHODS.items()
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", list(_ABORTS))
+async def test_a_cancelled_describe_still_closes_its_flow(kind: str) -> None:
+    client = _client(_form("init", _HOST))
+    sent: list[str] = []
+
+    async def abort(flow_id: str) -> None:
+        await asyncio.sleep(0)
+        sent.append(flow_id)
+
+    getattr(client, _ABORTS[kind]).side_effect = abort
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await _describe(kind, client, None)
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", list(_ABORTS))
+@pytest.mark.parametrize(("status", "level"), [(404, "DEBUG"), (500, "WARNING")])
+async def test_a_failed_describe_abort_is_a_warning_unless_the_flow_is_gone(
+    kind: str, status: int, level: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _client(_form("init", _HOST))
+    getattr(client, _ABORTS[kind]).side_effect = HomeAssistantAPIError(
+        f"API error: {status}", status_code=status
+    )
+
+    with caplog.at_level("DEBUG", logger="ha_mcp.tools.integration_schema"):
+        await _describe(kind, client, None)
+
+    assert [r.levelname for r in caplog.records if "abort" in r.getMessage()] == [level]
 
 
 @pytest.mark.asyncio
@@ -904,23 +949,6 @@ async def test_a_string_core_does_not_ship_is_no_warning() -> None:
     assert not any("strings for" in w for w in resp.get("warnings", []))
     assert "warnings" not in resp["options_schema"]
     assert "reason_text" not in resp["options_schema"]
-
-
-@pytest.mark.asyncio
-async def test_a_failed_abort_of_the_setup_describe_is_logged_as_a_warning(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    client = _client(_form("user", _HOST))
-    client.abort_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 500", status_code=500
-    )
-
-    with caplog.at_level("DEBUG", logger="ha_mcp.tools.integration_schema"):
-        await fetch_config_flow_schema(client, "demo", {})
-
-    assert [r.levelname for r in caplog.records if "f1" in r.getMessage()] == [
-        "WARNING"
-    ]
 
 
 @pytest.mark.asyncio

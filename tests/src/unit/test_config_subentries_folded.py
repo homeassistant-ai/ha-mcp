@@ -145,7 +145,7 @@ async def test_get_integration_subentry_schema_abort_failure_warns(mock_client, 
         )
 
     assert result["subentry_schema"]["fields"] == [{"name": "model"}]
-    assert "Failed to abort config subentry introspection flow flow-1" in caplog.text
+    assert "flow flow-1 abort failed: slow abort" in caplog.text
 
 
 async def test_get_integration_schema_requires_subentry_type(mock_client):
