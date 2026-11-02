@@ -705,6 +705,39 @@ class TestHelperDashboardPartialThroughDeepSearch:
             f"got {result.get('partial')!r} / {result.get('partial_reason')!r}"
         )
 
+    async def test_an_ignored_flow_helper_is_not_options_probed(self) -> None:
+        """An ignored entry has no options flow by policy (Core never set it
+        up, so its flow can raise), so the search must not start one — a
+        probe would also misreport the helper backend as partial."""
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXIGNORED",
+                    "domain": "template",
+                    "title": "Some Template",
+                    "source": "ignore",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock(
+            side_effect=RuntimeError("ignored entry has no flow")
+        )
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        client.start_options_flow.assert_not_called()
+        assert not result.get("partial"), result.get("partial_reason")
+
     async def test_dashboard_list_failure_surfaces_partial(self) -> None:
         """A failed dashboard registry-list driven through ``deep_search``
         must flag ``partial`` and name the dashboard gap — pins the
