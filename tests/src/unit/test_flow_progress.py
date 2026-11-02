@@ -390,6 +390,9 @@ async def test_a_raw_write_error_left_open_comes_back_with_the_warning(
     if converted:
         error = json.loads(str(exc_info.value))
         assert f"API error: {status}" in error["error"]["message"]
+        # The code still comes from the status, as at the tool's handler.
+        code = {500: "SERVICE_CALL_FAILED", 403: "AUTH_INVALID_TOKEN"}[status]
+        assert error["error"]["code"] == code
         assert error["error"]["suggestions"][-1].endswith("may not have been applied.")
         assert not any("target entity" in s for s in error["error"]["suggestions"])
         (warning,) = error["warnings"]
