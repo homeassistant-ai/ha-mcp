@@ -189,30 +189,40 @@ async def test_a_failed_abort_is_a_warning_on_the_preview() -> None:
         pytest.param(RuntimeError("ws down"), True, id="failed"),
     ],
 )
+@pytest.mark.parametrize("raw", [False, True], ids=["structured", "raw"])
 async def test_a_failed_preview_keeps_the_flow_left_open_warning(
-    monkeypatch: pytest.MonkeyPatch, abort_error: Exception | None, left_open: bool
+    monkeypatch: pytest.MonkeyPatch,
+    abort_error: Exception | None,
+    left_open: bool,
+    raw: bool,
 ) -> None:
     client = _client(_form(last_step=True))
     client.abort_config_flow.side_effect = abort_error
 
     async def describe_fails(*_args: Any) -> None:
+        if raw:  # a raw error left open comes back structured
+            raise HomeAssistantAPIError("describe failed", status_code=500)
         raise_tool_error(
             create_error_response(ErrorCode.SERVICE_CALL_FAILED, "describe failed")
         )
 
     monkeypatch.setattr(reconfigure_preflight, "describe_form", describe_fails)
 
-    with pytest.raises(ToolError) as exc_info:
+    with pytest.raises(
+        HomeAssistantAPIError if raw and not left_open else ToolError
+    ) as exc_info:
         await _read(client, {"host": "10.0.0.5"})
 
+    client.abort_config_flow.assert_awaited_once_with("f1")
+    if raw and not left_open:
+        return
     body = json.loads(str(exc_info.value))
-    assert body["error"]["message"] == "describe failed"
+    assert "describe failed" in body["error"]["message"]
     warnings = body.get("warnings", [])
     assert [w for w in warnings if "reauthentication" in w] == (
         warnings if left_open else []
     )
     assert len(warnings) == int(left_open)
-    client.abort_config_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio

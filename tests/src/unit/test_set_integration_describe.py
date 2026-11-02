@@ -213,3 +213,36 @@ async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> No
     assert error["code"] == "RESOURCE_NOT_FOUND"
     assert "no_such_domain" in error["message"]
     assert "Invalid handler specified" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_set_integration_describe_whose_flow_start_fails_with_5xx() -> None:
+    # Only a 400 or 404 is about the flow start; a 5xx is the tool's own error.
+    client = _client({})
+    client.start_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(domain="demo", describe=True)
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert "could not start a config flow" not in error["message"]
+    assert "spelled correctly" in error["suggestion"]
+
+
+@pytest.mark.asyncio
+async def test_set_integration_describe_left_open_returns_the_warning() -> None:
+    client = _client(_MENU)
+    client.submit_config_flow_step.side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
+    client.abort_config_flow.side_effect = TimeoutError()
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(
+            domain="demo", describe=True, menu_choice="advanced"
+        )
+
+    (warning,) = _error(exc_info)["warnings"]
+    assert "already_in_progress" in warning

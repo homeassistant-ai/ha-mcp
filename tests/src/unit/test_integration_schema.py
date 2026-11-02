@@ -297,7 +297,8 @@ async def _described(
         await fetch_config_flow_schema(client, "demo", resp, menu_choice=menu_choice)
 
 
-# How the describe ends: (first step, menu_choice, the error it raises).
+# How the describe ends: (first step, menu_choice, the error it raises once
+# the flow is closed).
 _ENDINGS = {
     "described": (_form("init", _HOST), None, None),
     # menu_choice on a flow that opens with a form: refused after the start.
@@ -327,7 +328,8 @@ async def test_a_describe_says_when_its_flow_may_still_be_open(
         await _described(kind, client, resp)
         warnings = resp.get("warnings", [])
     else:
-        # A raw error left open comes back structured, carrying the warning.
+        # An error left open comes back structured (a raw one converted), with
+        # the warning.
         with pytest.raises(ToolError if left_open else error) as exc_info:
             await _described(kind, client, resp, menu_choice=menu_choice)
         is_tool_error = isinstance(exc_info.value, ToolError)
@@ -338,21 +340,28 @@ async def test_a_describe_says_when_its_flow_may_still_be_open(
 
 
 @pytest.mark.asyncio
-async def test_a_raw_error_left_open_stays_a_warning_on_the_entry_read(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("raw", [True, False], ids=["raw", "no-form"])
+async def test_an_error_left_open_on_the_entry_read_keeps_the_warning(
+    monkeypatch: pytest.MonkeyPatch, raw: bool
 ) -> None:
-    # ha_get_integration's options probe (not strict) degrades to warnings.
+    # ha_get_integration's options probe (not strict) degrades a raw error to
+    # warnings; a step with no form to describe still fails, with the warning.
     monkeypatch.setattr(
         integration_schema, "describe_form", AsyncMock(side_effect=RuntimeError("x"))
     )
-    client = _client(_form("init", _HOST))
+    client = _client(_form("init", _HOST) if raw else {**_MENU, "type": "progress"})
     client.abort_options_flow.side_effect = TimeoutError()
     resp = _resp()
 
-    await fetch_options_schema(client, "e1", resp)
-
+    if not raw:
+        with pytest.raises(ToolError) as exc_info:
+            await fetch_options_schema(client, "e1", resp)
+        resp = _error(exc_info)
+    else:
+        await fetch_options_schema(client, "e1", resp)
+        assert resp["warnings"][1].startswith("options schema probe failed for e1")
     assert "the options flow f1 was closed" in resp["warnings"][0]
-    assert resp["warnings"][1].startswith("options schema probe failed for e1")
+    assert len(resp["warnings"]) == 1 + raw
 
 
 @pytest.mark.asyncio
