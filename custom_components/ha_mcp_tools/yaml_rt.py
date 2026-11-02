@@ -246,7 +246,9 @@ def _key_value(node: Any, parts: list[str]) -> tuple[bool, Any]:
     return True, current
 
 
-def _walk_yaml_mappings(node: Any, parts: list[str], seen: set[int], found: set[str]) -> None:
+def _walk_yaml_mappings(
+    node: Any, parts: list[str], seen: set[int], found: set[str]
+) -> None:
     if id(node) in seen:
         return
     seen.add(id(node))

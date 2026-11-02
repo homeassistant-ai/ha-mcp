@@ -459,6 +459,9 @@ class _AnnotatedDict(dict):
         self.__config_file__ = path
         self.__line__ = 1
 
+    def __eq__(self, other: object) -> bool:
+        return dict.__eq__(self, other)
+
 
 class TestFindYamlKeyFiles:
     def test_finds_top_level_key_in_config(self):

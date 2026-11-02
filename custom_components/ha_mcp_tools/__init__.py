@@ -3506,7 +3506,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 type(err).__name__,
                 err,
             )
-    register_find_yaml_key(hass, caller_token_ok=_caller_token_ok, unauthorized_response=_unauthorized_response)
+    register_find_yaml_key(hass, _caller_token_ok, _unauthorized_response)
     # Register all services with response support
     for service, schema, build_handler in (
         (
@@ -3591,7 +3591,6 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
 
 async def _async_unload_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the File & YAML services (tools entry) config entry."""
-    # Remove all services
     hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)
     hass.services.async_remove(DOMAIN, SERVICE_FIND_YAML_KEY)

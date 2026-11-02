@@ -476,9 +476,7 @@ class YamlReadTools:
             targets: list[tuple[str, bool]] | None = None
             resolve_warnings: list[str] = []
             if _has_glob(file):
-                discovered = await _find_yaml_key_files(
-                    self._client, file, yaml_path
-                )
+                discovered = await _find_yaml_key_files(self._client, file, yaml_path)
                 if discovered:
                     targets = [(path, True) for path in discovered]
             if targets is None:

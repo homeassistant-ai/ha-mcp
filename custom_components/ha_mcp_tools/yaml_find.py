@@ -74,7 +74,6 @@ def build_find_yaml_key_handler(
 
 def register_find_yaml_key(
     hass: HomeAssistant,
-    *,
     caller_token_ok: Callable[[HomeAssistant, ServiceCall], bool],
     unauthorized_response: Callable[[str], dict[str, Any]],
 ) -> None:
