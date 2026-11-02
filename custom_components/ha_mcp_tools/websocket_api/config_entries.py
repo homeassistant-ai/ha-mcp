@@ -22,12 +22,15 @@ def _do_config_entries(
     *,
     secret_values: frozenset[str] = frozenset(),
     secret_scrub_degraded: bool = False,
+    type_matched_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Return config entries as Core's ``config_entries/get`` rows, extended.
 
     Each row is Core's ``ConfigEntry.as_json_fragment`` plus ``unique_id``,
     ``options`` and ``subentries`` (see :func:`_config_entry_row`). Filtered by
-    ``domain`` when given, or the single entry by ``entry_id``
+    ``domain`` and by the ids Core's own ``type_filter`` match kept
+    (``type_matched_ids``, from :func:`_config_entries_prep`) when given, or the
+    single entry by ``entry_id``
     (``hass.config_entries.async_get_entry``). Only a WHOLLY ABSENT ``entry_id``
     key (``None``) selects list mode; an empty-string ``entry_id`` is a
     single-entry lookup for a nonexistent id, so it returns ``entries: []``
@@ -66,6 +69,10 @@ def _do_config_entries(
         entries = _iter_config_entries(hass)
         if domain:
             entries = [e for e in entries if getattr(e, "domain", None) == domain]
+        if type_matched_ids is not None:
+            entries = [
+                e for e in entries if getattr(e, "entry_id", None) in type_matched_ids
+            ]
     result: dict[str, Any] = {
         "entries": [
             _config_entry_row(
@@ -90,10 +97,37 @@ async def _config_entries_prep(
     executor via :meth:`hass.async_add_executor_job`, keeping
     :func:`_do_config_entries` a pure in-memory read. The ``degraded`` flag (a
     present-but-unreadable ``secrets.yaml``) rides through so the response can signal
-    that ``options`` may be unredacted. See :func:`_load_secret_scrub`.
+    that ``options`` may be unredacted. See :func:`_load_secret_scrub`. A list
+    read with ``type_filter`` also resolves the ids Core's type match keeps.
     """
     values, degraded = await hass.async_add_executor_job(_load_secret_scrub, hass)
-    return {"secret_values": values, "secret_scrub_degraded": degraded}
+    extra: dict[str, Any] = {"secret_values": values, "secret_scrub_degraded": degraded}
+    type_filter = msg.get("type_filter")
+    if type_filter and msg.get("entry_id") is None:
+        extra["type_matched_ids"] = await _entry_ids_matching_type(
+            hass, type_filter, msg.get("domain")
+        )
+    return extra
+
+
+async def _entry_ids_matching_type(
+    hass: HomeAssistant, type_filter: list[str], domain: str | None
+) -> frozenset[str]:
+    """The ids of the entries Core's REST list keeps for ``?type=``.
+
+    Core's own matcher, so an entry whose integration Core cannot find stays in
+    unless the filter is ``["helper"]``, as on the REST list. It is private to
+    Core; if a release drops it, the import error fails this command and the
+    server falls back to its REST read.
+    """
+    from homeassistant.components.config.config_entries import (
+        _async_matching_config_entries_json_fragments,
+    )
+
+    fragments = await _async_matching_config_entries_json_fragments(
+        hass, type_filter, domain or None
+    )
+    return frozenset(json.loads(json_bytes(f))["entry_id"] for f in fragments)
 
 
 def _config_entry_by_id(hass: HomeAssistant, entry_id: str) -> Any:

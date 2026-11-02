@@ -145,6 +145,9 @@ CAPABILITIES: list[str] = [
     # A flag on config_entries: gates its opt-in ``include_subentry_data``, the
     # scrubbed subentry ``data`` the server's config_subentry backups capture.
     "config_entries_subentry_data",
+    # A flag on config_entries: gates its ``type_filter``, Core's own match for
+    # the REST list's ``?type=``, so the server lists by type in one read.
+    "config_entries_type_filter",
     "registry_lookup",
     "system_snapshot",
     "entity_lookup",

@@ -198,8 +198,11 @@ every field kept: from the component's `config_entries` command (which adds
 `unique_id` and the stored options) or Core's REST entry list otherwise. On
 the REST path the list's `domain` and `integration_type` go to Core's
 `?domain=` and `?type=`, so Core's own matching rule applies (an unknown type
-is not rejected); the component command has no type filter, so that path keeps
-the rows whose entry ids Core's `?type=` answer holds. One entry is read with
+is not rejected). The component path sends the type as `type_filter`, which
+the component matches with Core's own `?type=` helper
+(`_async_matching_config_entries_json_fragments`), so the list is one read; a
+component without the `config_entries_type_filter` capability gets no type, and
+that path keeps the rows whose entry ids Core's `?type=` answer holds. One entry is read with
 WebSocket `config_entries/get_single`, Core's `not_found` being the 404; the
 REST list is the fallback when no WebSocket answer comes back or Core answers
 `unauthorized` (`get_single` is admin-only, the REST list is not).

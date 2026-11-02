@@ -334,3 +334,36 @@ async def test_reader_refuses_a_payload_with_a_non_dict_row(
     )
 
     assert await mod.fetch_config_entries(client, domain="mqtt") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caps", "frame", "filtered"),
+    [
+        pytest.param(
+            {"config_entries", "config_entries_type_filter"},
+            {"domain": "sun", "type_filter": ["service"]},
+            True,
+            id="capability",
+        ),
+        pytest.param({"config_entries"}, {"domain": "sun"}, False, id="fallback"),
+    ],
+)
+async def test_reader_sends_the_type_only_to_a_component_that_filters_by_it(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caps: set[str],
+    frame: dict[str, Any],
+    filtered: bool,
+) -> None:
+    """An older component would ignore the type, so it is not sent there."""
+    ws = _arrange(monkeypatch, send=AsyncMock(return_value={"result": {"entries": []}}))
+    monkeypatch.setattr(mod, "component_supports", lambda _caps, name: name in caps)
+
+    read = await mod.fetch_config_entries(
+        client, domain="sun", integration_type="service"
+    )
+
+    assert ws.send_command.await_args.kwargs == frame
+    assert read is not None
+    assert read.type_filtered is filtered

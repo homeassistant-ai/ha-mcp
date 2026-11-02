@@ -211,8 +211,8 @@ the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/config_entries`` — config entries as Core's
   ``config_entries/get`` rows (``ConfigEntry.as_json_fragment``) plus
-  ``unique_id``, ``options`` and ``subentries``, filtered by ``domain`` or fetched
-  by ``entry_id``. ``entry.data`` (integration credentials) is
+  ``unique_id``, ``options`` and ``subentries``, filtered by ``domain`` and
+  ``type_filter`` (Core's own integration-type match) or fetched by ``entry_id``. ``entry.data`` (integration credentials) is
   NEVER read; ``options`` is passed through a resolved-``!secret`` scrub (an
   options leaf equal to a ``secrets.yaml`` value becomes ``"**redacted**"``,
   loaded off the loop by :func:`_config_entries_prep`) — data minimization

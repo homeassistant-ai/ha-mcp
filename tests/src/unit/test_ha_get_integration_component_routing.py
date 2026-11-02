@@ -839,9 +839,9 @@ async def test_legacy_list_passes_integration_type_to_core(
 async def test_component_list_keeps_rows_core_matches_for_integration_type(
     domain: str | None, params: dict[str, str]
 ) -> None:
-    # The component command has no type filter, so Core's REST answer decides
-    # which component rows stay; the rows themselves (options) still come from
-    # the component.
+    # A component without config_entries_type_filter gets no type, so Core's
+    # REST answer decides which component rows stay; the rows themselves
+    # (options) still come from the component.
     rows = [_row("m1", "mqtt"), _row("s1", "sun", options={"elevation": 1})]
     if domain:
         rows = [r for r in rows if r["domain"] == domain]
@@ -862,6 +862,7 @@ async def test_component_list_keeps_rows_core_matches_for_integration_type(
         )
 
     assert client.rest_list_params == params
+    assert "type_filter" not in _ce_calls(ws)[0].kwargs
     assert [e["entry_id"] for e in resp["entries"]] == ["s1"]
     assert resp["entries"][0]["options"] == {"elevation": 1}
     assert resp["total_count"] == 1

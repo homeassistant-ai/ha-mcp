@@ -1131,7 +1131,8 @@ class IntegrationTools:
         """List config entries with optional domain/query filtering and pagination."""
         # Component fast path: one in-process read (domain filtered server-side,
         # options materialized on each row) replaces the per-entry OptionsFlow
-        # probes; the REST list is still read when integration_type filters.
+        # probes; the REST list is read for integration_type only when the
+        # component cannot filter by type.
         # Normalize the domain to HA's canonical lowercase: both the component
         # and Core's REST list filter by exact match.
         domain_norm = domain.strip().lower() if domain else None
@@ -1144,11 +1145,13 @@ class IntegrationTools:
             params["type"] = validate_identifier_not_empty(
                 integration_type, "integration_type"
             )
-        read = await fetch_config_entries(self._client, domain=domain_norm)
+        read = await fetch_config_entries(
+            self._client, domain=domain_norm, integration_type=params.get("type")
+        )
         if read is not None:
             rows = read.rows
-            if integration_type is not None:
-                # The component command has no type filter, so Core's REST list
+            if integration_type is not None and not read.type_filtered:
+                # A component without the type filter: Core's REST list
                 # decides which entries match the type.
                 matching = {
                     entry.get("entry_id")

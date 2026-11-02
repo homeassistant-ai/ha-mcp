@@ -78,16 +78,24 @@ class ComponentEntries(NamedTuple):
     #: The component could not read ``secrets.yaml``, so ``options`` went out
     #: unscrubbed.
     secret_scrub_degraded: bool
+    #: The component applied ``integration_type``; False means the rows are
+    #: not filtered by type and the caller must match the type itself.
+    type_filtered: bool = False
 
 
 async def fetch_config_entries(
-    client: Any, *, entry_id: str | None = None, domain: str | None = None
+    client: Any,
+    *,
+    entry_id: str | None = None,
+    domain: str | None = None,
+    integration_type: str | None = None,
 ) -> ComponentEntries | None:
     """One ``config_entries`` read; ``None`` when the answer cannot be trusted.
 
     Pass ``entry_id`` for the single entry (no rows ⇒ no such entry) or
     ``domain`` to filter the list (the component's exact comparison); neither
-    lists all.
+    lists all. ``integration_type`` is sent only to a component advertising
+    ``config_entries_type_filter``; ``type_filtered`` says whether it was.
 
     ``None`` means "use your legacy path": no capability, a downgrade
     (``unknown_command`` also invalidates the cached caps), any other command
@@ -104,6 +112,11 @@ async def fetch_config_entries(
         query["entry_id"] = entry_id
     if domain is not None:
         query["domain"] = domain
+    type_filtered = integration_type is not None and component_supports(
+        caps, "config_entries_type_filter"
+    )
+    if type_filtered:
+        query["type_filter"] = [integration_type]
     try:
         ws = await get_websocket_client(
             url=client.base_url,
@@ -135,6 +148,7 @@ async def fetch_config_entries(
     return ComponentEntries(
         rows=list(entries),
         secret_scrub_degraded=result.get("secret_scrub_degraded") is True,
+        type_filtered=type_filtered,
     )
 
 
