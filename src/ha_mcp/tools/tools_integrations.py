@@ -1624,9 +1624,9 @@ class IntegrationTools:
                 description=(
                     "The ws_command's arguments, without 'type' and 'id'. "
                     "Checked against the schema Home Assistant registered "
-                    "for the command before it is sent; when the installed "
-                    "ha_mcp_tools component cannot check it, it is sent "
-                    "unchecked, with a warning."
+                    "for the command before it is sent; when the "
+                    "ha_mcp_tools component is missing or cannot check it, "
+                    "it is sent unchecked, with a warning."
                 ),
             ),
         ] = None,

@@ -3,7 +3,9 @@
 Starts a flow only to read its first form (or its menu, or the branch form a
 ``menu_choice`` picks) and always aborts it. Feeds ``describe`` and the
 ``data_schema`` attached to flow errors; split out of
-``config_entry_flow_walker``, which drives flows to completion.
+``config_entry_flow_walker``, which drives flows to completion. Also holds the
+shielded flow abort and the check whether an abort left its flow open, which
+``config_entry_flow_abort`` builds on.
 """
 
 import asyncio

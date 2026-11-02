@@ -1673,8 +1673,8 @@ class DeepSearchMixin(SceneSearchMixin):
         options: dict[str, Any] = {}
         probe_failed = False
         # Only an entry with an options flow (an ignored one has none) has a
-        # body to probe; a perfect title match (100) makes the probe redundant,
-        # anything below is probed for accurate scoring and ``match_in_config``.
+        # body to probe. The probe can only raise the score, so a perfect title
+        # match (100) skips it unless include_config asks for the body.
         normalize_ignored_entry(entry)
         need_probe = bool(entry.get("supports_options")) and (
             include_config

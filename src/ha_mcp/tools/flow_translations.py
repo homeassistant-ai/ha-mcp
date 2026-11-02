@@ -22,8 +22,8 @@ _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 def strings_unread_warning(domain: str) -> str:
     """The warning for a response whose Core strings could not be read."""
     return (
-        f"Home Assistant's strings for {domain} could not be read, so its help, "
-        "error and reason texts are missing"
+        f"Home Assistant's strings for {domain} could not be read, so its flow "
+        "texts (help, errors, reasons, progress) are missing"
     )
 
 

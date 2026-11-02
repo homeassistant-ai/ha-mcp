@@ -1,6 +1,7 @@
 """ha_get_integration lists an entry's own WebSocket commands; ha_set_integration sends one."""
 
 import json
+from contextlib import ExitStack
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -60,10 +61,9 @@ async def _get(client: MagicMock, domain: str | None = "knx", **kwargs: Any) -> 
         return await IntegrationTools(client).ha_get_integration(**kwargs)
 
 
-def _bridge(answer: dict[str, Any] | Exception) -> Any:
-    """The real bridge, talking to a component that answers ``answer``."""
-    from contextlib import ExitStack
-
+def _bridge(answer: dict[str, Any] | Exception) -> tuple[ExitStack, Mock]:
+    """Patches for the real bridge, talking to a component that answers
+    ``answer``, and that component's WebSocket client."""
     caps = ComponentCaps(1, "test", frozenset({"integration_commands"}), {})
     ws = Mock(
         send_command=AsyncMock(

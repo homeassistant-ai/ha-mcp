@@ -20,19 +20,20 @@ a different problem — it commits in place and Home Assistant reloads afterward
 — and lives in ``config_entry_reconfigure``, which shares this module's
 sentinel rejection and ``config_entry_flow_abort``'s flow abort.
 
-The step machinery those entry points drive lives in six sibling modules,
-imported in one direction only (menu <- form <- walker <- abort <- here,
-progress <- walker, introspect <- errors <- progress and walker, and
-introspect <- walker, abort and here):
+The step machinery those entry points drive lives in seven sibling modules.
+Each imports only modules upstream of it in these chains, so no import runs
+the other way: menu <- form <- walker <- abort <- here, and
+introspect <- errors <- progress <- walker.
 
 - ``config_entry_flow_abort``: aborting a failed walk's flow, shielded
-- ``config_entry_flow_introspect``: the flow-type vocabulary, the abort
-  timeout, and the read-only helper flow introspection
+- ``config_entry_flow_introspect``: the flow-type vocabulary, the shielded
+  abort and its left-open check, and the read-only helper flow introspection
+- ``config_entry_flow_errors``: Home Assistant's flow answers as structured
+  errors, and the reconfigure outcome vocabulary
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
 - ``config_entry_flow_progress``: waiting out a progress step within a budget
-- ``config_entry_flow_walker``: step submission and the two flow walkers,
-  which report HA's errors through ``config_entry_flow_errors``
+- ``config_entry_flow_walker``: step submission and the two flow walkers
 """
 
 import asyncio
@@ -862,7 +863,8 @@ async def _update_config_entry_options(
                 entry_id,
                 flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
             )
-            # A restore reports its own failure and has no warnings to add to.
+            # A restore reports its own failure (OptionsFlowError) and has no
+            # warnings channel; an unconfirmed abort shows only in the log above.
             if progress is None:
                 raise_if_flow_left_open(
                     flow_err, abort_err, flow_left_open("options", flow_id)
