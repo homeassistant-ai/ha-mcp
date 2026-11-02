@@ -293,7 +293,7 @@ async def _find_yaml_key_files(
 
 async def _resolve_all_targets(
     client: Any, file: str, yaml_path: str
-) -> tuple[list[tuple[str, bool]], list[str]]:
+) -> tuple[list[tuple[str, bool]], list[str], set[str]]:
     """Merge Core-discovered files with the glob resolver's matches.
 
     Discovery sees only what Core loaded, so a package file Core rejected is
@@ -303,6 +303,7 @@ async def _resolve_all_targets(
     """
     targets: list[tuple[str, bool]] = []
     warnings: list[str] = []
+    discovered_paths: set[str] = set()
     if _has_glob(file):
         discovered = await _find_yaml_key_files(client, file, yaml_path)
         if discovered is None:
@@ -315,6 +316,7 @@ async def _resolve_all_targets(
             targets = [
                 (path, not (named_literal and path == file)) for path in discovered
             ]
+            discovered_paths = {path for path, _ in targets}
     resolved: list[tuple[str, bool]] = []
     try:
         resolved, resolver_warnings = await _resolve_target_files(client, file)
@@ -326,7 +328,7 @@ async def _resolve_all_targets(
     seen = {path for path, _ in targets}
     targets.extend((path, expanded) for path, expanded in resolved if path not in seen)
     targets.sort(key=lambda target: target[0])
-    return targets, warnings
+    return targets, warnings, discovered_paths
 
 
 async def _list_files_matching(
@@ -539,7 +541,7 @@ class YamlReadTools:
         try:
             await _assert_mcp_tools_available(self._client)
 
-            targets, resolve_warnings = await _resolve_all_targets(
+            targets, resolve_warnings, discovered_paths = await _resolve_all_targets(
                 self._client, file, yaml_path
             )
             await refuse_reading_hidden_definitions(
@@ -583,6 +585,13 @@ class YamlReadTools:
                     files_unreadable += 1
                 elif match:
                     matches.append(match)
+                elif target in discovered_paths:
+                    warnings.append(
+                        f"{target} is annotated as defining {yaml_path} in "
+                        "Core's loaded config, but the dotted path is not "
+                        "readable from that file; a merged include directory "
+                        "may define it."
+                    )
 
             result: dict[str, Any] = {
                 "success": True,

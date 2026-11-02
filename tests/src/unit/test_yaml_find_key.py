@@ -263,6 +263,30 @@ async def test_discovered_bracketed_literal_keeps_strict_parse_errors():
         await fn(yaml_path="rest", file="packages/svc[a].yaml")
 
 
+async def test_tool_warns_when_a_discovered_path_is_not_readable():
+    """A merged include keeps the parent annotation; say the path is not there."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {
+                "success": True,
+                "files": ["custom_packages/merged.yaml"],
+            },
+            "list_files": {
+                "success": True,
+                "files": [{"path": "custom_packages/merged.yaml", "is_dir": False}],
+            },
+            "read_file": _read_ok(None),
+        }
+    )
+
+    out = await fn(yaml_path="shell_command.mcp_secret", file="custom_packages/*.yaml")
+
+    assert out["count"] == 0
+    assert any("annotated as defining" in warning for warning in out["warnings"])
+
+
 def test_failure_reason_falls_back_outside_the_envelope():
     from ha_mcp.tools import tools_yaml_read
 
