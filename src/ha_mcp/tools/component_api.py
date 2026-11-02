@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client.rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -150,6 +151,17 @@ _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
 _PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+# The latest probe was refused as unauthorized. Kept beside the failure text so
+# a fire tool can stop before sending with the same rejected token; read callers
+# keep treating the probe as best-effort.
+_PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
+
+
+def component_probe_auth_failed(client: Any) -> bool:
+    """True when the latest capability probe was rejected as unauthorized."""
+    return bool(_PROBE_AUTH_REJECTED.get(client))
+
+
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
@@ -221,12 +233,30 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
     transient-negative stamp so a client never carries both negative kinds.
     """
     _PROBE_FAILURES.pop(client, None)
+    _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE[client] = caps
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
     if caps is None:
         _NEGATIVE_CACHE_TS[client] = _monotonic()
     else:
         _NEGATIVE_CACHE_TS.pop(client, None)
+
+
+def _is_auth_rejection(exc: Exception) -> bool:
+    """True when a probe failure was Home Assistant refusing the token."""
+    if isinstance(exc, HomeAssistantCommandError):
+        return getattr(exc, "code", None) == "unauthorized"
+    return isinstance(exc, HomeAssistantAuthError) or isinstance(
+        exc.__cause__, HomeAssistantAuthError
+    )
+
+
+def _store_probe_failure(client: Any, exc: Exception, message: str) -> None:
+    """Cache an inconclusive probe and remember an auth rejection."""
+    _store_transient_negative(client)
+    if _is_auth_rejection(exc):
+        _PROBE_AUTH_REJECTED[client] = True
+    _PROBE_FAILURES[client] = message
 
 
 def _store_transient_negative(client: Any, caps: ComponentCaps | None = None) -> None:
@@ -350,24 +380,23 @@ async def get_component_caps(
             if is_unknown_command(exc):
                 _store_caps(client, None)
             else:
-                _store_transient_negative(client)
-                _PROBE_FAILURES[client] = f"{INFO_COMMAND} failed: {exc}"
+                _store_probe_failure(client, exc, f"{INFO_COMMAND} failed: {exc}")
             return _checked_caps(client, None, strict, cause=exc)
         except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as exc:
             logger.debug(
                 "%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=True
             )
-            _store_transient_negative(client)
-            _PROBE_FAILURES[client] = (
-                f"{INFO_COMMAND} probe could not reach Home Assistant"
+            _store_probe_failure(
+                client, exc, f"{INFO_COMMAND} probe could not reach Home Assistant"
             )
             return _checked_caps(client, None, strict, cause=exc)
         except Exception as exc:
             # Read callers retain best-effort fallback; strict write callers
             # must not confuse an unexpected fault with capability absence.
             logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
-            _store_transient_negative(client)
-            _PROBE_FAILURES[client] = f"{INFO_COMMAND} probe failed unexpectedly"
+            _store_probe_failure(
+                client, exc, f"{INFO_COMMAND} probe failed unexpectedly"
+            )
             return _checked_caps(client, None, strict, cause=exc)
 
         caps = _parse_caps(response)
@@ -419,6 +448,7 @@ def invalidate_caps(client: Any) -> None:
     stale positive doesn't keep routing to a dead command.
     """
     _PROBE_FAILURES.pop(client, None)
+    _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)

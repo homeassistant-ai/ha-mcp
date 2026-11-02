@@ -29,6 +29,7 @@ from ..errors import ErrorCode, create_error_response, create_validation_error
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
     UNKNOWN_COMMAND_CODE,
+    component_probe_auth_failed,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -95,8 +96,8 @@ _ADMIN_EVENT_MESSAGE = (
 )
 
 _AMBIGUOUS_DISPATCH_WARNING = (
-    "Response timed out. The event may have been dispatched; delivery to "
-    "subscribers is unconfirmed."
+    "Home Assistant did not confirm the event. It may have been dispatched; "
+    "delivery to subscribers is unconfirmed."
 )
 
 
@@ -163,7 +164,7 @@ def _partial_result(event_type: str, listener_fields: dict[str, Any]) -> dict[st
         "event_type": event_type,
         "message": (
             f"Event {event_type} may have been dispatched, but Home Assistant "
-            "did not respond within the timeout period."
+            "did not confirm it."
         ),
         "context": {},
         "context_id": None,
@@ -196,6 +197,12 @@ def _fire_reply_payload(
     if raw.get("success") is False:
         if fallback_on_unknown and raw.get("error_code") == UNKNOWN_COMMAND_CODE:
             return _UNKNOWN_COMMAND
+        if raw.get("error_code") == "unauthorized":
+            exception_to_structured_error(
+                HomeAssistantAdminRequiredError(_ADMIN_EVENT_MESSAGE),
+                context={"event_type": event_type},
+                suggestions=_EVENT_REJECTION_SUGGESTIONS,
+            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -328,6 +335,12 @@ class EventCallMixin:
         because the event may already have fired.
         """
         caps = await get_component_caps(self._client)
+        if component_probe_auth_failed(self._client):
+            exception_to_structured_error(
+                HomeAssistantAdminRequiredError(_ADMIN_EVENT_MESSAGE),
+                context={"event_type": event_type},
+                suggestions=_EVENT_REJECTION_SUGGESTIONS,
+            )
         if not component_supports(caps, "call_event"):
             return None
         try:

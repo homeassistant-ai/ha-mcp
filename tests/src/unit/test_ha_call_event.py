@@ -167,8 +167,8 @@ class TestHaCallEvent:
         assert isinstance(warnings, list) and warnings, (
             f"Expected non-empty warnings list, got: {result!r}"
         )
-        assert any("timed out" in w.lower() for w in warnings), (
-            f"Expected timeout-related warning content; got: {warnings!r}"
+        assert any("did not confirm" in w.lower() for w in warnings), (
+            f"Expected ambiguous-dispatch warning content; got: {warnings!r}"
         )
 
     async def test_reports_exact_listener_count(self):
@@ -405,6 +405,59 @@ class TestHaCallEvent:
             "64 characters" in suggestion
             for suggestion in payload["error"]["suggestions"]
         )
+
+    @pytest.mark.parametrize("component_capable", [True, False])
+    async def test_unauthorized_envelope_maps_to_admin_required(
+        self, monkeypatch, component_capable
+    ):
+        """Core can return the refusal as an envelope, not a raised error."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Unauthorized",
+                "error_code": "unauthorized",
+            }
+        )
+        caps = (
+            SimpleNamespace(capabilities=["call_event"]) if component_capable else None
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=caps)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_event("my_event")
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
+        tools._client.fire_event.assert_not_awaited()
+
+    async def test_component_probe_auth_failure_stops_before_the_fire(
+        self, monkeypatch
+    ):
+        """A rejected probe must not be followed by a listener read or fire."""
+        from ha_mcp.tools import component_api
+
+        tools = _make_tools({"message": "rest"})
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "Command failed: Unauthorized", "unauthorized"
+            )
+        )
+        monkeypatch.setattr(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_event("my_event")
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
+        ws.send_command.assert_awaited_once_with("ha_mcp_tools/info")
+        tools._client._request.assert_not_awaited()
+        tools._client.send_websocket_message.assert_not_awaited()
 
     async def test_ws_not_sent_falls_back_with_context_warning(self):
         """The REST fallback says why context_id is missing."""
@@ -700,7 +753,7 @@ class TestHaCallEvent:
         assert result["wildcard_listener_count"] == 1
         assert result["context"] == {}
         assert result["context_id"] is None
-        assert any("timed out" in w.lower() for w in result["warnings"])
+        assert any("did not confirm" in w.lower() for w in result["warnings"])
 
     async def test_zero_listener_warning_does_not_claim_delivery(self):
         """A pre-dispatch count cannot establish whether the event was delivered."""

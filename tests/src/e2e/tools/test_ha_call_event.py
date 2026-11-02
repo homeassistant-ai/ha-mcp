@@ -75,28 +75,28 @@ async def test_call_event_list_data_rejected(mcp_client):
 async def _assert_trace_parent_id(mcp_client, automation_id, context_id):
     """Assert the fired event's context is the automation trace's parent."""
     assert context_id, f"ha_call_event must report a context_id; got {context_id!r}"
-    traces: list[dict] = []
     for _ in range(30):
         traces_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
             {"automation_id": automation_id, "limit": 5},
         )
         traces_data = assert_mcp_success(traces_result, "list automation traces")
-        traces = traces_data.get("traces") or []
-        if traces:
-            break
+        for trace in traces_data.get("traces") or []:
+            detailed_result = await mcp_client.call_tool(
+                "ha_get_automation_traces",
+                {
+                    "automation_id": automation_id,
+                    "run_id": trace["run_id"],
+                    "detailed": True,
+                },
+            )
+            detailed = assert_mcp_success(detailed_result, "read detailed trace")
+            if (detailed.get("context") or {}).get("parent_id") == context_id:
+                return
         await asyncio.sleep(0.5)
-    assert traces, "The event-triggered automation must record a trace"
-    run_id = traces[0]["run_id"]
-    detailed_result = await mcp_client.call_tool(
-        "ha_get_automation_traces",
-        {"automation_id": automation_id, "run_id": run_id, "detailed": True},
-    )
-    detailed = assert_mcp_success(detailed_result, "read detailed trace")
-    trace_context = detailed.get("context") or {}
-    assert trace_context.get("parent_id") == context_id, (
-        "The automation trace's context.parent_id must equal the fired event's "
-        f"context_id; got {trace_context.get('parent_id')!r} vs {context_id!r}"
+    raise AssertionError(
+        "No automation trace has context.parent_id equal to the fired event's "
+        f"context_id {context_id!r}"
     )
 
 
