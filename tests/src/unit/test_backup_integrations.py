@@ -542,3 +542,6 @@ async def test_options_that_differ_only_in_type_are_put_back(
     )
 
     update.assert_awaited_once()
+    (options,) = [m["options"] for m in sent if m["type"] == "options_flow"]
+    assert options == {"flag": False}
+    assert type(options["flag"]) is bool
