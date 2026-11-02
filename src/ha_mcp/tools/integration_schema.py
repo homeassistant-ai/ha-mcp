@@ -528,6 +528,19 @@ async def describe_flow_form(
         refuse_ignored_entry(
             resp["entry"], action="describe the options flow of", entry_id=entry_id
         )
+        if resp["entry"].get("supports_options") is False:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Config entry '{entry_id}' has no options flow "
+                    "(supports_options is false), so there is no options form "
+                    "to describe.",
+                    context={
+                        "entry_id": entry_id,
+                        "domain": resp["entry"].get("domain"),
+                    },
+                )
+            )
         await fetch_options_schema(
             client,
             entry_id,

@@ -157,6 +157,24 @@ def test_ha_get_integration_takes_no_menu_choice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_options_describe_of_an_entry_without_options_starts_no_flow() -> None:
+    client = _client(_form("init", _HOST))
+    client.get_config_entry.return_value = {
+        "entry_id": "e1",
+        "domain": "sun",
+        "supports_options": False,
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(entry_id="e1", describe=True)
+
+    body = _error(exc_info)
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "has no options flow" in body["error"]["message"]
+    client.start_options_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_set_integration_describe_whose_flow_cannot_start_is_no_missing_domain() -> (
     None
 ):
