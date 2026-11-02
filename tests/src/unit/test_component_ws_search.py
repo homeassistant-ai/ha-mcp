@@ -42,6 +42,7 @@ import pytest
 
 from ._component_ws_fakes import (
     FakeRegEntry,
+    FakeServices,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
@@ -152,17 +153,6 @@ class FakeConfigEntries:
             if getattr(entry, "entry_id", None) == entry_id:
                 return entry
         return None
-
-
-class FakeServices:
-    """Stand-in for ``hass.services`` (``async_services`` mapping)."""
-
-    def __init__(self, services):
-        # services: {domain: {service_name: <anything>}}
-        self._services = {d: dict(s) for d, s in dict(services).items()}
-
-    def async_services(self):
-        return dict(self._services)
 
 
 class FakeHass:
@@ -1855,6 +1845,7 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/system_snapshot",
     "ha_mcp_tools/entity_lookup",
     "ha_mcp_tools/registries",
+    "ha_mcp_tools/call_event",
 ]
 
 # Required fields per command, so the admin gate and wrappers reach the handler.
@@ -1870,6 +1861,7 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     # registry_lookup now REQUIRES a target (entity_ids or config_entry_id) —
     # a neither-present request raises HomeAssistantError (issue #1813 M2).
     "ha_mcp_tools/registry_lookup": {"entity_ids": ["light.x"]},
+    "ha_mcp_tools/call_event": {"event_type": "probe_event"},
     # config_entries / system_snapshot need no required params.
 }
 
@@ -1904,6 +1896,7 @@ class TestRegistrationAndAdminGate:
             # test_component_ws_phase2_async.py, test_component_template_diagnose.py,
             # _oauth_callbacks_ws.py and test_component_ws_logbook.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
+            wsapi.WS_CALL_EVENT,
             wsapi.WS_CALL_SERVICE,
             wsapi.WS_BULK_CALL_SERVICE,
             wsapi.WS_TEMPLATE_DIAGNOSE,
@@ -1952,7 +1945,13 @@ class TestRegistrationAndAdminGate:
             with pytest.raises(_StubHomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
-        handler(FakeHass(), conn, msg)
+        hass = FakeHass()
+        if command == wsapi.WS_CALL_EVENT:
+            hass.bus = SimpleNamespace(
+                async_fire=lambda *args, **kwargs: None,
+                async_listeners=dict,
+            )
+        handler(hass, conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)
 

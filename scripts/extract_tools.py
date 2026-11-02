@@ -35,7 +35,10 @@ README_END_MARKER = "<!-- TOOLS_TABLE_END -->"
 DOCS_START_MARKER = "<!-- ADDON_TOOLS_START -->"
 DOCS_END_MARKER = "<!-- ADDON_TOOLS_END -->"
 
-TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py"])
+TOOL_FILES = sorted(
+    list(TOOLS_DIR.glob("tools_*.py"))
+    + [TOOLS_DIR / "backup.py", TOOLS_DIR / "event_call.py"]
+)
 
 ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 

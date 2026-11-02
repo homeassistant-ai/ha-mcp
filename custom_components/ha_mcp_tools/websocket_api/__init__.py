@@ -170,6 +170,13 @@ the info handshake carries no capability entry:
   raises ``HomeAssistantError`` (→ the server's command-error fallback to its legacy
   options-flow path). All awaiting-adjacent work (the deferred apply) lives in
   :func:`_server_entry_update_prep`; :func:`_do_server_entry_update` is a pure formatter.
+* ``ha_mcp_tools/call_event`` — fire a custom event on Core's own bus in-process
+  and return the event's ``context`` plus the exact-event and ``MATCH_ALL``
+  listener counts, read in the same synchronous pass, so the server's
+  ``ha_call_event`` needs no separate ``GET /api/events`` before a fire. The
+  event type travels in the message body, so Core accepts the same names its
+  WebSocket ``fire_event`` command does; the server keeps ``state_changed`` on
+  its REST path because ``APIEventView`` rebuilds that payload's state dicts.
 * ``ha_mcp_tools/call_service`` — the FIRST write capability. Fires exactly one
   ``hass.services.async_call`` in-process and returns the REAL pre→post state
   transition for the target ``entity_ids`` — event-confirmed via an
@@ -329,6 +336,7 @@ from .. import (
     todo_items,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
+from .call_event import _do_call_event
 from .call_service import _call_service_prep, _do_call_service
 from .config_entries import _config_entries_prep, _do_config_entries
 from .constants import CAPABILITIES, SCHEMA_VERSION
@@ -355,6 +363,7 @@ from .registries import _do_registries
 from .schemas import (
     _blueprint_get_schema,
     _bulk_call_service_schema,
+    _call_event_schema,
     _call_service_schema,
     _config_entries_schema,
     _dashboard_edit_schema,
@@ -482,6 +491,9 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _do_server_entry_update,
             _server_entry_update_prep,
         ),
+        # The event WRITE command: listeners are read and the event fires in one
+        # synchronous pass, so no async prep is needed.
+        (_call_event_schema(), _do_call_event, None),
         # The service WRITE command: dispatch + the bounded confirmation wait are
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.

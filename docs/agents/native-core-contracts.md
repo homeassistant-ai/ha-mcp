@@ -102,6 +102,19 @@ same test the frontend's restart dialog applies). When the recorder or the
 backup manager does not answer, it says so in `warnings` instead of claiming
 the check passed.
 
+`ha_call_event` prefers the component's `ha_mcp_tools/call_event` bridge
+(capability `call_event`). The bridge reads `hass.bus.async_listeners()` and
+calls `hass.bus.async_fire()` in one pass, returning the event's context and
+the exact-event and `MATCH_ALL` listener counts. Without the component the tool
+fires Core's WebSocket `fire_event`, which returns the same context; listener
+counts come from `GET /api/events` before the fire. `state_changed` stays on the
+REST `POST /api/events/{event_type}` route because only `APIEventView` rebuilds
+its `old_state`/`new_state` dicts into State objects. A WebSocket command that
+provably was not sent falls back to that REST route and says so in `warnings`;
+a timeout or dropped socket after the send returns `partial` rather than an
+error that invites a retry. `context_id` is the event context's `id`; an
+automation triggered by the event records it as `parent_id` in its trace.
+
 Todo item adds, updates and removals by name prefer the component's
 `ha_mcp_tools/todo_item` bridge (capability `todo_item`). It resolves an item
 value with Core's own `_find_by_uid_or_summary`, calls Core's todo services in

@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client.rest_client import (
+    HomeAssistantAdminRequiredError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -150,6 +152,22 @@ _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
 _PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+# The latest probe was refused as unauthorized. Kept beside the failure text so
+# a fire tool can stop before sending with the same rejected token; read callers
+# keep treating the probe as best-effort.
+_PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+
+def component_probe_auth_failed(client: Any) -> bool:
+    """True when the latest capability probe was rejected as unauthorized."""
+    return client in _PROBE_AUTH_REJECTED
+
+
+def component_probe_auth_kind(client: Any) -> str | None:
+    """``permission`` or ``token`` for the latest probe rejection, else None."""
+    return _PROBE_AUTH_REJECTED.get(client)
+
+
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
@@ -221,12 +239,35 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
     transient-negative stamp so a client never carries both negative kinds.
     """
     _PROBE_FAILURES.pop(client, None)
+    _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE[client] = caps
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
     if caps is None:
         _NEGATIVE_CACHE_TS[client] = _monotonic()
     else:
         _NEGATIVE_CACHE_TS.pop(client, None)
+
+
+def _auth_rejection_kind(exc: Exception) -> str | None:
+    """Classify a probe failure as a permission refusal or a token rejection."""
+    if isinstance(exc, HomeAssistantAdminRequiredError):
+        return "permission"
+    if isinstance(exc, HomeAssistantCommandError):
+        return "permission" if getattr(exc, "code", None) == "unauthorized" else None
+    if isinstance(exc, HomeAssistantAuthError) or isinstance(
+        exc.__cause__, HomeAssistantAuthError
+    ):
+        return "token"
+    return None
+
+
+def _store_probe_failure(client: Any, exc: Exception, message: str) -> None:
+    """Cache an inconclusive probe and remember an auth rejection."""
+    _store_transient_negative(client)
+    kind = _auth_rejection_kind(exc)
+    if kind:
+        _PROBE_AUTH_REJECTED[client] = kind
+    _PROBE_FAILURES[client] = message
 
 
 def _store_transient_negative(client: Any, caps: ComponentCaps | None = None) -> None:
@@ -340,6 +381,8 @@ async def get_component_caps(
         # silently unreachable on an HTTPS + verify_ssl=False install. ``None`` is
         # the pool's settings default, so a client without the attr is unchanged.
         verify_ssl = getattr(client, "verify_ssl", None)
+        # This probe alone decides the auth marker; never carry a stale one.
+        _PROBE_AUTH_REJECTED.pop(client, None)
 
         try:
             ws = await get_websocket_client(
@@ -350,24 +393,23 @@ async def get_component_caps(
             if is_unknown_command(exc):
                 _store_caps(client, None)
             else:
-                _store_transient_negative(client)
-                _PROBE_FAILURES[client] = f"{INFO_COMMAND} failed: {exc}"
+                _store_probe_failure(client, exc, f"{INFO_COMMAND} failed: {exc}")
             return _checked_caps(client, None, strict, cause=exc)
         except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as exc:
             logger.debug(
                 "%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=True
             )
-            _store_transient_negative(client)
-            _PROBE_FAILURES[client] = (
-                f"{INFO_COMMAND} probe could not reach Home Assistant"
+            _store_probe_failure(
+                client, exc, f"{INFO_COMMAND} probe could not reach Home Assistant"
             )
             return _checked_caps(client, None, strict, cause=exc)
         except Exception as exc:
             # Read callers retain best-effort fallback; strict write callers
             # must not confuse an unexpected fault with capability absence.
             logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
-            _store_transient_negative(client)
-            _PROBE_FAILURES[client] = f"{INFO_COMMAND} probe failed unexpectedly"
+            _store_probe_failure(
+                client, exc, f"{INFO_COMMAND} probe failed unexpectedly"
+            )
             return _checked_caps(client, None, strict, cause=exc)
 
         caps = _parse_caps(response)
@@ -419,6 +461,7 @@ def invalidate_caps(client: Any) -> None:
     stale positive doesn't keep routing to a dead command.
     """
     _PROBE_FAILURES.pop(client, None)
+    _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)

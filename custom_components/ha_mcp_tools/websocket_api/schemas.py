@@ -17,6 +17,7 @@ from .constants import (
     SERVER_ENTRY_UPDATE_MAX_PIP_SPEC,
     WS_BLUEPRINT_GET,
     WS_BULK_CALL_SERVICE,
+    WS_CALL_EVENT,
     WS_CALL_SERVICE,
     WS_CONFIG_ENTRIES,
     WS_DASHBOARD_EDIT,
@@ -289,6 +290,14 @@ def _server_entry_update_schema() -> dict[Any, Any]:
             vol.Length(max=SERVER_ENTRY_UPDATE_MAX_PIP_SPEC),
             _single_line_pip_spec,
         ),
+    }
+
+
+def _call_event_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_CALL_EVENT,
+        vol.Required("event_type"): str,
+        vol.Optional("event_data"): dict,
     }
 
 

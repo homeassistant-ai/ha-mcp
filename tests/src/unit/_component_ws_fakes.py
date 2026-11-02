@@ -47,6 +47,10 @@ class _FakeContext:
     def __init__(self, user_id: str | None) -> None:
         self.user_id = user_id
 
+    def as_dict(self) -> dict[str, Any]:
+        """Mirror Core's ``Context.as_dict`` for the call_event reply."""
+        return {"id": None, "user_id": self.user_id}
+
 
 class _FakeConnection:
     def __init__(
@@ -105,6 +109,17 @@ class _FakeWSApi:
 
     def async_register_command(self, hass: Any, handler: Any) -> None:
         self.registered[handler._ws_command] = handler
+
+
+class FakeServices:
+    """Stand-in for ``hass.services`` (``async_services`` mapping)."""
+
+    def __init__(self, services: Mapping[str, Mapping[str, Any]]) -> None:
+        # services: {domain: {service_name: <anything>}}
+        self._services = {d: dict(s) for d, s in dict(services).items()}
+
+    def async_services(self) -> dict[str, dict[str, Any]]:
+        return dict(self._services)
 
 
 class _FakeCallServices:
