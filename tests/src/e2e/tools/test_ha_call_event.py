@@ -72,6 +72,34 @@ async def test_call_event_list_data_rejected(mcp_client):
         )
 
 
+async def _assert_trace_parent_id(mcp_client, automation_id, context_id):
+    """Assert the fired event's context is the automation trace's parent."""
+    assert context_id, f"ha_call_event must report a context_id; got {context_id!r}"
+    traces: list[dict] = []
+    for _ in range(30):
+        traces_result = await mcp_client.call_tool(
+            "ha_get_automation_traces",
+            {"automation_id": automation_id, "limit": 5},
+        )
+        traces_data = assert_mcp_success(traces_result, "list automation traces")
+        traces = traces_data.get("traces") or []
+        if traces:
+            break
+        await asyncio.sleep(0.5)
+    assert traces, "The event-triggered automation must record a trace"
+    run_id = traces[0]["run_id"]
+    detailed_result = await mcp_client.call_tool(
+        "ha_get_automation_traces",
+        {"automation_id": automation_id, "run_id": run_id, "detailed": True},
+    )
+    detailed = assert_mcp_success(detailed_result, "read detailed trace")
+    trace_context = detailed.get("context") or {}
+    assert trace_context.get("parent_id") == context_id, (
+        "The automation trace's context.parent_id must equal the fired event's "
+        f"context_id; got {trace_context.get('parent_id')!r} vs {context_id!r}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_call_event_delivery_verified(mcp_client):
     """Prove that ha_call_event delivers events to HA subscribers end-to-end.
@@ -156,6 +184,8 @@ async def test_call_event_delivery_verified(mcp_client):
         )
         logger.info("Event delivery verified: %s reached 'on'", boolean_id)
 
+        await _assert_trace_parent_id(mcp_client, automation_id, data["context_id"])
+
     finally:
         if automation_id:
             try:
@@ -179,3 +209,15 @@ async def test_call_event_delivery_verified(mcp_client):
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Cleanup failed for helper %s: %s", boolean_id, exc)
+
+
+@pytest.mark.asyncio
+async def test_call_event_rejects_overlong_event_type(mcp_client):
+    """Core's 64-character event-type limit comes back as readable text."""
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool(
+            "ha_call_event",
+            {"event_type": "mcp_" + "x" * 61},
+        )
+
+    assert "64" in str(exc_info.value)

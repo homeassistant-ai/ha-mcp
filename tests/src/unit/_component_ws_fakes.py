@@ -47,6 +47,10 @@ class _FakeContext:
     def __init__(self, user_id: str | None) -> None:
         self.user_id = user_id
 
+    def as_dict(self) -> dict[str, Any]:
+        """Mirror Core's ``Context.as_dict`` for the call_event reply."""
+        return {"id": None, "user_id": self.user_id}
+
 
 class _FakeConnection:
     def __init__(

@@ -490,10 +490,12 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _do_server_entry_update,
             _server_entry_update_prep,
         ),
+        # The event WRITE command: listeners are read and the event fires in one
+        # synchronous pass, so no async prep is needed.
+        (_call_event_schema(), _do_call_event, None),
         # The service WRITE command: dispatch + the bounded confirmation wait are
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.
-        (_call_event_schema(), _do_call_event, None),
         (_call_service_schema(), _do_call_service, _call_service_prep),
         # The BATCH write command (D5a): the same async seam — all guards, the
         # register-before-fire pass, the dispatches, and the bounded wait live in

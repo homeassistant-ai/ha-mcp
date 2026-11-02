@@ -188,10 +188,13 @@ CAPABILITIES: list[str] = [
     # old component that lacks it is never sent the frame and the server stays on its
     # legacy options-flow submit.
     "server_entry_update",
-    # The first WRITE capability (Phase 3). The server gates its ``ha_call_service``
-    # component route on this; an old component that lacks it is never sent a
-    # component write and stays on the legacy REST path.
+    # The event WRITE capability. The server gates its ``ha_call_event``
+    # component route on this; without it the tool uses Core's WebSocket
+    # ``fire_event`` command.
     "call_event",
+    # The first service WRITE capability (Phase 3). The server gates its
+    # ``ha_call_service`` component route on this; an old component that lacks
+    # it is never sent a component write and stays on the legacy REST path.
     "call_service",
     # The BATCH write capability (Phase 3, D5a). The server gates its bulk-control
     # component route on this; a component that lacks it is never sent a batch

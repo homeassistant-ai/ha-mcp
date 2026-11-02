@@ -13,6 +13,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
@@ -176,7 +177,9 @@ class TestHaCallEvent:
 
         assert result["listener_count"] == 2
         assert result["wildcard_listener_count"] == 0
-        assert "warnings" not in result
+        assert any(
+            "WebSocket fire_event was unavailable" in w for w in result["warnings"]
+        )
 
     async def test_wildcard_only_warns_with_match_all_context(self):
         """Recorder and other match-all listeners must not hide a zero count."""
@@ -272,7 +275,6 @@ class TestHaCallEvent:
         assert result["success"] is True
         assert "listener_count" not in result
         assert "wildcard_listener_count" not in result
-        assert "warnings" not in result
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
 
     async def test_connect_timeout_does_not_claim_dispatch(self):
@@ -310,7 +312,127 @@ class TestHaCallEvent:
         assert result["wildcard_listener_count"] == 1
         tools._client.fire_event.assert_not_awaited()
 
-    async def test_component_transport_error_is_not_retried(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("exact", "wildcard"),
+        [(None, None), (True, 0), (-1, 0), ("3", 0), (0, True), (0, -1), (0, "2")],
+    )
+    async def test_component_invalid_counts_are_omitted(
+        self, monkeypatch, exact, wildcard
+    ):
+        """A malformed component count must read as unknown, never as zero."""
+        payload: dict = {"context": {"id": "ctx"}}
+        if exact is not None:
+            payload["listener_count"] = exact
+            payload["wildcard_listener_count"] = wildcard
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value=_ws_success(payload)
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context_id"] == "ctx"
+        assert "listener_count" not in result
+        assert "wildcard_listener_count" not in result
+        assert "warnings" not in result
+
+    async def test_component_generic_error_is_structured(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("component bug")
+        )
+        monkeypatch.setattr(
+            event_call,
+            "get_component_caps",
+            AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
+        )
+
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
+        assert tools._client.send_websocket_message.await_count == 1
+
+    @pytest.mark.parametrize("component_capable", [True, False])
+    async def test_unauthorized_token_maps_to_admin_required(
+        self, monkeypatch, component_capable
+    ):
+        """A non-admin token gets the admin-required error, not a generic failure."""
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "Command failed: Unauthorized", "unauthorized"
+            )
+        )
+        caps = (
+            SimpleNamespace(capabilities=["call_event"]) if component_capable else None
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=caps)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_event("my_event")
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
+        assert any(
+            "administrator" in suggestion.lower()
+            for suggestion in payload["error"]["suggestions"]
+        )
+
+    async def test_event_rejection_uses_event_specific_suggestions(self, monkeypatch):
+        tools = _make_tools({"message": "rest"})
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Event type has a maximum length of 64 characters",
+            }
+        )
+        monkeypatch.setattr(
+            event_call, "get_component_caps", AsyncMock(return_value=None)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_event("my_event")
+
+        payload = json.loads(str(exc_info.value))
+        assert any(
+            "64 characters" in suggestion
+            for suggestion in payload["error"]["suggestions"]
+        )
+
+    async def test_ws_not_sent_falls_back_with_context_warning(self):
+        """The REST fallback says why context_id is missing."""
+        tools = _make_tools({"message": "rest"})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context_id"] is None
+        assert any(
+            "WebSocket fire_event was unavailable" in warning
+            for warning in result["warnings"]
+        )
+
+    async def test_ws_fallback_refusal_names_the_websocket_failure(self):
+        """The delimiter refusal must name the fallback, not the event type."""
+        tools = _make_tools({"message": "rest"})
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_event("bad/event")
+
+        message = str(exc_info.value)
+        assert "REST fallback" in message
+        assert "WebSocket fire_event command was not sent" in message
+        assert "cannot contain path separators" in message
+
+    async def test_component_post_send_loss_is_partial_and_not_retried(
+        self, monkeypatch
+    ):
+        """A connection loss after the component send may have fired the event."""
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
             side_effect=HomeAssistantConnectionError("component down")
@@ -321,8 +443,12 @@ class TestHaCallEvent:
             AsyncMock(return_value=SimpleNamespace(capabilities=["call_event"])),
         )
 
-        with pytest.raises(ToolError):
-            await tools.ha_call_event("my_event")
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert result["partial"] is True
+        assert any("may have been dispatched" in w for w in result["warnings"])
+        assert tools._client.send_websocket_message.await_count == 1
         tools._client.fire_event.assert_not_awaited()
 
     async def test_component_not_sent_falls_back_to_ws(self, monkeypatch):
@@ -342,6 +468,10 @@ class TestHaCallEvent:
         result = await tools.ha_call_event("my_event")
 
         assert result["context_id"] == "ws-context"
+        assert [
+            call.args[0]["type"]
+            for call in tools._client.send_websocket_message.await_args_list
+        ] == [event_call.WS_CALL_EVENT, event_call.CORE_FIRE_EVENT]
 
     async def test_component_invalid_result_is_an_error(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
@@ -356,6 +486,7 @@ class TestHaCallEvent:
 
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
+        assert tools._client.send_websocket_message.await_count == 1
 
     async def test_component_non_dict_reply_is_an_error(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
@@ -370,6 +501,7 @@ class TestHaCallEvent:
 
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
+        assert tools._client.send_websocket_message.await_count == 1
 
     async def test_component_unknown_command_falls_back_to_ws(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
@@ -402,6 +534,7 @@ class TestHaCallEvent:
 
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
+        assert tools._client.send_websocket_message.await_count == 1
 
     async def test_component_non_dict_context_is_omitted(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
@@ -449,9 +582,11 @@ class TestHaCallEvent:
 
         assert result["success"] is True
         assert result["context_id"] == "ws-context"
+        sent = tools._client.send_websocket_message.await_args.args[0]
+        assert sent["event_type"] == "mcp_probe?key=go"
 
-    async def test_ws_transport_error_is_an_error(self, monkeypatch):
-        tools = _make_tools({"message": "rest"})
+    async def test_ws_post_send_loss_is_partial_and_not_retried(self, monkeypatch):
+        tools = _make_tools({"message": "rest"}, {"my_event": 2})
         tools._client.send_websocket_message = AsyncMock(
             side_effect=HomeAssistantConnectionError("ws down")
         )
@@ -459,8 +594,14 @@ class TestHaCallEvent:
             event_call, "get_component_caps", AsyncMock(return_value=None)
         )
 
-        with pytest.raises(ToolError):
-            await tools.ha_call_event("my_event")
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert result["partial"] is True
+        assert result["listener_count"] == 2
+        assert any("may have been dispatched" in w for w in result["warnings"])
+        assert tools._client.send_websocket_message.await_count == 1
+        tools._client.fire_event.assert_not_awaited()
 
     async def test_ws_invalid_result_is_an_error(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
@@ -484,7 +625,8 @@ class TestHaCallEvent:
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
 
-    async def test_ws_unknown_command_falls_back_to_rest(self, monkeypatch):
+    async def test_ws_unknown_command_is_an_error_not_a_fallback(self, monkeypatch):
+        """Core registers fire_event on every supported version."""
         tools = _make_tools({"message": "rest"})
         tools._client.send_websocket_message = AsyncMock(
             return_value={"success": False, "error_code": "unknown_command"}
@@ -492,11 +634,14 @@ class TestHaCallEvent:
         monkeypatch.setattr(
             event_call, "get_component_caps", AsyncMock(return_value=None)
         )
+        invalidated = MagicMock()
+        monkeypatch.setattr(event_call, "invalidate_caps", invalidated)
 
-        result = await tools.ha_call_event("my_event")
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("my_event")
 
-        assert result["success"] is True
-        tools._client.fire_event.assert_awaited_once_with("my_event", None)
+        tools._client.fire_event.assert_not_awaited()
+        invalidated.assert_not_called()
 
     async def test_ws_rejection_is_an_error(self, monkeypatch):
         tools = _make_tools({"message": "rest"})
@@ -622,6 +767,7 @@ class TestHaCallEvent:
         with pytest.raises(ToolError):
             await tools.ha_call_event("my_event")
 
+        assert tools._client.send_websocket_message.await_count == 1
         tools._client.fire_event.assert_not_awaited()
 
     async def test_command_not_sent_falls_back_when_not_an_auth_failure(

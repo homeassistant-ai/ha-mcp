@@ -1819,10 +1819,12 @@ _NEW_COMMANDS = [
     "ha_mcp_tools/services_list",
     "ha_mcp_tools/reference_data",
     "ha_mcp_tools/server_entry",
+    "ha_mcp_tools/call_event",
 ]
 
 _NEW_CMD_MSG_EXTRA = {
     "ha_mcp_tools/dashboards": {"mode": "list"},
+    "ha_mcp_tools/call_event": {"event_type": "probe_event"},
 }
 
 
@@ -1877,7 +1879,13 @@ class TestNewCommandRegistration:
             with pytest.raises(_base._StubHomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
-        handler(FakeHass(), conn, msg)
+        hass = FakeHass()
+        if command == wsapi.WS_CALL_EVENT:
+            hass.bus = SimpleNamespace(
+                async_fire=lambda *args, **kwargs: None,
+                async_listeners=dict,
+            )
+        handler(hass, conn, msg)
         assert 7 in conn.results
         assert isinstance(conn.results[7], dict)
 
