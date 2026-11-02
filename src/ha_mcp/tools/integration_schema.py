@@ -474,10 +474,14 @@ async def describe_flow_form(
                 "only with describe=True"
                 + (f"; drop {', '.join(other_modes)}" if other_modes else ""),
                 suggestions=[
-                    "Example: ha_set_integration(domain='group', describe=True, "
-                    "menu_choice='light')",
-                    "Example: ha_set_integration(entry_id='abc123', "
-                    "describe=True, menu_choice='advanced')",
+                    (
+                        "Example: ha_set_integration(domain='group', "
+                        "describe=True, menu_choice='light')"
+                    ),
+                    (
+                        "Example: ha_set_integration(entry_id='abc123', "
+                        "describe=True, menu_choice='advanced')"
+                    ),
                 ],
             )
         )
