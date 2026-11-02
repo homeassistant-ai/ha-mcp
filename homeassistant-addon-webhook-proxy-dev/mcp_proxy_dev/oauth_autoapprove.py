@@ -549,7 +549,7 @@ async def _forward_to_core(
     with ``action=revoke`` — get the same 503, and neither call site has to
     remember to say so.
     """
-    from .oauth_indirect import core_token_base_url
+    from .oauth_indirect import core_listener_url
 
     revocation = path == "/auth/revoke" or form.get("action") == "revoke"
     session = data.get("session")
@@ -560,12 +560,13 @@ async def _forward_to_core(
             path,
         )
         return _unavailable("token forwarding is not available", revocation=revocation)
-    base = core_token_base_url(hass)
+    base, verify_ssl = core_listener_url(hass)
     try:
         async with session.post(
             f"{base}{path}",
             data=form,
             timeout=aiohttp.ClientTimeout(total=25),
+            ssl=verify_ssl is not False,
         ) as response:
             return (
                 response.status,
@@ -574,10 +575,11 @@ async def _forward_to_core(
             )
     except (TimeoutError, aiohttp.ClientError) as err:
         _LOGGER.warning(
-            "ha_auth %s forward to %s failed: %s",
+            "ha_auth %s forward to %s failed: %s: %s",
             path,
             base,
             type(err).__name__,
+            err,
         )
         return _unavailable(
             "core did not answer the token request", revocation=revocation

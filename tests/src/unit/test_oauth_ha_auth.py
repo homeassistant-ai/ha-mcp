@@ -8,7 +8,6 @@ import hmac
 import importlib
 import json
 import sys
-from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -459,63 +458,6 @@ async def test_mixed_registration_refresh_derivation_is_unreproducible():
     assert authorize_id == "https://a.example"
     # aligned with _refresh_identity_is_reproducible
     assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
-
-
-def test_core_token_base_url_uses_plain_http_loopback_port():
-    """Use core's loopback listener directly when its API is plain HTTP."""
-    hass = SimpleNamespace(
-        config=SimpleNamespace(api=SimpleNamespace(use_ssl=False, port=9123))
-    )
-
-    assert oauth_ha_auth.core_token_base_url(hass) == "http://127.0.0.1:9123"
-
-
-def test_core_token_base_url_uses_configured_https_url(monkeypatch):
-    """Use Home Assistant's configured URL when core serves HTTPS."""
-
-    class NoURLAvailableError(Exception):
-        pass
-
-    kwargs = {}
-
-    def configured_url(_hass, **call_kwargs):
-        kwargs.update(call_kwargs)
-        return "https://ha.example"
-
-    network = ModuleType("homeassistant.helpers.network")
-    network.NoURLAvailableError = NoURLAvailableError
-    network.get_url = configured_url
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.network", network)
-    hass = SimpleNamespace(
-        config=SimpleNamespace(api=SimpleNamespace(use_ssl=True, port=8123))
-    )
-
-    assert oauth_ha_auth.core_token_base_url(hass) == "https://ha.example"
-    assert kwargs == {
-        "prefer_external": False,
-        "allow_cloud": False,
-        "require_ssl": True,
-    }
-
-
-def test_core_token_base_url_falls_back_when_no_url_available(monkeypatch):
-    """Fall back to loopback when no configured HTTPS URL is available."""
-
-    class NoURLAvailableError(Exception):
-        pass
-
-    def unavailable(_hass, **_kwargs):
-        raise NoURLAvailableError
-
-    network = ModuleType("homeassistant.helpers.network")
-    network.NoURLAvailableError = NoURLAvailableError
-    network.get_url = unavailable
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.network", network)
-    hass = SimpleNamespace(
-        config=SimpleNamespace(api=SimpleNamespace(use_ssl=True, port=9443))
-    )
-
-    assert oauth_ha_auth.core_token_base_url(hass) == "https://127.0.0.1:9443"
 
 
 def _module_is(name: str, root: str) -> bool:
