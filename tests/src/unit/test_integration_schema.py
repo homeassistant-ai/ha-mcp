@@ -261,6 +261,81 @@ async def test_a_failed_describe_abort_is_a_warning_unless_the_flow_is_gone(
     assert [r.levelname for r in caplog.records if "abort" in r.getMessage()] == [level]
 
 
+_LEFT_OPEN = {
+    "options": ("abort_options_flow", "the options flow f1 was closed"),
+    "subentry": ("abort_config_subentry_flow", "the subentry flow f1 was closed"),
+    "setup": ("abort_config_flow", "already_in_progress"),
+}
+_ABORT_ANSWERS = [
+    pytest.param(None, False, id="aborted"),
+    pytest.param(
+        HomeAssistantAPIError("API error: 404", status_code=404), False, id="gone"
+    ),
+    pytest.param(
+        HomeAssistantAPIError("API error: 500", status_code=500), True, id="http-500"
+    ),
+    pytest.param(TimeoutError(), True, id="timeout"),
+]
+
+
+async def _described(
+    kind: str, client: Any, resp: dict[str, Any], menu_choice: str | None = None
+) -> None:
+    if kind == "options":
+        await fetch_options_schema(
+            client, "e1", resp, strict=True, menu_choice=menu_choice
+        )
+    elif kind == "subentry":
+        await fetch_config_subentry_schema(
+            client,
+            "e1",
+            resp,
+            subentry_type="device",
+            subentry_id=None,
+            show_advanced_options=False,
+            menu_choice=menu_choice,
+        )
+    else:
+        await fetch_config_flow_schema(client, "demo", resp, menu_choice=menu_choice)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", list(_LEFT_OPEN))
+@pytest.mark.parametrize(("abort_error", "left_open"), _ABORT_ANSWERS)
+async def test_a_describe_says_when_its_flow_may_still_be_open(
+    kind: str, abort_error: Exception | None, left_open: bool
+) -> None:
+    client = _client(_form("init", _HOST))
+    abort, consequence = _LEFT_OPEN[kind]
+    getattr(client, abort).side_effect = abort_error
+    resp = _resp()
+
+    await _described(kind, client, resp)
+
+    warnings = resp.get("warnings", [])
+    assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
+    assert len(warnings) == int(left_open)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", list(_LEFT_OPEN))
+@pytest.mark.parametrize(("abort_error", "left_open"), _ABORT_ANSWERS)
+async def test_a_refused_describe_says_when_its_flow_may_still_be_open(
+    kind: str, abort_error: Exception | None, left_open: bool
+) -> None:
+    # menu_choice on a flow that opens with a form: refused after the start.
+    client = _client(_form("init", _HOST))
+    abort, consequence = _LEFT_OPEN[kind]
+    getattr(client, abort).side_effect = abort_error
+
+    with pytest.raises(ToolError) as exc_info:
+        await _described(kind, client, _resp(), menu_choice="advanced")
+
+    warnings = _error(exc_info).get("warnings", [])
+    assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
+    assert len(warnings) == int(left_open)
+
+
 @pytest.mark.asyncio
 async def test_a_failed_options_probe_keeps_cores_message_in_the_warning() -> None:
     client = _client(_MENU)

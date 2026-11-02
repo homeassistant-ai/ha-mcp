@@ -19,9 +19,11 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools import integration_reconfigure
+from ha_mcp.errors import ErrorCode, create_error_response
+from ha_mcp.tools import integration_reconfigure, reconfigure_preflight
 from ha_mcp.tools.config_entry_identity import ReconfigureIdentity
 from ha_mcp.tools.config_entry_reconfigure import PreparedReconfigure
+from ha_mcp.tools.helpers import raise_tool_error
 from ha_mcp.tools.integration_reconfigure import ReconfigureRunner
 from ha_mcp.tools.reconfigure_preflight import _declared_keys, read_reconfigure_form
 
@@ -172,6 +174,45 @@ async def test_a_failed_abort_is_a_warning_on_the_preview() -> None:
 
     (warning,) = warnings
     assert "reauthentication" in warning
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("abort_error", "left_open"),
+    [
+        pytest.param(None, False, id="aborted"),
+        pytest.param(
+            HomeAssistantAPIError("API error: 404", status_code=404),
+            False,
+            id="gone",
+        ),
+        pytest.param(RuntimeError("ws down"), True, id="failed"),
+    ],
+)
+async def test_a_failed_preview_keeps_the_flow_left_open_warning(
+    monkeypatch: pytest.MonkeyPatch, abort_error: Exception | None, left_open: bool
+) -> None:
+    client = _client(_form(last_step=True))
+    client.abort_config_flow.side_effect = abort_error
+
+    async def describe_fails(*_args: Any) -> None:
+        raise_tool_error(
+            create_error_response(ErrorCode.SERVICE_CALL_FAILED, "describe failed")
+        )
+
+    monkeypatch.setattr(reconfigure_preflight, "describe_form", describe_fails)
+
+    with pytest.raises(ToolError) as exc_info:
+        await _read(client, {"host": "10.0.0.5"})
+
+    body = json.loads(str(exc_info.value))
+    assert body["error"]["message"] == "describe failed"
+    warnings = body.get("warnings", [])
+    assert [w for w in warnings if "reauthentication" in w] == (
+        warnings if left_open else []
+    )
+    assert len(warnings) == int(left_open)
+    client.abort_config_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio

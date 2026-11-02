@@ -58,15 +58,20 @@ async def shielded_abort(
 
 async def abort_probe_flow(
     abort: Callable[[str], Awaitable[Any]], flow_id: str, *, quiet: bool = False
-) -> None:
+) -> bool:
     """Abort a flow opened only to read it, shielded: a cancelled read still
-    closes it. A failure logs at warning, at debug when ``quiet``."""
-    await shielded_abort(
+    closes it. A failure logs at warning, at debug when ``quiet``.
+
+    Returns whether the flow may still be open: the abort failed with
+    anything other than Core's 404 for a flow that is already gone.
+    """
+    abort_err = await shielded_abort(
         abort,
         flow_id,
         failure=f"flow {flow_id} abort failed",
         level=logging.DEBUG if quiet else logging.WARNING,
     )
+    return abort_err is not None and not flow_gone(abort_err)
 
 
 class _FlowType(StrEnum):

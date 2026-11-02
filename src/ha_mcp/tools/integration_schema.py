@@ -28,6 +28,7 @@ from ..redaction import (
     redaction_enabled,
     sentinel_replacement,
 )
+from .config_entry_flow_abort import closing_probe_flow, flow_left_open
 from .config_entry_flow_errors import (
     FlowRef,
     abort_reason_text,
@@ -294,40 +295,45 @@ async def fetch_options_schema(
     warning.
     """
     entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
-    flow_id = None
     try:
         flow_result = await client.start_options_flow(entry_id)
         flow_id = flow_result.get("flow_id")
-        if flow_result.get("type") == "form" and entry is not None:
-            if populate_options:
-                entry["options"] = options_from_form_flow(flow_result)
-            elif redaction_enabled():
-                # Component-served path: options carry raw persisted values
-                # (the component only scrubs resolved !secret references).
-                # Now that the flow schema is in hand, redact the fields it
-                # marks as passwords.
-                entry["options"] = redact_options_by_flow_schema(
-                    entry.get("options"), flow_result.get("data_schema", [])
-                )
-        elif populate_options and entry is not None:
-            # A branch form behind a menu holds that branch's fields, not
-            # the entry's options.
-            resp.setdefault("warnings", []).append(
-                f"options for {entry_id} could not be read: the options flow "
-                f"opens with a {flow_result.get('type')!r} step, not a form, so "
-                "empty 'options' does not mean the entry has none"
-            )
-        _put_payload(
+        async with closing_probe_flow(
+            client.abort_options_flow,
+            flow_id,
+            flow_left_open("options", flow_id),
             resp,
-            "options_schema",
-            await _describe_step(
-                client,
-                flow_result,
-                flow=FlowRef(_entry_domain(entry), "options", entry_id),
-                menu_choice=menu_choice,
-                submit=client.submit_options_flow_step,
-            ),
-        )
+        ):
+            if flow_result.get("type") == "form" and entry is not None:
+                if populate_options:
+                    entry["options"] = options_from_form_flow(flow_result)
+                elif redaction_enabled():
+                    # Component-served path: options carry raw persisted
+                    # values (the component only scrubs resolved !secret
+                    # references). Now that the flow schema is in hand,
+                    # redact the fields it marks as passwords.
+                    entry["options"] = redact_options_by_flow_schema(
+                        entry.get("options"), flow_result.get("data_schema", [])
+                    )
+            elif populate_options and entry is not None:
+                # A branch form behind a menu holds that branch's fields, not
+                # the entry's options.
+                resp.setdefault("warnings", []).append(
+                    f"options for {entry_id} could not be read: the options "
+                    f"flow opens with a {flow_result.get('type')!r} step, not a "
+                    "form, so empty 'options' does not mean the entry has none"
+                )
+            _put_payload(
+                resp,
+                "options_schema",
+                await _describe_step(
+                    client,
+                    flow_result,
+                    flow=FlowRef(_entry_domain(entry), "options", entry_id),
+                    menu_choice=menu_choice,
+                    submit=client.submit_options_flow_step,
+                ),
+            )
     except ToolError:
         raise
     except Exception as schema_err:
@@ -343,9 +349,6 @@ async def fetch_options_schema(
             f"{type(schema_err).__name__}: {schema_err} — 'options_schema' is "
             "missing and 'options' may be incomplete"
         )
-    finally:
-        if flow_id:
-            await abort_probe_flow(client.abort_options_flow, flow_id)
 
 
 async def fetch_config_subentry_schema(
@@ -374,15 +377,19 @@ async def fetch_config_subentry_schema(
         )
 
     entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
-    flow_id = None
-    try:
-        flow_result = await client.start_config_subentry_flow(
-            entry_id,
-            subentry_type,
-            subentry_id=subentry_id,
-            show_advanced_options=show_advanced_options,
-        )
-        flow_id = flow_result.get("flow_id")
+    flow_result = await client.start_config_subentry_flow(
+        entry_id,
+        subentry_type,
+        subentry_id=subentry_id,
+        show_advanced_options=show_advanced_options,
+    )
+    flow_id = flow_result.get("flow_id")
+    async with closing_probe_flow(
+        client.abort_config_subentry_flow,
+        flow_id,
+        flow_left_open("subentry", flow_id),
+        resp,
+    ):
         _put_payload(
             resp,
             "subentry_schema",
@@ -402,9 +409,6 @@ async def fetch_config_subentry_schema(
                 ),
             },
         )
-    finally:
-        if flow_id:
-            await abort_probe_flow(client.abort_config_subentry_flow, flow_id)
 
 
 async def fetch_config_flow_schema(
@@ -431,7 +435,9 @@ async def fetch_config_flow_schema(
             )
         )
     flow_id = first_step.get("flow_id")
-    try:
+    async with closing_probe_flow(
+        client.abort_config_flow, flow_id, flow_left_open("setup", flow_id), resp
+    ):
         schema = await _describe_step(
             client,
             first_step,
@@ -439,9 +445,6 @@ async def fetch_config_flow_schema(
             menu_choice=menu_choice,
             submit=client.submit_config_flow_step,
         )
-    finally:
-        if flow_id:
-            await abort_probe_flow(client.abort_config_flow, flow_id)
     _put_payload(resp, "config_flow_schema", schema)
 
 

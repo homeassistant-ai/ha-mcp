@@ -132,7 +132,9 @@ def reconfigure_client(
     """
     client = MagicMock()
     # A menu first step: the preview lists it, checks no keys, aborts the flow.
-    client.start_reconfigure_flow = AsyncMock(return_value={"type": "menu"})
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={"type": "menu", "flow_id": "flow-preview"}
+    )
     client.abort_config_flow = AsyncMock()
     client.list_entity_registry = AsyncMock(return_value=list(entity_rows or []))
     client.list_device_registry = AsyncMock(return_value=list(device_rows or []))
@@ -1609,7 +1611,7 @@ async def test_reconfigure_without_token_previews_and_never_writes(
     assert isinstance(preview["confirm_token"], str)
     assert preview["confirm_token"].startswith("sha256:")
     client.submit_config_flow_step.assert_not_called()
-    client.abort_config_flow.assert_awaited_once()
+    client.abort_config_flow.assert_awaited_once_with("flow-preview")
 
 
 @pytest.mark.asyncio

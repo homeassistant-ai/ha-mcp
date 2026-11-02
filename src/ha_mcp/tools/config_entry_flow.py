@@ -53,6 +53,7 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
 from .config_entry_flow_abort import (
     abort_failed_flow,
+    flow_left_open,
     raise_if_flow_left_open,
 )
 from .config_entry_flow_errors import FlowRef
@@ -593,9 +594,7 @@ async def _run_config_subentry_flow(
                     flow_id,
                     kind="config subentry flow",
                 ),
-                f"Home Assistant did not confirm that the subentry flow {flow_id} "
-                "was closed. It stays open until it ends or Home Assistant "
-                "restarts.",
+                flow_left_open("subentry", flow_id),
             )
         raise
 
@@ -954,10 +953,7 @@ async def create_config_entry(
             raise_if_flow_left_open(
                 flow_error,
                 await abort_failed_flow(client.abort_config_flow, flow_id),
-                f"Home Assistant did not confirm that the setup flow {flow_id} "
-                "was closed. While it stays open (until it ends or Home "
-                "Assistant restarts), a new setup of the same device or account "
-                "can abort with already_in_progress.",
+                flow_left_open("setup", flow_id),
             )
         raise
 
