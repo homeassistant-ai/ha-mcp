@@ -8,8 +8,11 @@ Starts a flow only to read its first form (or its menu, or the branch form a
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any
+
+import anyio
 
 from ..client.rest_client import HomeAssistantAPIError
 
@@ -17,6 +20,26 @@ logger = logging.getLogger(__name__)
 
 # How long cleanup waits for Home Assistant to abort a flow.
 _ABORT_TIMEOUT_S = 5.0
+
+
+async def abort_probe_flow(
+    abort: Callable[[str], Awaitable[Any]], flow_id: str, *, quiet: bool = False
+) -> None:
+    """Abort a flow opened only to read it, shielded: a cancelled read still
+    closes it. A failure logs at warning, at debug when ``quiet``."""
+    try:
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
+    except Exception as abort_err:  # noqa: BLE001
+        # A flow that already finished (abort, create_entry) is gone: Core
+        # answers 404, which is expected here.
+        gone = getattr(abort_err, "status_code", None) == 404
+        logger.log(
+            logging.DEBUG if gone or quiet else logging.WARNING,
+            "flow %s abort failed: %s",
+            flow_id,
+            abort_err,
+        )
 
 
 class _FlowType(StrEnum):
@@ -126,11 +149,4 @@ async def fetch_helper_flow_info(
         return info
     finally:
         if intro_flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_flow(intro_flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.debug(
-                    f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
-                )
+            await abort_probe_flow(client.abort_config_flow, intro_flow_id, quiet=True)

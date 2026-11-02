@@ -10,8 +10,6 @@ the few fields whose Core validator does not serialize (e.g. schedule days).
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -22,7 +20,7 @@ from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_introspect import (
-    _ABORT_TIMEOUT_S,
+    abort_probe_flow,
     fetch_helper_flow_info,
     menu_choices,
 )
@@ -34,8 +32,6 @@ from ..flow_translations import (
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
 from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
-
-logger = logging.getLogger(__name__)
 
 # Long select lists (units, device classes) are truncated: the first few
 # values show the format, and HA reports the full list if a value is rejected.
@@ -293,12 +289,7 @@ async def _describe_flow(
         }
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as err:  # noqa: BLE001
-                logger.debug("describe: options flow %s abort failed: %s", flow_id, err)
+            await abort_probe_flow(client.abort_options_flow, flow_id)
 
 
 def _reject_menu_choice(helper_type: str, menu_choice: str, why: str) -> NoReturn:

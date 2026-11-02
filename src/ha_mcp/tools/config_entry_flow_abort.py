@@ -38,20 +38,22 @@ def abort_left_flow_open(abort_err: Exception | None) -> bool:
     return abort_err is not None and getattr(abort_err, "status_code", None) != 404
 
 
-async def _abort_after_flow_error(
-    client: Any, flow_id: str, flow_error: BaseException, left_open: str
+def raise_if_flow_left_open(
+    flow_error: BaseException, abort_err: Exception | None, left_open: str
 ) -> None:
-    """Abort ``flow_id`` after ``flow_error``; if the abort is not confirmed,
-    raise a structured ``flow_error`` again with ``left_open`` in its warnings."""
-    abort_err = await _abort_flow_best_effort(client, flow_id)
+    """If the abort after ``flow_error`` is not confirmed, raise a structured
+    ``flow_error`` again with ``left_open`` in its warnings."""
     payload = flow_error_payload(flow_error)
     if payload and abort_left_flow_open(abort_err):
         payload.setdefault("warnings", []).append(left_open)
         raise_tool_error(payload)
 
 
-async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a pending subentry flow without hiding the original failure."""
+async def _abort_subentry_flow_best_effort(
+    client: Any, flow_id: str
+) -> Exception | None:
+    """Abort a pending subentry flow without hiding the original failure;
+    return the abort's own error, if any."""
     try:
         with anyio.CancelScope(shield=True):
             await asyncio.wait_for(
@@ -63,3 +65,5 @@ async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
             flow_id,
             abort_err,
         )
+        return abort_err
+    return None

@@ -22,6 +22,7 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from ha_mcp.client.rest_client import (
@@ -30,7 +31,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_dev
+from ha_mcp.tools import component_api, config_entry_flow_introspect, tools_dev
 from ha_mcp.tools.tools_dev import find_server_config_entry
 
 from ._component_routing_helpers import (
@@ -382,7 +383,7 @@ async def test_a_probe_abort_that_never_answers_does_not_hold_the_caller(
     async def never_answers(*_args: Any) -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(tools_dev, "_ABORT_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
     client = AsyncMock()
     client.abort_options_flow.side_effect = never_answers
 
@@ -391,3 +392,21 @@ async def test_a_probe_abort_that_never_answers_does_not_hold_the_caller(
     )
 
     client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_caller_still_closes_the_probe_flow() -> None:
+    sent: list[str] = []
+
+    async def abort(flow_id: str) -> None:
+        await asyncio.sleep(0)
+        sent.append(flow_id)
+
+    client = AsyncMock()
+    client.abort_options_flow.side_effect = abort
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await tools_dev.abort_options_flow_quietly(client, {"flow_id": "f1"})
+
+    assert sent == ["f1"]

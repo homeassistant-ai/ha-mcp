@@ -21,7 +21,9 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
-from ha_mcp.tools import integration_schema, tools_integrations
+from ha_mcp.tools import (
+    config_entry_flow_introspect,
+)
 from ha_mcp.tools.integration_schema import (
     fetch_config_flow_schema,
     fetch_config_subentry_schema,
@@ -175,6 +177,8 @@ async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
     if kind == "probe":
         entry = {"supports_options": True, "options": {"host": "h"}}
         await redact_component_options(client, "e1", entry, [])
+    elif kind == "entry_options":
+        await fetch_entry_options_with_status(client, "e1")
     elif kind == "options":
         await fetch_options_schema(client, "e1", _resp(), menu_choice=menu_choice)
     elif kind == "subentry":
@@ -213,7 +217,7 @@ async def test_a_failed_menu_choice_submit_fails_every_describe(kind: str) -> No
     getattr(client, abort).assert_awaited_once_with("f1")
 
 
-_ABORTS = {"probe": "abort_options_flow"} | {
+_ABORTS = {"probe": "abort_options_flow", "entry_options": "abort_options_flow"} | {
     kind: methods[1] for kind, methods in _FLOW_METHODS.items()
 }
 
@@ -248,7 +252,7 @@ async def test_a_failed_describe_abort_is_a_warning_unless_the_flow_is_gone(
         f"API error: {status}", status_code=status
     )
 
-    with caplog.at_level("DEBUG", logger="ha_mcp.tools.integration_schema"):
+    with caplog.at_level("DEBUG", logger="ha_mcp.tools.config_entry_flow_introspect"):
         await _describe(kind, client, None)
 
     assert [r.levelname for r in caplog.records if "abort" in r.getMessage()] == [level]
@@ -323,7 +327,7 @@ async def _never_answers(*_args: Any) -> None:
 async def test_an_options_abort_that_never_answers_does_not_hold_the_describe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(integration_schema, "_ABORT_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
     client = _client(_form("init", _HOST))
     client.abort_options_flow.side_effect = _never_answers
     resp = _resp()
@@ -337,7 +341,7 @@ async def test_an_options_abort_that_never_answers_does_not_hold_the_describe(
 async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(integration_schema, "_ABORT_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
     client = _client(_form("init", _HOST, _API_KEY))
     client.abort_options_flow.side_effect = _never_answers
     entry = {"supports_options": True, "options": {"host": "h", "api_key": "k"}}
@@ -351,7 +355,7 @@ async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read
 async def test_an_options_probe_abort_that_never_answers_does_not_hold_the_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(tools_integrations, "_ABORT_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
     client = _client(_form("init", _HOST))
     client.abort_options_flow.side_effect = _never_answers
 

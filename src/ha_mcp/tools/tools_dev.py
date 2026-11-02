@@ -41,7 +41,7 @@ from .component_api import (
 )
 from .config_entry_flow import COMPONENT_DOMAIN
 from .config_entry_flow_form import _MISSING_DEFAULT, _step_owned_submission_value
-from .config_entry_flow_introspect import _ABORT_TIMEOUT_S
+from .config_entry_flow_introspect import abort_probe_flow
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -476,12 +476,8 @@ async def find_server_config_entry(
 
 async def abort_options_flow_quietly(client: Any, flow: dict[str, Any]) -> None:
     """Abort an open options flow, ignoring failures."""
-    if not (flow_id := flow.get("flow_id")):
-        return
-    try:
-        await asyncio.wait_for(client.abort_options_flow(flow_id), _ABORT_TIMEOUT_S)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Options-flow abort failed: %s", exc)
+    if flow_id := flow.get("flow_id"):
+        await abort_probe_flow(client.abort_options_flow, flow_id, quiet=True)
 
 
 def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:

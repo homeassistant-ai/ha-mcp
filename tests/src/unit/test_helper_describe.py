@@ -6,11 +6,15 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import read_only_request
+from ha_mcp.tools import config_entry_flow_introspect
 from ha_mcp.tools.config_helpers import describe as mod
+
+from .test_flow_progress import _abort_recorder
 
 _SCHEDULE_CORE = [
     {"type": "string", "lengthMin": 1, "name": "name", "required": True},
@@ -294,7 +298,7 @@ async def test_an_options_flow_abort_that_never_answers_does_not_hold_the_descri
     async def never_answers(*_args: Any) -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(mod, "_ABORT_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
     client.get_config_entry.return_value = {"domain": "group"}
     client.start_options_flow.return_value = {
         "type": "menu",
@@ -558,3 +562,54 @@ async def test_core_fields_follow_a_stable_order_with_hints_first(
     result = await mod.describe_helper(client, "schedule")
 
     assert [f["name"] for f in result["fields"]] == ["name", "monday", "sunday"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_options_describe_still_closes_its_flow(
+    client: AsyncMock,
+) -> None:
+    client.get_config_entry.return_value = {"domain": "group"}
+    client.start_options_flow.return_value = {
+        "type": "menu",
+        "flow_id": "f1",
+        "menu_options": ["a"],
+    }
+    sent, client.abort_options_flow.side_effect = _abort_recorder()
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await mod.describe_helper(client, "group", helper_id="entry1")
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_setup_flow_read_still_closes_its_flow(
+    client: AsyncMock,
+) -> None:
+    client.start_config_flow.return_value = {
+        "type": "form",
+        "flow_id": "f1",
+        "step_id": "user",
+        "data_schema": [],
+    }
+    sent, client.abort_config_flow.side_effect = _abort_recorder()
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await config_entry_flow_introspect.fetch_helper_flow_info(client, "group")
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("quiet", "level"), [(False, "WARNING"), (True, "DEBUG")])
+async def test_a_failed_probe_abort_logs_at_debug_when_quiet(
+    quiet: bool, level: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    abort = AsyncMock(side_effect=RuntimeError("ws down"))
+
+    with caplog.at_level("DEBUG", logger="ha_mcp.tools.config_entry_flow_introspect"):
+        await config_entry_flow_introspect.abort_probe_flow(abort, "f1", quiet=quiet)
+
+    assert [r.levelname for r in caplog.records if "f1" in r.getMessage()] == [level]

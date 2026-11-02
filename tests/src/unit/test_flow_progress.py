@@ -274,6 +274,7 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
     ("run", "consequence"),
     [
         pytest.param("create", "already_in_progress", id="create"),
+        pytest.param("subentry", "subentry flow f1", id="subentry"),
         pytest.param("reconfigure", "reauthentication", id="reconfigure"),
     ],
 )
@@ -300,8 +301,13 @@ async def test_a_failed_write_says_when_its_flow_may_still_be_open(
 ) -> None:
     monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
     client = _client(strings={})
-    client.abort_config_flow.side_effect = abort_error
-    write = _create_entry if run == "create" else _reconfigure
+    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
+    write, abort = {
+        "create": (_create_entry, client.abort_config_flow),
+        "subentry": (_create_subentry, client.abort_config_subentry_flow),
+        "reconfigure": (_reconfigure, client.abort_config_flow),
+    }[run]
+    abort.side_effect = abort_error
 
     with pytest.raises(ToolError) as exc_info:
         await write(client, dict(_PROGRESS))

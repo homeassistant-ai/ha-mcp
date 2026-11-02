@@ -45,7 +45,7 @@ from .config_entry_flow import (
     refuse_component_entry,
     update_config_entry_options,
 )
-from .config_entry_flow_introspect import _ABORT_TIMEOUT_S
+from .config_entry_flow_introspect import abort_probe_flow
 from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
@@ -236,15 +236,7 @@ async def fetch_entry_options_with_status(
         return {}, False
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                log_probe_failure(
-                    f"Failed to abort options flow {flow_id}: "
-                    f"{type(abort_err).__name__}: {abort_err}"
-                )
+            await abort_probe_flow(client.abort_options_flow, flow_id, quiet=quiet)
 
 
 def _split_component_entry_row(

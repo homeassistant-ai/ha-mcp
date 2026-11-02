@@ -50,8 +50,9 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
 from .config_entry_flow_abort import (
-    _abort_after_flow_error,
+    _abort_flow_best_effort,
     _abort_subentry_flow_best_effort,
+    raise_if_flow_left_open,
 )
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
@@ -582,7 +583,13 @@ async def _run_config_subentry_flow(
         )
     except (Exception, asyncio.CancelledError) as flow_error:
         if not leaves_flow_open(flow_error):
-            await _abort_subentry_flow_best_effort(client, flow_id)
+            raise_if_flow_left_open(
+                flow_error,
+                await _abort_subentry_flow_best_effort(client, flow_id),
+                f"Home Assistant did not confirm that the subentry flow {flow_id} "
+                "was closed. It stays open until it ends or Home Assistant "
+                "restarts.",
+            )
         raise
 
     if before is not None and result["operation"] == "created":
@@ -935,10 +942,9 @@ async def create_config_entry(
         )
     except (Exception, asyncio.CancelledError) as flow_error:
         if not leaves_flow_open(flow_error):
-            await _abort_after_flow_error(
-                client,
-                flow_id,
+            raise_if_flow_left_open(
                 flow_error,
+                await _abort_flow_best_effort(client, flow_id),
                 f"Home Assistant did not confirm that the setup flow {flow_id} "
                 "was closed. While it stays open (until it ends or Home "
                 "Assistant restarts), a new setup of the same device or account "
