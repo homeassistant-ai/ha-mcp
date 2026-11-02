@@ -29,7 +29,7 @@ from ..errors import ErrorCode, create_error_response, create_validation_error
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
     UNKNOWN_COMMAND_CODE,
-    component_probe_auth_failed,
+    component_probe_auth_kind,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -94,6 +94,8 @@ _ADMIN_EVENT_MESSAGE = (
     "Firing events is admin-only in Home Assistant and this token's user is "
     "not an administrator"
 )
+
+_TOKEN_REJECTED_MESSAGE = "Home Assistant rejected the access token"
 
 _AMBIGUOUS_DISPATCH_WARNING = (
     "Home Assistant did not confirm the event. It may have been dispatched; "
@@ -335,11 +337,17 @@ class EventCallMixin:
         because the event may already have fired.
         """
         caps = await get_component_caps(self._client)
-        if component_probe_auth_failed(self._client):
+        auth_kind = component_probe_auth_kind(self._client)
+        if auth_kind:
+            error: Exception = (
+                HomeAssistantAdminRequiredError(_ADMIN_EVENT_MESSAGE)
+                if auth_kind == "permission"
+                else HomeAssistantAuthError(_TOKEN_REJECTED_MESSAGE)
+            )
             exception_to_structured_error(
-                HomeAssistantAdminRequiredError(_ADMIN_EVENT_MESSAGE),
+                error,
                 context={"event_type": event_type},
-                suggestions=_EVENT_REJECTION_SUGGESTIONS,
+                suggestions=["Check the Home Assistant token"],
             )
         if not component_supports(caps, "call_event"):
             return None

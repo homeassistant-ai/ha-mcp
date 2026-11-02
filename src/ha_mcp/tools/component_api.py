@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client.rest_client import (
+    HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -154,12 +155,17 @@ _PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary
 # The latest probe was refused as unauthorized. Kept beside the failure text so
 # a fire tool can stop before sending with the same rejected token; read callers
 # keep treating the probe as best-effort.
-_PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
+_PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 
 def component_probe_auth_failed(client: Any) -> bool:
     """True when the latest capability probe was rejected as unauthorized."""
-    return bool(_PROBE_AUTH_REJECTED.get(client))
+    return client in _PROBE_AUTH_REJECTED
+
+
+def component_probe_auth_kind(client: Any) -> str | None:
+    """``permission`` or ``token`` for the latest probe rejection, else None."""
+    return _PROBE_AUTH_REJECTED.get(client)
 
 
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
@@ -242,20 +248,25 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
         _NEGATIVE_CACHE_TS.pop(client, None)
 
 
-def _is_auth_rejection(exc: Exception) -> bool:
-    """True when a probe failure was Home Assistant refusing the token."""
+def _auth_rejection_kind(exc: Exception) -> str | None:
+    """Classify a probe failure as a permission refusal or a token rejection."""
+    if isinstance(exc, HomeAssistantAdminRequiredError):
+        return "permission"
     if isinstance(exc, HomeAssistantCommandError):
-        return getattr(exc, "code", None) == "unauthorized"
-    return isinstance(exc, HomeAssistantAuthError) or isinstance(
+        return "permission" if getattr(exc, "code", None) == "unauthorized" else None
+    if isinstance(exc, HomeAssistantAuthError) or isinstance(
         exc.__cause__, HomeAssistantAuthError
-    )
+    ):
+        return "token"
+    return None
 
 
 def _store_probe_failure(client: Any, exc: Exception, message: str) -> None:
     """Cache an inconclusive probe and remember an auth rejection."""
     _store_transient_negative(client)
-    if _is_auth_rejection(exc):
-        _PROBE_AUTH_REJECTED[client] = True
+    kind = _auth_rejection_kind(exc)
+    if kind:
+        _PROBE_AUTH_REJECTED[client] = kind
     _PROBE_FAILURES[client] = message
 
 

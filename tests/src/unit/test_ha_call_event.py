@@ -406,6 +406,33 @@ class TestHaCallEvent:
             for suggestion in payload["error"]["suggestions"]
         )
 
+    async def test_component_probe_token_rejection_uses_a_token_error(
+        self, monkeypatch
+    ):
+        """A rejected token must not read as a permissions problem."""
+        from ha_mcp.tools import component_api
+
+        tools = _make_tools({"message": "rest"})
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(side_effect=HomeAssistantAuthError("invalid auth"))
+        monkeypatch.setattr(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_event("my_event")
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] != "AUTH_INSUFFICIENT_PERMISSIONS"
+        assert any(
+            "Check the Home Assistant token" in suggestion
+            for suggestion in payload["error"]["suggestions"]
+        )
+        assert component_api.component_probe_auth_failed(tools._client)
+        ws.send_command.assert_awaited_once_with("ha_mcp_tools/info")
+        tools._client._request.assert_not_awaited()
+        tools._client.send_websocket_message.assert_not_awaited()
+
     @pytest.mark.parametrize("component_capable", [True, False])
     async def test_unauthorized_envelope_maps_to_admin_required(
         self, monkeypatch, component_capable

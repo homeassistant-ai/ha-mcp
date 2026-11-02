@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp.client.rest_client import (
+    HomeAssistantAdminRequiredError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -501,3 +503,42 @@ async def test_strict_discovery_accepts_definitive_capability_absence(absence):
                 await get_component_caps(client, strict=True), "dashboard_edit"
             )
     assert ws.send_command.await_count == 1
+
+
+def test_auth_rejection_kind_distinguishes_permission_and_token():
+    assert (
+        component_api._auth_rejection_kind(
+            HomeAssistantCommandError("Command failed: Unauthorized", "unauthorized")
+        )
+        == "permission"
+    )
+    assert (
+        component_api._auth_rejection_kind(HomeAssistantAdminRequiredError("x"))
+        == "permission"
+    )
+    assert (
+        component_api._auth_rejection_kind(HomeAssistantAuthError("invalid auth"))
+        == "token"
+    )
+    assert component_api._auth_rejection_kind(RuntimeError("boom")) is None
+
+
+@pytest.mark.asyncio
+async def test_probe_auth_marker_records_kind_and_clears_on_success():
+    ws = _make_ws(
+        info_exc=HomeAssistantCommandError(
+            "Command failed: Unauthorized", "unauthorized"
+        )
+    )
+    client = _client()
+    with _patch_ws(ws):
+        assert await get_component_caps(client) is None
+
+    assert component_api.component_probe_auth_failed(client) is True
+    assert component_api.component_probe_auth_kind(client) == "permission"
+
+    invalidate_caps(client)
+    with _patch_ws(_make_ws(info_result=_INFO_OK)):
+        assert await get_component_caps(client) is not None
+
+    assert component_api.component_probe_auth_failed(client) is False
