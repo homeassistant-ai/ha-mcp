@@ -157,7 +157,12 @@ def _enabled_then_failed(entity_id: str, err: BackupRestoreError) -> BackupResto
         detail = "but its options were not restored: the options flow refused them"
     failed: BackupRestoreError = _manager().BackupRestoreError(
         f"Config entry {entity_id} was enabled, {detail}",
-        **{**err.outcome, "apply_status": "applied"},
+        # The enable applied; the options restore keeps its own status.
+        **{
+            **err.outcome,
+            "apply_status": "applied",
+            "options_apply_status": err.outcome["apply_status"],
+        },
     )
     return failed
 

@@ -514,6 +514,7 @@ async def test_an_entry_enabled_before_a_refused_options_flow_says_it_was_enable
         )
 
     assert exc_info.value.outcome["apply_status"] == "applied"
+    assert exc_info.value.outcome["options_apply_status"] == "not_applied"
     assert exc_info.value.outcome["reason"] == "flow_aborted"
     assert "enabled" in str(exc_info.value)
     assert "nothing was applied" not in str(exc_info.value).lower()
@@ -543,6 +544,7 @@ async def test_an_entry_enabled_before_an_unsettled_options_flow_says_it_was_ena
         )
 
     assert exc_info.value.outcome["apply_status"] == "applied"
+    assert exc_info.value.outcome["options_apply_status"] == "unknown"
     assert str(exc_info.value).startswith("Config entry e1 was enabled, then its")
 
 
