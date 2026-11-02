@@ -15,6 +15,10 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 from .test_component_ws_search import _REAL_VOL, FakeHass
 
 _VALID = {"status": "validated", "valid": True, "errors": []}
+_NOT_EXPOSED = (
+    "The installed component does not expose the listing and validation of an "
+    "integration's own WebSocket commands."
+)
 _COMMAND_LIST = {
     "status": "available",
     "domain": "knx",
@@ -79,7 +83,24 @@ class TestListing:
         ):
             result = await _get(_client(), entry_id="e1", include_ws_commands=True)
         assert "ws_commands" not in result
-        assert "ws_commands not listed" in result["warnings"][0]
+        (warning,) = result["warnings"]
+        assert warning.startswith(f"ws_commands not listed: {_NOT_EXPOSED}")
+        assert "Core contract" not in warning
+
+    async def test_a_failed_listing_keeps_the_entry_read_with_a_warning(
+        self,
+    ) -> None:
+        with patch(
+            "ha_mcp.tools.core_contract.get_component_caps",
+            AsyncMock(side_effect=RuntimeError("ws down")),
+        ):
+            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
+        assert result["entry"] == {"domain": "knx"}
+        assert "ws_commands" not in result
+        assert result["warnings"] == [
+            "ws_commands not listed: Could not obtain the listing and validation "
+            "of an integration's own WebSocket commands: ws down"
+        ]
 
     async def test_not_requested_means_no_bridge_call(self) -> None:
         bridge = AsyncMock()
@@ -213,7 +234,25 @@ class TestSend:
         client.send_websocket_message.assert_awaited_once_with(
             {"type": "knx/get_knx_project"}
         )
-        assert "Not validated before sending" in result["warnings"][0]
+        assert result["warnings"] == [
+            f"Not validated before sending: {_NOT_EXPOSED} "
+            "Core still validates actual requests."
+        ]
+
+    async def test_a_failed_bridge_sends_nothing(self) -> None:
+        client = _client()
+        with (
+            patch(
+                "ha_mcp.tools.core_contract.get_component_caps",
+                AsyncMock(side_effect=RuntimeError("ws down")),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await IntegrationTools(client).ha_set_integration(
+                entry_id="e1", ws_command="knx/delete_entity"
+            )
+        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
+        client.send_websocket_message.assert_not_awaited()
 
     async def test_a_core_error_is_a_service_failure(self) -> None:
         client = _client()
@@ -280,6 +319,33 @@ class TestSend:
             )
         assert fragment in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("bridge", "feature"),
+    [
+        ("core_contract", "Core contract discovery/validation"),
+        (
+            "integration_commands",
+            "the listing and validation of an integration's own WebSocket commands",
+        ),
+    ],
+)
+async def test_each_bridge_names_its_own_feature_when_absent(
+    bridge: str, feature: str
+) -> None:
+    from ha_mcp.tools import core_contract
+
+    caps = ComponentCaps(1, "test", frozenset(), {})
+    with patch.object(
+        core_contract, "get_component_caps", AsyncMock(return_value=caps)
+    ):
+        result = await getattr(core_contract, bridge)(Mock(), "knx")
+    assert result == {
+        "status": "unavailable",
+        "reason": f"The installed component does not expose {feature}. "
+        "Core still validates actual requests.",
+    }
 
 
 async def test_server_bridge_reaches_the_component_producer(

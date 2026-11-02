@@ -45,7 +45,9 @@ async def core_contract(
     params: dict[str, Any] = {"command": command}
     if payload is not None:
         params["payload"] = payload
-    return await _contract_bridge(client, "core_contract", params)
+    return await _contract_bridge(
+        client, "core_contract", params, "Core contract discovery/validation"
+    )
 
 
 async def integration_commands(
@@ -58,15 +60,23 @@ async def integration_commands(
     params: dict[str, Any] = {"domain": domain}
     if command is not None:
         params.update(command=command, payload=payload or {})
-    return await _contract_bridge(client, "integration_commands", params)
+    return await _contract_bridge(
+        client,
+        "integration_commands",
+        params,
+        "the listing and validation of an integration's own WebSocket commands",
+    )
 
 
 async def _contract_bridge(
-    client: Any, capability: str, params: dict[str, Any]
+    client: Any, capability: str, params: dict[str, Any], feature: str
 ) -> dict[str, Any]:
+    """Ask the component's ``capability`` bridge; ``feature`` names it in
+    the reason and error texts."""
     unavailable = {
         "status": "unavailable",
-        "reason": "The installed component does not expose Core contract discovery/validation. Core still validates actual requests.",
+        "reason": f"The installed component does not expose {feature}. "
+        "Core still validates actual requests.",
     }
     try:
         caps = await get_component_caps(client, strict=True)
@@ -90,11 +100,11 @@ async def _contract_bridge(
         if is_unknown_command(exc):
             invalidate_caps(client)
             return unavailable
-        logger.warning("Core contract discovery failed", exc_info=True)
+        logger.warning("%s failed", feature, exc_info=True)
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Could not obtain Core contract: {exc}",
+                f"Could not obtain {feature}: {exc}",
                 context={k: v for k, v in params.items() if k != "payload"},
             )
         )

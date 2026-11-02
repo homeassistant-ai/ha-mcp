@@ -5,14 +5,19 @@ Core registers each command with its request schema; the component's
 against them. Core marks no command as read-only, so sending one is a write.
 """
 
+import logging
 from typing import Any
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from .backup_access import guard_snapshot_route
 from .config_entry_flow import is_component_domain, refuse_component_entry
 from .core_contract import command_payload, integration_commands
-from .helpers import raise_tool_error
+from .helpers import extract_tool_error_message, raise_tool_error
 from .util_helpers import is_streaming_ws_command, websocket_error_message
+
+logger = logging.getLogger(__name__)
 
 _LIST_SUGGESTION = (
     "List the entry's commands with "
@@ -28,11 +33,22 @@ async def attach_ws_commands(client: Any, resp: dict[str, Any]) -> None:
             "include_ws_commands was ignored: ha-mcp's own entries take no ws_command"
         )
         return
-    listing: dict[str, Any] = (
-        await integration_commands(client, domain)
-        if isinstance(domain, str)
-        else {"status": "unavailable", "reason": "the entry carries no domain"}
-    )
+    listing: dict[str, Any] = {
+        "status": "unavailable",
+        "reason": "the entry carries no domain",
+    }
+    if isinstance(domain, str):
+        # Optional detail: a failed listing must not discard the entry read.
+        try:
+            listing = await integration_commands(client, domain)
+        except ToolError as err:
+            logger.warning(
+                "Listing %s's WebSocket commands failed", domain, exc_info=True
+            )
+            listing = {
+                "status": "unavailable",
+                "reason": extract_tool_error_message(err),
+            }
     if listing["status"] != "available":
         resp.setdefault("warnings", []).append(
             f"ws_commands not listed: {listing['reason']}"
