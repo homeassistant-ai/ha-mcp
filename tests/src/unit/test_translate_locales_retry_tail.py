@@ -29,6 +29,13 @@ def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     return recorded
 
 
+def _deadline_in(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """Put the time budget's deadline ``seconds`` from now (negative: spent)."""
+    monkeypatch.setattr(
+        translate_locales, "_DEADLINE", translate_locales.time.monotonic() + seconds
+    )
+
+
 def test_failed_attempts_wait_before_each_retry_but_not_after_the_last(
     monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
 ) -> None:
@@ -55,9 +62,7 @@ def test_spent_budget_stops_the_retries(
 
     def times_out_past_the_deadline(*_args: Any, **_kwargs: Any) -> Any:
         calls.append(1)
-        monkeypatch.setattr(
-            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
-        )
+        _deadline_in(monkeypatch, -1)
         raise translate_locales.httpx.ReadTimeout("read timed out")
 
     monkeypatch.setattr(translate_locales.httpx, "post", times_out_past_the_deadline)
@@ -101,14 +106,13 @@ def _accept(
 def test_rejected_string_gets_one_retry_while_the_budget_lasts(
     monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
 ) -> None:
-    monkeypatch.setattr(
-        translate_locales, "_DEADLINE", translate_locales.time.monotonic() + 3600
-    )
+    _deadline_in(monkeypatch, 3600)
     results: dict[tuple[str, str], str] = {}
     failed = _accept(results, [])
     assert len(retries) == 1
     assert "previous attempt was rejected" in retries[0]
     assert len(sleeps) == 1, "the retry is paced like any other request"
+    assert sleeps[0] > 0, "a retry must wait"
     assert results == {("messages", "greeting"): "Hallo"}
     assert failed == set()
 
@@ -118,9 +122,7 @@ def test_spent_budget_skips_the_validation_retry(
 ) -> None:
     """An answer can arrive after the deadline; each string it got wrong must
     then fail at once, without a retry call and its pacing wait."""
-    monkeypatch.setattr(
-        translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
-    )
+    _deadline_in(monkeypatch, -1)
     failures: list[str] = []
     failed = _accept({}, failures)
     assert retries == []
@@ -129,12 +131,15 @@ def test_spent_budget_skips_the_validation_retry(
     assert failures[0].endswith("(time budget exhausted; not retrying)")
 
 
-def test_late_answer_keeps_the_strings_it_got_right(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
+@pytest.mark.parametrize("deadline_in", [3600, -1])
+def test_valid_answer_is_kept_without_a_retry_or_a_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    sleeps: list[float],
+    retries: list[str],
+    deadline_in: float,
 ) -> None:
-    monkeypatch.setattr(
-        translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
-    )
+    """A valid answer, late or not, must not cost a retry or a 7 s wait."""
+    _deadline_in(monkeypatch, deadline_in)
     results: dict[tuple[str, str], str] = {}
     failed = _accept(results, [], translated="Hallo")
     assert results == {("messages", "greeting"): "Hallo"}
@@ -144,23 +149,43 @@ def test_late_answer_keeps_the_strings_it_got_right(
 
 
 def test_retry_answered_after_the_deadline_skips_its_pacing_wait(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
 ) -> None:
     """The retry can return after the deadline; its pacing wait then paces
-    no request."""
-    monkeypatch.setattr(
-        translate_locales, "_DEADLINE", translate_locales.time.monotonic() + 3600
-    )
+    no request and only eats into the slack before the job timeout."""
+    _deadline_in(monkeypatch, 3600)
+    engine = translate_locales._call_gemini
 
-    def answers_past_the_deadline(_prompt: str) -> dict[str, Any]:
-        monkeypatch.setattr(
-            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
-        )
-        return {"messages:greeting": "Hallo"}
+    def answers_past_the_deadline(prompt: str) -> dict[str, Any]:
+        _deadline_in(monkeypatch, -1)
+        return engine(prompt)
 
     monkeypatch.setattr(translate_locales, "_call_gemini", answers_past_the_deadline)
     results: dict[tuple[str, str], str] = {}
     failed = _accept(results, [])
-    assert results == {("messages", "greeting"): "Hallo"}, "the retry answered"
+    assert len(retries) == 1, "the retry ran"
+    assert results == {("messages", "greeting"): "Hallo"}
     assert failed == set()
     assert sleeps == []
+
+
+@pytest.mark.parametrize(("crosses_deadline", "waits"), [(False, 1), (True, 0)])
+def test_failed_retry_fails_the_string_not_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+    sleeps: list[float],
+    crosses_deadline: bool,
+    waits: int,
+) -> None:
+    """A retry the engine fails must leave only its string failed; its wait
+    still paces the next request while the budget lasts."""
+    _deadline_in(monkeypatch, 3600)
+
+    def fails(_prompt: str) -> dict[str, Any]:
+        if crosses_deadline:
+            _deadline_in(monkeypatch, -1)
+        raise SystemExit("Gemini API call failed: HTTP 503")
+
+    monkeypatch.setattr(translate_locales, "_call_gemini", fails)
+    failed = _accept({}, [])
+    assert failed == {("messages", "greeting")}
+    assert len(sleeps) == waits
