@@ -273,6 +273,7 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
         pytest.param("create", "already_in_progress", id="create"),
         pytest.param("subentry", "subentry flow f1", id="subentry"),
         pytest.param("reconfigure", "reauthentication", id="reconfigure"),
+        pytest.param("options", "options flow f1", id="options"),
     ],
 )
 @pytest.mark.parametrize(
@@ -303,6 +304,7 @@ async def test_a_failed_write_says_when_its_flow_may_still_be_open(
         "create": (_create_entry, client.abort_config_flow),
         "subentry": (_create_subentry, client.abort_config_subentry_flow),
         "reconfigure": (_reconfigure, client.abort_config_flow),
+        "options": (_update_options, client.abort_options_flow),
     }[run]
     abort.side_effect = abort_error
 

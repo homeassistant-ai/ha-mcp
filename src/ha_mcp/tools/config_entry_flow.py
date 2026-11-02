@@ -53,6 +53,7 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
 from .config_entry_flow_abort import (
     abort_failed_flow,
+    abort_failed_options_flow,
     flow_left_open,
     raise_if_flow_left_open,
 )
@@ -858,19 +859,17 @@ async def _update_config_entry_options(
         else:
             should_abort = not leaves_flow_open(flow_err)
         if should_abort:
-            try:
-                with anyio.CancelScope(shield=True):  # see shielded_abort
-                    await asyncio.wait_for(
-                        client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                    )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    "Failed to abort options flow %s for entry %s "
-                    "(stage=abort_cleanup, reason=%s, error_type=%s)",
-                    flow_id,
-                    entry_id,
-                    flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
-                    type(abort_err).__name__,
+            abort_err = await abort_failed_options_flow(
+                client,
+                flow_id,
+                entry_id=entry_id,
+                reason=flow_err.reason
+                if isinstance(flow_err, OptionsFlowError)
+                else None,
+            )
+            if progress is None:
+                raise_if_flow_left_open(
+                    flow_err, abort_err, flow_left_open("options", flow_id)
                 )
         raise
 

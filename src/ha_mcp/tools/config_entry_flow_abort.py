@@ -4,13 +4,23 @@ closing a flow opened only to read it."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from .config_entry_flow_introspect import abort_probe_flow, flow_gone, shielded_abort
+import anyio
+
+from .config_entry_flow_introspect import (
+    _ABORT_TIMEOUT_S,
+    abort_probe_flow,
+    flow_gone,
+    shielded_abort,
+)
 from .config_entry_flow_walker import flow_error_payload
 from .helpers import raise_tool_error
+
+logger = logging.getLogger(__name__)
 
 
 def flow_left_open(kind: str, flow_id: str) -> str:
@@ -35,6 +45,31 @@ async def abort_failed_flow(
     return await shielded_abort(
         abort, flow_id, failure=f"Failed to abort {kind} {flow_id} after error"
     )
+
+
+async def abort_failed_options_flow(
+    client: Any, flow_id: str, *, entry_id: str, reason: object
+) -> Exception | None:
+    """Abort an options flow after a failed walk; return the abort's error.
+
+    The log names the error's type only, never its text.
+    """
+    try:
+        with anyio.CancelScope(shield=True):  # see shielded_abort
+            await asyncio.wait_for(
+                client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
+            )
+    except Exception as abort_err:  # noqa: BLE001
+        logger.warning(
+            "Failed to abort options flow %s for entry %s "
+            "(stage=abort_cleanup, reason=%s, error_type=%s)",
+            flow_id,
+            entry_id,
+            reason,
+            type(abort_err).__name__,
+        )
+        return abort_err
+    return None
 
 
 def abort_left_flow_open(abort_err: Exception | None) -> bool:
