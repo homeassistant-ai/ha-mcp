@@ -349,7 +349,10 @@ async def fetch_options_schema(
         )
     except ToolError:
         raise
-    except Exception as schema_err:  # noqa: BLE001
+    except Exception as schema_err:
+        # A described menu branch was asked for: fail as the other describes do.
+        if menu_choice is not None:
+            raise
         logger.warning(
             f"Failed to fetch options schema for {entry_id}: "
             f"{type(schema_err).__name__}: {schema_err}"
@@ -357,8 +360,8 @@ async def fetch_options_schema(
         schema_warnings: list[str] = resp.setdefault("warnings", [])
         schema_warnings.append(
             f"options schema probe failed for {entry_id}: "
-            f"{type(schema_err).__name__} — 'options_schema' is missing "
-            "and 'options' may be incomplete"
+            f"{type(schema_err).__name__}: {schema_err} — 'options_schema' is "
+            "missing and 'options' may be incomplete"
         )
     finally:
         if flow_id:

@@ -170,6 +170,59 @@ async def test_a_menu_choice_core_does_not_offer_is_refused_with_its_options() -
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
+async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
+    if kind == "options":
+        await fetch_options_schema(client, "e1", _resp(), menu_choice=menu_choice)
+    elif kind == "subentry":
+        await fetch_config_subentry_schema(
+            client,
+            "e1",
+            _resp(),
+            subentry_type="device",
+            subentry_id=None,
+            show_advanced_options=False,
+            menu_choice=menu_choice,
+        )
+    else:
+        await fetch_config_flow_schema(client, "demo", {}, menu_choice=menu_choice)
+
+
+_FLOW_METHODS = {
+    "options": ("submit_options_flow_step", "abort_options_flow"),
+    "subentry": ("submit_config_subentry_flow_step", "abort_config_subentry_flow"),
+    "setup": ("submit_config_flow_step", "abort_config_flow"),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", list(_FLOW_METHODS))
+async def test_a_failed_menu_choice_submit_fails_every_describe(kind: str) -> None:
+    client = _client(_MENU)
+    submit, abort = _FLOW_METHODS[kind]
+    getattr(client, submit).side_effect = HomeAssistantAPIError(
+        "API error: 400 - Invalid step", status_code=400
+    )
+
+    with pytest.raises(HomeAssistantAPIError, match="Invalid step"):
+        await _describe(kind, client, "advanced")
+
+    getattr(client, abort).assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_options_probe_keeps_cores_message_in_the_warning() -> None:
+    client = _client(_MENU)
+    client.start_options_flow.side_effect = HomeAssistantAPIError(
+        "API error: 500 - Config entry not loaded", status_code=500
+    )
+    resp = _resp()
+
+    await fetch_options_schema(client, "e1", resp)
+
+    assert "options_schema" not in resp
+    assert any("Config entry not loaded" in w for w in resp["warnings"])
+
+
 @pytest.mark.asyncio
 async def test_menu_choice_on_a_flow_that_opens_with_a_form_is_refused() -> None:
     client = _client(_form("init", _HOST))
