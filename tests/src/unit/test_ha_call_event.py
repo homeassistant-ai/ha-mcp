@@ -15,6 +15,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import event_call
@@ -587,9 +588,9 @@ class TestHaCallEvent:
 
     async def test_ws_post_send_loss_is_partial_and_not_retried(self, monkeypatch):
         tools = _make_tools({"message": "rest"}, {"my_event": 2})
-        tools._client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws down")
-        )
+        timeout = HomeAssistantConnectionError("ws down")
+        timeout.__cause__ = HomeAssistantCommandTimeout("Command timeout")
+        tools._client.send_websocket_message = AsyncMock(side_effect=timeout)
         monkeypatch.setattr(
             event_call, "get_component_caps", AsyncMock(return_value=None)
         )

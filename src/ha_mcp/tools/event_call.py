@@ -323,8 +323,9 @@ class EventCallMixin:
         """Fire through the component bridge when it advertises call_event.
 
         A command that the component does not know is safe to fall back from:
-        it was refused before dispatch. Other component errors are surfaced, not
-        retried through another path, because the event may already have fired.
+        it was refused before dispatch. Other component errors are surfaced,
+        except a connection loss after the send, which returns ``partial``
+        because the event may already have fired.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "call_event"):
