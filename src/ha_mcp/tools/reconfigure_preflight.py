@@ -50,7 +50,7 @@ def _declared_keys(schema: Any) -> set[str]:
 async def read_reconfigure_form(
     client: Any, *, entry_id: str, domain: str, config: dict[str, Any]
 ) -> tuple[dict[str, Any], list[str]]:
-    """Describe the reconfigure flow's first step; return it and key warnings.
+    """Describe the reconfigure flow's first step; return it and the warnings.
 
     Refuses the preview when Home Assistant aborts the flow at once, or when
     ``config`` names keys the flow's last form does not declare or cannot
@@ -99,7 +99,7 @@ async def read_reconfigure_form(
             form.update(await describe_form(client, domain, flow.path, step))
     finally:
         abort_err = await _abort_flow_best_effort(client, step.get("flow_id"))
-    warnings = []
+    warnings = form.pop("warnings", [])
     if abort_err is not None and getattr(abort_err, "status_code", None) != 404:
         warnings.append(_FLOW_LEFT_OPEN)
     if step.get("type") != "form":

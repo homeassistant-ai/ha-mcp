@@ -212,6 +212,13 @@ def _raise_flow_finished(step: dict[str, Any], path: str) -> NoReturn:
     )
 
 
+def _put_payload(resp: dict[str, Any], key: str, payload: dict[str, Any]) -> None:
+    """``payload`` as ``resp[key]``, its ``warnings`` moved to the response's."""
+    if warnings := payload.pop("warnings", None):
+        resp.setdefault("warnings", []).extend(warnings)
+    resp[key] = payload
+
+
 async def _describe_step(
     client: Any,
     step: dict[str, Any],
@@ -329,12 +336,16 @@ async def fetch_options_schema(
                 f"opens with a {flow_result.get('type')!r} step, not a form, so "
                 "empty 'options' does not mean the entry has none"
             )
-        resp["options_schema"] = await _describe_step(
-            client,
-            flow_result,
-            flow=FlowRef(_entry_domain(entry), "options", entry_id),
-            menu_choice=menu_choice,
-            submit=client.submit_options_flow_step,
+        _put_payload(
+            resp,
+            "options_schema",
+            await _describe_step(
+                client,
+                flow_result,
+                flow=FlowRef(_entry_domain(entry), "options", entry_id),
+                menu_choice=menu_choice,
+                submit=client.submit_options_flow_step,
+            ),
         )
     except ToolError:
         raise
@@ -397,19 +408,25 @@ async def fetch_config_subentry_schema(
             show_advanced_options=show_advanced_options,
         )
         flow_id = flow_result.get("flow_id")
-        resp["subentry_schema"] = {
-            "subentry_type": subentry_type,
-            "subentry_id": subentry_id,
-            **await _describe_step(
-                client,
-                flow_result,
-                flow=FlowRef(
-                    _entry_domain(entry), f"config_subentries.{subentry_type}", entry_id
+        _put_payload(
+            resp,
+            "subentry_schema",
+            {
+                "subentry_type": subentry_type,
+                "subentry_id": subentry_id,
+                **await _describe_step(
+                    client,
+                    flow_result,
+                    flow=FlowRef(
+                        _entry_domain(entry),
+                        f"config_subentries.{subentry_type}",
+                        entry_id,
+                    ),
+                    menu_choice=menu_choice,
+                    submit=client.submit_config_subentry_flow_step,
                 ),
-                menu_choice=menu_choice,
-                submit=client.submit_config_subentry_flow_step,
-            ),
-        }
+            },
+        )
     finally:
         if flow_id:
             try:
@@ -473,4 +490,4 @@ async def fetch_config_flow_schema(
                     flow_id,
                     abort_err,
                 )
-    resp["config_flow_schema"] = schema
+    _put_payload(resp, "config_flow_schema", schema)

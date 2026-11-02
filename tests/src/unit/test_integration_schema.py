@@ -797,7 +797,8 @@ async def test_a_failed_strings_read_is_a_warning_on_the_described_form() -> Non
     await fetch_options_schema(client, "e1", resp)
 
     assert resp["options_schema"]["fields"][0]["name"] == "host"
-    assert any("could not be read" in w for w in resp["options_schema"]["warnings"])
+    assert "warnings" not in resp["options_schema"]
+    assert any("strings for demo could not be read" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio
@@ -810,7 +811,34 @@ async def test_a_failed_strings_read_is_a_warning_on_an_abort() -> None:
 
     schema = resp["options_schema"]
     assert schema["aborted"] == "no_options"
-    assert any("could not be read" in w for w in schema["warnings"])
+    assert "warnings" not in schema
+    assert any("strings for demo could not be read" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["subentry_schema", "config_flow_schema"])
+async def test_a_failed_strings_read_is_a_top_level_warning_on_every_describe(
+    key: str,
+) -> None:
+    client = _client(_form("user", _HOST))
+    client.send_websocket_message.side_effect = RuntimeError("ws down")
+    resp = _resp()
+
+    if key == "subentry_schema":
+        await fetch_config_subentry_schema(
+            client,
+            "e1",
+            resp,
+            subentry_type="device",
+            subentry_id=None,
+            show_advanced_options=False,
+        )
+    else:
+        await fetch_config_flow_schema(client, "demo", resp)
+
+    assert resp[key]["fields"][0]["name"] == "host"
+    assert "warnings" not in resp[key]
+    assert any("strings for demo could not be read" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio
@@ -820,6 +848,7 @@ async def test_a_string_core_does_not_ship_is_no_warning() -> None:
 
     await fetch_options_schema(client, "e1", resp)
 
+    assert not any("strings for" in w for w in resp.get("warnings", []))
     assert "warnings" not in resp["options_schema"]
     assert "reason_text" not in resp["options_schema"]
 

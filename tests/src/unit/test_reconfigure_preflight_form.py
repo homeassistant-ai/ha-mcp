@@ -175,6 +175,17 @@ async def test_a_failed_abort_is_a_warning_on_the_preview() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_failed_strings_read_is_a_warning_beside_the_form() -> None:
+    client = _client(_form(last_step=True))
+    client.send_websocket_message.side_effect = RuntimeError("ws down")
+
+    form, warnings = await _read(client, {"host": "10.0.0.5"})
+
+    assert "warnings" not in form
+    assert any("could not be read" in w for w in warnings)
+
+
+@pytest.mark.asyncio
 async def test_an_abort_core_answers_with_404_is_no_warning() -> None:
     # 404: the flow is already gone.
     client = _client(_form(last_step=True))
