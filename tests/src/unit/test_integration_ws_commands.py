@@ -239,6 +239,34 @@ class TestSend:
             "Core still validates actual requests."
         ]
 
+    async def test_an_answer_that_is_no_validation_sends_with_a_warning(
+        self,
+    ) -> None:
+        client = _client()
+        bridge = AsyncMock(return_value={"status": "available", "commands": []})
+        with patch.object(module, "integration_commands", bridge):
+            result = await IntegrationTools(client).ha_set_integration(
+                entry_id="e1", ws_command="knx/get_knx_project"
+            )
+        client.send_websocket_message.assert_awaited_once()
+        assert result["warnings"] == [
+            "Not validated before sending: the component answered 'available', "
+            "not a validation"
+        ]
+
+    async def test_a_validation_without_a_verdict_sends_nothing(self) -> None:
+        client = _client()
+        bridge = AsyncMock(return_value={"status": "validated"})
+        with (
+            patch.object(module, "integration_commands", bridge),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await IntegrationTools(client).ha_set_integration(
+                entry_id="e1", ws_command="knx/delete_entity"
+            )
+        assert _error(exc_info)["code"] == "VALIDATION_FAILED"
+        client.send_websocket_message.assert_not_awaited()
+
     async def test_a_failed_bridge_sends_nothing(self) -> None:
         client = _client()
         with (

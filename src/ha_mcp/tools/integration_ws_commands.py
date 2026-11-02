@@ -94,13 +94,14 @@ async def send_ws_command(
         )
     guard_snapshot_route(ws_command=command, ws_params=payload)
     validation = await integration_commands(client, domain, command, payload)
-    if validation["status"] == "validated" and not validation["valid"]:
+    validated = validation["status"] == "validated"
+    if validated and validation.get("valid") is not True:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_FAILED,
                 "Home Assistant Core's schema for this command rejects the "
                 "ws_data; nothing was sent",
-                context={**context, "errors": validation["errors"]},
+                context={**context, "errors": validation.get("errors", [])},
                 suggestions=[_LIST_SUGGESTION],
             )
         )
@@ -119,6 +120,10 @@ async def send_ws_command(
         "ws_command": command,
         "result": result.get("result"),
     }
-    if validation["status"] == "unavailable":
-        resp["warnings"] = [f"Not validated before sending: {validation['reason']}"]
+    if not validated:
+        # Only a passed validation sends without a warning.
+        reason = validation.get("reason") or (
+            f"the component answered {validation['status']!r}, not a validation"
+        )
+        resp["warnings"] = [f"Not validated before sending: {reason}"]
     return resp
