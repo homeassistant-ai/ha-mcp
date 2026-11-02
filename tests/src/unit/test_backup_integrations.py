@@ -522,6 +522,33 @@ async def test_an_entry_enabled_before_a_refused_options_flow_says_it_was_enable
 
 
 @pytest.mark.asyncio
+async def test_a_refused_options_flow_on_an_enabled_entry_keeps_its_own_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The restore enabled nothing, so nothing was applied.
+    sent = _ws(monkeypatch, [], [_read(_row({"int": 42}))])
+    refused = config_entry_flow.OptionsFlowError(
+        "Home Assistant aborted the options restore",
+        apply_status="not_applied",
+        entry_id="e1",
+        reason="flow_aborted",
+    )
+    monkeypatch.setattr(
+        config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=refused)
+    )
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "demo", "disabled_by": None, "options": {"int": 11}}
+        )
+
+    assert exc_info.value.outcome["apply_status"] == "not_applied"
+    assert "options_apply_status" not in exc_info.value.outcome
+    assert "was enabled" not in str(exc_info.value)
+    assert "config_entries/disable" not in [m["type"] for m in sent]
+
+
+@pytest.mark.asyncio
 async def test_an_entry_enabled_before_an_unsettled_options_flow_says_it_was_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
