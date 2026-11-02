@@ -75,7 +75,8 @@ async def _flow_texts(
             return {
                 "warnings": [
                     f"The domain of config entry {flow.entry_id} could not be "
-                    "read, so Home Assistant's error and reason texts are missing"
+                    "read, so Home Assistant's texts for this flow step are "
+                    "missing"
                 ]
             }
     if not isinstance(domain, str):

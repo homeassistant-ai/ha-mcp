@@ -966,7 +966,7 @@ async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> No
     assert "reason_text" not in resp["subentry_schema"]
     assert resp["warnings"] == [
         "The domain of config entry e1 could not be read, so Home Assistant's "
-        "error and reason texts are missing"
+        "texts for this flow step are missing"
     ]
 
 
