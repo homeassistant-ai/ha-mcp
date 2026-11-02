@@ -157,6 +157,27 @@ def test_ha_get_integration_takes_no_menu_choice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_set_integration_describe_whose_flow_cannot_start_is_no_missing_domain() -> (
+    None
+):
+    # Core answers 400 for failed dependencies: the domain is installed.
+    client = _client({})
+    client.start_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 400 - Failed dependencies mqtt",
+        status_code=400,
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(
+            domain="tasmota", describe=True
+        )
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "Failed dependencies mqtt" in error["message"]
+
+
+@pytest.mark.asyncio
 async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> None:
     client = _client({})
     client.start_config_flow.side_effect = HomeAssistantAPIError(

@@ -428,14 +428,24 @@ async def fetch_config_flow_schema(
         first_step = await client.start_config_flow(domain)
     except HomeAssistantAPIError as err:
         # Core answers 404 "Invalid handler specified" for a domain without a
-        # config flow and 400 for failed dependencies.
+        # config flow, and 400 when the domain's dependencies failed or its
+        # flow has no user step: the domain exists, its flow cannot start.
         if err.status_code not in (400, 404):
             raise
         raise_tool_error(
             create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
+                ErrorCode.RESOURCE_NOT_FOUND
+                if err.status_code == 404
+                else ErrorCode.SERVICE_CALL_FAILED,
                 f"Home Assistant could not start a config flow for {domain!r} ({err})",
                 context={"domain": domain},
+                suggestions=None
+                if err.status_code == 404
+                else [
+                    "The integration exists but its setup flow cannot start: "
+                    "Core's text names the failed dependency or the missing "
+                    "step. Check the Home Assistant log."
+                ],
             )
         )
     flow_id = first_step.get("flow_id")
