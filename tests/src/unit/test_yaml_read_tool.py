@@ -25,9 +25,7 @@ def _reset_caller_token_cache():
 def _filesystem_tools_enabled(monkeypatch):
     """The tool registers only with filesystem tools on — it returns
     config-file contents, so it sits behind the same flag as ha_read_file.
-
-    Autouse because every test below needs a registered tool; the gate itself
-    is asserted by TestGating.
+    Autouse because every test needs a registered tool; TestGating asserts it.
     """
     from ha_mcp import config as ha_mcp_config
 
@@ -82,6 +80,7 @@ def _service_mock(responses: dict):
 
 async def _make_tool(responses: dict):
     """Build a minimal mcp + client harness around register_yaml_read_tools."""
+    responses.setdefault("find_yaml_key", {"success": True, "files": []})
     from ha_mcp.tools.tools_yaml_read import register_yaml_read_tools
 
     captured: dict = {}

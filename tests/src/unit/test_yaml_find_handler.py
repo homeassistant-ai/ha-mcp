@@ -24,6 +24,8 @@ for _module in (
 
 from custom_components.ha_mcp_tools import yaml_find  # noqa: E402
 
+yaml_find.YAML_CONFIG_FILE = "configuration.yaml"
+
 
 def _hass():
     async def _executor(func, *args):
@@ -41,10 +43,11 @@ def _call(yaml_path="template"):
 
 
 def test_handler_returns_relative_files(monkeypatch):
-    async def fake_config(hass):
+    def fake_load(path, secrets):
+        assert path == "/config/configuration.yaml"
         return {"template": {}}
 
-    monkeypatch.setattr(yaml_find, "async_hass_config_yaml", fake_config)
+    monkeypatch.setattr(yaml_find, "load_yaml_config_file", fake_load)
     monkeypatch.setattr(
         yaml_find,
         "find_yaml_key_files",
@@ -74,10 +77,10 @@ def test_handler_rejects_bad_token():
 
 
 def test_handler_reports_config_load_failure(monkeypatch):
-    async def fake_config(hass):
+    def fake_load(path, secrets):
         raise RuntimeError("bad config")
 
-    monkeypatch.setattr(yaml_find, "async_hass_config_yaml", fake_config)
+    monkeypatch.setattr(yaml_find, "load_yaml_config_file", fake_load)
     handler = yaml_find.build_find_yaml_key_handler(
         _hass(),
         caller_token_ok=lambda hass, call: True,

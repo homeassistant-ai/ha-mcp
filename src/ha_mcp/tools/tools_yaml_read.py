@@ -18,6 +18,7 @@ back door.
 
 import asyncio
 import fnmatch
+import json
 import logging
 import re
 from typing import Annotated, Any
@@ -110,6 +111,17 @@ def _unwrap_or_raise(result: Any, service: str, context: dict[str, Any]) -> Any:
     if not unwrapped.get("success", True):
         raise_tool_error(unwrapped)
     return unwrapped
+
+
+def _failure_reason(err: Exception) -> str:
+    """Readable resolver failure without the serialized error envelope."""
+    try:
+        payload = json.loads(str(err))
+    except (json.JSONDecodeError, TypeError):
+        return str(err)
+    if isinstance(payload, dict):
+        return _failure_text(payload)
+    return str(err)
 
 
 def _failure_text(payload: dict[str, Any]) -> str:
@@ -290,20 +302,27 @@ async def _resolve_all_targets(
     valid. Each target keeps the resolver's named-vs-expanded provenance.
     """
     targets: list[tuple[str, bool]] = []
+    warnings: list[str] = []
     if _has_glob(file):
         discovered = await _find_yaml_key_files(client, file, yaml_path)
-        if discovered:
+        if discovered is None:
+            warnings.append(
+                "Core's loaded YAML could not be searched; files included from "
+                "packages or subfolders may be missing from this result."
+            )
+        elif discovered:
             named_literal = _names_a_file(file.rpartition("/")[2])
             targets = [
                 (path, not (named_literal and path == file)) for path in discovered
             ]
     resolved: list[tuple[str, bool]] = []
     try:
-        resolved, warnings = await _resolve_target_files(client, file)
+        resolved, resolver_warnings = await _resolve_target_files(client, file)
     except Exception as err:
         if not targets:
             raise
-        warnings = [f"Glob expansion failed: {err}"]
+        resolver_warnings = [f"Glob expansion failed: {_failure_reason(err)}"]
+    warnings.extend(resolver_warnings)
     seen = {path for path, _ in targets}
     targets.extend((path, expanded) for path, expanded in resolved if path not in seen)
     targets.sort(key=lambda target: target[0])

@@ -203,7 +203,31 @@ async def test_tool_warns_when_glob_expansion_fails_after_discovery():
     out = await fn(yaml_path="template", file="custom_packages/*.yaml")
 
     assert out["count"] == 1
-    assert any("glob expansion failed" in w.lower() for w in out["warnings"])
+    assert out["warnings"] == ["Glob expansion failed: listing failed"]
+
+
+async def test_tool_warns_when_discovery_is_unavailable():
+    """A fallback-only search must say subfolders may be missing."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {"success": False, "error": "component too old"},
+            "list_files": {
+                "success": True,
+                "files": [{"path": "custom_packages/a.yaml", "is_dir": False}],
+            },
+            "read_file": _read_ok("template:\n"),
+        }
+    )
+
+    out = await fn(yaml_path="template", file="custom_packages/*.yaml")
+
+    assert out["count"] == 1
+    assert any(
+        "packages or subfolders may be missing" in warning.lower()
+        for warning in out["warnings"]
+    )
 
 
 async def test_discovered_bracketed_literal_keeps_strict_parse_errors():
@@ -237,3 +261,10 @@ async def test_discovered_bracketed_literal_keeps_strict_parse_errors():
 
     with pytest.raises(ToolError):
         await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+
+def test_failure_reason_falls_back_outside_the_envelope():
+    from ha_mcp.tools import tools_yaml_read
+
+    assert tools_yaml_read._failure_reason(RuntimeError("boom")) == "boom"
+    assert tools_yaml_read._failure_reason(ValueError('"a string"')) == '"a string"'

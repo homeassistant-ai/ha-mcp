@@ -230,7 +230,8 @@ def yaml_jsonify(node: Any) -> Any:
 
 
 def _source_file(node: Any, value: Any) -> str | None:
-    for candidate in (value, node):
+    """Return the file that writes the key, not one that supplied its value."""
+    for candidate in (node, value):
         path = getattr(candidate, "__config_file__", None)
         if isinstance(path, str):
             return path

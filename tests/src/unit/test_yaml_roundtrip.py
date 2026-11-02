@@ -493,6 +493,14 @@ class TestFindYamlKeyFiles:
         ]
 
 
+class _TaggedValue:
+    """A resolved value annotated with the file that supplied it."""
+
+    def __init__(self, path):
+        self.__config_file__ = path
+        self.__line__ = 1
+
+
 class TestFindYamlKeyEdges:
     def test_empty_path_returns_nothing(self):
         assert find_yaml_key_files({"template": {}}, "") == []
@@ -507,6 +515,16 @@ class TestFindYamlKeyEdges:
 
     def test_mapping_without_source_annotation_is_ignored(self):
         assert find_yaml_key_files({"template": {}}, "template") == []
+
+    def test_key_uses_the_mapping_not_its_secret_value(self):
+        root = _AnnotatedDict("/config/configuration.yaml")
+        package = _AnnotatedDict("/config/custom_packages/nested/mcp.yaml")
+        package["shell_command"] = {"mcp_secret": _TaggedValue("/config/secrets.yaml")}
+        root["custom_packages"] = {"nested": package}
+
+        assert find_yaml_key_files(root, "shell_command.mcp_secret") == [
+            "/config/custom_packages/nested/mcp.yaml"
+        ]
 
     def test_cycles_are_walked_once(self):
         node = _AnnotatedDict("/config/configuration.yaml")
