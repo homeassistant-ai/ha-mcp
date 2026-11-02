@@ -517,6 +517,26 @@ class TestFindYamlKeyEdges:
     def test_mapping_without_source_annotation_is_ignored(self):
         assert find_yaml_key_files({"template": {}}, "template") == []
 
+    def test_path_across_an_include_is_not_attributed_to_the_parent(self):
+        """The parent file cannot supply a path that continues in an include."""
+        root = _AnnotatedDict("/config/configuration.yaml")
+        included = _AnnotatedDict("/config/commands.yaml")
+        included["mcp_secret"] = "value"
+        root["shell_command"] = included
+
+        assert find_yaml_key_files(root, "shell_command.mcp_secret") == []
+
+    def test_included_mapping_is_found_at_its_own_path(self):
+        """The included file is still discoverable by its own top-level path."""
+        root = _AnnotatedDict("/config/configuration.yaml")
+        included = _AnnotatedDict("/config/commands.yaml")
+        included["shell_command"] = {"mcp_secret": "value"}
+        root["included"] = included
+
+        assert find_yaml_key_files(root, "shell_command.mcp_secret") == [
+            "/config/commands.yaml"
+        ]
+
     def test_key_uses_the_mapping_not_its_secret_value(self):
         root = _AnnotatedDict("/config/configuration.yaml")
         package = _AnnotatedDict("/config/custom_packages/nested/mcp.yaml")

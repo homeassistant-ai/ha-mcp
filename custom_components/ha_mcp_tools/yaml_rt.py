@@ -229,22 +229,26 @@ def yaml_jsonify(node: Any) -> Any:
     return str(node)
 
 
-def _source_file(node: Any, value: Any) -> str | None:
-    """Return the file that writes the key, not one that supplied its value."""
-    for candidate in (node, value):
-        path = getattr(candidate, "__config_file__", None)
-        if isinstance(path, str):
-            return path
-    return None
+def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
+    """Walk ``parts`` in ``node``, rejecting paths that cross a file boundary.
 
-
-def _key_value(node: Any, parts: list[str]) -> tuple[bool, Any]:
+    The returned file is the one that writes the first segment. Every mapping
+    along the path must come from that same file: if an ``!include`` supplies
+    an intermediate mapping, no single file holds the full dotted path and a
+    read addressed by that path cannot use it.
+    """
+    root_file = getattr(node, "__config_file__", None)
+    if not isinstance(root_file, str):
+        return False, None
     current = node
     for part in parts:
         if not isinstance(current, dict) or part not in current:
             return False, None
+        current_file = getattr(current, "__config_file__", root_file)
+        if current_file != root_file:
+            return False, None
         current = current[part]
-    return True, current
+    return True, root_file
 
 
 def _walk_yaml_mappings(
@@ -255,11 +259,9 @@ def _walk_yaml_mappings(
     seen.add(id(node))
     children: Any
     if isinstance(node, dict):
-        matched, value = _key_value(node, parts)
-        if matched:
-            path = _source_file(node, value)
-            if path:
-                found.add(path)
+        matched, path = _key_value(node, parts)
+        if matched and path:
+            found.add(path)
         children = node.values()
     elif isinstance(node, list):
         children = node
