@@ -15,6 +15,9 @@ surfaces stop returning operator secrets verbatim:
    options-flow schema marks with a password text selector are replaced the
    same way, on both the harvested options and the ``include_schema=True``
    fields (whose current value comes from the form's ``suggested_value``).
+   Stored option values are checked against the flow's first form only,
+   so a password field that only a later form declares is not detected
+   in them.
 3. **Every other tool response**: secret values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
    :class:`RedactSecretsMiddleware` (registered just outside the
