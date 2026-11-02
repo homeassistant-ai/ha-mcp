@@ -1170,7 +1170,7 @@ class TestTimeBudget:
             lambda *_a, **_k: pytest.fail("HTTP call after the deadline"),
         )
         monkeypatch.setattr(translate_locales, "_DEADLINE", float("-inf"))
-        with pytest.raises(SystemExit, match="time budget"):
+        with pytest.raises(SystemExit, match="before the engine call"):
             translate_locales._call_gemini("prompt")
 
 
