@@ -88,7 +88,9 @@ class TestIntegrationSetupSchema:
             listed = await mcp.call_tool_success(
                 "ha_get_integration", {"domain": "demo"}
             )
-            entry = next(e for e in listed["entries"] if e.get("supports_options"))
+            with_options = [e for e in listed["entries"] if e.get("supports_options")]
+            assert with_options, f"no demo entry with options: {listed['entries']}"
+            entry = with_options[0]
             data = await mcp.call_tool_success(
                 "ha_set_integration",
                 {"entry_id": entry["entry_id"], "describe": True},
