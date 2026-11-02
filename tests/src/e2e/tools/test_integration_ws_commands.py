@@ -1,11 +1,12 @@
 """
 E2E: an integration entry's own WebSocket commands, the API its panel uses.
 
-The test container has no KNX entry, so these run against the first entry
-that is not ha-mcp's own: ha_get_integration lists only that domain's
-commands, and ha_set_integration refuses a command outside the entry's
-prefix before anything is sent. Sending a KNX command needs a KNX entry and
-is covered by the unit tests.
+The test container has no KNX entry. The listing runs against its
+shopping_list entry, whose integration registers shopping_list/* commands,
+so the list cannot pass empty; ha_set_integration's refusal of a command
+outside the entry's prefix runs against the first entry that is not
+ha-mcp's own. Sending a KNX command needs a KNX entry and is covered by the
+unit tests.
 """
 
 import logging
@@ -34,18 +35,23 @@ async def _first_entry(mcp: MCPAssertions) -> dict[str, Any]:
 @pytest.mark.requires_component_surface
 async def test_include_ws_commands_lists_only_the_entrys_own_commands(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
-        entry = await _first_entry(mcp)
+        listing = await mcp.call_tool_success(
+            "ha_get_integration", {"domain": "shopping_list"}
+        )
+        entries = listing.get("data", listing).get("entries", [])
+        assert entries, "the test container has no shopping_list entry"
         result = await mcp.call_tool_success(
             "ha_get_integration",
-            {"entry_id": entry["entry_id"], "include_ws_commands": True},
+            {"entry_id": entries[0]["entry_id"], "include_ws_commands": True},
         )
     data = result.get("data", result)
-    prefix = f"{entry['domain']}/"
-    assert isinstance(data["ws_commands"], list), data.get("warnings")
-    for row in data["ws_commands"]:
-        assert row["command"].startswith(prefix), row
+    commands = data.get("ws_commands")
+    assert isinstance(commands, list), data.get("warnings")
+    assert "shopping_list/items" in [row["command"] for row in commands], commands
+    for row in commands:
+        assert row["command"].startswith("shopping_list/"), row
         assert "description_complete" in row, row
-    logger.info("%s lists %d ws_commands", entry["domain"], len(data["ws_commands"]))
+    logger.info("shopping_list lists %d ws_commands", len(commands))
 
 
 @pytest.mark.asyncio
