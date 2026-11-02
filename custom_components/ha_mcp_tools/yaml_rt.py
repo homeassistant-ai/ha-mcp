@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import math
 import re
 import threading
@@ -11,6 +10,7 @@ from datetime import date, datetime
 from io import StringIO
 from typing import Any
 
+from annotatedyaml.loader import FastSafeLoader
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarbool import ScalarBoolean
 
@@ -39,41 +39,13 @@ class _TaggedScalar:
         return hash((self.tag, self.value))
 
 
-_HA_TAG_FALLBACK = (
-    "!include",
-    "!include_dir_list",
-    "!include_dir_named",
-    "!include_dir_merge_list",
-    "!include_dir_merge_named",
-    "!secret",
-    "!env_var",
-    "!input",
-)
-
-
-def _ha_tags_from_core() -> tuple[str, ...]:
-    """Return the ``!`` tags Core's YAML loader registers.
-
-    The component runs inside Home Assistant, where ``annotatedyaml`` owns the
-    loader constructors, so a new Core tag needs no edit here. Unit tests
-    import this module without Home Assistant installed; the fallback keeps
-    the same tag set available there.
-    """
-    try:
-        loader = importlib.import_module("annotatedyaml.loader").FastSafeLoader
-    except (ImportError, AttributeError):
-        return _HA_TAG_FALLBACK
-    tags = tuple(
-        sorted(
-            tag
-            for tag in loader.yaml_constructors
-            if isinstance(tag, str) and tag.startswith("!")
-        )
+_HA_TAGS = tuple(
+    sorted(
+        tag
+        for tag in FastSafeLoader.yaml_constructors
+        if isinstance(tag, str) and tag.startswith("!")
     )
-    return tags or _HA_TAG_FALLBACK
-
-
-_HA_TAGS = _ha_tags_from_core()
+)
 
 
 def _make_tag_constructor(tag: str) -> Callable[[Any, Any], _TaggedScalar]:
@@ -255,3 +227,56 @@ def yaml_jsonify(node: Any) -> Any:
     if isinstance(node, (datetime, date)):
         return node.isoformat()
     return str(node)
+
+
+def _source_file(node: Any, value: Any) -> str | None:
+    for candidate in (value, node):
+        path = getattr(candidate, "__config_file__", None)
+        if isinstance(path, str):
+            return path
+    return None
+
+
+def _key_value(node: Any, parts: list[str]) -> tuple[bool, Any]:
+    current = node
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    return True, current
+
+
+def _walk_yaml_mappings(node: Any, parts: list[str], seen: set[int], found: set[str]) -> None:
+    if id(node) in seen:
+        return
+    seen.add(id(node))
+    if isinstance(node, dict):
+        matched, value = _key_value(node, parts)
+        if matched:
+            path = _source_file(node, value)
+            if path:
+                found.add(path)
+        children = node.values()
+    elif isinstance(node, list):
+        children = node
+    else:
+        return
+    for child in children:
+        if isinstance(child, (dict, list)):
+            _walk_yaml_mappings(child, parts, seen, found)
+
+
+def find_yaml_key_files(config: Any, yaml_path: str) -> list[str]:
+    """Return files whose mappings define ``yaml_path`` in Core's loaded config.
+
+    Core's ``annotatedyaml`` loader tags every mapping it loads with
+    ``__config_file__``. Walking the merged config finds keys in packages and
+    included folders that a one-level glob cannot see. Values are never
+    returned; only the source file names leave this function.
+    """
+    parts = [part for part in yaml_path.split(".") if part]
+    if not parts:
+        return []
+    found: set[str] = set()
+    _walk_yaml_mappings(config, parts, set(), found)
+    return sorted(found)

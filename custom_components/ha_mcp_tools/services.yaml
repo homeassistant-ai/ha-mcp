@@ -74,6 +74,20 @@ list_files:
       selector:
         text:
 
+find_yaml_key:
+  name: Find YAML Key
+  description: >-
+    Locate the config files whose loaded YAML mappings define a dotted key,
+    including files reached through packages and include directory tags.
+    Returns source paths only; values are not returned.
+  fields:
+    yaml_path:
+      name: YAML path
+      description: Dotted key path to locate.
+      required: true
+      selector:
+        text:
+
 read_file:
   name: Read File
   description: Read a file from the Home Assistant config directory.

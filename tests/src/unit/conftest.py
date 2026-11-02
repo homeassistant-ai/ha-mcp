@@ -21,6 +21,32 @@ import pytest
 if TYPE_CHECKING:
     from ha_mcp.tools.component_api import ComponentCaps
 
+# annotatedyaml is a Home Assistant runtime dependency; the component imports
+# FastSafeLoader directly so the loader's real tag registry is the only source.
+# Unit tests run without HA, so provide its constructor registry before any
+# component import.
+if "annotatedyaml.loader" not in sys.modules:
+    _annotatedyaml = SimpleNamespace()
+    _annotatedyaml_loader = SimpleNamespace()
+
+    class _AnnotatedYamlLoader:
+        pass
+
+    _AnnotatedYamlLoader.yaml_constructors = {
+        "!include": None,
+        "!include_dir_list": None,
+        "!include_dir_named": None,
+        "!include_dir_merge_list": None,
+        "!include_dir_merge_named": None,
+        "!secret": None,
+        "!env_var": None,
+        "!input": None,
+    }
+    _annotatedyaml_loader.FastSafeLoader = _AnnotatedYamlLoader
+    _annotatedyaml.loader = _annotatedyaml_loader
+    sys.modules["annotatedyaml"] = _annotatedyaml
+    sys.modules["annotatedyaml.loader"] = _annotatedyaml_loader
+
 # Core's generated flow registry, which the component imports at module level
 # for its flow-helper set. Home Assistant is not a unit-test dependency, and the
 # module must exist before any test module imports the component. The helper

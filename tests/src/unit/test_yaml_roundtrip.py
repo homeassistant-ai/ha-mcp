@@ -33,10 +33,37 @@ sys.modules["homeassistant.components.persistent_notification"] = (
 sys.modules["homeassistant.helpers.storage"] = homeassistant.helpers.storage
 sys.modules["homeassistant.loader"] = homeassistant.loader
 
+# annotatedyaml is a Home Assistant runtime dependency, so the component imports
+# FastSafeLoader directly. Stub its constructor registry before importing yaml_rt.
+annotatedyaml = types.ModuleType("annotatedyaml")
+annotatedyaml_loader = types.ModuleType("annotatedyaml.loader")
+
+
+class _FastSafeLoader:
+    pass
+
+
+_FastSafeLoader.yaml_constructors = {
+    "!include": None,
+    "!include_dir_list": None,
+    "!include_dir_named": None,
+    "!include_dir_merge_list": None,
+    "!include_dir_merge_named": None,
+    "!secret": None,
+    "!env_var": None,
+    "!input": None,
+    "!future": None,
+    "tag:yaml.org,2002:str": None,
+}
+annotatedyaml_loader.FastSafeLoader = _FastSafeLoader
+annotatedyaml.loader = annotatedyaml_loader
+sys.modules["annotatedyaml"] = annotatedyaml
+sys.modules["annotatedyaml.loader"] = annotatedyaml_loader
+
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
-    _HA_TAG_FALLBACK,
-    _ha_tags_from_core,
+    _HA_TAGS,
     _TaggedScalar,
+    find_yaml_key_files,
     make_yaml,
     yaml_dumps,
     yaml_jsonify,
@@ -148,42 +175,9 @@ class TestEnvVarTag:
 
 
 class TestCoreTagDiscovery:
-    """The Core-loader branch must be pinned separately from the fallback."""
-
-    def _loader(self, monkeypatch, constructors):
-        loader = types.ModuleType("annotatedyaml.loader")
-        loader.FastSafeLoader = type(
-            "FastSafeLoader", (), {"yaml_constructors": constructors}
-        )
-        monkeypatch.setitem(sys.modules, "annotatedyaml.loader", loader)
-
-    def test_tags_come_from_core_loader(self, monkeypatch):
-        self._loader(
-            monkeypatch,
-            {
-                "!input": None,
-                "!future": None,
-                "tag:yaml.org,2002:str": None,
-                None: None,
-            },
-        )
-
-        assert _ha_tags_from_core() == ("!future", "!input")
-
-    def test_import_error_falls_back(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "annotatedyaml.loader", None)
-
-        assert _ha_tags_from_core() == _HA_TAG_FALLBACK
-
-    def test_loader_without_fast_safe_loader_falls_back(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "annotatedyaml.loader", types.ModuleType("x"))
-
-        assert _ha_tags_from_core() == _HA_TAG_FALLBACK
-
-    def test_loader_with_no_ha_tags_falls_back(self, monkeypatch):
-        self._loader(monkeypatch, {"tag:yaml.org,2002:str": None})
-
-        assert _ha_tags_from_core() == _HA_TAG_FALLBACK
+    def test_tags_come_from_core_loader(self):
+        assert "!input" in _HA_TAGS
+        assert tuple(sorted(_HA_TAGS)) == _HA_TAGS
 
 
 class TestInputTag:
@@ -457,3 +451,62 @@ class TestSeqIndentDetectionEdges:
 
         text = "name: My Home\ntemplate:\n  - sensor: []\n"
         assert detect_seq_indent(text) == (4, 2)
+
+
+class _AnnotatedDict(dict):
+    def __init__(self, path):
+        super().__init__()
+        self.__config_file__ = path
+        self.__line__ = 1
+
+
+class TestFindYamlKeyFiles:
+    def test_finds_top_level_key_in_config(self):
+        root = _AnnotatedDict("/config/configuration.yaml")
+        root["template"] = {}
+
+        assert find_yaml_key_files(root, "template") == ["/config/configuration.yaml"]
+
+    def test_finds_nested_package_mapping(self):
+        root = _AnnotatedDict("/config/configuration.yaml")
+        packages = _AnnotatedDict("/config/configuration.yaml")
+        nested = _AnnotatedDict("/config/custom_packages/nested/mcp.yaml")
+        nested["template"] = {}
+        packages["nested"] = nested
+        root["custom_packages"] = packages
+
+        assert find_yaml_key_files(root, "template") == [
+            "/config/custom_packages/nested/mcp.yaml"
+        ]
+
+    def test_dotted_path_uses_the_containing_mapping(self):
+        root = _AnnotatedDict("/config/configuration.yaml")
+        home = _AnnotatedDict("/config/configuration.yaml")
+        home["name"] = "Home"
+        root["homeassistant"] = home
+
+        assert find_yaml_key_files(root, "homeassistant.name") == [
+            "/config/configuration.yaml"
+        ]
+
+
+class TestFindYamlKeyEdges:
+    def test_empty_path_returns_nothing(self):
+        assert find_yaml_key_files({"template": {}}, "") == []
+
+    def test_scalar_root_returns_nothing(self):
+        assert find_yaml_key_files("not a mapping", "template") == []
+
+    def test_list_root_walks_mappings(self):
+        node = _AnnotatedDict("/config/configuration.yaml")
+        node["template"] = {}
+        assert find_yaml_key_files([node], "template") == ["/config/configuration.yaml"]
+
+    def test_mapping_without_source_annotation_is_ignored(self):
+        assert find_yaml_key_files({"template": {}}, "template") == []
+
+    def test_cycles_are_walked_once(self):
+        node = _AnnotatedDict("/config/configuration.yaml")
+        node["self"] = node
+        node["template"] = {}
+        assert find_yaml_key_files(node, "template") == ["/config/configuration.yaml"]

@@ -17,6 +17,7 @@ back door.
 """
 
 import asyncio
+import fnmatch
 import logging
 import re
 from typing import Annotated, Any
@@ -230,6 +231,36 @@ def _evaluate_read(
     return match, None
 
 
+async def _find_yaml_key_files(
+    client: Any, file: str, yaml_path: str
+) -> list[str] | None:
+    """Use Core's annotated load to find files defining ``yaml_path``.
+
+    ``None`` means the component cannot answer (or the load failed), so the
+    caller keeps the glob fallback. The result is filtered by the caller's
+    ``file`` pattern so a scoped search stays scoped.
+    """
+    try:
+        unwrapped = _unwrap_or_raise(
+            await call_mcp_tools_service(
+                client, "find_yaml_key", {"yaml_path": yaml_path}
+            ),
+            "find_yaml_key",
+            {"file": file},
+        )
+    except Exception:
+        logger.debug("find_yaml_key unavailable; using glob fallback", exc_info=True)
+        return None
+    files = unwrapped.get("files")
+    if not isinstance(files, list):
+        return None
+    return sorted(
+        str(path)
+        for path in files
+        if isinstance(path, str) and fnmatch.fnmatch(path, file)
+    )
+
+
 async def _list_files_matching(
     client: Any, file: str, directory: str, pattern: str
 ) -> list[str]:
@@ -389,8 +420,9 @@ class YamlReadTools:
                 default="configuration.yaml",
                 description=(
                     "Config-relative file to read. Accepts an fnmatch glob to "
-                    "search several files at once — 'packages/*.yaml' matches one "
-                    "directory level, not a nested tree."
+                    "search several files at once. When the component can load "
+                    "Core's config, key discovery follows packages and include "
+                    "directories recursively."
                 ),
             ),
         ] = "configuration.yaml",
@@ -441,7 +473,18 @@ class YamlReadTools:
 
             # Strictness is a property of each target, not of the request, so
             # the resolver reports which targets were named rather than expanded.
-            targets, resolve_warnings = await _resolve_target_files(self._client, file)
+            targets: list[tuple[str, bool]] | None = None
+            resolve_warnings: list[str] = []
+            if _has_glob(file):
+                discovered = await _find_yaml_key_files(
+                    self._client, file, yaml_path
+                )
+                if discovered:
+                    targets = [(path, True) for path in discovered]
+            if targets is None:
+                targets, resolve_warnings = await _resolve_target_files(
+                    self._client, file
+                )
             await refuse_reading_hidden_definitions(
                 self._client, "ha_config_get_yaml", [target for target, _ in targets]
             )

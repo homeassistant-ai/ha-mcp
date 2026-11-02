@@ -202,6 +202,24 @@ class TestYamlReadTagPreservation:
         assert "!include automations.yaml" in match["content"]
         assert match["parsed"] == "!include automations.yaml"
 
+    async def test_nested_package_key_is_discovered(self, mcp_client):
+        """Core's annotation load finds a key in a nested package folder."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "template",
+                    "file": "custom_packages/*.yaml",
+                    "include_parsed": True,
+                },
+            )
+
+        assert data["count"] >= 1
+        assert any(
+            match["file"].endswith("nested/mcp_nested_2926.yaml")
+            for match in data["matches"]
+        )
+
     async def test_input_tag_not_resolved(self, mcp_client):
         """Blueprint ``!input`` markers survive into the parsed view.
 
