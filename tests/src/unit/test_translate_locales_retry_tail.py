@@ -140,3 +140,27 @@ def test_late_answer_keeps_the_strings_it_got_right(
     assert results == {("messages", "greeting"): "Hallo"}
     assert failed == set()
     assert retries == []
+    assert sleeps == []
+
+
+def test_retry_answered_after_the_deadline_skips_its_pacing_wait(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    """The retry can return after the deadline; its pacing wait then paces
+    no request."""
+    monkeypatch.setattr(
+        translate_locales, "_DEADLINE", translate_locales.time.monotonic() + 3600
+    )
+
+    def answers_past_the_deadline(_prompt: str) -> dict[str, Any]:
+        monkeypatch.setattr(
+            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
+        )
+        return {"messages:greeting": "Hallo"}
+
+    monkeypatch.setattr(translate_locales, "_call_gemini", answers_past_the_deadline)
+    results: dict[tuple[str, str], str] = {}
+    failed = _accept(results, [])
+    assert results == {("messages", "greeting"): "Hallo"}, "the retry answered"
+    assert failed == set()
+    assert sleeps == []

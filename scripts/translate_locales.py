@@ -808,8 +808,7 @@ def _accept_or_retry(
     """Validate one translated string, retrying once with the reason."""
     reason = _validate(item, translated)
     if reason is not None and _out_of_time():
-        # _call_gemini refuses past the deadline anyway; skipping it here also
-        # skips the pacing sleep, which per rejected string outruns the slack.
+        # _call_gemini would refuse the retry; skip it and its per-string wait.
         reason += " (time budget exhausted; not retrying)"
     elif reason is not None:
         try:
@@ -824,7 +823,8 @@ def _accept_or_retry(
             print(f"  retry call failed: {exc}", file=sys.stderr)
         else:
             translated = retry.get(_string_id(item))
-        time.sleep(_SECONDS_BETWEEN_REQUESTS)
+        if not _out_of_time():  # past the deadline the wait paces no request
+            time.sleep(_SECONDS_BETWEEN_REQUESTS)
         reason = _validate(item, translated)
     if reason is None:
         results[(item.section, item.key)] = str(translated)
