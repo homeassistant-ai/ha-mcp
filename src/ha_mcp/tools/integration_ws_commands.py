@@ -25,6 +25,31 @@ _LIST_SUGGESTION = (
 )
 
 
+def reject_ws_command_conflicts(
+    entry_id: str | None, ws_command: str | None, **others: object
+) -> None:
+    """Reject a ws_command call without entry_id and ws_command, or with another mode."""
+    problems = [
+        f"a ws_command call needs {name}"
+        for name, value in (("entry_id", entry_id), ("ws_command", ws_command))
+        if value is None
+    ]
+    if given := [name for name, value in others.items() if value is not None]:
+        problems.append(f"ws_command takes no {', '.join(given)}")
+    if problems:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "; ".join(problems),
+                context={"entry_id": entry_id, "ws_command": ws_command},
+                suggestions=[
+                    "Example: ha_set_integration(entry_id='abc123', "
+                    "ws_command='knx/get_knx_project')"
+                ],
+            )
+        )
+
+
 async def attach_ws_commands(client: Any, resp: dict[str, Any]) -> None:
     """Add the entry's ``<domain>/`` commands with Core's request schemas."""
     domain = (resp.get("entry") or {}).get("domain")
@@ -55,7 +80,9 @@ async def attach_ws_commands(client: Any, resp: dict[str, Any]) -> None:
         )
         return
     commands = listing["commands"]
-    warnings = {text for row in commands for text in row.pop("warnings", [])}
+    warnings: set[str] = set()
+    for row in commands:
+        warnings.update(row.pop("warnings", []))
     resp["ws_commands"] = commands
     if warnings:
         resp.setdefault("warnings", []).extend(sorted(warnings))
@@ -76,7 +103,7 @@ async def send_ws_command(
                 context=context,
             )
         )
-    command_payload(command, payload)
+    message = command_payload(command, payload)
     entry = await client.get_config_entry(entry_id)
     domain = entry.get("domain")
     refuse_component_entry(
@@ -105,7 +132,7 @@ async def send_ws_command(
                 suggestions=[_LIST_SUGGESTION],
             )
         )
-    result = await client.send_websocket_message({"type": command, **payload})
+    result = await client.send_websocket_message(message)
     if not result.get("success"):
         raise_tool_error(
             create_error_response(

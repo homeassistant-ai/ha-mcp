@@ -78,7 +78,11 @@ from .integration_schema import (
     options_from_form_flow,
     redact_component_options,
 )
-from .integration_ws_commands import attach_ws_commands, send_ws_command
+from .integration_ws_commands import (
+    attach_ws_commands,
+    reject_ws_command_conflicts,
+    send_ws_command,
+)
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import get_logger_levels, websocket_error_message
@@ -167,31 +171,6 @@ def _reject_set_integration_mode_conflicts(
                 "(enable/disable) or 'config' (update options)",
                 suggestions=[
                     "Use ha_get_integration() to find valid config entry IDs",
-                ],
-            )
-        )
-
-
-def _reject_ws_command_conflicts(
-    entry_id: str | None, ws_command: str | None, **others: object
-) -> None:
-    """Reject a ws_command call without entry_id and ws_command, or with another mode."""
-    problems = [
-        f"a ws_command call needs {name}"
-        for name, value in (("entry_id", entry_id), ("ws_command", ws_command))
-        if value is None
-    ]
-    if given := [name for name, value in others.items() if value is not None]:
-        problems.append(f"ws_command takes no {', '.join(given)}")
-    if problems:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "; ".join(problems),
-                context={"entry_id": entry_id, "ws_command": ws_command},
-                suggestions=[
-                    "Example: ha_set_integration(entry_id='abc123', "
-                    "ws_command='knx/get_knx_project')"
                 ],
             )
         )
@@ -1722,17 +1701,19 @@ class IntegrationTools:
         - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
         - KNX project: ha_set_integration(entry_id="abc123", ws_command="knx/get_knx_project")
         """
+        # Only reconfigure takes these; every other mode refuses them.
+        reconfigure_guards: dict[str, Any] = {
+            "confirm_token": confirm_token,
+            "expected_device_id": expected_device_id,
+            "expected_unique_id": expected_unique_id,
+            "expected_mac": expected_mac,
+            "expected_entity_ids": expected_entity_ids,
+        }
         try:
             _reject_log_persistence_without_level(log_persistence, log_level)
             if ws_command is not None or ws_data is not None:
-                reject_reconfigure_only_parameters(
-                    confirm_token=confirm_token,
-                    expected_device_id=expected_device_id,
-                    expected_unique_id=expected_unique_id,
-                    expected_mac=expected_mac,
-                    expected_entity_ids=expected_entity_ids,
-                )
-                _reject_ws_command_conflicts(
+                reject_reconfigure_only_parameters(**reconfigure_guards)
+                reject_ws_command_conflicts(
                     entry_id,
                     ws_command,
                     domain=domain,
@@ -1754,13 +1735,7 @@ class IntegrationTools:
             if describe or any(
                 p is not None for p in (menu_choice, subentry_type, subentry_id)
             ):
-                reject_reconfigure_only_parameters(
-                    confirm_token=confirm_token,
-                    expected_device_id=expected_device_id,
-                    expected_unique_id=expected_unique_id,
-                    expected_mac=expected_mac,
-                    expected_entity_ids=expected_entity_ids,
-                )
+                reject_reconfigure_only_parameters(**reconfigure_guards)
                 modes = {
                     "enabled": enabled is not None,
                     "config": config is not None,
@@ -1778,13 +1753,7 @@ class IntegrationTools:
                     other_modes=[name for name, given in modes.items() if given],
                 )
             if log_level is not None:
-                reject_reconfigure_only_parameters(
-                    confirm_token=confirm_token,
-                    expected_device_id=expected_device_id,
-                    expected_unique_id=expected_unique_id,
-                    expected_mac=expected_mac,
-                    expected_entity_ids=expected_entity_ids,
-                )
+                reject_reconfigure_only_parameters(**reconfigure_guards)
                 return await set_log_level(
                     self._client,
                     entry_id,
@@ -1802,20 +1771,10 @@ class IntegrationTools:
                     domain=domain,
                     enabled=enabled,
                     config=config,
-                    expected_device_id=expected_device_id,
-                    expected_unique_id=expected_unique_id,
-                    expected_mac=expected_mac,
-                    expected_entity_ids=expected_entity_ids,
-                    confirm_token=confirm_token,
+                    **reconfigure_guards,
                 )
 
-            reject_reconfigure_only_parameters(
-                confirm_token=confirm_token,
-                expected_device_id=expected_device_id,
-                expected_unique_id=expected_unique_id,
-                expected_mac=expected_mac,
-                expected_entity_ids=expected_entity_ids,
-            )
+            reject_reconfigure_only_parameters(**reconfigure_guards)
 
             _reject_set_integration_mode_conflicts(entry_id, domain, enabled, config)
 
