@@ -315,20 +315,27 @@ def _flow_failure_context(
     return context
 
 
+def redacted_step(step: dict[str, Any]) -> dict[str, Any]:
+    """``step`` with its form's stored secrets redacted under redact_secrets.
+
+    A form carries the persisted values in ``suggested_value`` (#2157).
+    """
+    schema = step.get("data_schema")
+    if isinstance(schema, list) and redaction_enabled():
+        return {**step, "data_schema": redact_flow_schema(schema)}
+    return step
+
+
 async def raise_form_errors(
     client: Any, flow: FlowRef | None, flow_id: str, current_step: dict[str, Any]
 ) -> NoReturn:
     """Raise for a form HA returned with ``errors``, with Core's text for each."""
     errors = current_step["errors"]
-    schema = current_step.get("data_schema")
-    if isinstance(schema, list) and redaction_enabled():
-        # The form carries the stored values in suggested_value (#2157).
-        schema = redact_flow_schema(schema)
     context: dict[str, Any] = {
         "flow_id": flow_id,
         "step_id": current_step.get("step_id"),
         "errors": errors,
-        "data_schema": schema,
+        "data_schema": redacted_step(current_step).get("data_schema"),
     }
     if isinstance(errors, dict):
         texts = await _flow_texts(client, flow, current_step, "error", errors)

@@ -30,6 +30,7 @@ from .config_entry_flow_errors import (
     abort_reason_text,
     raise_flow_abort,
     raise_form_errors,
+    redacted_step,
 )
 from .config_entry_flow_form import (
     _MENU_SELECTION_KEYS,
@@ -233,7 +234,7 @@ def _raise_no_answer(
                 "flow_id": flow_id,
                 "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
                 "submitted_keys": sorted(payload),
-                "details": current_step,
+                "details": redacted_step(current_step),
             },
         )
     )

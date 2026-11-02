@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -372,6 +373,33 @@ async def test_a_lost_submit_answer_is_possibly_applied_in_every_flow_kind(
     )
     getattr(client, submit).assert_awaited_once()
     getattr(client, abort).assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("run", "submit", "abort"), _FLOW_KINDS)
+async def test_a_lost_submit_answer_redacts_the_forms_password_value(
+    monkeypatch: pytest.MonkeyPatch, run: Any, submit: str, abort: str
+) -> None:
+    # The submitted form rides along as details, and an options or reconfigure
+    # form carries the stored values in suggested_value.
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    secret = {
+        "name": "api_key",
+        "selector": {"text": {"type": "password"}},
+        "description": {"suggested_value": "sk-LIVE"},
+    }
+    client = _client(strings={})
+    getattr(client, submit).side_effect = TimeoutError()
+
+    with pytest.raises(ToolError) as exc_info:
+        await run(client, {**_FORM, "data_schema": [secret]})
+
+    assert "sk-LIVE" not in str(exc_info.value)
+    details = json.loads(str(exc_info.value))["details"]
+    assert details["data_schema"][0]["name"] == "api_key"
 
 
 @pytest.mark.asyncio
