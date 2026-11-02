@@ -206,6 +206,30 @@ async def test_tool_warns_when_glob_expansion_fails_after_discovery():
     assert out["warnings"] == ["Glob expansion failed: listing failed"]
 
 
+async def test_listing_failure_names_the_bracketed_literal():
+    """A named literal must not vanish behind a generic listing failure."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {
+                "success": True,
+                "files": ["packages/svc1.yaml"],
+            },
+            "list_files": {"success": False, "error": "listing failed"},
+            "read_file": _read_ok("template:\n"),
+        }
+    )
+
+    out = await fn(yaml_path="template", file="packages/svc[12].yaml")
+
+    assert out["count"] == 1
+    assert out["warnings"] == [
+        "Glob expansion failed: listing failed",
+        "packages/svc[12].yaml was not searched because its listing failed.",
+    ]
+
+
 async def test_tool_warns_when_discovery_is_unavailable():
     """A fallback-only search must say subfolders may be missing."""
     from .test_yaml_read_tool import _make_tool, _read_ok
