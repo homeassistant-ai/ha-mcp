@@ -514,6 +514,15 @@ class TestFindYamlKeyEdges:
         node["template"] = {}
         assert find_yaml_key_files([node], "template") == ["/config/configuration.yaml"]
 
+    def test_key_nested_below_a_top_level_mapping_is_not_a_root(self):
+        """A nested ``sensor`` under ``template`` is not a top-level sensor."""
+        root = _AnnotatedDict("/config/configuration.yaml")
+        template = _AnnotatedDict("/config/configuration.yaml")
+        template["sensor"] = []
+        root["template"] = template
+
+        assert find_yaml_key_files(root, "sensor") == []
+
     def test_mapping_without_source_annotation_is_ignored(self):
         assert find_yaml_key_files({"template": {}}, "template") == []
 

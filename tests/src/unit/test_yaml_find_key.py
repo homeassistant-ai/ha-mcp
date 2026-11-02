@@ -203,7 +203,9 @@ async def test_tool_warns_when_glob_expansion_fails_after_discovery():
     out = await fn(yaml_path="template", file="custom_packages/*.yaml")
 
     assert out["count"] == 1
-    assert out["warnings"] == ["Glob expansion failed: listing failed"]
+    assert out["warnings"] == [
+        "Glob expansion failed: listing failed. Files matching the pattern may be missing from this result."
+    ]
 
 
 async def test_listing_failure_names_the_bracketed_literal():
@@ -225,8 +227,32 @@ async def test_listing_failure_names_the_bracketed_literal():
 
     assert out["count"] == 1
     assert out["warnings"] == [
-        "Glob expansion failed: listing failed",
+        "Glob expansion failed: listing failed. Files matching the pattern may be missing from this result.",
         "packages/svc[12].yaml was not searched because its listing failed.",
+    ]
+
+
+async def test_listing_failure_does_not_flag_a_discovered_bracketed_literal():
+    """A discovered named literal is read, so it is not reported unsearched."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {
+                "success": True,
+                "files": ["packages/svc[12].yaml"],
+            },
+            "list_files": {"success": False, "error": "listing failed"},
+            "read_file": _read_ok("template:\n"),
+        }
+    )
+
+    out = await fn(yaml_path="template", file="packages/svc[12].yaml")
+
+    assert out["count"] == 1
+    assert out["warnings"] == [
+        "Glob expansion failed: listing failed. Files matching the pattern "
+        "may be missing from this result."
     ]
 
 
@@ -308,7 +334,10 @@ async def test_tool_warns_when_a_discovered_path_is_not_readable():
     out = await fn(yaml_path="shell_command.mcp_secret", file="custom_packages/*.yaml")
 
     assert out["count"] == 0
-    assert any("annotated as defining" in warning for warning in out["warnings"])
+    assert any(
+        warning.startswith("custom_packages/merged.yaml is annotated as defining")
+        for warning in out["warnings"]
+    )
 
 
 def test_failure_reason_falls_back_outside_the_envelope():

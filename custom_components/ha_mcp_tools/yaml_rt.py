@@ -252,24 +252,42 @@ def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
 
 
 def _walk_yaml_mappings(
-    node: Any, parts: list[str], seen: set[int], found: set[str]
+    node: Any,
+    parts: list[str],
+    seen: set[int],
+    found: set[str],
+    parent_file: str | None = None,
 ) -> None:
+    """Walk mappings, matching ``parts`` only at the top of each file.
+
+    A definition is a top-level key of the file that writes it. Matching every
+    nested mapping would report a key such as ``sensor`` under ``template`` as
+    a top-level definition, and the read addressed from that file cannot
+    supply the path. A mapping whose ``__config_file__`` differs from its
+    parent's starts a new file, so it is a root too.
+    """
     if id(node) in seen:
         return
     seen.add(id(node))
+    node_file = getattr(node, "__config_file__", None)
+    at_file_root = parent_file is None or (
+        isinstance(node_file, str) and node_file != parent_file
+    )
     children: Any
     if isinstance(node, dict):
-        matched, path = _key_value(node, parts)
-        if matched and path:
-            found.add(path)
+        if at_file_root:
+            matched, path = _key_value(node, parts)
+            if matched and path:
+                found.add(path)
         children = node.values()
     elif isinstance(node, list):
         children = node
     else:
         return
+    child_parent = node_file if isinstance(node_file, str) else parent_file
     for child in children:
         if isinstance(child, (dict, list)):
-            _walk_yaml_mappings(child, parts, seen, found)
+            _walk_yaml_mappings(child, parts, seen, found, child_parent)
 
 
 def find_yaml_key_files(config: Any, yaml_path: str) -> list[str]:

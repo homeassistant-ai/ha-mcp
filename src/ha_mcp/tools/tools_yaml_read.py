@@ -323,7 +323,10 @@ async def _resolve_all_targets(
     except Exception as err:
         if not targets:
             raise
-        resolver_warnings = [f"Glob expansion failed: {_failure_reason(err)}"]
+        resolver_warnings = [
+            f"Glob expansion failed: {_failure_reason(err)}. Files matching "
+            "the pattern may be missing from this result."
+        ]
         if _names_a_file(file.rpartition("/")[2]) and file not in discovered_paths:
             resolver_warnings.append(
                 f"{file} was not searched because its listing failed."
