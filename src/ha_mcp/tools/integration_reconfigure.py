@@ -2,7 +2,7 @@
 
 Split out of ``tools_integrations.py`` when that module passed 3,500 lines.
 Holds the whole reconfigure surface: the parameters legal only in this mode,
-the confirm-token handshake, the read-only preflight response, and the
+the confirm-token handshake, the preflight response, and the
 runner that drives ``config_entry_reconfigure.reconfigure_config_entry``.
 
 ``tools_integrations`` keeps the ``ha_set_integration`` tool itself and
@@ -226,9 +226,10 @@ class ReconfigureRunner:
         entry in place, preserving its entry/device/entity relationships.
 
         ``confirm_token`` alone is the handshake, matching
-        ``ha_config_set_yaml``: omitted runs the read-only preflight, which
-        reads the flow's first form and aborts the flow, and returns a token;
-        supplied applies. Auto-backup follows the normal
+        ``ha_config_set_yaml``: omitted runs the preflight, which starts the
+        reconfigure flow, reads its first form and aborts it (a flow Home
+        Assistant finishes at its start is reported as applied_but_unverified),
+        and returns a token; supplied applies. Auto-backup follows the normal
         integration backup policy and is captured only after the token
         validates, so a rejected confirmation leaves no snapshot behind. The
         returned rollback metadata describes repeating the official flow with

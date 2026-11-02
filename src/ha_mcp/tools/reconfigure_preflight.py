@@ -56,8 +56,8 @@ async def read_reconfigure_form(
     flow = FlowRef(domain, "config")
     if step.get("type") == "abort":
         reason = step.get("reason")
-        # Core aborts with a success reason only after it updated and
-        # reloaded the entry, without any value from the caller.
+        # Core aborts with a success reason only after it updated the entry
+        # and scheduled its reload, without any value from the caller.
         applied = reason in _RECONFIGURE_SUCCESS_REASONS
         raise_tool_error(
             create_error_response(

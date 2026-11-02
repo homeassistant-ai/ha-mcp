@@ -20,11 +20,13 @@ a different problem — it commits in place and Home Assistant reloads afterward
 — and lives in ``config_entry_reconfigure``, which shares this module's
 sentinel rejection and ``config_entry_flow_abort``'s flow abort.
 
-The step machinery those entry points drive lives in five sibling modules,
-imported in one direction only (menu <- form <- walker <- abort <- here, and
-progress <- walker):
+The step machinery those entry points drive lives in six sibling modules,
+imported in one direction only (menu <- form <- walker <- abort <- here,
+progress <- walker, and introspect <- walker, abort and here):
 
 - ``config_entry_flow_abort``: aborting a failed walk's flow, shielded
+- ``config_entry_flow_introspect``: the flow-type vocabulary, the abort
+  timeout, and the read-only helper flow introspection
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
 - ``config_entry_flow_progress``: waiting out a progress step within a budget
@@ -394,6 +396,8 @@ async def _create_snapshot_helper(
             submit_fn=partial(progress.submit, client),
             helper_type=helper_type,
             complete_snapshot=True,
+            flow=None,
+            refuse_progress=True,
         )
         entry = result["entry"].get("result", {})
         return {
@@ -841,8 +845,10 @@ async def _update_config_entry_options(
             helper_type=expected_domain,
             keep_current_values=progress is None,
             complete_snapshot=progress is not None,
-            # A restore reports its own refusal, never the flow's text.
+            # A restore reports its own refusal, never the flow's text, and
+            # refuses a progress step: its tracker sees submits, not polls.
             flow=FlowRef(actual_domain, "options") if progress is None else None,
+            refuse_progress=progress is not None,
         )
     except (Exception, asyncio.CancelledError) as flow_err:
         if progress is not None:

@@ -25,8 +25,10 @@ class FlowRef:
     """Where a flow's strings live: ``component.<domain>.<path>``.
 
     ``path`` is ``config`` (config and reconfigure flows), ``options`` or
-    ``config_subentries.<type>``. A subentry flow knows only its parent
-    entry, so it names ``entry_id`` and the domain is read when needed.
+    ``config_subentries.<type>``. An options or subentry flow can name its
+    entry's ``entry_id`` and leave ``domain`` ``None``: the error, abort and
+    progress texts then read the domain from the entry, while
+    ``describe_form`` shows no help text.
     """
 
     domain: str | None
@@ -86,8 +88,9 @@ class ReconfigureStatus(StrEnum):
     """Outcome vocabulary for the ``ha_set_integration`` reconfigure mode.
 
     Ordered by how far the request got. Everything from ``APPLIED_*`` onward
-    means Home Assistant committed the change, so a caller must not blindly
-    retry those.
+    means Home Assistant committed the change, or may have, so a caller must
+    not blindly retry those. Every flow walk also uses
+    ``APPLIED_BUT_UNVERIFIED`` for a submit or poll whose answer was lost.
     """
 
     #: Preflight: validated, the flow only read and aborted, nothing applied.
@@ -106,7 +109,8 @@ class ReconfigureStatus(StrEnum):
     APPLIED_IDENTITY_MISMATCH = "applied_identity_mismatch"
     #: Committed, identity intact, and the entry reloaded cleanly.
     APPLIED_AND_VERIFIED = "applied_and_verified"
-    #: Committed, but the result could not be fully verified.
+    #: Committed or maybe committed: the answer was lost, or the result could
+    #: not be fully verified.
     APPLIED_BUT_UNVERIFIED = "applied_but_unverified"
 
 
@@ -201,9 +205,9 @@ async def _raise_flow_api_error(
     """Translate an HA 4xx during a flow submit into a structured ToolError.
 
     For 400/422 responses, parses ``response_data`` for field-level info
-    via ``_parse_flow_api_error``. When the body is unstructured (no
-    ``errors`` map), attaches a ``data_schema`` so the caller has actionable
-    information.
+    via ``_parse_flow_api_error``. Attaches a ``data_schema`` whenever one is
+    found, next to ``field_errors`` or in place of them, so the caller sees
+    what Home Assistant accepts.
 
     The schema is the live step's own whenever it carries one, so a later
     form's rejection shows that form; a fresh introspection flow is the

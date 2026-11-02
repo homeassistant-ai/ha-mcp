@@ -272,6 +272,7 @@ class TestHandleFlowStepsOptionsFlowError:
                 config={"window_size": 1},
                 submit_fn=submit_fn,
                 helper_type="filter",
+                flow=None,
             )
 
         body = _parse_tool_error(exc_info.value)
@@ -311,6 +312,7 @@ class TestHandleFlowStepsOptionsFlowError:
                 submit_fn=submit_fn,
                 helper_type="shelly",
                 is_reconfigure=True,
+                flow=None,
             )
 
         body = _parse_tool_error(exc_info.value)
@@ -326,7 +328,7 @@ class TestHandleFlowStepsOptionsFlowError:
 
 class TestUndrivableStepTypes:
     """External (browser/OAuth) steps cannot be driven over MCP, nor can a
-    progress step in a walk without a FlowRef (a snapshot restore).
+    progress step in a walk that refuses one (a snapshot restore).
 
     ``_handle_flow_steps`` must surface them as SERVICE_CALL_FAILED with an
     actionable "complete in the HA UI" suggestion — NOT fall through to the
@@ -354,6 +356,8 @@ class TestUndrivableStepTypes:
                 initial_step=initial_step,
                 config={},
                 helper_type="some_oauth_integration",
+                flow=None,
+                refuse_progress=True,
             )
 
         body = _parse_tool_error(exc_info.value)

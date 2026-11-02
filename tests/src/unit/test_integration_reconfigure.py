@@ -2157,6 +2157,7 @@ async def test_subentry_reconfigure_rejects_unconsumed_values() -> None:
             {"type": "abort", "reason": "reconfigure_successful"},
             {"unexpected": True},
             is_reconfigure=True,
+            flow=None,
         )
 
     payload = json.loads(str(exc_info.value))
@@ -2472,6 +2473,7 @@ async def test_subentry_reconfigure_rejects_create_entry_result() -> None:
             {"type": "create_entry", "result": {"subentry_id": "new"}},
             {},
             is_reconfigure=True,
+            flow=None,
         )
 
     payload = json.loads(str(exc_info.value))

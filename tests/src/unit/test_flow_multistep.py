@@ -32,11 +32,9 @@ from ha_mcp.tools.config_entry_flow_form import (
     _handle_form_step,
     _ReuseState,
 )
-from ha_mcp.tools.config_entry_flow_walker import (
-    _handle_config_subentry_flow_steps,
-    _handle_flow_steps,
-    _submit_step,
-)
+from ha_mcp.tools.config_entry_flow_walker import _submit_step
+
+from ._flow_walks import _handle_config_subentry_flow_steps, _handle_flow_steps
 
 
 class TestExtractSchemaFieldNames:

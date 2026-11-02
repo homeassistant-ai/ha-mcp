@@ -401,20 +401,43 @@ def _collect_stored(value: Any, listed: frozenset[str], secret: bool) -> set[str
     return known_values_for_option_item(value) if secret else set()
 
 
-def sentinel_option_keys(
-    options: Any, _prefix: str = "", _match: Callable[[Any], bool] = carries_sentinel
-) -> list[str]:
+def sentinel_option_keys(options: Any) -> list[str]:
     """Dotted paths of submitted option values that equal a redaction sentinel.
 
     Used by ``ha_manage_app`` config mode to reject round-tripping a
     redacted read back into a live add-on config.
     """
+    return _matching_option_keys(options, carries_sentinel)
+
+
+#: What the ha_mcp_tools component writes over an option value equal to a
+#: ``secrets.yaml`` entry. Like a sentinel, it is no usable value to write.
+_COMPONENT_REDACTED = "**redacted**"
+
+
+def _is_placeholder(value: Any) -> bool:
+    return carries_sentinel(value) or value == _COMPONENT_REDACTED
+
+
+def placeholder_option_keys(options: Any) -> list[str]:
+    """Dotted paths of option values that are a redaction sentinel or the
+    component's ``**redacted**`` scrub.
+
+    For config-entry options, which the component may have served.
+    """
+    return _matching_option_keys(options, _is_placeholder)
+
+
+def _matching_option_keys(
+    options: Any, match: Callable[[Any], bool], prefix: str = ""
+) -> list[str]:
+    """Dotted paths of the values in an options dict that ``match`` accepts."""
     keys: list[str] = []
     if not isinstance(options, dict):
         return keys
     for name, value in options.items():
-        path = f"{_prefix}.{name}" if _prefix else str(name)
-        _collect_matching_paths(value, path, keys, _match)
+        path = f"{prefix}.{name}" if prefix else str(name)
+        _collect_matching_paths(value, path, keys, match)
     return keys
 
 
@@ -429,27 +452,10 @@ def _collect_matching_paths(
     if match(value):
         keys.append(path)
     elif isinstance(value, dict):
-        keys.extend(sentinel_option_keys(value, path, match))
+        keys.extend(_matching_option_keys(value, match, path))
     elif isinstance(value, list):
         for idx, item in enumerate(value):
             _collect_matching_paths(item, f"{path}[{idx}]", keys, match)
-
-
-#: What the ha_mcp_tools component writes over an option value equal to a
-#: ``secrets.yaml`` entry. Like a sentinel, it is no usable value to write.
-_COMPONENT_REDACTED = "**redacted**"
-
-
-def _is_placeholder(value: Any) -> bool:
-    return carries_sentinel(value) or value == _COMPONENT_REDACTED
-
-
-def placeholder_option_keys(options: Any) -> list[str]:
-    """``sentinel_option_keys`` plus paths holding the component's scrub.
-
-    For config-entry options, which the component may have served.
-    """
-    return sentinel_option_keys(options, _match=_is_placeholder)
 
 
 # ---------------------------------------------------------------------------

@@ -85,7 +85,8 @@ async def fetch_config_entries(
     """One ``config_entries`` read; ``None`` when the answer cannot be trusted.
 
     Pass ``entry_id`` for the single entry (no rows ⇒ no such entry) or
-    ``domain`` to filter the list (Core's exact match); neither lists all.
+    ``domain`` to filter the list (the component's exact comparison); neither
+    lists all.
 
     ``None`` means "use your legacy path": no capability, a downgrade
     (``unknown_command`` also invalidates the cached caps), any other command

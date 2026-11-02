@@ -94,6 +94,8 @@ async def _walk_snapshot(
             submit_fn=partial(progress.submit, client),
             is_reconfigure=subentry_id is not None,
             complete_snapshot=True,
+            flow=None,
+            refuse_progress=True,
         )
     except (Exception, asyncio.CancelledError) as err:
         failure = err if isinstance(err, OptionsFlowError) else progress.failure()

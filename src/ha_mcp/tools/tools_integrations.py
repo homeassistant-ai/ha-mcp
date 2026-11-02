@@ -546,6 +546,10 @@ class IntegrationTools:
         Without an entry_id: Lists all configured integrations with optional filters.
         With an entry_id: Returns detailed information including full options/configuration.
 
+        WHEN NOT TO USE:
+        - Changing an entry, or describing a setup form or a form behind a
+          menu: use ha_set_integration (describe=True for a form).
+
         EXAMPLES:
         - List / search: ha_get_integration(query="zigbee")
         - Get an entry with its editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
@@ -1496,7 +1500,7 @@ class IntegrationTools:
                 description=(
                     "Use the existing config entry's official reconfigure flow "
                     "(its connection settings) instead of its options flow. "
-                    "Without confirm_token this is a preflight that applies "
+                    "Without confirm_token this is a preflight that submits "
                     "nothing and returns one, with the flow's first form."
                 ),
             ),

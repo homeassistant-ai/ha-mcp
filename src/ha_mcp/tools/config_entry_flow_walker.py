@@ -161,7 +161,7 @@ async def _submit_step(
 
 async def _wait_for_progress(
     client: Any,
-    flow: FlowRef,
+    flow: FlowRef | None,
     flow_id: str,
     step: dict[str, Any],
     *,
@@ -170,7 +170,10 @@ async def _wait_for_progress(
     """``wait_for_progress`` with each GET classified like a submit.
 
     The GET re-runs the flow, so the step after ``progress_done`` may commit.
+    Raises ``ValueError`` without a ``flow``: the poll URL depends on it.
     """
+    if flow is None:
+        raise ValueError("Polling a progress step needs the flow's FlowRef")
 
     async def poll(url: str, polled: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -505,9 +508,10 @@ async def _wait_out_progress_or_refuse(
     current_step: dict[str, Any],
     *,
     is_reconfigure: bool,
+    refuse_progress: bool,
 ) -> dict[str, Any]:
     result_type = current_step.get("type")
-    if result_type not in PROGRESS_STEP_TYPES or flow is None:
+    if result_type not in PROGRESS_STEP_TYPES or refuse_progress:
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -539,7 +543,8 @@ async def _handle_flow_steps(
     is_reconfigure: bool = False,
     keep_current_values: bool = False,
     complete_snapshot: bool = False,
-    flow: FlowRef | None = None,
+    flow: FlowRef | None,
+    refuse_progress: bool = False,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps.
 
@@ -598,9 +603,13 @@ async def _handle_flow_steps(
             last (``_OptionsFlowProgress``); skips the no-key-consumed check
             and the leftover-key warnings and reconfigure error, since a
             flow without a marked last form is verified by readback instead.
-        flow: Where the flow's strings live, so a form's ``errors`` and an
-            abort ``reason`` come back with Core's text next to the key
-            (``error_text`` / ``reason_text``). ``None`` keeps the raw keys.
+        flow: Where the flow lives: a form's ``errors`` and an abort
+            ``reason`` come back with Core's text next to the key
+            (``error_text`` / ``reason_text``), and a progress step is polled
+            at its flow resource. ``None`` keeps the raw keys, and a progress
+            step then raises ``ValueError`` unless ``refuse_progress`` is set.
+        refuse_progress: Refuse a progress step instead of polling it, as
+            external steps always are.
         is_reconfigure: Whether this is the official reconfigure flow — the
             same mode HA uses for reauth, so both ``reconfigure_successful``
             and ``reauth_successful`` count as its success aborts. In this
@@ -740,7 +749,12 @@ async def _handle_flow_steps(
 
         elif result_type in _UNDRIVABLE_STEP_TYPES:
             current_step = await _wait_out_progress_or_refuse(
-                client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
+                client,
+                flow,
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                refuse_progress=refuse_progress,
             )
 
         else:
@@ -863,7 +877,7 @@ async def _handle_config_subentry_flow_steps(
     *,
     is_reconfigure: bool,
     keep_current_values: bool = False,
-    flow: FlowRef | None = None,
+    flow: FlowRef | None,
 ) -> dict[str, Any]:
     """Walk a config subentry flow and accept HA's reconfigure-success abort.
 
@@ -886,6 +900,9 @@ async def _handle_config_subentry_flow_steps(
     :func:`_handle_flow_steps` (issue #2254): reconfiguring a subentry
     resubmits the step's own value for every declared field the caller named
     no key for, so a partial patch stops wiping the rest of the subentry.
+
+    ``flow`` has the same meaning as in :func:`_handle_flow_steps`; a
+    progress step is always polled, so it needs one.
     """
     validate_step_values(config)
     remaining_config = dict(config)
@@ -983,7 +1000,7 @@ async def _handle_config_subentry_flow_steps(
             )
             continue
 
-        if result_type in PROGRESS_STEP_TYPES and flow is not None:
+        if result_type in PROGRESS_STEP_TYPES:
             current_step = await _wait_for_progress(
                 client, flow, flow_id, current_step, is_reconfigure=is_reconfigure
             )

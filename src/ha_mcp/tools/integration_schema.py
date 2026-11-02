@@ -152,7 +152,8 @@ async def redact_component_options(
 
 
 def _entry_domain(entry: dict[str, Any] | None) -> str | None:
-    # None, never "": the flow's strings then resolve the domain by entry_id.
+    # None, never "": flow texts (errors, aborts, progress) then read the
+    # domain by entry_id; describe_form shows no help text without one.
     domain = (entry or {}).get("domain")
     return domain if isinstance(domain, str) and domain else None
 
