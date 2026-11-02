@@ -52,7 +52,7 @@ async def _flow_texts(
     ``keys`` maps an output key (a field name, or ``reason_text`` /
     ``progress_action_text``) to its translation key; a key Core ships no
     string for is left out, so the caller keeps the raw key. A failed strings
-    read gives ``warnings`` instead.
+    read, or a failed read of the entry's domain, gives ``warnings`` instead.
     """
     if flow is None or not keys:
         return {}
@@ -69,9 +69,15 @@ async def _flow_texts(
         try:
             domain = (await client.get_config_entry(flow.entry_id)).get("domain")
         except Exception:  # the text is best effort
-            logger.debug(
+            logger.warning(
                 "domain of %s for flow text failed", flow.entry_id, exc_info=True
             )
+            return {
+                "warnings": [
+                    f"The domain of config entry {flow.entry_id} could not be "
+                    "read, so Home Assistant's error and reason texts are missing"
+                ]
+            }
     if not isinstance(domain, str):
         return {}
     strings = await fetch_flow_strings(client, domain, path.split(".")[0])

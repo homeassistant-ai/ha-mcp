@@ -919,3 +919,28 @@ async def test_an_entry_without_a_domain_reads_the_reason_under_its_entry() -> N
     assert resp["subentry_schema"]["reason_text"] == "None."
     sent = [c.args[0] for c in client.send_websocket_message.await_args_list]
     assert all(m["integration"] == ["ollama"] for m in sent)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> None:
+    client = _client({"type": "abort", "flow_id": "f1", "reason": "no_models"})
+    client.get_config_entry.side_effect = HomeAssistantAPIError(
+        "API error: 500", status_code=500
+    )
+    resp: dict[str, Any] = {"entry": {"entry_id": "e1"}}
+
+    await fetch_config_subentry_schema(
+        client,
+        "e1",
+        resp,
+        subentry_type="conversation",
+        subentry_id=None,
+        show_advanced_options=False,
+    )
+
+    assert resp["subentry_schema"]["aborted"] == "no_models"
+    assert "reason_text" not in resp["subentry_schema"]
+    assert resp["warnings"] == [
+        "The domain of config entry e1 could not be read, so Home Assistant's "
+        "error and reason texts are missing"
+    ]
