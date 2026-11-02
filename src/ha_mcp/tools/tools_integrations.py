@@ -66,6 +66,7 @@ from .helpers import (
     validate_identifier_not_empty,
     ws_failure_code,
 )
+from .ignored_entries import normalize_ignored_entry
 from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_reconfigure import (
     ReconfigureRunner,
@@ -266,18 +267,8 @@ def _split_component_entry_row(
     return entry, subentries
 
 
-def _normalize_ignored_entry(entry: dict[str, Any]) -> None:
-    """HA-MCP policy: report an ignored entry as having no options flow (in place).
-
-    Core never sets it up, so its options flow can raise (#2927), and Core's
-    ``supports_options`` asks only the domain's flow handler, never ``source``.
-    The frontend lists ignored entries apart, with only a stop-ignoring action.
-    """
-    if entry.get("source") == "ignore":
-        entry["supports_options"] = False
-
-
-def _options_probe_cause() -> str:
+def options_probe_cause() -> str:
+    """Why flow-entry options went unread: Read Only Mode, or a failed read."""
     if is_read_only():
         return "Read Only Mode does not open the OptionsFlow that reads them"
     return "the OptionsFlow could not be read"
@@ -332,7 +323,6 @@ async def _describe_setup_flow(
     other_modes: dict[str, bool],
 ) -> dict[str, Any]:
     """Describe ``domain``'s setup form without adding the integration."""
-    given = [name for name, set_ in other_modes.items() if set_]
     if not describe:
         raise_tool_error(
             create_error_response(
@@ -344,6 +334,7 @@ async def _describe_setup_flow(
                 ],
             )
         )
+    given = [name for name, set_ in other_modes.items() if set_]
     if domain is None or given:
         raise_tool_error(
             create_error_response(
@@ -360,14 +351,6 @@ async def _describe_setup_flow(
     await fetch_config_flow_schema(
         client, resp["domain"], resp, menu_choice=menu_choice
     )
-    if "config_flow_schema" not in resp:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                resp["warnings"][-1].removeprefix("config_flow_schema: "),
-                context={"domain": resp["domain"]},
-            )
-        )
     return resp
 
 
@@ -973,7 +956,7 @@ class IntegrationTools:
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
             if isinstance(result, dict):
-                _normalize_ignored_entry(result)
+                normalize_ignored_entry(result)
 
             # Surface `options` on every per-entry response (Core's entry
             # fragment omits the field). For entries with supports_options=True
@@ -1011,7 +994,8 @@ class IntegrationTools:
             if level_warnings:
                 resp.setdefault("warnings", []).extend(level_warnings)
 
-            # Optionally fetch options flow schema (logically read-only: start+abort)
+            # Describe the options flow: started and aborted, refused by the caller
+            # in Read Only Mode because its first step can finish and save.
             if include_schema and result.get("supports_options"):
                 await fetch_options_schema(
                     self._client, entry_id, resp, menu_choice=menu_choice
@@ -1069,8 +1053,8 @@ class IntegrationTools:
                 result["options"] = options
                 if not probe_ok:
                     probe_warnings.append(
-                        f"options probe failed for {entry_id}: "
-                        f"{_options_probe_cause()}, so 'options' may "
+                        f"options of {entry_id} not read: "
+                        f"{options_probe_cause()}, so 'options' may "
                         "be incomplete — empty options does not mean the "
                         "entry has none"
                     )
@@ -1111,7 +1095,7 @@ class IntegrationTools:
             )
         entry, subentries = _split_component_entry_row(read.rows[0])
         entry.setdefault("options", {})
-        _normalize_ignored_entry(entry)
+        normalize_ignored_entry(entry)
 
         resp: dict[str, Any] = {
             "success": True,
@@ -1489,9 +1473,9 @@ class IntegrationTools:
             result_data.setdefault("warnings", []).extend(extra_warnings)
         if probe_failures:
             result_data.setdefault("warnings", []).append(
-                f"options probe failed for {len(probe_failures)} "
-                f"entr{'y' if len(probe_failures) == 1 else 'ies'} "
-                f"({', '.join(probe_failures)}): {_options_probe_cause()}, "
+                f"options of {len(probe_failures)} "
+                f"entr{'y' if len(probe_failures) == 1 else 'ies'} not read "
+                f"({', '.join(probe_failures)}): {options_probe_cause()}, "
                 "so their 'options' may be incomplete; empty options does "
                 "not mean an entry has none"
             )
@@ -1507,7 +1491,8 @@ class IntegrationTools:
         """Copy the entry row minus ``options``/``subentries``; add the tool's fields.
 
         Every other key passes through (Core's fields, plus ``unique_id`` on the
-        component path); ``supports_options`` is forced off for an ignored entry.
+        component path); ``supports_options`` and ``supports_reconfigure`` are
+        forced off for an ignored entry.
         ``options`` comes back when ``include_opts`` is set.
         """
         formatted_entry: dict[str, Any] = {
@@ -1515,7 +1500,7 @@ class IntegrationTools:
             for key, value in entry.items()
             if key not in ("options", "subentries")
         }
-        _normalize_ignored_entry(formatted_entry)
+        normalize_ignored_entry(formatted_entry)
 
         # Surface the effective Python logger level for this integration
         # ("DEFAULT" = no override; falls back to the root logger level).
@@ -1836,6 +1821,7 @@ class IntegrationTools:
         - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
         """
         try:
+            _reject_log_persistence_without_level(log_persistence, log_level)
             if describe or menu_choice is not None:
                 reject_reconfigure_only_parameters(
                     confirm_token=confirm_token,
@@ -1857,7 +1843,6 @@ class IntegrationTools:
                         "log_level": log_level is not None,
                     },
                 )
-            _reject_log_persistence_without_level(log_persistence, log_level)
             if log_level is not None:
                 reject_reconfigure_only_parameters(
                     confirm_token=confirm_token,

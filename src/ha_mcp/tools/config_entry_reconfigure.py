@@ -52,6 +52,7 @@ from .config_entry_reload_watch import (
     _subscribe_entry_changes,
 )
 from .helpers import raise_tool_error, validate_identifier_not_empty
+from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +386,7 @@ async def prepare_reconfigure_request(
             )
         )
     refuse_component_entry(domain, action="reconfigure", entry_id=validated_entry_id)
+    refuse_ignored_entry(entry, action="reconfigure", entry_id=validated_entry_id)
     if not entry.get("supports_reconfigure", False):
         raise_tool_error(
             create_error_response(

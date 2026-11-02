@@ -177,20 +177,29 @@ async def describe_form(
     return described
 
 
-_MORE_FORMS = {False: "yes", None: "depends_on_answers"}
+_LATER_FORM_TAIL = (
+    "whose fields can depend on these answers. Pass them in the same config; "
+    "a missing one comes back in the error with that form's fields."
+)
+# ``last_step`` is False when a later form follows and None when the flow does
+# not say, which many single-form flows do.
+_MORE_FORMS = {
+    False: ("yes", "Home Assistant asks for more fields on a later form, "),
+    None: (
+        "depends_on_answers",
+        "This form does not say whether it is the last one. Home Assistant "
+        "may ask for more fields on a later form, ",
+    ),
+}
 
 
 def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
-    """Say when HA asks for more fields on a later form of the same flow."""
+    """Say when HA asks, or may ask, for more fields on a later form."""
     more = _MORE_FORMS.get(step.get("last_step"))
     if more is None:
         return {}
-    return {
-        "more_forms": more,
-        "note": "Home Assistant asks for more fields on a later form, whose "
-        "fields can depend on these answers. Pass them in the same config; "
-        "a missing one comes back in the error with that form's fields.",
-    }
+    answer, lead = more
+    return {"more_forms": answer, "note": lead + _LATER_FORM_TAIL}
 
 
 def _refuse_a_flow_describe_in_read_only() -> None:

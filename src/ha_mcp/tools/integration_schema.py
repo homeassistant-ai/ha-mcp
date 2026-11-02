@@ -147,11 +147,8 @@ async def redact_component_options(
         return
     if not entry.get("supports_options"):
         return
-    # The probe opens the options flow, which Read Only Mode does not start:
-    # without a schema the fail-closed branch below runs.
-    data_schema = (
-        None if is_read_only() else await _options_form_schema(client, entry_id)
-    )
+    read_only = is_read_only()
+    data_schema = None if read_only else await _options_form_schema(client, entry_id)
     if isinstance(data_schema, list):
         entry["options"] = redact_options_by_flow_schema(options, data_schema)
     else:
@@ -159,7 +156,8 @@ async def redact_component_options(
             key: sentinel_replacement(value) for key, value in options.items()
         }
         warnings.append(
-            f"redact_secrets: no options schema readable for {entry_id} — "
+            f"redact_secrets: no options schema readable for {entry_id}"
+            f"{' (Read Only Mode opens no options flow)' if read_only else ''} — "
             "every option value was redacted conservatively (the password "
             "fields cannot be told apart without the schema)"
         )
@@ -433,7 +431,8 @@ async def fetch_config_flow_schema(
     """Describe ``domain``'s setup (config) flow as ``resp["config_flow_schema"]``.
 
     The flow is started, its first step (or the form behind ``menu_choice``)
-    described, and the flow aborted. A step that creates the entry raises.
+    described, and the flow aborted. A step that creates the entry raises, and
+    so does a domain Home Assistant starts no config flow for.
     """
     try:
         first_step = await client.start_config_flow(domain)
@@ -442,11 +441,13 @@ async def fetch_config_flow_schema(
         # config flow and 400 for failed dependencies.
         if err.status_code not in (400, 404):
             raise
-        resp.setdefault("warnings", []).append(
-            f"config_flow_schema: Home Assistant could not start a config flow "
-            f"for {domain!r} ({err})"
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Home Assistant could not start a config flow for {domain!r} ({err})",
+                context={"domain": domain},
+            )
         )
-        return
     flow_id = first_step.get("flow_id")
     try:
         schema = await _describe_step(

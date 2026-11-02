@@ -697,25 +697,6 @@ async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_domain_is_a_warning_not_a_failure() -> None:
-    client = _client({})
-    client.start_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 404 - Invalid handler specified",
-        status_code=404,
-        response_data={"message": "Invalid handler specified"},
-    )
-    resp: dict[str, Any] = {"entries": []}
-
-    await fetch_config_flow_schema(client, "no_such_domain", resp)
-
-    assert "config_flow_schema" not in resp
-    assert any(
-        "no_such_domain" in w and "Invalid handler specified" in w
-        for w in resp["warnings"]
-    )
-
-
-@pytest.mark.asyncio
 async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
     client = _client(_form("user", _HOST))
 
@@ -746,8 +727,15 @@ async def test_set_integration_describe_returns_the_setup_form() -> None:
         {"describe": True},
         {"domain": "demo", "describe": True, "config": {"host": "x"}},
         {"domain": "demo", "describe": True, "entry_id": "e1"},
+        {"domain": "demo", "describe": True, "log_persistence": "permanent"},
     ],
-    ids=["menu-without-describe", "no-domain", "with-config", "with-entry"],
+    ids=[
+        "menu-without-describe",
+        "no-domain",
+        "with-config",
+        "with-entry",
+        "with-log-persistence",
+    ],
 )
 async def test_set_integration_describe_takes_domain_and_menu_choice_only(
     call: dict[str, Any],
@@ -779,6 +767,7 @@ async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> No
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "RESOURCE_NOT_FOUND"
     assert "no_such_domain" in error["message"]
+    assert "Invalid handler specified" in error["message"]
 
 
 @pytest.mark.asyncio

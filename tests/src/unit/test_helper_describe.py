@@ -237,6 +237,8 @@ async def test_flow_helper_says_when_more_forms_follow(
 
     assert result.get("more_forms") == more_forms
     assert ("note" in result) is (more_forms is not None)
+    if more_forms is not None:
+        assert ("may ask" in result["note"]) is (last_step is None)
 
 
 @pytest.mark.asyncio

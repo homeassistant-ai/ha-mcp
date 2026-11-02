@@ -18,7 +18,7 @@ from ..tools_config_dashboards import (
     _dashboards_via_component,
     fetch_dashboards_list,
 )
-from ..tools_integrations import fetch_entry_options_with_status
+from ..tools_integrations import fetch_entry_options_with_status, options_probe_cause
 from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
     DEFAULT_CONCURRENCY_LIMIT,
@@ -1528,8 +1528,8 @@ class DeepSearchMixin(SceneSearchMixin):
         if helper_failed:
             reasons.append(
                 f"{helper_failed} helper backend(s) not scanned (per-type list, "
-                "flow-entries list, or a flow-entry options-probe failed) — "
-                "their match status is unknown; this result is not exhaustive."
+                f"flow-entries list, or flow-entry options: {options_probe_cause()})"
+                " — their match status is unknown; this result is not exhaustive."
             )
         if dashboard_failed:
             reasons.append(

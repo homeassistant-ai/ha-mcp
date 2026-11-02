@@ -59,6 +59,7 @@ from .config_entry_flow_walker import (
     leaves_flow_open,
 )
 from .helpers import raise_tool_error
+from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
 
@@ -822,6 +823,9 @@ async def _update_config_entry_options(
     actual_domain = config_entry.get("domain")
     refuse_component_entry(
         actual_domain, action="change the options of", entry_id=entry_id
+    )
+    refuse_ignored_entry(
+        config_entry, action="change the options of", entry_id=entry_id
     )
 
     flow_result = await client.start_options_flow(entry_id)

@@ -17,6 +17,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import read_only_request
 from ha_mcp.tools.integration_schema import redact_component_options
+from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
     fetch_entry_options_with_status,
@@ -106,6 +107,18 @@ async def test_read_only_names_itself_as_why_options_are_missing() -> None:
     assert "Read Only Mode" in warnings[0]
 
 
+def test_read_only_names_itself_on_the_list_and_in_ha_search() -> None:
+    tools = IntegrationTools(AsyncMock())
+    response: dict[str, Any] = {"success": True}
+
+    with read_only_request():
+        listed = tools._finalize_entry_list([], None, None, None, 50, 0, ["e1"])
+        DeepSearchMixin._apply_per_type_partial_flag(response, helper_failed=1)
+
+    assert "Read Only Mode" in listed["warnings"][0]
+    assert "Read Only Mode" in response["partial_reason"]
+
+
 @pytest.mark.asyncio
 async def test_read_only_redacts_component_options_without_a_probe() -> None:
     client = AsyncMock()
@@ -118,3 +131,4 @@ async def test_read_only_redacts_component_options_without_a_probe() -> None:
     client.start_options_flow.assert_not_called()
     assert entry["options"]["host"] != "h"
     assert "no options schema readable" in warnings[0]
+    assert "Read Only Mode" in warnings[0]
