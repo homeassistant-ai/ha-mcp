@@ -250,6 +250,7 @@ def _walk_yaml_mappings(node: Any, parts: list[str], seen: set[int], found: set[
     if id(node) in seen:
         return
     seen.add(id(node))
+    children: Any
     if isinstance(node, dict):
         matched, value = _key_value(node, parts)
         if matched:

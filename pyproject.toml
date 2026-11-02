@@ -154,6 +154,7 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [
+    "annotatedyaml.*",
     "homeassistant.*",
     "awesomeversion",
     "hass_frontend",
