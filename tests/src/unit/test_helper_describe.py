@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.read_only import read_only_request
 from ha_mcp.tools.config_helpers import describe as mod
 
 _SCHEDULE_CORE = [
@@ -301,6 +302,46 @@ async def test_an_options_flow_abort_that_never_answers_does_not_hold_the_descri
     )
 
     assert result["menu_options"] == ["a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("menu_choice", ["sensor", None], ids=["menu", "no-menu"])
+async def test_read_only_refuses_a_setup_flow_describe_before_it_starts(
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch, menu_choice: str | None
+) -> None:
+    info = AsyncMock()
+    monkeypatch.setattr(mod, "fetch_helper_flow_info", info)
+
+    with read_only_request(), pytest.raises(ToolError, match="READ_ONLY_MODE"):
+        await mod.describe_helper(client, "template", menu_choice=menu_choice)
+
+    info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_only_still_describes_an_existing_helper(client: AsyncMock) -> None:
+    client.get_config_entry.return_value = {"domain": "group"}
+    client.start_options_flow.return_value = {
+        "type": "menu",
+        "flow_id": "f1",
+        "menu_options": ["a"],
+    }
+
+    with read_only_request():
+        result = await mod.describe_helper(client, "group", helper_id="entry1")
+
+    assert result["menu_options"] == ["a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_component")
+async def test_read_only_still_describes_a_storage_helper_type(
+    client: AsyncMock,
+) -> None:
+    with read_only_request():
+        result = await mod.describe_helper(client, "input_number")
+
+    assert result["source"] == "static_fallback"
 
 
 @pytest.mark.asyncio
