@@ -21,7 +21,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from .component_config_entries import fetch_domain_unique_ids
 from .config_entry_flow import _reject_redaction_sentinels, refuse_component_entry
-from .config_entry_flow_abort import _abort_flow_best_effort, raise_if_flow_left_open
+from .config_entry_flow_abort import abort_failed_flow, raise_if_flow_left_open
 from .config_entry_flow_errors import FlowRef, ReconfigureStatus
 from .config_entry_flow_walker import (
     POST_COMMIT_STATUSES,
@@ -621,7 +621,9 @@ async def _run_reconfigure_flow(
                 rollback_metadata=rollback_metadata,
             )
         raise_if_flow_left_open(
-            flow_error, await _abort_flow_best_effort(client, flow_id), FLOW_LEFT_OPEN
+            flow_error,
+            await abort_failed_flow(client.abort_config_flow, flow_id),
+            FLOW_LEFT_OPEN,
         )
         raise
     return flow_id, result

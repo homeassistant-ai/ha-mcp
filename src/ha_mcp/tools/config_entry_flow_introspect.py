@@ -22,25 +22,51 @@ logger = logging.getLogger(__name__)
 _ABORT_TIMEOUT_S = 5.0
 
 
+def flow_gone(err: BaseException | None) -> bool:
+    """Whether ``err`` is Core's 404 for a flow that no longer exists: it
+    already finished (abort, create_entry)."""
+    return getattr(err, "status_code", None) == 404
+
+
+async def shielded_abort(
+    abort: Callable[[str], Awaitable[Any]],
+    flow_id: str,
+    *,
+    failure: str,
+    level: int = logging.WARNING,
+) -> Exception | None:
+    """Abort ``flow_id`` and return the abort's own error, if any.
+
+    Shielded: a cancellation arrives through an anyio cancel scope, which
+    would cancel the abort itself at its first await. A failure is logged as
+    ``failure`` at ``level``, at debug when the flow is already gone.
+    """
+    try:
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
+    except Exception as abort_err:
+        logger.log(
+            logging.DEBUG if flow_gone(abort_err) else level,
+            "%s: %s",
+            failure,
+            abort_err,
+            exc_info=True,
+        )
+        return abort_err
+    return None
+
+
 async def abort_probe_flow(
     abort: Callable[[str], Awaitable[Any]], flow_id: str, *, quiet: bool = False
 ) -> None:
     """Abort a flow opened only to read it, shielded: a cancelled read still
     closes it. A failure logs at warning, at debug when ``quiet``."""
-    try:
-        with anyio.CancelScope(shield=True):
-            await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
-    except Exception as abort_err:
-        # A flow that already finished (abort, create_entry) is gone: Core
-        # answers 404, which is expected here.
-        gone = getattr(abort_err, "status_code", None) == 404
-        logger.log(
-            logging.DEBUG if gone or quiet else logging.WARNING,
-            "flow %s abort failed: %s",
-            flow_id,
-            abort_err,
-            exc_info=True,
-        )
+    await shielded_abort(
+        abort,
+        flow_id,
+        failure=f"flow {flow_id} abort failed",
+        level=logging.DEBUG if quiet else logging.WARNING,
+    )
 
 
 class _FlowType(StrEnum):

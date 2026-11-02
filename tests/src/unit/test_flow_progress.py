@@ -33,10 +33,7 @@ from ha_mcp.tools.config_entry_flow import (
     set_config_subentry,
     update_config_entry_options,
 )
-from ha_mcp.tools.config_entry_flow_abort import (
-    _abort_flow_best_effort,
-    _abort_subentry_flow_best_effort,
-)
+from ha_mcp.tools.config_entry_flow_abort import abort_failed_flow
 from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
 from ha_mcp.tools.config_entry_flow_progress import (
     PROGRESS_BUDGET_S,
@@ -608,8 +605,8 @@ async def test_best_effort_abort_is_sent_inside_a_cancelled_scope() -> None:
 
     with anyio.CancelScope() as scope:
         scope.cancel()
-        await _abort_flow_best_effort(client, "f1")
-        await _abort_subentry_flow_best_effort(client, "s1")
+        await abort_failed_flow(client.abort_config_flow, "f1")
+        await abort_failed_flow(client.abort_config_subentry_flow, "s1")
 
     assert (sent, sent_sub) == (["f1"], ["s1"])
 

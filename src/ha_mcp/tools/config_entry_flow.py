@@ -52,8 +52,7 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
 from .config_entry_flow_abort import (
-    _abort_flow_best_effort,
-    _abort_subentry_flow_best_effort,
+    abort_failed_flow,
     raise_if_flow_left_open,
 )
 from .config_entry_flow_errors import FlowRef
@@ -422,7 +421,7 @@ async def _cleanup_snapshot_creation(
         return
     if failure.apply_status == "not_applied":
         try:
-            with anyio.CancelScope(shield=True):  # see config_entry_flow_abort
+            with anyio.CancelScope(shield=True):  # see shielded_abort
                 await asyncio.wait_for(
                     client.abort_config_flow(progress.flow_id), timeout=_ABORT_TIMEOUT_S
                 )
@@ -589,7 +588,11 @@ async def _run_config_subentry_flow(
         if not leaves_flow_open(flow_error):
             raise_if_flow_left_open(
                 flow_error,
-                await _abort_subentry_flow_best_effort(client, flow_id),
+                await abort_failed_flow(
+                    client.abort_config_subentry_flow,
+                    flow_id,
+                    kind="config subentry flow",
+                ),
                 f"Home Assistant did not confirm that the subentry flow {flow_id} "
                 "was closed. It stays open until it ends or Home Assistant "
                 "restarts.",
@@ -857,7 +860,7 @@ async def _update_config_entry_options(
             should_abort = not leaves_flow_open(flow_err)
         if should_abort:
             try:
-                with anyio.CancelScope(shield=True):  # see config_entry_flow_abort
+                with anyio.CancelScope(shield=True):  # see shielded_abort
                     await asyncio.wait_for(
                         client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
                     )
@@ -950,7 +953,7 @@ async def create_config_entry(
         if not leaves_flow_open(flow_error):
             raise_if_flow_left_open(
                 flow_error,
-                await _abort_flow_best_effort(client, flow_id),
+                await abort_failed_flow(client.abort_config_flow, flow_id),
                 f"Home Assistant did not confirm that the setup flow {flow_id} "
                 "was closed. While it stays open (until it ends or Home "
                 "Assistant restarts), a new setup of the same device or account "
