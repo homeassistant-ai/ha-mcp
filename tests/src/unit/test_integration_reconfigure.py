@@ -130,11 +130,9 @@ def reconfigure_client(
     cover. Starting from this factory means an unstubbed registry read fails
     loudly instead.
     """
-    client = MagicMock()
     # A menu first step: the preview lists it, checks no keys, aborts the flow.
-    client.start_reconfigure_flow = AsyncMock(
-        return_value={"type": "menu", "flow_id": "flow-preview"}
-    )
+    menu = {"type": "menu", "flow_id": "flow-preview"}
+    client = MagicMock(start_reconfigure_flow=AsyncMock(return_value=menu))
     client.abort_config_flow = AsyncMock()
     client.list_entity_registry = AsyncMock(return_value=list(entity_rows or []))
     client.list_device_registry = AsyncMock(return_value=list(device_rows or []))
