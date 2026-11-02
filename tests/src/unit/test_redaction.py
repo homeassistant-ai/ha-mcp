@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import (
     REDACTED_EMPTY,
     REDACTED_KNOWN,
@@ -30,6 +31,7 @@ from ha_mcp.redaction import (
 )
 from ha_mcp.tools.component_config_entries import ComponentEntries
 from ha_mcp.tools.config_entry_flow import _reject_redaction_sentinels
+from ha_mcp.tools.config_entry_flow_abort import flow_left_open
 from ha_mcp.tools.integration_schema import (
     options_from_form_flow,
     redact_component_options,
@@ -597,16 +599,12 @@ class TestRedactSecretsMiddleware:
 class TestRedactComponentOptions:
     """integration_schema.redact_component_options — component path (issue 2157)."""
 
-    def _tools_with_flow(self, flow_response, abort_raises=False):
+    def _tools_with_flow(self, flow_response):
         from ha_mcp.tools.tools_integrations import IntegrationTools
 
         client = MagicMock()
         client.start_options_flow = AsyncMock(return_value=flow_response)
-        client.abort_options_flow = (
-            AsyncMock(side_effect=RuntimeError("abort failed"))
-            if abort_raises
-            else AsyncMock()
-        )
+        client.abort_options_flow = AsyncMock()
         return IntegrationTools(client)
 
     @pytest.mark.asyncio
@@ -700,11 +698,19 @@ class TestRedactComponentOptions:
         tools._client.start_options_flow.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_abort_failure_does_not_break_redaction(self):
+    @pytest.mark.parametrize(
+        ("abort_error", "left_open"),
+        [
+            (RuntimeError("abort failed"), True),
+            (HomeAssistantAPIError("API error: 404", status_code=404), False),
+        ],
+        ids=["failed", "gone"],
+    )
+    async def test_abort_failure_does_not_break_redaction(self, abort_error, left_open):
         tools = self._tools_with_flow(
-            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA},
-            abort_raises=True,
+            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
         )
+        tools._client.abort_options_flow.side_effect = abort_error
         entry = {
             "entry_id": "e1",
             "supports_options": True,
@@ -713,7 +719,8 @@ class TestRedactComponentOptions:
         warnings: list[str] = []
         await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"api_key": REDACTED_SET}
-        assert warnings == []
+        # An abort Home Assistant did not confirm may leave the probe open.
+        assert warnings == ([flow_left_open("options", "f1")] if left_open else [])
 
 
 class TestEmbeddedSentinelRejection:
@@ -788,7 +795,6 @@ class TestWriteFlowErrorSchemaRedaction:
     async def test_raise_flow_api_error_redacts_current_step_schema(
         self, redact_on, monkeypatch
     ):
-        from ha_mcp.client.rest_client import HomeAssistantAPIError
         from ha_mcp.tools import config_entry_flow_errors as flow_errors
 
         monkeypatch.setattr(

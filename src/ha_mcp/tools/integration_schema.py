@@ -92,8 +92,11 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
-    """The options flow's first-form schema, or None when it cannot be read."""
+async def _options_form_schema(
+    client: Any, entry_id: Any, warnings: list[str]
+) -> list[Any] | None:
+    """The options flow's first-form schema, or None when it cannot be read.
+    An abort Home Assistant does not confirm adds the left-open warning."""
     data_schema: list[Any] | None = None
     flow_id = None
     try:
@@ -116,8 +119,8 @@ async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
             exc_info=True,
         )
     finally:
-        if flow_id:
-            await abort_probe_flow(client.abort_options_flow, flow_id)
+        if flow_id and await abort_probe_flow(client.abort_options_flow, flow_id):
+            warnings.append(flow_left_open("options", flow_id))
     return data_schema
 
 
@@ -141,7 +144,7 @@ async def redact_component_options(
         return
     if not entry.get("supports_options"):
         return
-    data_schema = await _options_form_schema(client, entry_id)
+    data_schema = await _options_form_schema(client, entry_id, warnings)
     if isinstance(data_schema, list):
         entry["options"] = redact_options_by_flow_schema(options, data_schema)
     else:
