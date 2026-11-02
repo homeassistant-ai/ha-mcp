@@ -21,6 +21,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from ..read_only import is_read_only, read_only_error_response
 from ..redaction import (
     redaction_enabled,
 )
@@ -268,6 +269,39 @@ def _normalize_ignored_entry(entry: dict[str, Any]) -> None:
     """
     if entry.get("source") == "ignore":
         entry["supports_options"] = False
+
+
+def _refuse_a_flow_read_that_can_save(
+    *,
+    entry_id: str | None,
+    domain: str | None,
+    include_schema: bool,
+    include_subentry_schema: bool,
+    menu_choice: str | None,
+) -> None:
+    """Refuse, in read-only mode, a describe that can finish its flow.
+
+    Starting a setup flow or submitting a menu choice can finish the flow,
+    and Core saves the entry, a subentry or the options before it answers.
+    """
+    if not is_read_only():
+        return
+    if entry_id is None:
+        can_save = include_schema and domain is not None
+    else:
+        can_save = menu_choice is not None and (
+            include_schema or include_subentry_schema
+        )
+    if can_save:
+        raise_tool_error(
+            read_only_error_response(
+                "ha_get_integration",
+                blocked_operation="a setup-flow describe or a menu_choice "
+                "submit can finish the flow and save it",
+                allowed="listing and reading entries, and describing an "
+                "entry's options or subentry flow without menu_choice",
+            )
+        )
 
 
 class IntegrationTools:
@@ -636,6 +670,13 @@ class IntegrationTools:
             if domain is not None:
                 validate_identifier_not_empty(domain, "domain")
                 include_opts = True
+            _refuse_a_flow_read_that_can_save(
+                entry_id=entry_id,
+                domain=domain,
+                include_schema=include_schema_bool,
+                include_subentry_schema=include_subentry_schema_bool,
+                menu_choice=menu_choice,
+            )
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:

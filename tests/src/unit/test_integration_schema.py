@@ -19,6 +19,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.read_only import read_only_request
 from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import integration_schema, tools_integrations
 from ha_mcp.tools.integration_schema import (
@@ -747,6 +748,64 @@ async def test_list_mode_include_schema_without_domain_is_reported_as_ignored() 
 
     client.start_config_flow.assert_not_called()
     assert any("include_schema" in w for w in resp["warnings"])
+
+
+# --- read-only mode: a describe that can save is refused before Core ----------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"domain": "demo", "include_schema": True},
+        {"entry_id": "e1", "include_schema": True, "menu_choice": "advanced"},
+        {
+            "entry_id": "e1",
+            "include_subentry_schema": True,
+            "subentry_type": "conversation",
+            "menu_choice": "advanced",
+        },
+    ],
+    ids=["setup", "options-menu", "subentry-menu"],
+)
+async def test_read_only_refuses_a_describe_that_can_save(call: dict[str, Any]) -> None:
+    # A setup flow's first step or a menu submit can be create_entry, and Core
+    # saves before it answers.
+    client = _client(_form("user", _HOST))
+    tools = IntegrationTools(client)
+    tools._list_entries = AsyncMock()  # type: ignore[method-assign]
+    tools._get_entry_detail_response = AsyncMock()  # type: ignore[method-assign]
+
+    with read_only_request(), pytest.raises(ToolError) as exc_info:
+        await tools.ha_get_integration(**call)
+
+    assert json.loads(str(exc_info.value))["error"]["code"] == "READ_ONLY_MODE"
+    tools._list_entries.assert_not_called()
+    tools._get_entry_detail_response.assert_not_called()
+    client.start_config_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "read"),
+    [
+        ({"entry_id": "e1", "include_schema": True}, "_get_entry_detail_response"),
+        ({"domain": "demo"}, "_list_entries"),
+        ({"include_schema": True}, "_list_entries"),
+    ],
+    ids=["options-describe", "list-domain", "schema-without-domain"],
+)
+async def test_read_only_still_allows_the_reads_master_allowed(
+    call: dict[str, Any], read: str
+) -> None:
+    tools = _tools()
+    tools._get_entry_detail_response = AsyncMock(return_value={"success": True})  # type: ignore[method-assign]
+    tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
+
+    with read_only_request():
+        await tools.ha_get_integration(**call)
+
+    getattr(tools, read).assert_awaited_once()
 
 
 # --- strings Home Assistant could not send are a warning, a missing one not --
