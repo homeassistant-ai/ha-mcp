@@ -249,6 +249,39 @@ async def test_a_menu_first_flow_lists_its_options_without_a_key_check() -> None
     client.abort_config_flow.assert_awaited_once_with("f1")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_step",
+    [
+        {
+            "type": "progress",
+            "flow_id": "f1",
+            "step_id": "pair",
+            "progress_action": "wait_for_device",
+        },
+        {
+            "type": "external",
+            "flow_id": "f1",
+            "step_id": "auth",
+            "url": "https://example.invalid/authorize",
+        },
+    ],
+    ids=["progress", "external"],
+)
+async def test_a_flow_opening_with_a_progress_or_external_step_is_only_aborted(
+    first_step: dict[str, Any],
+) -> None:
+    client = _client(first_step)
+
+    form, warnings = await _read(client, {"host": "10.0.0.5", "api_token": "t"})
+
+    assert form == {"flow_type": first_step["type"], "step_id": first_step["step_id"]}
+    assert warnings == []
+    client.abort_config_flow.assert_awaited_once_with("f1")
+    client.submit_config_flow_step.assert_not_called()
+    client._request.assert_not_called()
+
+
 def _prepared(monkeypatch: pytest.MonkeyPatch) -> PreparedReconfigure:
     prepared = PreparedReconfigure(
         entry_id="e1",
@@ -286,6 +319,27 @@ async def test_only_the_preview_leg_reads_the_form(
 
 
 @pytest.mark.asyncio
+async def test_a_flow_that_fails_to_start_fails_the_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepared(monkeypatch)
+    client = _client({})
+    client.start_reconfigure_flow.side_effect = HomeAssistantAPIError(
+        "API error: 400 - Bad Request", status_code=400
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await ReconfigureRunner(client).run("e1", config=prepared.flow_config)
+
+    body = json.loads(str(exc_info.value))
+    assert body["success"] is False
+    assert body["entry_id"] == "e1"
+    assert "confirm_token" not in body
+    client.abort_config_flow.assert_not_called()
+    client.submit_config_flow_step.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_a_password_fields_live_value_does_not_leak_into_the_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -316,7 +370,10 @@ async def test_a_password_fields_live_value_does_not_leak_into_the_preview(
             {"type": "menu", "flow_id": "f1", "step_id": "reconfigure"},
             False,
         ),
+        ({"type": "progress", "flow_id": "f1", "step_id": "pair"}, False),
+        ({"type": "external", "flow_id": "f1", "step_id": "auth"}, False),
     ],
+    ids=["form", "menu", "progress", "external"],
 )
 async def test_the_preview_message_claims_a_key_check_only_when_one_ran(
     monkeypatch: pytest.MonkeyPatch, first_step: dict[str, Any], keys_checked: bool
