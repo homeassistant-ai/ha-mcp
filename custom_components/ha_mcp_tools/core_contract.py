@@ -33,7 +33,11 @@ COMMANDS = (
 
 
 def _registered_schema(hass: HomeAssistant, command: str) -> Any:
-    entry = (hass.data.get("websocket_api") or {}).get(command)
+    return _entry_schema(command, (hass.data.get("websocket_api") or {}).get(command))
+
+
+def _entry_schema(command: str, entry: Any) -> Any:
+    """The request schema of ``command``'s registry ``entry``, None if absent."""
     if not entry:
         return None
     if entry[1] is False:
@@ -159,8 +163,8 @@ def integration_commands(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
             "status": "available",
             "domain": msg["domain"],
             "commands": [
-                {"command": name, **_describe(_registered_schema(hass, name))}
-                for name in sorted(registered)
+                {"command": name, **_describe(_entry_schema(name, entry))}
+                for name, entry in sorted(registered.items())
                 if name.startswith(prefix)
             ],
         }
