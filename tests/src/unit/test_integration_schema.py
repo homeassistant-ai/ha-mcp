@@ -3,8 +3,8 @@
 A schema exists only inside an open flow: the tool opens the entry's options
 (or subentry) flow, describes its form in the same compact shape the helper
 describe uses (fields, Core's help text, current values), and aborts it. A
-flow that opens with a menu lists its branches; ``menu_choice`` describes the
-form behind one of them.
+flow that opens with a menu lists its branches; ``menu_choice``, which only
+ha_set_integration(describe=True) takes, describes the form behind one of them.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ async def test_menu_without_a_choice_lists_the_branches_and_points_at_menu_choic
     schema = resp["options_schema"]
     assert schema["flow_type"] == "menu"
     assert schema["menu_options"] == ["basic", "advanced"]
-    assert "menu_choice" in schema["note"]
+    assert "menu_choice to ha_set_integration(" in schema["note"]
     client.submit_options_flow_step.assert_not_called()
     client.abort_options_flow.assert_awaited_once_with("f1")
 
@@ -180,7 +180,10 @@ async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
     elif kind == "entry_options":
         await fetch_entry_options_with_status(client, "e1")
     elif kind == "options":
-        await fetch_options_schema(client, "e1", _resp(), menu_choice=menu_choice)
+        # strict, as ha_set_integration(describe=True) reads it.
+        await fetch_options_schema(
+            client, "e1", _resp(), strict=True, menu_choice=menu_choice
+        )
     elif kind == "subentry":
         await fetch_config_subentry_schema(
             client,
@@ -515,54 +518,6 @@ async def test_subentry_flow_that_aborts_at_once_returns_cores_reason_text() -> 
     assert schema["reason_text"] == "None."
 
 
-def _tools() -> IntegrationTools:
-    return IntegrationTools(AsyncMock())
-
-
-async def _detail(tools: IntegrationTools, **flags: Any) -> dict[str, Any]:
-    return await tools._get_entry_detail_response(
-        "e1",
-        include_schema=flags.get("include_schema", False),
-        include_subentries=False,
-        include_subentry_schema=flags.get("include_subentry_schema", False),
-        subentry_type="conversation",
-        subentry_id=None,
-        show_advanced_options=False,
-        menu_choice="advanced",
-        include_diagnostics=False,
-        include_knx_project=False,
-        device_id=None,
-        fields_list=None,
-        truncate_bytes=None,
-        diagnostics_data_path=None,
-        data_offset_int=0,
-        data_limit_int=None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_menu_choice_with_both_schemas_is_refused() -> None:
-    tools = _tools()
-    tools._get_single_entry = AsyncMock()  # type: ignore[method-assign]
-
-    with pytest.raises(ToolError) as exc_info:
-        await _detail(tools, include_schema=True, include_subentry_schema=True)
-
-    body = json.loads(str(exc_info.value))
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    tools._get_single_entry.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_menu_choice_without_a_schema_is_reported_as_ignored() -> None:
-    tools = _tools()
-    tools._get_single_entry = AsyncMock(return_value={"success": True})  # type: ignore[method-assign]
-
-    resp = await _detail(tools)
-
-    assert any("menu_choice" in w for w in resp["warnings"])
-
-
 # --- the setup (config) flow of a domain, read in list mode -----------------
 
 
@@ -806,70 +761,6 @@ async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
         await fetch_config_flow_schema(client, "demo", {}, menu_choice="advanced")
 
     client.abort_config_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_set_integration_describe_returns_the_setup_form() -> None:
-    client = _client(_form("user", _HOST))
-
-    resp = await IntegrationTools(client).ha_set_integration(
-        domain="Demo ", describe=True
-    )
-
-    client.start_config_flow.assert_awaited_once_with("demo")
-    client.abort_config_flow.assert_awaited_once_with("f1")
-    assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call",
-    [
-        {"domain": "demo", "menu_choice": "light"},
-        {"describe": True},
-        {"domain": "demo", "describe": True, "config": {"host": "x"}},
-        {"domain": "demo", "describe": True, "entry_id": "e1"},
-        {"domain": "demo", "describe": True, "log_persistence": "permanent"},
-    ],
-    ids=[
-        "menu-without-describe",
-        "no-domain",
-        "with-config",
-        "with-entry",
-        "with-log-persistence",
-    ],
-)
-async def test_set_integration_describe_takes_domain_and_menu_choice_only(
-    call: dict[str, Any],
-) -> None:
-    client = _client(_form("user", _HOST))
-
-    with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(**call)
-
-    error = json.loads(str(exc_info.value))["error"]
-    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    client.start_config_flow.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> None:
-    client = _client({})
-    client.start_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 404 - Invalid handler specified",
-        status_code=404,
-        response_data={"message": "Invalid handler specified"},
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(
-            domain="no_such_domain", describe=True
-        )
-
-    error = json.loads(str(exc_info.value))["error"]
-    assert error["code"] == "RESOURCE_NOT_FOUND"
-    assert "no_such_domain" in error["message"]
-    assert "Invalid handler specified" in error["message"]
 
 
 @pytest.mark.asyncio

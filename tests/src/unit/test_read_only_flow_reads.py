@@ -36,20 +36,13 @@ def _tools() -> IntegrationTools:
     "call",
     [
         {"entry_id": "e1", "include_schema": True},
-        {"entry_id": "e1", "include_schema": True, "menu_choice": "advanced"},
         {
             "entry_id": "e1",
             "include_subentry_schema": True,
             "subentry_type": "conversation",
-        },
-        {
-            "entry_id": "e1",
-            "include_subentry_schema": True,
-            "subentry_type": "conversation",
-            "menu_choice": "advanced",
         },
     ],
-    ids=["options", "options-menu", "subentry", "subentry-menu"],
+    ids=["options", "subentry"],
 )
 async def test_read_only_refuses_an_entry_flow_describe(call: dict[str, Any]) -> None:
     tools = _tools()
