@@ -511,6 +511,42 @@ class TestFlowTextFromCore:
             {"individual_address": "0.0.240"},
         )
 
+    @pytest.mark.parametrize("kind", ["config", "subentry"])
+    async def test_a_form_shown_again_after_a_menu_is_not_its_rejection(
+        self, kind: str
+    ) -> None:
+        # Form, menu, then the same form rendered fresh with advisory errors:
+        # the menu came in between, so these errors answer no submit of ours.
+        client = _strings_client({})
+        form = {
+            "type": "form",
+            "flow_id": "f1",
+            "step_id": "routing",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+        start, submit = {
+            "config": ("start_config_flow", "submit_config_flow_step"),
+            "subentry": (
+                "start_config_subentry_flow",
+                "submit_config_subentry_flow_step",
+            ),
+        }[kind]
+        getattr(client, start).return_value = form
+        getattr(client, submit).side_effect = [
+            {"type": "menu", "flow_id": "f1", "step_id": "more", "menu_options": ["a"]},
+            {**form, "errors": {"base": "no_router_discovered"}},
+            {"type": "create_entry", "flow_id": "f1", "result": {"entry_id": "k1"}},
+        ]
+        config = {"host": "h", "next_step_id": "a"}
+
+        if kind == "config":
+            result = await create_config_entry(client, "knx", config)
+        else:
+            result = await set_config_subentry(client, "e1", "device", config)
+
+        assert result["success"] is True
+        assert getattr(client, submit).await_count == 3
+
     async def test_a_subentry_first_render_with_advisory_errors_is_submitted(
         self,
     ) -> None:
