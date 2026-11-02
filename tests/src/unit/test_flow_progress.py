@@ -31,6 +31,7 @@ from ha_mcp.tools.config_entry_flow import (
     _cleanup_snapshot_creation,
     _CreationFlowProgress,
     create_config_entry,
+    get_user_step_field_names,
     set_config_subentry,
     update_config_entry_options,
 )
@@ -692,6 +693,25 @@ async def test_options_cancel_scope_still_sends_the_abort() -> None:
     await _cancel_scope_at_poll(
         client, lambda: update_config_entry_options(client, "e1", {})
     )
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+async def test_helper_field_introspection_sends_its_abort_inside_a_cancelled_scope() -> (
+    None
+):
+    client = AsyncMock()
+    sent, client.abort_config_flow.side_effect = _abort_recorder()
+
+    with anyio.CancelScope() as scope:
+
+        async def start(_helper_type: str) -> dict[str, Any]:
+            scope.cancel()
+            return {"flow_id": "f1", "type": "form", "data_schema": []}
+
+        client.start_config_flow.side_effect = start
+        await get_user_step_field_names(client, "switch_as_x")
 
     assert sent == ["f1"]
 

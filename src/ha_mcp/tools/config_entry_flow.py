@@ -59,7 +59,7 @@ from .config_entry_flow_abort import (
 )
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
-from .config_entry_flow_introspect import _ABORT_TIMEOUT_S
+from .config_entry_flow_introspect import shielded_abort
 from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
     _FlowType,
@@ -639,14 +639,12 @@ async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] |
         return None
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    f"Failed to abort introspection flow {flow_id}: {abort_err}"
-                )
+            # Shielded: a cancelled helper write still closes this flow.
+            await shielded_abort(
+                client.abort_config_flow,
+                flow_id,
+                failure=f"Failed to abort introspection flow {flow_id}",
+            )
 
 
 async def update_config_entry_options(
