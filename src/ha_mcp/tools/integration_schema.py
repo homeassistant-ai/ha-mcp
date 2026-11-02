@@ -21,6 +21,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from ..read_only import is_read_only
 from ..redaction import (
     harvest_secret_strings,
     is_password_flow_field,
@@ -90,27 +91,9 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-async def redact_component_options(
-    client: Any, entry_id: Any, entry: dict[str, Any], warnings: list[str]
-) -> None:
-    """Redact password-marked fields on component-served options (#2157).
-
-    The component row carries raw persisted options with no schema, so
-    the password markers must come from a live options-flow probe. When
-    the entry supports an options flow but no form schema could be read
-    (probe failed, or the flow opens with a menu), every option value is
-    replaced with a set/empty sentinel — without the schema the password
-    fields cannot be told apart, so this fails closed. Entries without
-    an options flow carry no password markers anywhere (the documented
-    metadata limit of the toggle); their options pass through and the
-    known-value scrub remains the only line for them.
-    """
-    options = entry.get("options")
-    if not isinstance(options, dict) or not options:
-        return
-    if not entry.get("supports_options"):
-        return
-    data_schema: Any = None
+async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
+    """The options flow's first-form schema, or None when it cannot be read."""
+    data_schema: list[Any] | None = None
     flow_id = None
     try:
         flow = await client.start_options_flow(entry_id)
@@ -119,8 +102,8 @@ async def redact_component_options(
             # An empty/missing schema on a form (e.g. a confirm-only
             # step) classifies nothing — persisted options can outlive
             # fields removed from the flow, so treat it as unreadable
-            # and take the fail-closed branch below instead of
-            # "redacting" zero fields.
+            # and take the fail-closed branch instead of "redacting"
+            # zero fields.
             candidate = flow.get("data_schema")
             if isinstance(candidate, list) and candidate:
                 data_schema = candidate
@@ -140,6 +123,35 @@ async def redact_component_options(
                     flow_id,
                     abort_err,
                 )
+    return data_schema
+
+
+async def redact_component_options(
+    client: Any, entry_id: Any, entry: dict[str, Any], warnings: list[str]
+) -> None:
+    """Redact password-marked fields on component-served options (#2157).
+
+    The component row carries raw persisted options with no schema, so
+    the password markers must come from a live options-flow probe. When
+    the entry supports an options flow but no form schema could be read
+    (probe failed, or the flow opens with a menu), every option value is
+    replaced with a set/empty sentinel — without the schema the password
+    fields cannot be told apart, so this fails closed. Entries without
+    an options flow carry no password markers anywhere (the documented
+    metadata limit of the toggle); their options pass through and the
+    known-value scrub remains the only line for them. Read Only Mode runs
+    no probe, so it takes the same fail-closed path.
+    """
+    options = entry.get("options")
+    if not isinstance(options, dict) or not options:
+        return
+    if not entry.get("supports_options"):
+        return
+    # The probe opens the options flow, which Read Only Mode does not start:
+    # without a schema the fail-closed branch below runs.
+    data_schema = (
+        None if is_read_only() else await _options_form_schema(client, entry_id)
+    )
     if isinstance(data_schema, list):
         entry["options"] = redact_options_by_flow_schema(options, data_schema)
     else:

@@ -183,6 +183,8 @@ async def fetch_entry_options_with_status(
       raised, or its first step was not a form (a menu / abort / create_entry),
       so no options could be harvested.
 
+    In Read Only Mode no flow is opened and the result is ``({}, False)``.
+
     The flag lets callers surface degraded reads instead of passing ``{}``
     off as real options: ``smart_search`` flips ``partial`` when a probe
     fails mid-search, and ``ha_get_integration`` attaches a ``warnings``
@@ -209,6 +211,10 @@ async def fetch_entry_options_with_status(
     ``smart_search._search_flow_helpers`` can probe flow-helper config
     without instantiating ``IntegrationTools``.
     """
+    if is_read_only():
+        # The probe opens the options flow, and a flow whose first step
+        # finishes saves the options before Core answers.
+        return {}, False
     log_probe_failure = logger.debug if quiet else logger.warning
     flow_id: str | None = None
     try:
@@ -271,37 +277,98 @@ def _normalize_ignored_entry(entry: dict[str, Any]) -> None:
         entry["supports_options"] = False
 
 
-def _refuse_a_flow_read_that_can_save(
-    *,
-    entry_id: str | None,
-    domain: str | None,
-    include_schema: bool,
-    include_subentry_schema: bool,
-    menu_choice: str | None,
-) -> None:
-    """Refuse, in read-only mode, a describe that can finish its flow.
+def _options_probe_cause() -> str:
+    if is_read_only():
+        return "Read Only Mode does not open the OptionsFlow that reads them"
+    return "the OptionsFlow could not be read"
 
-    Starting a setup flow or submitting a menu choice can finish the flow,
-    and Core saves the entry, a subentry or the options before it answers.
+
+def _refuse_an_entry_flow_describe_in_read_only(
+    *, entry_id: str | None, include_schema: bool, include_subentry_schema: bool
+) -> None:
+    """Refuse, in read-only mode, describing an entry's options or subentry flow.
+
+    The describe starts the flow, and a flow whose first step or menu choice
+    finishes it saves the options or a subentry before Core answers.
     """
-    if not is_read_only():
-        return
-    if entry_id is None:
-        can_save = include_schema and domain is not None
-    else:
-        can_save = menu_choice is not None and (
-            include_schema or include_subentry_schema
-        )
-    if can_save:
+    if (
+        is_read_only()
+        and entry_id is not None
+        and (include_schema or include_subentry_schema)
+    ):
         raise_tool_error(
             read_only_error_response(
                 "ha_get_integration",
-                blocked_operation="a setup-flow describe or a menu_choice "
-                "submit can finish the flow and save it",
-                allowed="listing and reading entries, and describing an "
-                "entry's options or subentry flow without menu_choice",
+                blocked_operation="describing an entry's options or subentry "
+                "flow starts that flow, which can finish and save",
+                allowed="listing and reading entries; options that only the "
+                "options flow can read are left out",
             )
         )
+
+
+def _reject_log_persistence_without_level(
+    log_persistence: str | None, log_level: str | None
+) -> None:
+    if log_persistence is not None and log_level is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "log_persistence applies only together with log_level",
+                suggestions=[
+                    "Example: ha_set_integration(domain='zha', "
+                    "log_level='DEBUG', log_persistence='permanent')"
+                ],
+            )
+        )
+
+
+async def _describe_setup_flow(
+    client: Any,
+    domain: str | None,
+    menu_choice: str | None,
+    *,
+    describe: bool,
+    other_modes: dict[str, bool],
+) -> dict[str, Any]:
+    """Describe ``domain``'s setup form without adding the integration."""
+    given = [name for name, set_ in other_modes.items() if set_]
+    if not describe:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "menu_choice applies only with describe=True",
+                suggestions=[
+                    "Example: ha_set_integration(domain='group', "
+                    "describe=True, menu_choice='light')"
+                ],
+            )
+        )
+    if domain is None or given:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "describe=True takes domain (and optionally menu_choice) only"
+                + (f"; drop {', '.join(given)}" if given else ""),
+                suggestions=[
+                    "Example: ha_set_integration(domain='group', describe=True)"
+                ],
+            )
+        )
+    validate_identifier_not_empty(domain, "domain")
+    resp: dict[str, Any] = {"success": True, "domain": domain.strip().lower()}
+    await fetch_config_flow_schema(
+        client, resp["domain"], resp, menu_choice=menu_choice
+    )
+    if "config_flow_schema" not in resp:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                resp["warnings"][-1].removeprefix("config_flow_schema: "),
+                context={"domain": resp["domain"]},
+            )
+        )
+    return resp
 
 
 class IntegrationTools:
@@ -377,11 +444,11 @@ class IntegrationTools:
                 "lists menu_options instead (see menu_choice), and a flow Home "
                 "Assistant aborts gives aborted, plus reason_text when Home "
                 "Assistant has a string for the reason. Only applies "
-                "when supports_options=true. Without entry_id but with domain, "
-                "describe that integration's setup form as config_flow_schema "
-                "(same shape). The flow is started, described and aborted. If "
-                "Home Assistant finishes it instead of showing a form, the call "
-                "fails and says what was saved (e.g. the new entry).",
+                "when supports_options=true. The flow is started, described "
+                "and aborted. If Home Assistant finishes it instead of showing "
+                "a form, the call fails and says what was saved. For an "
+                "integration's setup form, use ha_set_integration(domain=..., "
+                "describe=True).",
                 default=False,
             ),
         ] = False,
@@ -445,7 +512,7 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "With include_schema (options or setup flow) or "
+                    "With include_schema (options flow) or "
                     "include_subentry_schema, when the flow opens with a menu: "
                     "the menu option whose form to describe. Without it the "
                     "menu options are listed. Choosing an option runs that "
@@ -608,7 +675,6 @@ class IntegrationTools:
         - Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
         - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
         - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; add menu_choice="<option>" to describe that form
-        - Fields a new integration asks for when added: ha_get_integration(domain="group", include_schema=True, menu_choice="light")
         - List template entries with their options: ha_get_integration(domain="template")
         - Only service integrations: ha_get_integration(integration_type="service")
 
@@ -670,12 +736,10 @@ class IntegrationTools:
             if domain is not None:
                 validate_identifier_not_empty(domain, "domain")
                 include_opts = True
-            _refuse_a_flow_read_that_can_save(
+            _refuse_an_entry_flow_describe_in_read_only(
                 entry_id=entry_id,
-                domain=domain,
                 include_schema=include_schema_bool,
                 include_subentry_schema=include_subentry_schema_bool,
-                menu_choice=menu_choice,
             )
 
             # If entry_id provided, get specific config entry
@@ -736,18 +800,12 @@ class IntegrationTools:
                     f"{', '.join(ignored_detail_params)} "
                     "ignored because entry_id was not set (list mode)"
                 )
-            if include_schema_bool and domain is not None:
-                await fetch_config_flow_schema(
-                    self._client,
-                    domain.strip().lower(),
-                    result,
-                    menu_choice=menu_choice,
-                )
-            elif include_schema_bool or menu_choice is not None:
+            if include_schema_bool or menu_choice is not None:
                 result.setdefault("warnings", []).append(
-                    "include_schema and menu_choice were ignored: without "
-                    "entry_id they describe the setup flow of the integration "
-                    "named in domain, so pass domain with include_schema=True"
+                    "include_schema and menu_choice were ignored: they "
+                    "describe an entry's options flow and need entry_id. For "
+                    "an integration's setup form, use "
+                    "ha_set_integration(domain=..., describe=True)"
                 )
             return result
 
@@ -1011,8 +1069,8 @@ class IntegrationTools:
                 result["options"] = options
                 if not probe_ok:
                     probe_warnings.append(
-                        f"options probe failed for {entry_id}: the "
-                        "OptionsFlow could not be read, so 'options' may "
+                        f"options probe failed for {entry_id}: "
+                        f"{_options_probe_cause()}, so 'options' may "
                         "be incomplete — empty options does not mean the "
                         "entry has none"
                     )
@@ -1433,8 +1491,9 @@ class IntegrationTools:
             result_data.setdefault("warnings", []).append(
                 f"options probe failed for {len(probe_failures)} "
                 f"entr{'y' if len(probe_failures) == 1 else 'ies'} "
-                f"({', '.join(probe_failures)}) - their 'options' may be "
-                "incomplete; empty options does not mean an entry has none"
+                f"({', '.join(probe_failures)}): {_options_probe_cause()}, "
+                "so their 'options' may be incomplete; empty options does "
+                "not mean an entry has none"
             )
         return result_data
 
@@ -1524,7 +1583,9 @@ class IntegrationTools:
         # Every reconfigure request validates the entry and confirmation before
         # the inner apply helper captures the normal edit snapshot.
         skip_fn=lambda kwargs: (
-            bool(kwargs.get("reconfigure")) or kwargs.get("log_level") is not None
+            bool(kwargs.get("reconfigure"))
+            or bool(kwargs.get("describe"))
+            or kwargs.get("log_level") is not None
         ),
     )
     @log_tool_usage
@@ -1677,6 +1738,40 @@ class IntegrationTools:
                 ),
             ),
         ] = None,
+        describe: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "With domain only: describe the domain's setup form as "
+                    "config_flow_schema instead of adding the integration: "
+                    "each field's type, default and Home Assistant's help "
+                    "text. A flow that opens with a menu lists menu_options "
+                    "(see menu_choice), and a flow Home Assistant aborts gives "
+                    "aborted, plus reason_text when Home Assistant has a "
+                    "string for the reason. The flow is started, described "
+                    "and aborted. If Home Assistant finishes it instead of "
+                    "showing a form, the call fails and says what was saved "
+                    "(e.g. the new entry)."
+                ),
+            ),
+        ] = False,
+        menu_choice: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "With describe=True, when the setup flow opens with a "
+                    "menu: the menu option whose form to describe. Without it "
+                    "the menu options are listed. Choosing an option runs that "
+                    "step in Home Assistant; if it finishes the flow at once, "
+                    "the call fails and reports what was saved. Refused when "
+                    "the flow opens with anything but a menu (an abort, or a "
+                    "flow Home Assistant finishes, is still reported), or the "
+                    "menu lacks the option."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
 
@@ -1684,6 +1779,9 @@ class IntegrationTools:
         - Enable/disable: entry_id + enabled.
         - Add integration: domain (+ config) — drives the domain's config
           flow, including menus and multi-step forms.
+        - Describe the setup form: domain + describe=True (+ menu_choice) —
+          returns the fields adding the integration asks for, adds nothing
+          unless Home Assistant finishes the flow at once.
         - Update options: entry_id + config — drives the entry's options
           flow (what the "Configure" button does in the HA UI).
         - Reconfigure: entry_id + reconfigure=True + config — connection
@@ -1706,8 +1804,8 @@ class IntegrationTools:
         Use ha_get_integration() to find entry IDs,
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
         options fields before an update, and
-        ha_get_integration(domain=..., include_schema=True) for the setup
-        form before adding. Its supports_reconfigure field tells
+        ha_set_integration(domain=..., describe=True) for the setup form
+        before adding. Its supports_reconfigure field tells
         you whether an entry qualifies for reconfigure=True.
 
         Caveats: adding an integration runs its config flow exactly as the HA
@@ -1732,22 +1830,34 @@ class IntegrationTools:
 
         EXAMPLES:
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
+        - Setup form before adding: ha_set_integration(domain="group", describe=True, menu_choice="light")
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
         - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}), then repeat adding confirm_token="sha256:..."
         - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
         """
         try:
-            if log_persistence is not None and log_level is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "log_persistence applies only together with log_level",
-                        suggestions=[
-                            "Example: ha_set_integration(domain='zha', "
-                            "log_level='DEBUG', log_persistence='permanent')"
-                        ],
-                    )
+            if describe or menu_choice is not None:
+                reject_reconfigure_only_parameters(
+                    confirm_token=confirm_token,
+                    expected_device_id=expected_device_id,
+                    expected_unique_id=expected_unique_id,
+                    expected_mac=expected_mac,
+                    expected_entity_ids=expected_entity_ids,
                 )
+                return await _describe_setup_flow(
+                    self._client,
+                    domain,
+                    menu_choice,
+                    describe=describe,
+                    other_modes={
+                        "entry_id": entry_id is not None,
+                        "enabled": enabled is not None,
+                        "config": config is not None,
+                        "reconfigure": reconfigure,
+                        "log_level": log_level is not None,
+                    },
+                )
+            _reject_log_persistence_without_level(log_persistence, log_level)
             if log_level is not None:
                 reject_reconfigure_only_parameters(
                     confirm_token=confirm_token,

@@ -1,6 +1,6 @@
-"""E2E: ha_get_integration(domain=..., include_schema=True) reads a setup form.
+"""E2E: ha_set_integration(domain=..., describe=True) reads a setup form.
 
-Without an entry_id, include_schema describes the domain's config flow: Core
+describe=True describes the domain's config flow instead of adding it: Core
 starts it, the tool describes the first step (or the form behind
 menu_choice) and aborts it. A flow Core aborts comes back with Core's own
 reason text, read here from Core's translations the way the frontend looks
@@ -38,11 +38,11 @@ class TestIntegrationSetupSchema:
 
         async with MCPAssertions(mcp_client) as mcp:
             menu = await mcp.call_tool_success(
-                "ha_get_integration", {"domain": "group", "include_schema": True}
+                "ha_set_integration", {"domain": "group", "describe": True}
             )
             light = await mcp.call_tool_success(
-                "ha_get_integration",
-                {"domain": "group", "include_schema": True, "menu_choice": "light"},
+                "ha_set_integration",
+                {"domain": "group", "describe": True, "menu_choice": "light"},
             )
 
         assert menu["config_flow_schema"]["flow_type"] == "menu"
@@ -64,7 +64,7 @@ class TestIntegrationSetupSchema:
             )
             assert entries["entries"], "the test instance must have a sun entry"
             data = await mcp.call_tool_success(
-                "ha_get_integration", {"domain": "sun", "include_schema": True}
+                "ha_set_integration", {"domain": "sun", "describe": True}
             )
 
         # Core's own abort for the same request names where its text lives.
@@ -81,16 +81,14 @@ class TestIntegrationSetupSchema:
         assert schema["reason_text"] == expected
         assert "fields" not in schema
 
-    async def test_unknown_domain_is_a_warning(self, mcp_client):
-        """A domain Core has no config flow for does not fail the listing."""
+    async def test_unknown_domain_fails_the_describe(self, mcp_client):
+        """A domain Core has no config flow for has no setup form to describe."""
         async with MCPAssertions(mcp_client) as mcp:
-            data = await mcp.call_tool_success(
-                "ha_get_integration",
-                {"domain": "no_such_integration_xyz", "include_schema": True},
+            await mcp.call_tool_failure(
+                "ha_set_integration",
+                {"domain": "no_such_integration_xyz", "describe": True},
+                expected_error="no_such_integration_xyz",
             )
-
-        assert "config_flow_schema" not in data
-        assert any("no_such_integration_xyz" in w for w in data["warnings"])
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)

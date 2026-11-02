@@ -193,17 +193,16 @@ def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _refuse_a_setup_flow_in_read_only() -> None:
-    """Starting the setup flow, or submitting its menu, can finish it, and Core
-    creates the helper before it answers."""
+def _refuse_a_flow_describe_in_read_only() -> None:
+    """Starting the setup or options flow, or submitting its menu, can finish
+    it, and Core creates the helper or saves its options before it answers."""
     if is_read_only():
         raise_tool_error(
             read_only_error_response(
                 "ha_config_list_helpers",
-                blocked_operation="describing a helper type starts its setup "
-                "flow, which can finish and create the helper",
-                allowed="listing helpers, describing a storage helper type, and "
-                "describing an existing helper by helper_id",
+                blocked_operation="describing a flow-based helper starts its "
+                "setup or options flow, which can finish and save",
+                allowed="listing helpers and describing a storage helper type",
             )
         )
 
@@ -211,8 +210,8 @@ def _refuse_a_setup_flow_in_read_only() -> None:
 async def _describe_flow(
     client: Any, helper_type: str, menu_choice: str | None, entry_id: str | None
 ) -> dict[str, Any]:
+    _refuse_a_flow_describe_in_read_only()
     if entry_id is None:
-        _refuse_a_setup_flow_in_read_only()
         info = await fetch_helper_flow_info(client, helper_type, menu_choice)
         if menu_choice and "schema" in info and "branch" not in info:
             _reject_menu_choice(

@@ -203,11 +203,11 @@ the rows whose entry ids Core's `?type=` answer holds. One entry is read with
 WebSocket `config_entries/get_single`, Core's `not_found` being the 404; the
 REST list is the fallback when no WebSocket answer comes back or Core answers
 `unauthorized` (`get_single` is admin-only, the REST list is not).
-`include_schema` (options flow, or the setup flow of `domain` without an
-entry), `include_subentry_schema` and the reconfigure preview start Core's own
-flow, describe its first step in the helper describe's compact `fields` shape
-(current values from `suggested_value`, help text from Core's strings) and
-abort it. A menu lists Core's menu options; `menu_choice` submits
+`include_schema` (options flow), `ha_set_integration(describe=True)` (the
+setup flow of `domain`), `include_subentry_schema` and the reconfigure preview
+start Core's own flow, describe its first step in the helper describe's compact
+`fields` shape (current values from `suggested_value`, help text from Core's
+strings) and abort it. A menu lists Core's menu options; `menu_choice` submits
 `next_step_id` to the same flow. Form errors, abort reasons and progress
 actions keep Core's key and add Core's string (`error_text`, `reason_text`,
 and `progress_action_text` on the errors for a progress step: the budget

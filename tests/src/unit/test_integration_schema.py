@@ -19,7 +19,6 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.read_only import read_only_request
 from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import integration_schema, tools_integrations
 from ha_mcp.tools.integration_schema import (
@@ -727,85 +726,74 @@ async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_mode_include_schema_describes_the_domains_setup_flow() -> None:
+async def test_set_integration_describe_returns_the_setup_form() -> None:
     client = _client(_form("user", _HOST))
-    tools = IntegrationTools(client)
-    tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
 
-    resp = await tools.ha_get_integration(domain="Demo ", include_schema=True)
+    resp = await IntegrationTools(client).ha_set_integration(
+        domain="Demo ", describe=True
+    )
 
     client.start_config_flow.assert_awaited_once_with("demo")
+    client.abort_config_flow.assert_awaited_once_with("f1")
     assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
-
-
-@pytest.mark.asyncio
-async def test_list_mode_include_schema_without_domain_is_reported_as_ignored() -> None:
-    client = _client(_form("user", _HOST))
-    tools = IntegrationTools(client)
-    tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
-
-    resp = await tools.ha_get_integration(include_schema=True)
-
-    client.start_config_flow.assert_not_called()
-    assert any("include_schema" in w for w in resp["warnings"])
-
-
-# --- read-only mode: a describe that can save is refused before Core ----------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call",
     [
-        {"domain": "demo", "include_schema": True},
-        {"entry_id": "e1", "include_schema": True, "menu_choice": "advanced"},
-        {
-            "entry_id": "e1",
-            "include_subentry_schema": True,
-            "subentry_type": "conversation",
-            "menu_choice": "advanced",
-        },
+        {"domain": "demo", "menu_choice": "light"},
+        {"describe": True},
+        {"domain": "demo", "describe": True, "config": {"host": "x"}},
+        {"domain": "demo", "describe": True, "entry_id": "e1"},
     ],
-    ids=["setup", "options-menu", "subentry-menu"],
+    ids=["menu-without-describe", "no-domain", "with-config", "with-entry"],
 )
-async def test_read_only_refuses_a_describe_that_can_save(call: dict[str, Any]) -> None:
-    # A setup flow's first step or a menu submit can be create_entry, and Core
-    # saves before it answers.
+async def test_set_integration_describe_takes_domain_and_menu_choice_only(
+    call: dict[str, Any],
+) -> None:
     client = _client(_form("user", _HOST))
-    tools = IntegrationTools(client)
-    tools._list_entries = AsyncMock()  # type: ignore[method-assign]
-    tools._get_entry_detail_response = AsyncMock()  # type: ignore[method-assign]
 
-    with read_only_request(), pytest.raises(ToolError) as exc_info:
-        await tools.ha_get_integration(**call)
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(**call)
 
-    assert json.loads(str(exc_info.value))["error"]["code"] == "READ_ONLY_MODE"
-    tools._list_entries.assert_not_called()
-    tools._get_entry_detail_response.assert_not_called()
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     client.start_config_flow.assert_not_called()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("call", "read"),
-    [
-        ({"entry_id": "e1", "include_schema": True}, "_get_entry_detail_response"),
-        ({"domain": "demo"}, "_list_entries"),
-        ({"include_schema": True}, "_list_entries"),
-    ],
-    ids=["options-describe", "list-domain", "schema-without-domain"],
-)
-async def test_read_only_still_allows_the_reads_master_allowed(
-    call: dict[str, Any], read: str
+async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> None:
+    client = _client({})
+    client.start_config_flow.side_effect = HomeAssistantAPIError(
+        "API error: 404 - Invalid handler specified",
+        status_code=404,
+        response_data={"message": "Invalid handler specified"},
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(
+            domain="no_such_domain", describe=True
+        )
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "RESOURCE_NOT_FOUND"
+    assert "no_such_domain" in error["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("domain", ["demo", None], ids=["domain", "no-domain"])
+async def test_list_mode_include_schema_is_ignored_and_points_to_set(
+    domain: str | None,
 ) -> None:
-    tools = _tools()
-    tools._get_entry_detail_response = AsyncMock(return_value={"success": True})  # type: ignore[method-assign]
+    client = _client(_form("user", _HOST))
+    tools = IntegrationTools(client)
     tools._list_entries = AsyncMock(return_value={"success": True, "entries": []})  # type: ignore[method-assign]
 
-    with read_only_request():
-        await tools.ha_get_integration(**call)
+    resp = await tools.ha_get_integration(domain=domain, include_schema=True)
 
-    getattr(tools, read).assert_awaited_once()
+    client.start_config_flow.assert_not_called()
+    assert any("describe=True" in w for w in resp["warnings"])
 
 
 # --- strings Home Assistant could not send are a warning, a missing one not --
