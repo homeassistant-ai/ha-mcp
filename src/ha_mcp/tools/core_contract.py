@@ -42,23 +42,42 @@ async def core_contract(
     client: Any, command: str, payload: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Describe or validate without dispatching; absence is explicitly unvalidated."""
+    params: dict[str, Any] = {"command": command}
+    if payload is not None:
+        params["payload"] = payload
+    return await _contract_bridge(client, "core_contract", params)
+
+
+async def integration_commands(
+    client: Any,
+    domain: str,
+    command: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """List ``domain``'s own WebSocket commands, or validate a call to one."""
+    params: dict[str, Any] = {"domain": domain}
+    if command is not None:
+        params.update(command=command, payload=payload or {})
+    return await _contract_bridge(client, "integration_commands", params)
+
+
+async def _contract_bridge(
+    client: Any, capability: str, params: dict[str, Any]
+) -> dict[str, Any]:
     unavailable = {
         "status": "unavailable",
         "reason": "The installed component does not expose Core contract discovery/validation. Core still validates actual requests.",
     }
     try:
         caps = await get_component_caps(client, strict=True)
-        if not component_supports(caps, "core_contract"):
+        if not component_supports(caps, capability):
             return unavailable
         ws = await get_websocket_client(
             url=client.base_url,
             token=client.token,
             verify_ssl=getattr(client, "verify_ssl", None),
         )
-        params: dict[str, Any] = {"command": command}
-        if payload is not None:
-            params["payload"] = payload
-        response = await ws.send_command("ha_mcp_tools/core_contract", **params)
+        response = await ws.send_command(f"ha_mcp_tools/{capability}", **params)
         result = response.get("result")
         if isinstance(result, dict) and result.get("status") in {
             "available",
@@ -76,7 +95,7 @@ async def core_contract(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Could not obtain Core contract: {exc}",
-                context={"command": command},
+                context={k: v for k, v in params.items() if k != "payload"},
             )
         )
         return {}  # unreachable

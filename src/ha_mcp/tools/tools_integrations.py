@@ -78,6 +78,7 @@ from .integration_schema import (
     options_from_form_flow,
     redact_component_options,
 )
+from .integration_ws_commands import attach_ws_commands, send_ws_command
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import get_logger_levels, websocket_error_message
@@ -138,7 +139,7 @@ def _reject_set_integration_mode_conflicts(
     enabled: bool | None,
     config: dict[str, Any] | None,
 ) -> None:
-    """Reject ha_set_integration argument combinations that name two modes."""
+    """Reject ha_set_integration argument combinations that name two modes or none."""
     if domain is not None and entry_id is not None:
         raise_tool_error(
             create_error_response(
@@ -155,6 +156,43 @@ def _reject_set_integration_mode_conflicts(
                 "'enabled' is mutually exclusive with 'domain' and "
                 "'config' — enable/disable is a separate call",
                 context={"entry_id": entry_id, "domain": domain},
+            )
+        )
+    if domain is None and entry_id is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Nothing to do — provide 'domain' to add an "
+                "integration, or 'entry_id' with 'enabled' "
+                "(enable/disable) or 'config' (update options)",
+                suggestions=[
+                    "Use ha_get_integration() to find valid config entry IDs",
+                ],
+            )
+        )
+
+
+def _reject_ws_command_conflicts(
+    entry_id: str | None, ws_command: str | None, **others: object
+) -> None:
+    """Reject a ws_command call without entry_id and ws_command, or with another mode."""
+    problems = [
+        f"a ws_command call needs {name}"
+        for name, value in (("entry_id", entry_id), ("ws_command", ws_command))
+        if value is None
+    ]
+    if given := [name for name, value in others.items() if value is not None]:
+        problems.append(f"ws_command takes no {', '.join(given)}")
+    if problems:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "; ".join(problems),
+                context={"entry_id": entry_id, "ws_command": ws_command},
+                suggestions=[
+                    "Example: ha_set_integration(entry_id='abc123', "
+                    "ws_command='knx/get_knx_project')"
+                ],
             )
         )
 
@@ -443,18 +481,17 @@ class IntegrationTools:
                 default=False,
             ),
         ] = False,
-        include_knx_project: Annotated[
+        include_ws_commands: Annotated[
             bool,
             Field(
                 description=(
-                    "When entry_id is a KNX config entry, also return the parsed ETS "
-                    "project: the full group-address table (address, name, DPT, "
-                    "description) under knx_project.group_addresses, plus the group-range "
-                    "hierarchy and project metadata. This GA table is not in the "
-                    "diagnostics dump; per-entity GA assignments are (config_store / "
-                    "configuration_yaml). Ignored (with a warning) when the entry is not a "
-                    "KNX integration. KNX exposes a single project, so the result is the "
-                    "same for every KNX entry_id."
+                    "When entry_id is set, also list the integration's own "
+                    "'<domain>/' WebSocket commands (the API its panel uses, e.g. "
+                    "KNX's knx/get_knx_project) under ws_commands, each with the "
+                    "request schema Home Assistant registered for it. Send one "
+                    "with ha_set_integration(entry_id=..., ws_command=...). "
+                    "Needs the ha_mcp_tools custom component; without it a "
+                    "warning says the list is unavailable."
                 ),
                 default=False,
             ),
@@ -558,6 +595,7 @@ class IntegrationTools:
         - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; ha_set_integration(entry_id="abc123", describe=True, menu_choice="<option>") describes that form
         - List template entries with their options: ha_get_integration(domain="template")
         - Only service integrations: ha_get_integration(integration_type="service")
+        - An entry's panel commands: ha_get_integration(entry_id="abc123", include_ws_commands=True)
 
         OPTIONS: ``options`` reflect the entry's persisted values. Values that
         match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. For
@@ -584,7 +622,6 @@ class IntegrationTools:
             include_opts = include_options
             include_schema_bool = include_schema
             include_diagnostics_bool = include_diagnostics
-            include_knx_project_bool = include_knx_project
             include_subentries_bool = include_subentries
             include_subentry_schema_bool = include_subentry_schema
             show_advanced_options_bool = show_advanced_options
@@ -629,7 +666,7 @@ class IntegrationTools:
                     subentry_id=subentry_id,
                     show_advanced_options=show_advanced_options_bool,
                     include_diagnostics=include_diagnostics_bool,
-                    include_knx_project=include_knx_project_bool,
+                    include_ws_commands=include_ws_commands,
                     device_id=device_id,
                     fields_list=fields_list,
                     truncate_bytes=truncate_bytes,
@@ -656,7 +693,7 @@ class IntegrationTools:
             )
             ignored_detail_params = self._ignored_diagnostics_detail_params(
                 include_diagnostics=include_diagnostics_bool,
-                include_knx_project=include_knx_project_bool,
+                include_ws_commands=include_ws_commands,
                 device_id=device_id,
                 fields_list=fields_list,
                 truncate_bytes=truncate_bytes,
@@ -708,7 +745,7 @@ class IntegrationTools:
         subentry_id: str | None,
         show_advanced_options: bool,
         include_diagnostics: bool,
-        include_knx_project: bool,
+        include_ws_commands: bool,
         device_id: str | None,
         fields_list: list[str] | None,
         truncate_bytes: int | None,
@@ -716,7 +753,7 @@ class IntegrationTools:
         data_offset_int: int,
         data_limit_int: int | None,
     ) -> dict[str, Any]:
-        """Build the single-entry response, attaching diagnostics/KNX when asked."""
+        """Build the single-entry response, attaching diagnostics/commands when asked."""
         resp = await self._get_single_entry(
             entry_id,
             include_schema,
@@ -741,15 +778,15 @@ class IntegrationTools:
             resp.setdefault("warnings", []).append(
                 "device_id was provided but ignored because include_diagnostics=False"
             )
-        if include_knx_project:
-            await self._attach_knx_project(resp, entry_id)
+        if include_ws_commands:
+            await attach_ws_commands(self._client, resp)
         return resp
 
     @staticmethod
     def _ignored_diagnostics_detail_params(
         *,
         include_diagnostics: bool,
-        include_knx_project: bool,
+        include_ws_commands: bool,
         device_id: str | None,
         fields_list: list[str] | None,
         truncate_bytes: int | None,
@@ -757,12 +794,12 @@ class IntegrationTools:
         data_offset_int: int,
         data_limit_int: int | None,
     ) -> list[str]:
-        """Detail-only diagnostics/KNX params that are ignored in list mode."""
+        """Detail-only diagnostics/command params that are ignored in list mode."""
         ignored_detail_params: list[str] = []
         if include_diagnostics:
             ignored_detail_params.append("include_diagnostics")
-        if include_knx_project:
-            ignored_detail_params.append("include_knx_project")
+        if include_ws_commands:
+            ignored_detail_params.append("include_ws_commands")
         if device_id is not None:
             ignored_detail_params.append("device_id")
         if fields_list is not None:
@@ -1029,69 +1066,6 @@ class IntegrationTools:
             )
 
         return resp
-
-    async def _attach_knx_project(self, resp: dict[str, Any], entry_id: str) -> None:
-        """Attach the parsed KNX ETS project to a single-entry response.
-
-        Reads ``knx/get_knx_project`` (the same command the KNX panel uses) and
-        attaches the group-address table, group-range hierarchy, and project
-        metadata under ``resp["knx_project"]``. The KNX integration exposes one
-        project globally, so the command takes no entry scope; this is gated on
-        the entry actually being a KNX integration to avoid attaching unrelated
-        data to a non-KNX entry.
-
-        Failures are surfaced as warnings rather than raised — the primary
-        entry read already succeeded, mirroring how diagnostics fetch failures
-        are handled. The "KNX integration not loaded" case collapses into
-        ha_get_integration's existing no-such-entry handling (no KNX entry → no
-        entry_id to pass here), so it needs no special casing.
-        """
-        entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else {}
-        domain = entry.get("domain") if isinstance(entry, dict) else None
-        if domain != "knx":
-            resp.setdefault("warnings", []).append(
-                f"include_knx_project ignored: entry {entry_id} is not a KNX "
-                f"integration (domain={domain!r})"
-            )
-            return
-
-        result = await self._client.send_websocket_message(
-            {"type": "knx/get_knx_project"}
-        )
-        if not isinstance(result, dict) or not result.get("success"):
-            error_msg = websocket_error_message(
-                result.get("error", "Unknown error")
-                if isinstance(result, dict)
-                else result
-            )
-            resp.setdefault("warnings", []).append(
-                f"Failed to fetch KNX project: {error_msg}"
-            )
-            return
-
-        project = result.get("result")
-        if not project:
-            # No ETS project uploaded yet — get_knxproject() returns None.
-            resp["knx_project"] = {
-                "count": 0,
-                "group_addresses": {},
-                "group_ranges": {},
-                "info": {},
-                "note": (
-                    "The KNX integration is loaded but no ETS project has been "
-                    "uploaded yet. Upload a .knxproj file via the KNX panel to "
-                    "populate the group-address table."
-                ),
-            }
-            return
-
-        group_addresses = project.get("group_addresses", {})
-        resp["knx_project"] = {
-            "count": len(group_addresses),
-            "group_addresses": group_addresses,
-            "group_ranges": project.get("group_ranges", {}),
-            "info": project.get("info", {}),
-        }
 
     async def _fetch_config_subentries(self, entry_id: str) -> list[dict[str, Any]]:
         """Fetch config subentries for a detailed entry response."""
@@ -1436,10 +1410,13 @@ class IntegrationTools:
         domain_resolver=resolve_config_entry_backup_domain,
         # Every reconfigure request validates the entry and confirmation before
         # the inner apply helper captures the normal edit snapshot.
+        # A ws_command changes the integration's own storage, not the entry
+        # the snapshot holds.
         skip_fn=lambda kwargs: (
             bool(kwargs.get("reconfigure"))
             or bool(kwargs.get("describe"))
             or kwargs.get("log_level") is not None
+            or kwargs.get("ws_command") is not None
         ),
     )
     @log_tool_usage
@@ -1648,8 +1625,32 @@ class IntegrationTools:
                 ),
             ),
         ] = None,
+        ws_command: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "With entry_id: one of the integration's own '<domain>/' "
+                    "WebSocket commands to send, as its panel in the HA UI "
+                    "does (e.g. 'knx/get_knx_project'). Its result is "
+                    "returned under result. Streaming commands are refused."
+                ),
+            ),
+        ] = None,
+        ws_data: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description=(
+                    "The ws_command's arguments, without 'type' and 'id'. "
+                    "Checked against the schema Home Assistant registered "
+                    "for the command before it is sent."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
+        """Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.
 
         Modes (pick one):
         - Enable/disable: entry_id + enabled.
@@ -1666,6 +1667,10 @@ class IntegrationTools:
           preflight returns as confirm_token to apply.
         - Log level: log_level + domain (or entry_id) — sets how much the
           integration logs; read it back with ha_get_integration's log_level.
+        - Integration command: entry_id + ws_command (+ ws_data) — what the
+          integration's panel sends (KNX project, entities, telegrams).
+          Home Assistant marks none of these commands as read-only, so a read
+          such as knx/get_knx_project goes through this tool too.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -1684,7 +1689,9 @@ class IntegrationTools:
         options fields before an update, and
         ha_set_integration(domain=..., describe=True) for the setup form
         before adding. Its supports_reconfigure field tells
-        you whether an entry qualifies for reconfigure=True.
+        you whether an entry qualifies for reconfigure=True, and
+        ha_get_integration(entry_id=..., include_ws_commands=True) lists the
+        commands ws_command accepts with their schemas.
 
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
@@ -1713,9 +1720,37 @@ class IntegrationTools:
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
         - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}), then repeat adding confirm_token="sha256:..."
         - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
+        - KNX project: ha_set_integration(entry_id="abc123", ws_command="knx/get_knx_project")
         """
         try:
             _reject_log_persistence_without_level(log_persistence, log_level)
+            if ws_command is not None or ws_data is not None:
+                reject_reconfigure_only_parameters(
+                    confirm_token=confirm_token,
+                    expected_device_id=expected_device_id,
+                    expected_unique_id=expected_unique_id,
+                    expected_mac=expected_mac,
+                    expected_entity_ids=expected_entity_ids,
+                )
+                _reject_ws_command_conflicts(
+                    entry_id,
+                    ws_command,
+                    domain=domain,
+                    enabled=enabled,
+                    config=config,
+                    log_level=log_level,
+                    menu_choice=menu_choice,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    reconfigure=reconfigure or None,
+                    describe=describe or None,
+                )
+                return await send_ws_command(
+                    self._client,
+                    validate_identifier_not_empty(entry_id, "entry_id"),
+                    validate_identifier_not_empty(ws_command, "ws_command"),
+                    ws_data,
+                )
             if describe or any(
                 p is not None for p in (menu_choice, subentry_type, subentry_id)
             ):
@@ -1796,19 +1831,6 @@ class IntegrationTools:
                 )
                 refuse_component_entry(domain, action="add an entry for")
                 return await create_config_entry(self._client, domain, config or {})
-
-            if entry_id is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Nothing to do — provide 'domain' to add an "
-                        "integration, or 'entry_id' with 'enabled' "
-                        "(enable/disable) or 'config' (update options)",
-                        suggestions=[
-                            "Use ha_get_integration() to find valid config entry IDs",
-                        ],
-                    )
-                )
 
             # Empty/whitespace entry_id would surface as a misleading HA
             # "config entry not found" from the backend call.

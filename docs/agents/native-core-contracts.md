@@ -236,6 +236,26 @@ it up, so its flows can fail), and failing a setup describe whose step Core fini
 (naming the entry Core created, not undoing it) or any describe that reaches a
 step without a form.
 
+An integration's own WebSocket commands, the API its panel uses, go through
+the component's `ha_mcp_tools/integration_commands` bridge (capability
+`integration_commands`). `ha_get_integration(include_ws_commands=True)` lists
+the entry domain's `<domain>/` commands from Core's registry
+(`hass.data["websocket_api"]`), each with its registered request schema
+serialized as `core_contract.py` serializes one; a command Core registers
+without fields (schema `False`) is described with Core's
+`BASE_COMMAND_MESSAGE_SCHEMA`. `ha_set_integration(entry_id=..., ws_command=...,
+ws_data=...)` sends one: the bridge runs the registered validator without the
+handler, and the server sends the command over WebSocket only when it passes.
+The `<domain>/` prefix of the entry is the bridge's permission boundary, and
+the server checks it too. HA-MCP policies here: refusing ha-mcp's own entries,
+refusing streaming commands and snapshot routes as `ha_call_service`'s
+`ws_command` does, and taking no auto-backup (the command changes the
+integration's own storage, not the entry). Core marks no command as read-only,
+so every call is a write and read-only mode blocks it, the KNX project read
+(`knx/get_knx_project`) included; keeping reads would need a hand-kept list.
+Without the capability the list is absent with a warning, and a command is
+sent unvalidated with a warning; Core still validates it on receipt.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative
