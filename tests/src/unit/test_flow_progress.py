@@ -671,3 +671,55 @@ async def test_helper_recreation_cleanup_is_sent_inside_a_cancelled_scope() -> N
         await _cleanup_snapshot_creation(client, progress, failure)
 
     assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_abort_after_an_error_logs_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    abort = AsyncMock(side_effect=RuntimeError("ws down"))
+
+    with caplog.at_level("WARNING"):
+        await abort_failed_flow(abort, "f1", kind="config subentry flow")
+
+    (record,) = [r for r in caplog.records if "f1" in r.getMessage()]
+    assert record.getMessage().startswith(
+        "Failed to abort config subentry flow f1 after error"
+    )
+    assert record.exc_info is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("abort_error", "level"),
+    [
+        pytest.param(RuntimeError("PRIVATE_TEST_PAYLOAD"), "WARNING", id="failed"),
+        pytest.param(
+            HomeAssistantAPIError("PRIVATE_TEST_PAYLOAD", status_code=404),
+            "DEBUG",
+            id="gone",
+        ),
+    ],
+)
+async def test_a_helper_recreation_abort_logs_the_error_type_only(
+    caplog: pytest.LogCaptureFixture, abort_error: Exception, level: str
+) -> None:
+    # The error's text may echo the snapshot's values.
+    client = AsyncMock()
+    client.abort_config_flow.side_effect = abort_error
+    progress = _CreationFlowProgress({})
+    progress.flow_id = "f1"
+    failure = OptionsFlowError(
+        "refused", apply_status="not_applied", entry_id="", reason="flow_aborted"
+    )
+
+    with caplog.at_level("DEBUG"):
+        await _cleanup_snapshot_creation(client, progress, failure)
+
+    (record,) = [r for r in caplog.records if "f1" in r.getMessage()]
+    assert record.levelname == level
+    assert record.getMessage() == (
+        "Helper recreation flow f1 cleanup failed (reason=flow_aborted, "
+        f"error_type={type(abort_error).__name__})"
+    )
+    assert "PRIVATE_TEST_PAYLOAD" not in caplog.text

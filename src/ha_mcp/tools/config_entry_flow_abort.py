@@ -15,8 +15,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .config_entry_flow_introspect import (
     _ABORT_TIMEOUT_S,
+    abort_left_flow_open,
     abort_probe_flow,
-    flow_gone,
     shielded_abort,
 )
 from .config_entry_flow_walker import flow_error_payload
@@ -49,34 +49,27 @@ async def abort_failed_flow(
     )
 
 
-async def abort_failed_options_flow(
-    client: Any, flow_id: str, *, entry_id: str, reason: object
+async def abort_failed_flow_type_only(
+    abort: Callable[[str], Awaitable[Any]], flow_id: str, msg: str, *args: object
 ) -> Exception | None:
-    """Abort an options flow after a failed walk; return the abort's error.
+    """Abort a flow after a failed write; return the abort's error.
 
-    The log names the error's type only, never its text.
+    A failure logs ``msg % (*args, error_type)`` at warning, at debug when the
+    flow is already gone: the error's type only, never its text, which may
+    echo the values the flow carried.
     """
     try:
         with anyio.CancelScope(shield=True):  # see shielded_abort
-            await asyncio.wait_for(
-                client.abort_options_flow(flow_id), timeout=_ABORT_TIMEOUT_S
-            )
+            await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
     except Exception as abort_err:  # noqa: BLE001
-        logger.warning(
-            "Failed to abort options flow %s for entry %s "
-            "(stage=abort_cleanup, reason=%s, error_type=%s)",
-            flow_id,
-            entry_id,
-            reason,
+        logger.log(
+            logging.WARNING if abort_left_flow_open(abort_err) else logging.DEBUG,
+            msg,
+            *args,
             type(abort_err).__name__,
         )
         return abort_err
     return None
-
-
-def abort_left_flow_open(abort_err: Exception | None) -> bool:
-    """Whether a failed abort may have left its flow open (a 404: it is gone)."""
-    return abort_err is not None and not flow_gone(abort_err)
 
 
 def _raise_with_warning(flow_error: BaseException, warning: str) -> None:

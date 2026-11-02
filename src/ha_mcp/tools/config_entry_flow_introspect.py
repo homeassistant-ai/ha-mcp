@@ -22,10 +22,15 @@ logger = logging.getLogger(__name__)
 _ABORT_TIMEOUT_S = 5.0
 
 
-def flow_gone(err: BaseException | None) -> bool:
+def _flow_gone(err: BaseException | None) -> bool:
     """Whether ``err`` is Core's 404 for a flow that no longer exists: it
     already finished (abort, create_entry)."""
     return getattr(err, "status_code", None) == 404
+
+
+def abort_left_flow_open(abort_err: Exception | None) -> bool:
+    """Whether a failed abort may have left its flow open (a 404: it is gone)."""
+    return abort_err is not None and not _flow_gone(abort_err)
 
 
 async def shielded_abort(
@@ -46,7 +51,7 @@ async def shielded_abort(
             await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
     except Exception as abort_err:
         logger.log(
-            logging.DEBUG if flow_gone(abort_err) else level,
+            logging.DEBUG if _flow_gone(abort_err) else level,
             "%s: %s",
             failure,
             abort_err,
@@ -65,13 +70,14 @@ async def abort_probe_flow(
     Returns whether the flow may still be open: the abort failed with
     anything other than Core's 404 for a flow that is already gone.
     """
-    abort_err = await shielded_abort(
-        abort,
-        flow_id,
-        failure=f"flow {flow_id} abort failed",
-        level=logging.DEBUG if quiet else logging.WARNING,
+    return abort_left_flow_open(
+        await shielded_abort(
+            abort,
+            flow_id,
+            failure=f"flow {flow_id} abort failed",
+            level=logging.DEBUG if quiet else logging.WARNING,
+        )
     )
-    return abort_err is not None and not flow_gone(abort_err)
 
 
 class _FlowType(StrEnum):

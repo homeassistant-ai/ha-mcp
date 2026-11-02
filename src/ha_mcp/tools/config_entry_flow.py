@@ -42,8 +42,6 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
 
-import anyio
-
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -53,7 +51,7 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
 from .config_entry_flow_abort import (
     abort_failed_flow,
-    abort_failed_options_flow,
+    abort_failed_flow_type_only,
     flow_left_open,
     raise_if_flow_left_open,
 )
@@ -422,18 +420,13 @@ async def _cleanup_snapshot_creation(
     if not progress.flow_id:
         return
     if failure.apply_status == "not_applied":
-        try:
-            with anyio.CancelScope(shield=True):  # see shielded_abort
-                await asyncio.wait_for(
-                    client.abort_config_flow(progress.flow_id), timeout=_ABORT_TIMEOUT_S
-                )
-        except Exception as err:  # noqa: BLE001
-            logger.warning(
-                "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
-                progress.flow_id,
-                failure.reason,
-                type(err).__name__,
-            )
+        await abort_failed_flow_type_only(
+            client.abort_config_flow,
+            progress.flow_id,
+            "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
+            progress.flow_id,
+            failure.reason,
+        )
     else:
         logger.warning(
             "Helper recreation flow %s was not aborted "
@@ -859,14 +852,16 @@ async def _update_config_entry_options(
         else:
             should_abort = not leaves_flow_open(flow_err)
         if should_abort:
-            abort_err = await abort_failed_options_flow(
-                client,
+            abort_err = await abort_failed_flow_type_only(
+                client.abort_options_flow,
                 flow_id,
-                entry_id=entry_id,
-                reason=flow_err.reason
-                if isinstance(flow_err, OptionsFlowError)
-                else None,
+                "Failed to abort options flow %s for entry %s "
+                "(stage=abort_cleanup, reason=%s, error_type=%s)",
+                flow_id,
+                entry_id,
+                flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
             )
+            # A restore reports its own failure and has no warnings to add to.
             if progress is None:
                 raise_if_flow_left_open(
                     flow_err, abort_err, flow_left_open("options", flow_id)
