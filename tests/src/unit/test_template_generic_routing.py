@@ -10,7 +10,7 @@ import pytest
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import auto_backup, component_config_entries
+from ha_mcp.tools import auto_backup, component_api, component_config_entries
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
@@ -104,6 +104,9 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
     # No component config-entry read: integration snapshots fall back to Core's row.
     monkeypatch.setattr(
         component_config_entries, "fetch_config_entries", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        component_api, "get_component_caps", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(auto_backup, "get_global_settings", lambda: settings)
     return SimpleNamespace(

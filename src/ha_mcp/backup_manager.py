@@ -274,6 +274,15 @@ class _FlowHelperBackupSkip(_FlowHelperReadError):
     lists. Best-effort capture logs it at INFO."""
 
 
+def _restore_is_flow_driven(domain: str) -> bool:
+    """A snapshot domain whose restore drives a Core flow, which can apply it
+    partly: a flow helper, a config subentry or an integration entry."""
+    return _is_flow_helper_domain(domain) or domain in (
+        "helper_config_subentry",
+        "integration",
+    )
+
+
 def _is_flow_helper_domain(domain: str) -> bool:
     """A ``helper_<type>`` snapshot domain of a config-entry (flow) helper.
 
@@ -1565,11 +1574,10 @@ class BackupManager:
         step = "safety_preflight"
         try:
             needs_safety = await self._restore_needs_safety(handler, entity_id, config)
-            # Existing flow helpers and subentries always require a fresh
-            # recovery point: their flows can apply a restore partly.
-            is_flow = _is_flow_helper_domain(domain)
-            flow_driven = is_flow or domain == "helper_config_subentry"
-            if needs_safety and (flow_driven or take_safety_backup):
+            # Existing flow helpers, subentries and integration entries always
+            # require a fresh recovery point: their flows can apply a restore
+            # partly.
+            if needs_safety and (_restore_is_flow_driven(domain) or take_safety_backup):
                 step = "safety_backup"
                 safety_path = await self._capture_restore_safety(
                     domain, entity_id, outcome, config
@@ -1641,7 +1649,7 @@ class BackupManager:
     ) -> Path | None:
         """Take a restore's recovery point; a failed capture raises and blocks it."""
         is_flow = _is_flow_helper_domain(domain)
-        flow_driven = is_flow or domain == "helper_config_subentry"
+        flow_driven = _restore_is_flow_driven(domain)
         if not flow_driven and not getattr(self._settings, "enable_auto_backup", False):
             return None  # auto-backup off: no safety backup is promised
         # The restore overwrites the current state, so the throttle that a

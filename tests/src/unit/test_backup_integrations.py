@@ -5,6 +5,7 @@ options flow before it reapplies the enabled state. A deleted entry is refused."
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,7 +16,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_integrations import fetch_integration, restore_integration
 from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import backup as backup_tool
-from ha_mcp.tools import component_config_entries, config_entry_flow
+from ha_mcp.tools import component_api, component_config_entries, config_entry_flow
 from ha_mcp.tools.component_config_entries import ComponentEntries
 
 
@@ -23,9 +24,12 @@ def _ws(
     monkeypatch: pytest.MonkeyPatch,
     entries: list[dict[str, Any]],
     component: list[ComponentEntries | None] | None = None,
+    *,
+    installed: bool = False,
 ) -> list:
     """Record what reaches Core. ``component`` answers successive component
-    reads in turn (the last one repeats); without it there is no component."""
+    reads in turn (the last one repeats); without it there is no component.
+    ``installed``: a component advertises the command even when a read fails."""
     sent: list[dict[str, Any]] = []
     reads = list(component or [None])
 
@@ -42,6 +46,10 @@ def _ws(
     monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
     monkeypatch.setattr(
         component_config_entries, "fetch_config_entries", fake_component_read
+    )
+    caps = SimpleNamespace(capabilities={"config_entries"}) if installed else None
+    monkeypatch.setattr(
+        component_api, "get_component_caps", AsyncMock(return_value=caps)
     )
     return sent
 
@@ -162,17 +170,21 @@ async def test_capture_through_the_component_carries_options_but_not_subentries(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("installed", "reason"),
+    [(False, "component_unavailable"), (True, "component_read_failed")],
+    ids=["no-component", "failed-read"],
+)
 async def test_capture_without_the_component_keeps_cores_row_and_says_why_no_options(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, installed: bool, reason: str
 ) -> None:
-    sent = _ws(monkeypatch, [{"entry_id": "other"}, {"entry_id": "e1"}])
+    sent = _ws(
+        monkeypatch, [{"entry_id": "other"}, {"entry_id": "e1"}], installed=installed
+    )
 
     snapshot = await fetch_integration(None, "e1")
 
-    assert snapshot == {
-        "entry_id": "e1",
-        "options_unavailable": "component_unavailable",
-    }
+    assert snapshot == {"entry_id": "e1", "options_unavailable": reason}
     assert sent[-1] == {"type": "config_entries/get"}
 
 
@@ -506,6 +518,60 @@ async def test_an_entry_enabled_before_a_refused_options_flow_says_it_was_enable
     assert "enabled" in str(exc_info.value)
     assert "nothing was applied" not in str(exc_info.value).lower()
     assert [m["type"] for m in sent].count("config_entries/disable") == 1
+
+
+@pytest.mark.asyncio
+async def test_an_entry_enabled_before_an_unsettled_options_flow_says_it_was_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ws(monkeypatch, [], [_read(_row({"int": 42}, disabled_by="user"))])
+    monkeypatch.setattr(
+        config_entry_flow,
+        "update_config_entry_options",
+        AsyncMock(
+            side_effect=config_entry_flow.OptionsFlowError(
+                "Home Assistant did not answer the options restore",
+                apply_status="unknown",
+                entry_id="e1",
+            )
+        ),
+    )
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "demo", "disabled_by": None, "options": {"int": 11}}
+        )
+
+    assert exc_info.value.outcome["apply_status"] == "applied"
+    assert str(exc_info.value).startswith("Config entry e1 was enabled, then its")
+
+
+@pytest.mark.asyncio
+async def test_an_integration_restore_takes_a_safety_backup_whatever_the_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    # Its options flow can apply a restore partly, as a flow helper's can.
+    _ws(monkeypatch, [], [_read(_row({"int": 11}))])
+    manager = bm.get_backup_manager(
+        SimpleNamespace(),
+        SimpleNamespace(
+            enable_auto_backup=False,
+            auto_backup_throttle_minutes=60,
+            auto_backup_retain_per_entity=5,
+            auto_backup_dir=str(tmp_path),
+        ),
+    )
+    snapshot = manager._write_snapshot(
+        "integration",
+        "e1",
+        {"domain": "demo", "disabled_by": None, "options": {"int": 11}},
+        "test",
+    )
+
+    result = await manager.restore_snapshot(snapshot.name, take_safety_backup=False)
+
+    assert result["safety_backup"] is not None
+    assert manager.read_snapshot(result["safety_backup"])["domain"] == "integration"
 
 
 @pytest.mark.asyncio

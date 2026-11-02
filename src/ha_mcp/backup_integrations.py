@@ -18,27 +18,38 @@ options flow cannot produce) fail the restore after the enabled state is set.
 from __future__ import annotations
 
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .backup_entity_ids import _manager
+
+if TYPE_CHECKING:
+    from .backup_manager import BackupRestoreError
 
 
 async def fetch_integration(client: Any, entity_id: str) -> Any:
     from .redaction import placeholder_option_keys
     from .tools import component_config_entries
+    from .tools.component_api import component_supports, get_component_caps
 
     bm = _manager()
     read = await component_config_entries.fetch_config_entries(
         client, entry_id=entity_id
     )
     if read is None:
+        # An installed component whose command failed is not a missing one.
+        caps = await get_component_caps(client)
+        why = (
+            "component_read_failed"
+            if component_supports(caps, "config_entries")
+            else "component_unavailable"
+        )
         items = bm._require_list(
             await bm._ws_send(client, {"type": "config_entries/get"}),
             "config_entries/get",
         )
         for item in items:
             if item.get("entry_id") == entity_id:
-                return {**item, "options_unavailable": "component_unavailable"}
+                return {**item, "options_unavailable": why}
         return None
     if not read.rows:
         return None
@@ -119,15 +130,9 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
         try:
             await _restore_options(client, entity_id, config, current["options"])
         except bm.BackupRestoreError as err:
-            if not enable_first or err.outcome["apply_status"] != "not_applied":
+            if not enable_first:
                 raise
-            reason = err.outcome.get("reason")
-            raise bm.BackupRestoreError(
-                f"Config entry {entity_id} was enabled, but its options were "
-                "not restored: "
-                + (str(err) if reason else "the options flow refused them"),
-                **{**err.outcome, "apply_status": "applied"},
-            ) from err
+            raise _enabled_then_failed(entity_id, err) from err
     if not enable_first:
         result = await _set_disabled_by(client, entity_id, disabled_by)
     if not_restored is not None:
@@ -140,6 +145,21 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
             reason="options_not_restored",
         )
     return result
+
+
+def _enabled_then_failed(entity_id: str, err: BackupRestoreError) -> BackupRestoreError:
+    """``err`` from the options restore of an entry the restore enabled first."""
+    if err.outcome["apply_status"] != "not_applied":
+        detail = f"then its options restore failed: {err}"
+    elif err.outcome.get("reason"):
+        detail = f"but its options were not restored: {err}"
+    else:
+        detail = "but its options were not restored: the options flow refused them"
+    failed: BackupRestoreError = _manager().BackupRestoreError(
+        f"Config entry {entity_id} was enabled, {detail}",
+        **{**err.outcome, "apply_status": "applied"},
+    )
+    return failed
 
 
 def _options_not_restored(config: Any, current: dict[str, Any]) -> Any:
