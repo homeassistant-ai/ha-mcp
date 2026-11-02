@@ -166,11 +166,7 @@ class EventCallMixin:
         if component_result is not None:
             return component_result
 
-        ws_result = await self._fire_event_ws(event_type, parsed_data)
-        if ws_result is not None:
-            return ws_result
-
-        return await self._fire_event_rest(event_type, parsed_data)
+        return await self._fire_event_ws(event_type, parsed_data)
 
     async def _listener_fields(self, event_type: str) -> dict[str, Any]:
         """Read the optional listener counts, never blocking the fire."""
@@ -263,7 +259,7 @@ class EventCallMixin:
 
     async def _fire_event_ws(
         self, event_type: str, data: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Fire through Core's WebSocket fire_event command."""
         fields = await self._listener_fields(event_type)
         try:
@@ -279,7 +275,7 @@ class EventCallMixin:
                     context={"event_type": event_type},
                     suggestions=["Check the Home Assistant token"],
                 )
-            return None
+            return await self._fire_event_rest(event_type, data, fields)
         except Exception as err:  # noqa: BLE001
             exception_to_structured_error(
                 err,
@@ -297,7 +293,7 @@ class EventCallMixin:
         if raw.get("success") is False:
             if raw.get("error_code") == "unknown_command":
                 invalidate_caps(self._client)
-                return None
+                return await self._fire_event_rest(event_type, data, fields)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -327,9 +323,16 @@ class EventCallMixin:
         }
 
     async def _fire_event_rest(
-        self, event_type: str, data: dict[str, Any] | None
+        self,
+        event_type: str,
+        data: dict[str, Any] | None,
+        listener_fields: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Fire through the REST view; required for state_changed and older HA."""
+        """Fire through the REST view; required for state_changed and older HA.
+
+        ``listener_fields`` reuses a lookup the caller already made, so a
+        WebSocket-to-REST fallback does not wait for the counts twice.
+        """
         if any(separator in event_type for separator in _EVENT_TYPE_SEPARATORS):
             raise_tool_error(
                 create_validation_error(
@@ -339,7 +342,8 @@ class EventCallMixin:
                     details=f"Received: {event_type!r}",
                 )
             )
-        listener_fields = await self._listener_fields(event_type)
+        if listener_fields is None:
+            listener_fields = await self._listener_fields(event_type)
         try:
             response = await self._client.fire_event(event_type, data)
         except HomeAssistantConnectionError as error:
@@ -357,6 +361,8 @@ class EventCallMixin:
                         f"Event {event_type} may have been dispatched, but Home Assistant "
                         "did not respond within the timeout period."
                     ),
+                    "context": {},
+                    "context_id": None,
                     **{
                         key: value
                         for key, value in listener_fields.items()
@@ -384,5 +390,7 @@ class EventCallMixin:
             "success": True,
             "event_type": event_type,
             "message": response.get("message", f"Event {event_type} fired."),
+            "context": {},
+            "context_id": None,
             **listener_fields,
         }

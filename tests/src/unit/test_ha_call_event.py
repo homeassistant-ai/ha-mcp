@@ -552,6 +552,8 @@ class TestHaCallEvent:
         assert result["partial"] is True
         assert result["listener_count"] == 2
         assert result["wildcard_listener_count"] == 1
+        assert result["context"] == {}
+        assert result["context_id"] is None
         assert any("timed out" in w.lower() for w in result["warnings"])
 
     async def test_zero_listener_warning_does_not_claim_delivery(self):
@@ -640,3 +642,23 @@ class TestHaCallEvent:
 
         assert result["success"] is True
         tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_ws_fallback_reuses_the_prefetched_listener_fields(self):
+        """The fallback must not repeat the lookup's up-to-5s wait."""
+        tools = _make_tools({"message": "rest"}, {"my_event": 2, "*": 1})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["listener_count"] == 2
+        assert result["wildcard_listener_count"] == 1
+        tools._client._request.assert_awaited_once()
+        tools._client.fire_event.assert_awaited_once_with("my_event", None)
+
+    async def test_rest_returns_context_fallbacks(self):
+        """REST reports no context, but every route keeps the same keys."""
+        tools = _make_tools({"message": "ok"})
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["context"] == {}
+        assert result["context_id"] is None
