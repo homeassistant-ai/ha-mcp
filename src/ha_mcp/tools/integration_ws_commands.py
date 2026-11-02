@@ -89,7 +89,11 @@ async def _list_commands(client: Any, domain: Any) -> dict[str, Any]:
 async def send_ws_command(
     client: Any, entry_id: str, command: str, data: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Send one of the entry's own commands once Core's schema accepts it."""
+    """Send one of the entry's own commands once Core's schema accepts it.
+
+    When the component cannot validate it, the command is sent unchecked, with
+    a warning saying why.
+    """
     payload = data or {}
     context = {"entry_id": entry_id, "ws_command": command}
     if is_streaming_ws_command(command):
