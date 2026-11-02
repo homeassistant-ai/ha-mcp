@@ -1,4 +1,5 @@
-"""Describe and validate selected Core commands without invoking their handlers.
+"""Describe and validate selected Core commands, and an integration's own
+``<domain>/`` commands, without invoking their handlers.
 
 The registry is the authority: this bridge holds no copies of Core validators.
 It never dispatches a command. Writes still use Core's authenticated endpoints.
@@ -21,6 +22,8 @@ _UNSUPPORTED = _optional_attr("probatio", "UNSUPPORTED")
 _TO_JSON_SCHEMA = _optional_attr("probatio", "to_json_schema")
 COMMAND = "ha_mcp_tools/core_contract"
 CAPABILITY = "core_contract"
+INTEGRATION_COMMAND = "ha_mcp_tools/integration_commands"
+INTEGRATION_CAPABILITY = "integration_commands"
 # This is a bridge permission boundary, not a copy of the commands' fields.
 COMMANDS = (
     "energy/save_prefs",
@@ -29,20 +32,36 @@ COMMANDS = (
 )
 
 
+def _registered_schema(hass: HomeAssistant, command: str) -> Any:
+    entry = (hass.data.get("websocket_api") or {}).get(command)
+    if not entry:
+        return None
+    if entry[1] is False:
+        # Core registers a command without fields as False and refuses any field.
+        from homeassistant.components.websocket_api.messages import (
+            BASE_COMMAND_MESSAGE_SCHEMA,
+        )
+
+        return BASE_COMMAND_MESSAGE_SCHEMA.extend({"type": command})
+    return entry[1]
+
+
 def _schema(hass: HomeAssistant, command: str) -> Any:
     if command not in COMMANDS:
         raise ValueError("Unsupported Core contract")
-    entry = (hass.data.get("websocket_api") or {}).get(command)
-    return entry[1] if entry else None
+    return _registered_schema(hass, command)
 
 
 def validate_request(
     hass: HomeAssistant, command: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Call the exact installed validator, including its defaults and coercions."""
+    return _validate(_schema(hass, command), command, payload)
+
+
+def _validate(schema: Any, command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if {"id", "type"} & payload.keys():
         raise ValueError("id and type are reserved transport fields")
-    schema = _schema(hass, command)
     if schema is None:
         return {"status": "unavailable", "reason": "Core command is not registered"}
     try:
@@ -94,7 +113,11 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
     schema = _schema(hass, command)
     if schema is None:
         return {"status": "unavailable", "reason": "Core command is not registered"}
-    result: dict[str, Any] = {"status": "available", "command": command}
+    return {"status": "available", "command": command, **_describe(schema)}
+
+
+def _describe(schema: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     try:
         if _TO_JSON_SCHEMA is not None:
             try:
@@ -121,6 +144,29 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
             "Some Core validators cannot be described. Validation still uses the complete registered schema."
         ]
     return result
+
+
+def integration_commands(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Describe a domain's own commands, or validate a call to one of them.
+
+    The ``<domain>/`` prefix is this bridge's permission boundary.
+    """
+    prefix = f"{msg['domain']}/"
+    command = msg.get("command")
+    if command is None:
+        registered = hass.data.get("websocket_api") or {}
+        return {
+            "status": "available",
+            "domain": msg["domain"],
+            "commands": [
+                {"command": name, **_describe(_registered_schema(hass, name))}
+                for name in sorted(registered)
+                if name.startswith(prefix)
+            ],
+        }
+    if not command.startswith(prefix):
+        raise ValueError(f"{command} is not a {prefix} command")
+    return _validate(_registered_schema(hass, command), command, msg.get("payload", {}))
 
 
 def _defaults() -> dict[str, Any]:
@@ -160,6 +206,16 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
                 vol.Optional("payload"): dict,
             },
             execute,
+            None,
+        ),
+        (
+            {
+                vol.Required("type"): INTEGRATION_COMMAND,
+                vol.Required("domain"): str,
+                vol.Optional("command"): str,
+                vol.Optional("payload"): dict,
+            },
+            integration_commands,
             None,
         ),
         (

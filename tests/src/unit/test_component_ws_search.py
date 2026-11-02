@@ -1962,6 +1962,7 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS + wsapi.entity_restore.COMMANDS,
             wsapi.core_contract.COMMAND,
+            wsapi.core_contract.INTEGRATION_COMMAND,
             "ha_mcp_tools/statistics_units",
             wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
             wsapi.todo_items.WS_TODO_ITEM,  # test_component_todo_items.py

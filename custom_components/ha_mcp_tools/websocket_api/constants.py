@@ -206,6 +206,7 @@ CAPABILITIES: list[str] = [
     *helper_collections.CAPABILITIES,
     *entity_restore.CAPABILITIES,
     core_contract.CAPABILITY,
+    core_contract.INTEGRATION_CAPABILITY,
     todo_items.CAPABILITY,
     automation_config.CAPABILITY,
     *card_definitions.CAPABILITIES,
