@@ -5,8 +5,9 @@ unusable answer, ends in one shared tail: stop after the fifth attempt, stop
 once the time budget is spent, otherwise wait and retry. The first tests drive
 it through the transport-error path with a monkeypatched transport. The
 corrective retry ``_accept_or_retry`` asks for a rejected string runs only
-while the same budget lasts. Every test records the sleeps and runs on a
-stopped clock.
+while the same budget lasts, and a run whose budget runs out between two
+requests stops there. Every test records the sleeps and runs on a stopped
+clock.
 """
 
 from __future__ import annotations
@@ -193,3 +194,32 @@ def test_failed_retry_fails_the_string_not_the_run(
     failed = _accept({}, [])
     assert failed == {("messages", "greeting")}
     assert len(sleeps) == waits
+
+
+def test_budget_spent_mid_run_keeps_the_answers_and_stops(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    """The budget can run out between two requests for the same surface; the
+    strings already translated must be kept, and the run must stop with the
+    budget as its reason instead of calling the engine again."""
+    _deadline_in(monkeypatch, 3600)
+    monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
+    prompts: list[str] = []
+
+    def answers_then_spends_the_budget(prompt: str) -> dict[str, Any]:
+        prompts.append(prompt)
+        _deadline_in(monkeypatch, -1)
+        return {"messages:greeting": "Hallo"}
+
+    monkeypatch.setattr(
+        translate_locales, "_call_gemini", answers_then_spends_the_budget
+    )
+    items = [
+        translate_locales.WorkItem("de", "messages", "greeting", "Hello"),
+        translate_locales.WorkItem("de", "messages", "farewell", "Goodbye"),
+    ]
+    results, failures, failed, _ = translate_locales._translate_locale("de", items)
+    assert len(prompts) == 1
+    assert results == {("messages", "greeting"): "Hallo"}
+    assert failures[0] == "de: time budget exhausted — stopping this run"
+    assert failed == {("messages", "farewell")}
