@@ -286,9 +286,13 @@ class TestSend:
             "not a validation"
         ]
 
-    async def test_a_validation_without_a_verdict_sends_nothing(self) -> None:
+    @pytest.mark.parametrize("verdict", [{}, {"valid": None}, {"valid": "yes"}])
+    async def test_a_validation_without_a_verdict_sends_nothing(
+        self, verdict: dict[str, Any]
+    ) -> None:
+        # A malformed bridge answer, not a schema rejection of the ws_data.
         client = _client()
-        bridge = AsyncMock(return_value={"status": "validated"})
+        bridge = AsyncMock(return_value={"status": "validated", **verdict})
         with (
             patch.object(module, "integration_commands", bridge),
             pytest.raises(ToolError) as exc_info,
@@ -296,7 +300,8 @@ class TestSend:
             await IntegrationTools(client).ha_set_integration(
                 entry_id="e1", ws_command="knx/delete_entity"
             )
-        assert _error(exc_info)["code"] == "VALIDATION_FAILED"
+        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
+        assert "without a verdict" in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
 
     async def test_a_failed_bridge_sends_nothing(self) -> None:

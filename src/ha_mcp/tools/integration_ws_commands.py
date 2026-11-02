@@ -121,7 +121,16 @@ async def send_ws_command(
     guard_snapshot_route(ws_command=command, ws_params=payload)
     validation = await integration_commands(client, domain, command, payload)
     validated = validation["status"] == "validated"
-    if validated and validation.get("valid") is not True:
+    if validated and not isinstance(validation.get("valid"), bool):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "The component returned a validation without a verdict; "
+                "nothing was sent",
+                context=context,
+            )
+        )
+    if validated and validation["valid"] is False:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_FAILED,
