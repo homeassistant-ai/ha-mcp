@@ -46,6 +46,10 @@ from custom_components.ha_mcp_tools.loopback_url import (  # noqa: E402
             SimpleNamespace(port=8123, use_ssl=False, host="0.0.0.0"),
             ("http://127.0.0.1:8123", None),
         ),
+        (
+            SimpleNamespace(port=8123, use_ssl=True, host="::"),
+            ("https://[::1]:8123", False),
+        ),
     ],
     ids=[
         "no-api",
@@ -58,6 +62,7 @@ from custom_components.ha_mcp_tools.loopback_url import (  # noqa: E402
         "restricted-listen-address",
         "ipv6-listen-address",
         "wildcard-listen-address",
+        "ipv6-wildcard-listen-address",
     ],
 )
 def test_loopback_url_follows_the_http_config_and_rejects_bad_ports(

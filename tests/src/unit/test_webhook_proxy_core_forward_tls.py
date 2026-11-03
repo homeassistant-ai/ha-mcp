@@ -19,8 +19,14 @@ from .test_webhook_proxy_oauth_unified import oauth_stack  # noqa: F401
             SimpleNamespace(use_ssl=True, port=9443, host="10.0.2.15"),
             "https://10.0.2.15:9443",
         ),
+        (SimpleNamespace(use_ssl=True, port=9443, host="::"), "https://[::1]:9443"),
     ],
-    ids=["plain-http", "tls", "tls-restricted-listen-address"],
+    ids=[
+        "plain-http",
+        "tls",
+        "tls-restricted-listen-address",
+        "tls-ipv6-wildcard-listen-address",
+    ],
 )
 async def test_sign_in_reaches_core_listener(
     oauth_stack,  # noqa: F811

@@ -61,7 +61,8 @@ def derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
     host = (
         host_raw
         if isinstance(host_raw, str) and host_raw not in _WILDCARD_HOSTS
-        else "127.0.0.1"
+        # An IPv6 wildcard alone opens an IPv6-only socket.
+        else ("::1" if host_raw == "::" else "127.0.0.1")
     )
     if ":" in host:
         host = f"[{host}]"
