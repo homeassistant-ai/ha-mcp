@@ -855,7 +855,7 @@
     "src/ha_mcp/utils/entity_membership.py::normalize_member_entity_ids"
   ],
   "d4dfcdf48d4e": [
-    "tests/uat/run_uat.py::mcp_server_command",
+    "tests/uat/mcp_config.py::mcp_server_command",
     "tests/uat/stories/scripts/ha_query.py::mcp_server_command"
   ],
   "d524aa51c882": [

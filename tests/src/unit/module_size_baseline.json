@@ -117,6 +117,5 @@
   "tests/src/unit/test_yaml_dashboards.py": 1097,
   "tests/src/unit/test_yaml_read_tool.py": 1051,
   "tests/src/unit/visibility/test_enforcement.py": 1586,
-  "tests/uat/run_uat.py": 1022,
-  "tests/uat/stories/run_story.py": 1715
+  "tests/uat/stories/run_story.py": 1713
 }
