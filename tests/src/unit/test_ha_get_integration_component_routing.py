@@ -1,20 +1,9 @@
 """Routing tests for ``ha_get_integration`` over the ``ha_mcp_tools`` component gate.
 
-``ha_get_integration`` resolved a single entry by listing ALL config entries over
-REST and then paying an OptionsFlow start/abort round-trip per entry just to read
-``options`` (and a separate WS call for subentries). When the component advertises
-``config_entries``, one ``ha_mcp_tools/config_entries`` frame returns the entry
-identity, its already-materialized ``options`` (raw persisted, secret-scrubbed),
-and its ``subentries`` identity rows — no REST list, no OptionsFlow dance, no
-subentries WS call. These tests pin that: the component-served single lookup and
-list send ZERO ``start_options_flow`` calls (the key no-dance assertion), schema
-requests still open the legacy live flow while KEEPING the component's options,
-and every backend degradation (no caps, ``unknown_command`` → invalidate + fall
-back, a command error) behaves per the routing taxonomy. A connection error is a
-deliberate DEVIATION: this tool's legacy read falls back to Core's REST list when
-the WS gives no answer, so a WS-down error ALSO falls back (returns None → legacy
-get) rather than propagating. An empty-string ``entry_id`` is a single-entry lookup for a
-nonexistent id (not-found, never the first entry).
+When the component advertises ``config_entries``, one frame serves entry identity,
+options and subentries: no REST list, no OptionsFlow dance. Every degradation
+falls back to the legacy REST read; a WS-down ConnectionError falls back too
+(the legacy read is pure REST) instead of propagating.
 """
 
 from __future__ import annotations
@@ -43,6 +32,7 @@ from ._component_routing_helpers import (
 
 WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
+_CAPSLESS = HomeAssistantCommandError("no info", "unknown_command")
 _CAPS_CONFIG_ENTRIES = {
     "schema_version": 1,
     "component_version": "1.2.0",
@@ -215,6 +205,11 @@ def _clear_caps_cache() -> Any:
     component_api._NEGATIVE_CACHE_TS.clear()
 
 
+async def _get(ws: Any, client: Any, **call: Any) -> Any:
+    with patch_ws(ws, component_config_entries):
+        return await _build_get_integration(client)(**call)
+
+
 def _ce_calls(ws: Any) -> list[Any]:
     return [c for c in ws.send_command.call_args_list if c.args[0] == WS_CONFIG_ENTRIES]
 
@@ -222,18 +217,14 @@ def _ce_calls(ws: Any) -> list[Any]:
 # --- single-entry routing ------------------------------------------------------
 @pytest.mark.asyncio
 async def test_single_entry_served_by_component_no_options_dance() -> None:
-    """A single-entry read is served by one config_entries frame carrying identity
-    + options; the REST get and the OptionsFlow start/abort dance never run."""
+    """One config_entries frame serves the entry; no REST get, no OptionsFlow."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_result={"entries": [_row("cfg1", options={"discovery": True})]},
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1")
+    resp = await _get(ws, client, entry_id="cfg1")
 
     assert resp["success"] is True
     assert resp["entry_id"] == "cfg1"
@@ -252,8 +243,7 @@ async def test_single_entry_served_by_component_no_options_dance() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_include_subentries_from_component() -> None:
-    """include_subentries surfaces the component row's subentries at the top level;
-    the legacy config_entries/subentries/list WS call never runs."""
+    """include_subentries comes from the component row, not the legacy WS call."""
     subs = [
         {
             "subentry_id": "sub1",
@@ -268,10 +258,7 @@ async def test_single_entry_include_subentries_from_component() -> None:
         cmd_result={"entries": [_row("cfg1", subentries=subs)]},
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1", include_subentries=True)
+    resp = await _get(ws, client, entry_id="cfg1", include_subentries=True)
 
     assert resp["subentry_count"] == 1
     assert resp["subentries"] == subs
@@ -281,9 +268,7 @@ async def test_single_entry_include_subentries_from_component() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_include_schema_keeps_component_options() -> None:
-    """include_schema opens the legacy live options flow ONLY for the schema; the
-    component's raw options are kept (not overwritten by the flow's suggested
-    values). The entry itself still comes from the component (no REST get)."""
+    """include_schema opens a live flow only for the schema; component options win."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
@@ -301,10 +286,7 @@ async def test_single_entry_include_schema_keeps_component_options() -> None:
             ],
         }
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1", include_schema=True)
+    resp = await _get(ws, client, entry_id="cfg1", include_schema=True)
 
     assert resp["entry"]["options"] == {"discovery": True}  # component won
     assert resp["options_schema"]["flow_type"] == "form"
@@ -318,19 +300,15 @@ async def test_single_entry_include_schema_keeps_component_options() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_not_found_via_component_raises() -> None:
-    """An empty component ``entries`` for a given entry_id is authoritative
-    not-found — the same error the legacy REST get raises, and the REST get is
-    never consulted."""
+    """An empty component ``entries`` is authoritative not-found; no REST get."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_result={"entries": []},
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries), pytest.raises(ToolError) as excinfo:
-        await get_integration(entry_id="ghost")
+    with pytest.raises(ToolError) as excinfo:
+        await _get(ws, client, entry_id="ghost")
 
     assert "ghost" in str(excinfo.value)
     assert client.get_config_entry_calls == 0
@@ -338,7 +316,7 @@ async def test_single_entry_not_found_via_component_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_capsless_falls_back_to_legacy() -> None:
-    """Old component (info unknown_command) → legacy REST get + OptionsFlow probe."""
+    """Old component -> legacy REST get + OptionsFlow probe."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
@@ -354,10 +332,7 @@ async def test_single_entry_capsless_falls_back_to_legacy() -> None:
             ],
         },
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1")
+    resp = await _get(ws, client, entry_id="cfg1")
 
     assert resp["entry"]["entry_id"] == "cfg1"
     # The legacy path served it: REST get + one OptionsFlow probe.
@@ -367,16 +342,16 @@ async def test_single_entry_capsless_falls_back_to_legacy() -> None:
     assert not _ce_calls(ws)
 
 
-# unknown_command invalidates the caps cache so the next call re-probes; a
-# transient failure (timeout) is not a downgrade, so the caps stay cached.
+# unknown_command invalidates the caps cache; transient failures keep it.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("exc", "caps_cached"),
     [
         (HomeAssistantCommandError("gone", "unknown_command"), False),
         (HomeAssistantCommandTimeout("timeout"), True),
+        (HomeAssistantConnectionError("ws down"), True),
     ],
-    ids=["unknown_command_invalidates", "timeout_keeps_caps"],
+    ids=["unknown_command_invalidates", "timeout_keeps_caps", "connection_error"],
 )
 async def test_single_entry_command_error_falls_back(
     exc: Exception, caps_cached: bool
@@ -384,21 +359,18 @@ async def test_single_entry_command_error_falls_back(
     """A config_entries error falls back to the legacy REST get."""
     ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES, cmd_exc=exc)
     client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1")
+    resp = await _get(ws, client, entry_id="cfg1")
 
     assert resp["entry"]["entry_id"] == "cfg1"
     assert client.get_config_entry_calls == 1
+    assert len(_ce_calls(ws)) == 1
     assert (client in component_api._CAPS_CACHE) is caps_cached
 
 
 # --- list routing --------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_list_served_by_component_with_options() -> None:
-    """List with include_options is served by the component rows (options on each
-    row); the REST list and per-entry OptionsFlow probes never run."""
+    """include_options list is served by component rows; no REST list or probes."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
@@ -410,10 +382,7 @@ async def test_list_served_by_component_with_options() -> None:
         },
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(include_options=True)
+    resp = await _get(ws, client, include_options=True)
 
     by_id = {e["entry_id"]: e for e in resp["entries"]}
     assert by_id["c1"]["options"] == {"discovery": True}
@@ -426,8 +395,7 @@ async def test_list_served_by_component_with_options() -> None:
 
 @pytest.mark.asyncio
 async def test_list_without_options_uses_component_and_omits_options() -> None:
-    """Without include_options a plain component list read replaces the REST list;
-    options are not surfaced (mirroring the legacy summary shape)."""
+    """Without include_options the component replaces the REST list; no options."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
@@ -438,10 +406,7 @@ async def test_list_without_options_uses_component_and_omits_options() -> None:
         },
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration()
+    resp = await _get(ws, client)
 
     assert [e["entry_id"] for e in resp["entries"]] == ["c1"]
     assert "options" not in resp["entries"][0]
@@ -451,18 +416,14 @@ async def test_list_without_options_uses_component_and_omits_options() -> None:
 
 @pytest.mark.asyncio
 async def test_list_domain_filter_normalized_to_component() -> None:
-    """A domain filter is lowercased and passed to the component's server-side
-    filter (auto-enabling options), and echoed as domain_filter."""
+    """A domain filter is lowercased, sent to the component, enables options."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_result={"entries": [_row("c1", domain="template", options={"x": 1})]},
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(domain="Template")
+    resp = await _get(ws, client, domain="Template")
 
     assert _ce_calls(ws)[0].kwargs == {"domain": "template"}
     assert resp["domain_filter"] == "template"
@@ -478,10 +439,7 @@ async def test_list_capsless_falls_back_to_rest() -> None:
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
     client = RoutingClient(rest_entries=[_rest_entry("c1", supports_options=False)])
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration()
+    resp = await _get(ws, client)
 
     assert [e["entry_id"] for e in resp["entries"]] == ["c1"]
     assert client.rest_list_calls == 1
@@ -507,11 +465,8 @@ async def test_fetch_caps_miss_returns_none_no_frame() -> None:
     assert not _ce_calls(ws)
 
 
-# unknown_command invalidates the caps cache; a transient failure is not a
-# downgrade, so caps stay cached. A WS-down ConnectionError is a DEVIATION from the
-# uniform taxonomy: this tool's legacy path is a pure REST read (not the shared
-# pooled WS), so ``fetch_config_entries`` catches it and returns ``None`` instead
-# of propagating.
+# unknown_command invalidates the caps cache; transient failures keep it. A
+# ConnectionError returns None too: the legacy path is pure REST.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("exc", "caps_cached"),
@@ -534,7 +489,7 @@ async def test_fetch_command_error_returns_none(
 
 @pytest.mark.asyncio
 async def test_fetch_malformed_shape_falls_back() -> None:
-    """An ``entries`` value that is not a list (shape drift) → None (→ legacy)."""
+    """A non-list ``entries`` (shape drift) -> None (legacy)."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
@@ -547,13 +502,7 @@ async def test_fetch_malformed_shape_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_ws_establish_failure_falls_back_to_none() -> None:
-    """A failed establish in ``get_websocket_client()`` returns None → legacy.
-
-    After caps are cached, ``WebSocketManager`` raises
-    ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled socket.
-    ``fetch_config_entries`` catches it and returns ``None`` so the legacy
-    pure-REST get serves the entry, keeping the (still-advertised) caps.
-    """
+    """A failed pooled-WS establish returns None (legacy) and keeps the caps."""
     caps_ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES)
     client = RoutingClient()
     with patch_ws_establish_failure(
@@ -566,49 +515,16 @@ async def test_fetch_ws_establish_failure_falls_back_to_none() -> None:
 
 
 @pytest.mark.asyncio
-async def test_single_entry_connection_error_falls_back_to_rest() -> None:
-    """End-to-end: a WS-down component read falls back to the legacy REST get.
-
-    The component ``config_entries`` frame raises ``HomeAssistantConnectionError``
-    mid-call, but the legacy REST ``get_config_entry`` still serves the entry, so
-    the tool returns a result instead of erroring out.
-    """
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_exc=HomeAssistantConnectionError("ws down"),
-    )
-    client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1")
-
-    assert resp["entry"]["entry_id"] == "cfg1"
-    # The REST get served the fallback; the component frame was attempted once.
-    assert client.get_config_entry_calls == 1
-    assert len(_ce_calls(ws)) == 1
-
-
-@pytest.mark.asyncio
 async def test_empty_entry_id_is_not_found_never_first_entry() -> None:
-    """An empty-string ``entry_id`` routes as a single-entry (nonexistent) lookup.
-
-    The server forwards ``entry_id=""`` to the component as a single-entry frame
-    (kwargs ``{"entry_id": ""}``), and an empty ``entries`` reply is authoritative
-    not-found — the tool must raise, never fall through to list mode and return
-    the first entry.
-    """
+    """An empty ``entry_id`` is a single-entry lookup that misses, never list mode."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_result={"entries": []},  # component: async_get_entry("") missed
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries), pytest.raises(ToolError):
-        await get_integration(entry_id="")
+    with pytest.raises(ToolError):
+        await _get(ws, client, entry_id="")
 
     # Routed as a single-entry lookup for the empty id, not list mode.
     assert len(_ce_calls(ws)) == 1
@@ -622,17 +538,13 @@ async def test_empty_entry_id_is_not_found_never_first_entry() -> None:
 # flows raise. Core's ``supports_options`` asks only the domain's flow handler,
 # never ``source``, so the tool must key on ``source``.
 _IGNORED = {"source": "ignore", "state": "not_loaded", "supports_options": True}
-_CAPSLESS = HomeAssistantCommandError("no info", "unknown_command")
 
 
 @pytest.mark.asyncio
 async def test_ignored_entry_legacy_single_is_not_probed() -> None:
     ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
     client = RoutingClient(single_entry=_rest_entry("ign1", "unifi", **_IGNORED))
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="ign1")
+    resp = await _get(ws, client, entry_id="ign1")
 
     assert client.start_options_flow_calls == 0
     assert resp["entry"]["supports_options"] is False
@@ -647,10 +559,7 @@ async def test_not_loaded_entry_that_is_not_ignored_is_still_probed() -> None:
     ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
     entry = _rest_entry("nl1", "unifi", state="not_loaded")
     client = RoutingClient(single_entry=entry)
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="nl1")
+    resp = await _get(ws, client, entry_id="nl1")
 
     assert client.start_options_flow_calls == 1
     assert resp["entry"]["supports_options"] is True
@@ -660,10 +569,7 @@ async def test_not_loaded_entry_that_is_not_ignored_is_still_probed() -> None:
 async def test_ignored_entry_legacy_single_schema_opens_no_flow() -> None:
     ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
     client = RoutingClient(single_entry=_rest_entry("ign1", "zha", **_IGNORED))
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="ign1", include_schema=True)
+    resp = await _get(ws, client, entry_id="ign1", include_schema=True)
 
     assert client.start_options_flow_calls == 0
     assert "options_schema" not in resp
@@ -679,10 +585,7 @@ async def test_ignored_entries_legacy_list_are_not_probed() -> None:
             _rest_entry("ign2", "homeassistant_sky_connect", **_IGNORED),
         ]
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(include_options=True)
+    resp = await _get(ws, client, include_options=True)
 
     assert client.start_options_flow_calls == 0
     assert [e["supports_options"] for e in resp["entries"]] == [False, False]
@@ -698,10 +601,7 @@ async def test_ignored_entry_component_single_schema_opens_no_flow() -> None:
         cmd_result={"entries": [_row("ign1", "unifi", options={}, **_IGNORED)]},
     )
     client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="ign1", include_schema=True)
+    resp = await _get(ws, client, entry_id="ign1", include_schema=True)
 
     assert client.start_options_flow_calls == 0
     assert resp["entry"]["supports_options"] is False
@@ -718,10 +618,7 @@ async def test_legacy_list_passes_domain_filter_to_core() -> None:
             _rest_entry("h1", "hue", supports_options=False),
         ]
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(domain=" MQTT ")
+    resp = await _get(ws, client, domain=" MQTT ")
 
     assert client.rest_list_params == {"domain": "mqtt"}
     assert [e["entry_id"] for e in resp["entries"]] == ["m1"]
@@ -735,10 +632,7 @@ async def test_legacy_list_keeps_core_fields() -> None:
             _rest_entry("m1", "mqtt", supports_options=False, num_subentries=0)
         ]
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration()
+    resp = await _get(ws, client)
 
     assert resp["entries"][0]["num_subentries"] == 0
 
@@ -758,10 +652,8 @@ async def test_blank_filter_is_rejected_before_any_read(
     )
     ws = make_ws(WS_CONFIG_ENTRIES, cmd_result={"entries": [_row()]}, **info)
     client = RoutingClient(rest_entries=[_rest_entry("m1", "mqtt")])
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries), pytest.raises(ToolError) as exc:
-        await get_integration(**{param: value})
+    with pytest.raises(ToolError) as exc:
+        await _get(ws, client, **{param: value})
 
     assert "VALIDATION_INVALID_PARAMETER" in str(exc.value)
     assert not _ce_calls(ws)
@@ -786,10 +678,7 @@ async def test_legacy_list_passes_integration_type_to_core(
         ],
         integration_types={"mqtt": "hub", "sun": "service"},
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(domain=domain, integration_type="service")
+    resp = await _get(ws, client, domain=domain, integration_type="service")
 
     assert client.rest_list_params == params
     assert [e["entry_id"] for e in resp["entries"]] == ["s1"]
@@ -818,12 +707,9 @@ async def test_component_list_keeps_rows_core_matches_for_integration_type(
         rest_entries=[_rest_entry("m1", "mqtt"), _rest_entry("s1", "sun")],
         integration_types={"mqtt": "hub", "sun": "service"},
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(
-            domain=domain, integration_type="service", include_options=True
-        )
+    resp = await _get(
+        ws, client, domain=domain, integration_type="service", include_options=True
+    )
 
     assert client.rest_list_params == params
     assert "type_filter" not in _ce_calls(ws)[0].kwargs
@@ -858,28 +744,9 @@ async def test_component_list_keeps_what_core_keeps_for_an_unknown_integration(
         ],
         integration_types={"mqtt": "hub", "sun": "service"},
     )
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(integration_type=integration_type)
+    resp = await _get(ws, client, integration_type=integration_type)
 
     assert [e["entry_id"] for e in resp["entries"]] == expected
-
-
-@pytest.mark.asyncio
-async def test_component_list_without_integration_type_makes_no_rest_call() -> None:
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_result={"entries": [_row("m1", "mqtt")]},
-    )
-    client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        await get_integration()
-
-    assert client.rest_list_calls == 0
 
 
 @pytest.mark.asyncio
@@ -892,10 +759,7 @@ async def test_integration_type_is_ignored_with_a_warning_for_one_entry(
     )
     ws = make_ws(WS_CONFIG_ENTRIES, cmd_result={"entries": [_row("cfg1")]}, **info)
     client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1", integration_type="service")
+    resp = await _get(ws, client, entry_id="cfg1", integration_type="service")
 
     assert resp["entry_id"] == "cfg1"
     assert client.rest_list_calls == 0
@@ -913,10 +777,7 @@ async def test_degraded_secret_scrub_is_a_warning(call: dict[str, Any]) -> None:
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_result={"entries": [_row("cfg1")], "secret_scrub_degraded": True},
     )
-    get_integration = _build_get_integration(RoutingClient())
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(**call)
+    resp = await _get(ws, RoutingClient(), **call)
 
     assert any("secrets.yaml" in w for w in resp.get("warnings", []))
 
@@ -928,9 +789,6 @@ async def test_a_clean_secret_scrub_adds_no_warning() -> None:
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_result={"entries": [_row("cfg1")]},
     )
-    get_integration = _build_get_integration(RoutingClient())
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1")
+    resp = await _get(ws, RoutingClient(), entry_id="cfg1")
 
     assert not any("secrets.yaml" in w for w in resp.get("warnings", []))

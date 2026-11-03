@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,49 +10,40 @@ import pytest
 from ha_mcp.tools.flow_translations import fetch_flow_strings, flow_text
 
 _ABORT = "component.sun.config.abort.single_instance_allowed"
+_NOT_SUPPORTED = "component.demo.config.abort.not_supported"
 
 
-def test_flow_text_returns_the_translated_string() -> None:
-    strings = {_ABORT: "Already configured. Only a single configuration possible."}
-
-    assert (
-        flow_text(strings, "sun", "config.abort.single_instance_allowed", None)
-        == "Already configured. Only a single configuration possible."
-    )
+_STRINGS = {
+    _ABORT: "Only one.",
+    "component.demo.options.error.cannot_connect": "Cannot reach {host}:{port}.",
+    _NOT_SUPPORTED: "{model} is not supported by {integration}.",
+}
 
 
-def test_flow_text_fills_the_description_placeholders() -> None:
-    key = "component.demo.options.error.cannot_connect"
-    strings = {key: "Cannot reach {host} on port {port}."}
-
-    assert (
-        flow_text(
-            strings,
+@pytest.mark.parametrize(
+    ("domain", "key", "placeholders", "expected"),
+    [
+        ("sun", "config.abort.single_instance_allowed", None, "Only one."),
+        (
             "demo",
             "options.error.cannot_connect",
             {"host": "10.0.0.2", "port": "8080"},
-        )
-        == "Cannot reach 10.0.0.2 on port 8080."
-    )
-
-
-def test_flow_text_is_none_for_a_key_core_does_not_ship() -> None:
-    assert flow_text({_ABORT: "x"}, "sun", "config.abort.unknown", None) is None
-    # The key is scoped to the domain it was asked for.
-    assert (
-        flow_text({_ABORT: "x"}, "demo", "config.abort.single_instance_allowed", None)
-        is None
-    )
-
-
-def test_flow_text_leaves_a_placeholder_without_a_value_as_written() -> None:
-    key = "component.demo.config.abort.not_supported"
-    strings = {key: "{model} is not supported by {integration}."}
-
-    assert (
-        flow_text(strings, "demo", "config.abort.not_supported", {"model": "X1"})
-        == "X1 is not supported by {integration}."
-    )
+            "Cannot reach 10.0.0.2:8080.",
+        ),
+        ("sun", "config.abort.unknown", None, None),
+        ("demo", "config.abort.single_instance_allowed", None, None),  # other domain
+        (
+            "demo",
+            "config.abort.not_supported",
+            {"model": "X1"},
+            "X1 is not supported by {integration}.",
+        ),
+    ],
+)
+def test_flow_text(
+    domain: str, key: str, placeholders: dict[str, str] | None, expected: str | None
+) -> None:
+    assert flow_text(_STRINGS, domain, key, placeholders) == expected
 
 
 @pytest.mark.asyncio
@@ -76,22 +68,20 @@ async def test_fetch_flow_strings_sends_one_english_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_flow_strings_is_none_when_the_call_fails() -> None:
-    # None, not {}: a failed read must stay distinguishable from Core
-    # shipping no strings.
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(RuntimeError("ws down"), id="call-fails"),
+        pytest.param({"success": False, "error": {"code": "x"}}, id="core-error"),
+    ],
+)
+async def test_fetch_flow_strings_is_none_when_unreadable(answer: Any) -> None:
+    # None, not {}: a failed read must stay distinguishable from no strings.
     client = AsyncMock()
-    client.send_websocket_message.side_effect = RuntimeError("ws down")
-
-    assert await fetch_flow_strings(client, "sun", "config") is None
-
-
-@pytest.mark.asyncio
-async def test_fetch_flow_strings_is_none_when_core_answers_with_an_error() -> None:
-    client = AsyncMock()
-    client.send_websocket_message.return_value = {
-        "success": False,
-        "error": {"code": "unknown_error"},
-    }
+    if isinstance(answer, Exception):
+        client.send_websocket_message.side_effect = answer
+    else:
+        client.send_websocket_message.return_value = answer
 
     assert await fetch_flow_strings(client, "sun", "config") is None
 
@@ -109,8 +99,6 @@ async def test_fetch_flow_strings_is_empty_when_core_has_no_strings() -> None:
 
 @pytest.mark.asyncio
 async def test_same_named_fields_in_sections_keep_their_own_help() -> None:
-    # Core's frontend reads a section field's help under
-    # sections.<section>.data_description.<field>.
     from ha_mcp.tools.config_helpers.describe import describe_form
 
     prefix = "component.demo.config.step.user."

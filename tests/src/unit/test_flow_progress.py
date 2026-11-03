@@ -1,11 +1,4 @@
-"""Driving a flow's ``progress`` step (#2632).
-
-A progress step waits on work Home Assistant runs itself (a scan, a firmware
-check). Core moves the flow on when that work is done; a GET on the flow
-re-runs ``async_configure`` and answers the step the flow is at now, the same
-call the frontend makes. The walkers wait for that step within a budget and
-give up with Core's text for the progress action.
-"""
+"""Driving a flow's ``progress`` step (#2632): a GET on the flow answers its current step."""
 
 from __future__ import annotations
 
@@ -110,13 +103,22 @@ async def test_progress_then_form_returns_the_form_from_a_get_on_the_flow() -> N
 
 
 @pytest.mark.asyncio
-async def test_progress_then_create_entry_returns_the_finished_flow() -> None:
-    done = {"type": "create_entry", "flow_id": "f1", "result": {"entry_id": "e9"}}
-    client = _client(dict(done))
+@pytest.mark.parametrize(
+    ("first", "polled"),
+    [
+        (_PROGRESS, {"type": "create_entry", "flow_id": "f1", "result": {}}),
+        ({"type": "progress_done", "flow_id": "f1", "step_id": "d"}, _FORM),
+    ],
+    ids=["create_entry", "progress_done"],
+)
+async def test_progress_is_moved_on_by_the_next_get(
+    first: dict[str, Any], polled: dict[str, Any]
+) -> None:
+    client = _client(dict(polled))
 
-    step = await _wait(client, dict(_PROGRESS), FlowRef("demo", "config"), _FakeClock())
+    step = await _wait(client, dict(first), FlowRef("demo", "config"), _FakeClock())
 
-    assert step == done
+    assert step == polled
 
 
 @pytest.mark.asyncio
@@ -140,33 +142,14 @@ async def test_each_flow_kind_is_polled_on_its_own_resource(
 
 
 @pytest.mark.asyncio
-async def test_progress_done_is_moved_on_by_the_next_get() -> None:
-    client = _client(dict(_FORM))
-
-    step = await _wait(
-        client,
-        {"type": "progress_done", "flow_id": "f1", "step_id": "discover"},
-        FlowRef("demo", "config"),
-        _FakeClock(),
-    )
-
-    assert step == _FORM
-
-
-@pytest.mark.asyncio
 async def test_a_step_still_in_progress_after_the_budget_raises_with_cores_text() -> (
     None
 ):
-    client = AsyncMock()
+    client = _client(
+        strings={"component.demo.config.progress.scanning": "Scanning {count} hubs."}
+    )
+    client._request.side_effect = None
     client._request.return_value = dict(_PROGRESS)
-    client.send_websocket_message.return_value = {
-        "success": True,
-        "result": {
-            "resources": {
-                "component.demo.config.progress.scanning": "Scanning {count} hubs."
-            }
-        },
-    }
     clock = _FakeClock()
 
     with pytest.raises(ToolError) as exc_info:
@@ -178,9 +161,6 @@ async def test_a_step_still_in_progress_after_the_budget_raises_with_cores_text(
     assert body["progress_action_text"] == "Scanning 3 hubs."
     assert body["flow_id"] == "f1"
     assert clock.now == pytest.approx(PROGRESS_BUDGET_S)
-
-
-# --- the walkers drive a progress step instead of refusing it ---------------
 
 
 @pytest.fixture
@@ -269,13 +249,8 @@ async def test_reconfigure_progress_timeout_keeps_the_flow_open_and_carries_flow
     client.abort_config_flow.assert_not_awaited()
 
 
-# --- a submit or poll that gets no answer may have committed -----------------
-#
-# The GET re-runs async_configure: past progress_done that is the step that
-# finishes the flow. A lost answer to it is the same applied_but_unverified
-# ambiguity as a lost answer to a submit, in every flow kind.
-
-
+# A lost answer to the poll (the GET finishes the flow past progress_done) or to
+# a submit may have committed: applied_but_unverified.
 _NO_ANSWERS = [
     pytest.param(TimeoutError(), id="timeout"),
     pytest.param(HomeAssistantConnectionError("reset"), id="connection"),
@@ -283,8 +258,7 @@ _NO_ANSWERS = [
         HomeAssistantAPIError("API error: 504", status_code=504), id="http-504"
     ),
 ]
-# Core moves a progress flow on only inside the GET: the client's retry after a
-# gateway 502/503/504 meets this 404 when the first attempt finished the flow.
+# The client's retry after a gateway 5xx meets this 404 when the GET finished the flow.
 _POLL_404 = pytest.param(
     HomeAssistantAPIError("API error: 404 - Invalid flow specified", status_code=404),
     id="http-404",
@@ -354,9 +328,7 @@ async def test_a_write_out_of_progress_budget_closes_its_flow(
 async def test_a_failed_write_closes_its_flow_and_keeps_its_error(
     run: str, abort_error: Exception | None, cancelled: bool
 ) -> None:
-    # Home Assistant answered the submit with an error, which the walk treats
-    # as not committed, so it aborts the flow. The error, or the cancellation,
-    # comes back as it was raised.
+    # An answered submit error counts as not committed: abort, re-raise as raised.
     client = _client(strings={})
     write, submit, abort = _WRITES[run]
     getattr(client, submit).side_effect = (
@@ -411,8 +383,6 @@ _FLOW_KINDS = [
 async def test_a_lost_poll_answer_is_possibly_applied_in_every_flow_kind(
     no_answer: Exception, run: Any, submit: str, abort: str
 ) -> None:
-    # Past progress_done the GET finishes the flow, whichever kind it is, so
-    # an entry may exist (or the change may be saved) when the answer is lost.
     client = _client(strings={})
     client._request.side_effect = no_answer
 
@@ -449,8 +419,6 @@ async def test_a_lost_submit_answer_is_possibly_applied_in_every_flow_kind(
 async def test_a_lost_submit_answer_redacts_the_forms_password_value(
     monkeypatch: pytest.MonkeyPatch, run: Any, submit: str, abort: str
 ) -> None:
-    # The submitted form rides along as details, and an options or reconfigure
-    # form carries the stored values in suggested_value.
     monkeypatch.setattr(
         "ha_mcp.redaction.get_global_settings",
         lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
@@ -499,9 +467,6 @@ def test_only_a_flow_tool_error_can_leave_the_flow_open() -> None:
     assert not leaves_flow_open(ToolError("not json"))
 
 
-# --- every caller aborts a flow it leaves in progress ------------------------
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_wait")
 @pytest.mark.parametrize("run", list(_WRITES))
@@ -516,10 +481,8 @@ async def test_a_write_cancelled_during_the_wait_aborts_the_flow(run: str) -> No
     getattr(client, abort).assert_awaited_once_with("f1")
 
 
-# A real cancellation (an MCP client's notifications/cancelled, a tool
-# timeout) arrives through an anyio cancel scope, which re-delivers the
-# cancellation at every later await inside it, so the abort must be shielded
-# to reach Home Assistant at all.
+# An anyio cancel scope re-delivers cancellation at every later await, so the
+# abort must be shielded to reach Home Assistant.
 
 
 def _abort_recorder() -> tuple[list[str], Any]:

@@ -1,9 +1,4 @@
-"""ha_set_integration(describe=True): a setup, options or subentry form (#2632).
-
-The describes whose step can finish the flow (the setup flow's first step, and
-any menu choice) live on the write tool; ha_get_integration describes only the
-first options or subentry form and takes no ``menu_choice``.
-"""
+"""ha_set_integration(describe=True): setup, options and subentry forms (#2632)."""
 
 from __future__ import annotations
 
@@ -23,20 +18,24 @@ from .test_integration_schema import _HOST, _MENU, _client, _error, _form
 
 @pytest.mark.asyncio
 async def test_set_integration_describe_returns_the_setup_form() -> None:
-    client = _client(_form("user", _HOST))
+    client = _client(
+        _form("user", _HOST, last_step=False),
+        {"component.demo.config.step.user.data_description.host": "Device IP."},
+    )
 
     resp = await IntegrationTools(client).ha_set_integration(
         domain="Demo ", describe=True
     )
 
     client.start_config_flow.assert_awaited_once_with("demo")
-    # Describe opens the flow and submits nothing; the flow stays open and the
-    # response carries the flow_id that continues it.
+    # Nothing is submitted; the flow stays open and flow_id continues it.
     client.submit_config_flow_step.assert_not_called()
     client.abort_config_flow.assert_not_called()
     assert resp["flow_id"] == "f1"
     assert resp["step_id"] == "user"
     assert resp["fields"][0]["name"] == "host"
+    assert resp["fields"][0]["description"] == "Device IP."
+    assert resp["more_forms"] == "yes"
 
 
 _SUBENTRY_RULE = "subentry_type and subentry_id apply only with describe=True"
@@ -84,18 +83,6 @@ _SUBENTRY_RULE = "subentry_type and subentry_id apply only with describe=True"
             },
             "drop config",
         ),
-    ],
-    ids=[
-        "subentry-type-without-describe",
-        "subentry-id-without-describe",
-        "no-domain-or-entry",
-        "with-config",
-        "domain-and-entry",
-        "subentry-with-domain",
-        "entry-with-enabled",
-        "with-log-persistence",
-        "subentry-with-flow-id",
-        "subentry-with-config",
     ],
 )
 async def test_set_integration_describe_takes_one_flow_and_menu_choice_only(
@@ -225,24 +212,6 @@ async def test_set_integration_describe_whose_flow_cannot_start(
         assert error["code"] == code
         assert "no_such_domain" in error["message"]
         assert says in error["message"]
-
-
-@pytest.mark.asyncio
-async def test_set_integration_describe_reads_the_setup_help_text_and_later_forms() -> (
-    None
-):
-    client = _client(
-        _form("user", _HOST, last_step=False),
-        {"component.demo.config.step.user.data_description.host": "Device IP."},
-    )
-
-    resp = await IntegrationTools(client).ha_set_integration(
-        domain="demo", describe=True
-    )
-
-    assert resp["fields"][0]["description"] == "Device IP."
-    assert resp["more_forms"] == "yes"
-    client.abort_config_flow.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,7 @@
 """ha_get_integration's options and subentry flow schemas (#2632).
 
-A schema exists only inside an open flow: the tool opens the entry's options
-(or subentry) flow, describes its form in the same compact shape the helper
-describe uses (fields, Core's help text, current values), and aborts it. A
-flow that opens with a menu lists its branches. The form behind a branch, and
-a domain's setup form, are described by ha_set_integration(describe=True)
-(test_set_integration_describe.py).
+The tool opens the flow, describes its form (or lists a menu's branches) and
+aborts it. Branch and setup forms: test_set_integration_describe.py.
 """
 
 from __future__ import annotations
@@ -101,6 +97,7 @@ async def test_options_form_is_described_with_help_and_current_values() -> None:
         }
     ]
     assert "data_schema" not in resp["options_schema"]
+    assert resp["entry"]["options"] == {"host": "10.0.0.2"}
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
@@ -132,24 +129,31 @@ async def test_menu_without_a_choice_lists_the_branches_and_points_at_menu_choic
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
+def _subentry(client: Any, resp: dict[str, Any], **kwargs: Any):
+    kwargs = {
+        "subentry_type": "conversation",
+        "subentry_id": None,
+        "show_advanced_options": False,
+    } | kwargs
+    return fetch_config_subentry_schema(client, "e1", resp, **kwargs)
+
+
+async def _describe(
+    kind: str,
+    client: Any,
+    menu_choice: str | None = None,
+    resp: dict[str, Any] | None = None,
+) -> None:
+    resp = _resp() if resp is None else resp
     if kind == "probe":
         entry = {"supports_options": True, "options": {"host": "h"}}
         await redact_component_options(client, "e1", entry, [])
     elif kind == "entry_options":
         await fetch_entry_options_with_status(client, "e1")
     elif kind == "options":
-        await fetch_options_schema(client, "e1", _resp())
+        await fetch_options_schema(client, "e1", resp)
     else:
-        await fetch_config_subentry_schema(
-            client,
-            "e1",
-            _resp(),
-            subentry_type="device",
-            subentry_id=None,
-            show_advanced_options=False,
-            menu_choice=menu_choice,
-        )
+        await _subentry(client, resp, subentry_type="device", menu_choice=menu_choice)
 
 
 _FLOW_METHODS = {
@@ -177,7 +181,7 @@ async def test_a_cancelled_describe_still_closes_its_flow(kind: str) -> None:
 
     with anyio.CancelScope() as scope:
         scope.cancel()
-        await _describe(kind, client, None)
+        await _describe(kind, client)
 
     assert sent == ["f1"]
 
@@ -194,7 +198,7 @@ async def test_a_failed_describe_abort_is_a_warning_unless_the_flow_is_gone(
     )
 
     with caplog.at_level("DEBUG", logger="ha_mcp.tools.config_entry_flow_introspect"):
-        await _describe(kind, client, None)
+        await _describe(kind, client)
 
     assert [r.levelname for r in caplog.records if "abort" in r.getMessage()] == [level]
 
@@ -207,23 +211,6 @@ _ABORT_ANSWERS = [
     ),
     pytest.param(TimeoutError(), id="timeout"),
 ]
-
-
-async def _described(
-    kind: str, client: Any, resp: dict[str, Any], menu_choice: str | None = None
-) -> None:
-    if kind == "options":
-        await fetch_options_schema(client, "e1", resp)
-    else:
-        await fetch_config_subentry_schema(
-            client,
-            "e1",
-            resp,
-            subentry_type="device",
-            subentry_id=None,
-            show_advanced_options=False,
-            menu_choice=menu_choice,
-        )
 
 
 # How the describe ends: (first step, menu_choice, the error it raises once
@@ -255,11 +242,11 @@ async def test_a_describe_closes_its_flow_whatever_the_abort_answers(
     resp = _resp()
 
     if error is None:
-        await _described(kind, client, resp)
+        await _describe(kind, client, resp=resp)
     else:
         # The describe's own error comes back as it was raised.
         with pytest.raises(error):
-            await _described(kind, client, resp, menu_choice=menu_choice)
+            await _describe(kind, client, menu_choice, resp)
 
     getattr(client, _ABORTS[kind]).assert_awaited_once_with("f1")
     assert "warnings" not in resp
@@ -304,16 +291,6 @@ async def test_a_failed_options_probe_keeps_cores_message_in_the_warning() -> No
 
 
 @pytest.mark.asyncio
-async def test_legacy_read_fills_options_from_the_first_form() -> None:
-    client = _client(_form("init", _HOST))
-    resp = _resp()
-
-    await fetch_options_schema(client, "e1", resp)
-
-    assert resp["entry"]["options"] == {"host": "10.0.0.2"}
-
-
-@pytest.mark.asyncio
 async def test_options_behind_a_menu_are_reported_unread_on_the_legacy_read() -> None:
     # The branch form shows one branch's fields, not the entry's options.
     client = _client(dict(_MENU))
@@ -351,7 +328,7 @@ async def test_an_options_abort_that_never_answers_does_not_hold_the_read(
     client = _client(_form("init", _HOST))
     client.abort_options_flow.side_effect = _never_answers
 
-    await asyncio.wait_for(_describe(kind, client, None), timeout=2)
+    await asyncio.wait_for(_describe(kind, client), timeout=2)
 
     client.abort_options_flow.assert_awaited_once_with("f1")
 
@@ -381,14 +358,7 @@ async def test_subentry_form_reads_help_under_its_subentry_type() -> None:
     )
     resp = _resp("ollama")
 
-    await fetch_config_subentry_schema(
-        client,
-        "e1",
-        resp,
-        subentry_type="conversation",
-        subentry_id=None,
-        show_advanced_options=False,
-    )
+    await _subentry(client, resp)
 
     schema = resp["subentry_schema"]
     assert schema["subentry_type"] == "conversation"
@@ -410,15 +380,7 @@ async def test_subentry_menu_choice_submits_to_the_subentry_flow() -> None:
     client.submit_config_subentry_flow_step.return_value = _form("advanced", _HOST)
     resp = _resp("ollama")
 
-    await fetch_config_subentry_schema(
-        client,
-        "e1",
-        resp,
-        subentry_type="conversation",
-        subentry_id="sub1",
-        show_advanced_options=False,
-        menu_choice="advanced",
-    )
+    await _subentry(client, resp, subentry_id="sub1", menu_choice="advanced")
 
     client.submit_config_subentry_flow_step.assert_awaited_once_with(
         "f1", {"next_step_id": "advanced"}
@@ -474,7 +436,7 @@ async def test_a_flow_that_aborts_at_once_returns_cores_reason_text(
     )
     resp = _resp()
 
-    await _described(kind, client, resp)
+    await _describe(kind, client, resp=resp)
 
     schema = resp[f"{kind}_schema"]
     assert schema["flow_type"] == "abort"
@@ -509,12 +471,6 @@ async def test_options_abort_reads_the_reason_under_its_translation_domain() -> 
     assert resp["options_schema"]["reason_text"] == "Sign in again."
 
 
-# --- the setup (config) flow of a domain, read in list mode -----------------
-
-
-# --- a describe step that does not stop at a form, menu or abort -----------
-
-
 def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))
 
@@ -526,7 +482,7 @@ async def test_an_entry_flow_that_finishes_gets_the_no_form_error(kind: str) -> 
     getattr(client, _ABORTS[kind]).side_effect = TimeoutError()
 
     with pytest.raises(ToolError) as exc_info:
-        await _describe(kind, client, None)
+        await _describe(kind, client)
 
     # The abort comes after the error; the error does not claim it worked.
     message = _error(exc_info)["error"]["message"]
@@ -560,14 +516,7 @@ async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
     client = _client({"type": "external", "flow_id": "f1", "step_id": "auth"})
 
     with pytest.raises(ToolError) as exc_info:
-        await fetch_config_subentry_schema(
-            client,
-            "e1",
-            _resp("ollama"),
-            subentry_type="conversation",
-            subentry_id=None,
-            show_advanced_options=False,
-        )
+        await _subentry(client, _resp("ollama"))
 
     assert "'external'" in _error(exc_info)["error"]["message"]
     client.abort_config_subentry_flow.assert_awaited_once_with("f1")
@@ -588,9 +537,6 @@ async def test_list_mode_include_schema_is_ignored_and_points_to_set(
     assert any("describe=True" in w for w in resp["warnings"])
 
 
-# --- strings Home Assistant could not send are a warning, a missing one not --
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["options", "subentry"])
 async def test_a_failed_strings_read_is_a_top_level_warning_on_the_described_form(
@@ -600,7 +546,7 @@ async def test_a_failed_strings_read_is_a_top_level_warning_on_the_described_for
     client.send_websocket_message.side_effect = RuntimeError("ws down")
     resp = _resp()
 
-    await _described(kind, client, resp)
+    await _describe(kind, client, resp=resp)
 
     schema = resp[f"{kind}_schema"]
     assert schema["fields"][0]["name"] == "host"
@@ -643,14 +589,7 @@ async def test_an_entry_without_a_domain_reads_the_reason_under_its_entry() -> N
     client.get_config_entry.return_value = {"entry_id": "e1", "domain": "ollama"}
     resp = {"entry": {"entry_id": "e1"}}
 
-    await fetch_config_subentry_schema(
-        client,
-        "e1",
-        resp,
-        subentry_type="conversation",
-        subentry_id=None,
-        show_advanced_options=False,
-    )
+    await _subentry(client, resp)
 
     assert resp["subentry_schema"]["reason_text"] == "None."
     sent = [c.args[0] for c in client.send_websocket_message.await_args_list]
@@ -665,14 +604,7 @@ async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> No
     )
     resp: dict[str, Any] = {"entry": {"entry_id": "e1"}}
 
-    await fetch_config_subentry_schema(
-        client,
-        "e1",
-        resp,
-        subentry_type="conversation",
-        subentry_id=None,
-        show_advanced_options=False,
-    )
+    await _subentry(client, resp)
 
     assert resp["subentry_schema"]["aborted"] == "no_models"
     assert "reason_text" not in resp["subentry_schema"]
@@ -683,7 +615,7 @@ async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["probe", "entry_schema"])
+@pytest.mark.parametrize("kind", ["probe", "options"])
 async def test_a_swallowed_options_flow_failure_logs_its_traceback(
     kind: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -691,11 +623,7 @@ async def test_a_swallowed_options_flow_failure_logs_its_traceback(
     client.start_options_flow.side_effect = RuntimeError("ws down")
 
     with caplog.at_level("WARNING", logger="ha_mcp.tools.integration_schema"):
-        if kind == "probe":
-            entry = {"supports_options": True, "options": {"host": "h"}}
-            await redact_component_options(client, "e1", entry, [])
-        else:
-            await fetch_options_schema(client, "e1", _resp())
+        await _describe(kind, client)
 
     (record,) = [
         r for r in caplog.records if r.name == "ha_mcp.tools.integration_schema"

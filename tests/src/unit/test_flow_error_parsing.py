@@ -327,8 +327,7 @@ class TestHandleFlowStepsOptionsFlowError:
 
 
 class TestUndrivableStepTypes:
-    """External (browser/OAuth) steps cannot be driven over MCP, nor can a
-    progress step in a walk that refuses one (a snapshot restore).
+    """External (browser/OAuth) steps, and progress in a walk refusing it, cannot be driven.
 
     ``_handle_flow_steps`` must surface them as SERVICE_CALL_FAILED with an
     actionable "complete in the HA UI" suggestion — NOT fall through to the
@@ -394,14 +393,16 @@ def _translation_requests(client: AsyncMock) -> list[tuple[str, list[str]]]:
     ]
 
 
+_FLOW_METHODS = {
+    "config": ("start_config_flow", "submit_config_flow_step"),
+    "subentry": ("start_config_subentry_flow", "submit_config_subentry_flow_step"),
+}
+
+
 class TestFlowTextFromCore:
-    """An abort reason or a form error is a key; the UI shows Core's string
-    for it. The tool error carries that string next to the key, so the caller
-    reads what Home Assistant says instead of guessing from the key."""
+    """The tool error carries Core's string for an abort reason or form error."""
 
     async def test_setup_abort_carries_cores_reason_text(self) -> None:
-        # Core's own single-instance abort, as its flow manager answers it:
-        # the reason is defined once under the homeassistant integration.
         text = "Already configured. Only a single configuration possible."
         client = _strings_client(
             {"component.homeassistant.config.abort.single_instance_allowed": text}
@@ -524,13 +525,7 @@ class TestFlowTextFromCore:
             "step_id": "routing",
             "data_schema": [{"name": "host", "required": True}],
         }
-        start, submit = {
-            "config": ("start_config_flow", "submit_config_flow_step"),
-            "subentry": (
-                "start_config_subentry_flow",
-                "submit_config_subentry_flow_step",
-            ),
-        }[kind]
+        start, submit = _FLOW_METHODS[kind]
         getattr(client, start).return_value = form
         getattr(client, submit).side_effect = [
             {"type": "menu", "flow_id": "f1", "step_id": "more", "menu_options": ["a"]},
@@ -570,31 +565,6 @@ class TestFlowTextFromCore:
         result = await set_config_subentry(client, "e1", "device", {"name": "x"})
 
         assert result["success"] is True
-        client.submit_config_subentry_flow_step.assert_awaited_once()
-
-    async def test_a_subentry_form_back_with_errors_after_its_submit_is_refused(
-        self,
-    ) -> None:
-        client = _strings_client({})
-        client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
-        form = {
-            "type": "form",
-            "flow_id": "sub-flow",
-            "step_id": "user",
-            "data_schema": [{"name": "name", "required": True}],
-        }
-        client.start_config_subentry_flow.return_value = form
-        client.submit_config_subentry_flow_step.return_value = {
-            **form,
-            "errors": {"name": "already_configured"},
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_config_subentry(client, "e1", "device", {"name": "x"})
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert body["errors"] == {"name": "already_configured"}
         client.submit_config_subentry_flow_step.assert_awaited_once()
 
     async def test_subentry_abort_reads_its_type_under_the_parent_domain(
@@ -704,7 +674,7 @@ class TestFlowTextFromCore:
     @pytest.mark.parametrize(
         ("subentry_id", "status"), [("s1", "apply_failed"), (None, None)]
     )
-    async def test_a_subentry_form_back_with_errors_is_apply_failed_on_reconfigure(
+    async def test_a_subentry_form_back_with_errors_is_refused(
         self, subentry_id: str | None, status: str | None
     ) -> None:
         client = _strings_client({})
@@ -730,16 +700,18 @@ class TestFlowTextFromCore:
                 client, "e1", "device", {"name": "x"}, subentry_id=subentry_id
             )
 
-        assert _parse_tool_error(exc_info.value).get("status") == status
+        body = _parse_tool_error(exc_info.value)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["errors"] == {"base": "cannot_connect"}
+        assert body.get("status") == status
+        client.submit_config_subentry_flow_step.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_form_errors_redact_the_schemas_password_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A reconfigure form arrives with the stored values in suggested_value;
-    # under redact_secrets a password field's value must not ride into the
-    # error's data_schema.
+    # A reconfigure form carries stored values in suggested_value.
     monkeypatch.setattr(
         "ha_mcp.redaction.get_global_settings",
         lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),

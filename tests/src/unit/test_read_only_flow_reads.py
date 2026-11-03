@@ -1,10 +1,4 @@
-"""Read Only Mode: the integration reads still open the options flow.
-
-No options or subentry flow in Core saves on its first step, so describing
-that first form, and probing it for options or password fields, stays a read.
-The describes whose step can finish a flow (the setup describe, and any menu
-choice) live on ha_set_integration, which Read Only Mode hides.
-"""
+"""Read Only Mode: the integration reads still open the options flow (first form only)."""
 
 from __future__ import annotations
 

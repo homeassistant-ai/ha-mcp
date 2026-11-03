@@ -147,12 +147,16 @@ async def test_other_core_error_is_raised_not_retried_over_rest(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("code", ["unauthorized", "not_found"])
-async def test_an_answer_the_read_handles_is_not_logged_as_an_error(
-    client: HomeAssistantClient, code: str, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("code", "level"),
+    [("unauthorized", "DEBUG"), ("not_found", "DEBUG"), ("unknown_error", "ERROR")],
+)
+async def test_only_an_unhandled_core_error_is_logged_as_an_error(
+    client: HomeAssistantClient,
+    code: str,
+    level: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # A non-admin token gets "unauthorized" on every read and falls back to
-    # REST; "not_found" becomes the 404. Neither is a failure worth an ERROR.
     client.base_url, client.token, client.verify_ssl = "http://ha", "t", True
     ws = MagicMock()
     ws.send_command = AsyncMock(
@@ -168,33 +172,7 @@ async def test_an_answer_the_read_handles_is_not_logged_as_an_error(
     ):
         await client.get_config_entry("e1")
 
-    assert [r.levelname for r in caplog.records if "get_single" in r.message] == [
-        "DEBUG"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_another_core_error_is_still_logged_as_an_error(
-    client: HomeAssistantClient, caplog: pytest.LogCaptureFixture
-) -> None:
-    client.base_url, client.token, client.verify_ssl = "http://ha", "t", True
-    ws = MagicMock()
-    ws.send_command = AsyncMock(
-        side_effect=HomeAssistantCommandError("Command failed: x", "unknown_error")
-    )
-    with (
-        patch(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            new=AsyncMock(return_value=ws),
-        ),
-        caplog.at_level(logging.DEBUG, logger="ha_mcp.client.rest_client"),
-        pytest.raises(HomeAssistantAPIError),
-    ):
-        await client.get_config_entry("e1")
-
-    assert [r.levelname for r in caplog.records if "get_single" in r.message] == [
-        "ERROR"
-    ]
+    assert [r.levelname for r in caplog.records if "get_single" in r.message] == [level]
 
 
 @pytest.mark.asyncio

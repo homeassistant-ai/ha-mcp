@@ -149,8 +149,7 @@ async def test_new_flow_answers_its_menu_then_the_form_in_one_call():
 
 
 async def test_new_flow_without_config_stops_at_the_form_after_its_menu():
-    """Through run_integration_step: an omitted config is not defaulted to {}
-    when a menu_choice is given, or the form behind the menu would be sent."""
+    """An omitted config is not defaulted to {} when a menu_choice is given."""
     client = _client(
         start_config_flow=AsyncMock(return_value=MENU),
         submit_config_flow_step=AsyncMock(
@@ -187,7 +186,6 @@ async def test_a_flow_started_without_flow_id_is_refused():
 
 
 async def test_a_form_returned_with_errors_keeps_the_flow_open():
-    """Core shows the form again with its errors; the caller corrects it."""
     shown = _form("routing", _field("individual_address"), errors={"base": "no_router"})
     client = _client(submit_config_flow_step=AsyncMock(return_value=shown))
     result = await _drive(
@@ -239,15 +237,8 @@ async def test_an_options_form_keeps_the_values_the_caller_left_out():
         ),
         start_options_flow=AsyncMock(return_value=stored),
     )
-    result = await run_integration_step(
-        client,
-        domain=None,
-        entry_id="entry1",
-        flow_id=None,
-        config={"string": "BAT"},
-        menu_choice=None,
-        abort=False,
-        describe=False,
+    result = await _run(
+        client, domain=None, entry_id="entry1", config={"string": "BAT"}
     )
     client.submit_options_flow_step.assert_awaited_once_with(
         "f1", {"string": "BAT", "int": 10}
@@ -274,8 +265,7 @@ async def test_flow_id_reads_the_step_back_then_answers_it(target, url, submit):
 
 
 async def test_flow_id_alone_reads_the_step_again_without_submitting():
-    """Through run_integration_step: flow_id alone is a read, not an empty
-    form submitted by the ``config = {}`` default of a new flow."""
+    """flow_id alone is a read, not the ``config = {}`` default of a new flow."""
     client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
     result = await _run(client, flow_id="f1")
     assert result["step_id"] == "user"
@@ -379,8 +369,7 @@ async def test_a_redaction_placeholder_in_config_is_refused_and_nothing_is_sent(
 
 
 async def test_a_setup_form_does_not_get_the_values_the_caller_left_out():
-    """Only options and reconfigure forms arrive filled with stored values; a
-    setup form's suggested value is a hint, not something to submit."""
+    """A setup form's suggested value is a hint, not something to submit."""
     shown = _form(
         "user",
         _field("host"),
@@ -392,13 +381,6 @@ async def test_a_setup_form_does_not_get_the_values_the_caller_left_out():
 
 
 # --- abort --------------------------------------------------------------------
-
-
-async def test_abort_ends_the_flow():
-    client = _client()
-    result = await _drive(client, OPTIONS, flow_id="f1", abort=True)
-    client.abort_options_flow.assert_awaited_once_with("f1")
-    assert result["aborted"] is True
 
 
 async def test_abort_of_a_flow_already_gone_succeeds():
@@ -506,16 +488,7 @@ async def test_an_unknown_step_type_is_unexpected():
 
 async def test_a_new_flow_without_config_submits_an_empty_form():
     client = _client(start_config_flow=AsyncMock(return_value=_form("user")))
-    await run_integration_step(
-        client,
-        domain="local_calendar",
-        entry_id=None,
-        flow_id=None,
-        config=None,
-        menu_choice=None,
-        abort=False,
-        describe=False,
-    )
+    await _run(client, domain="local_calendar")
     client.submit_config_flow_step.assert_awaited_once_with("f1", {})
 
 
@@ -524,17 +497,8 @@ async def test_a_new_flow_without_config_submits_an_empty_form():
 )
 async def test_describe_with_an_answer_is_refused(extra):
     client = _client()
-    args: dict[str, Any] = {
-        "domain": "local_calendar",
-        "entry_id": None,
-        "flow_id": None,
-        "config": None,
-        "menu_choice": None,
-        "abort": False,
-        "describe": True,
-    }
     with pytest.raises(ToolError):
-        await run_integration_step(client, **{**args, **extra})
+        await _run(client, domain="local_calendar", describe=True, **extra)
     client.start_config_flow.assert_not_awaited()
 
 
@@ -545,16 +509,7 @@ async def test_an_entry_without_options_is_refused():
         )
     )
     with pytest.raises(ToolError) as exc_info:
-        await run_integration_step(
-            client,
-            domain=None,
-            entry_id="entry1",
-            flow_id=None,
-            config={},
-            menu_choice=None,
-            abort=False,
-            describe=False,
-        )
+        await _run(client, domain=None, entry_id="entry1", config={})
     assert "supports_options" in _error(exc_info)["error"]["message"]
     client.start_options_flow.assert_not_awaited()
 

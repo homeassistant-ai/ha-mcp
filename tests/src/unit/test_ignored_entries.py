@@ -58,22 +58,18 @@ async def test_reconfigure_of_an_ignored_entry_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_write_to_an_ignored_entry_starts_no_flow() -> None:
-    client = _client("ignore")
+@pytest.mark.parametrize("source", ["ignore", "user"])
+async def test_options_write_starts_a_flow_only_for_an_entry_that_is_not_ignored(
+    source: str,
+) -> None:
+    client = _client(source)
+    client.start_options_flow.return_value = {}
 
     with pytest.raises(ToolError) as exc_info:
         await update_config_entry_options(client, "e1", {"host": "h"})
 
-    assert "ignored" in json.loads(str(exc_info.value))["error"]["message"]
-    client.start_options_flow.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_options_write_to_an_entry_that_is_not_ignored_starts_the_flow() -> None:
-    client = _client("user")
-    client.start_options_flow.return_value = {}
-
-    with pytest.raises(ToolError):
-        await update_config_entry_options(client, "e1", {"host": "h"})
-
-    client.start_options_flow.assert_awaited_once_with("e1")
+    if source == "ignore":
+        assert "ignored" in json.loads(str(exc_info.value))["error"]["message"]
+        client.start_options_flow.assert_not_called()
+    else:
+        client.start_options_flow.assert_awaited_once_with("e1")

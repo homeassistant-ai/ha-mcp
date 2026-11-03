@@ -133,34 +133,30 @@ class TestListing:
         ]
         assert [r.exc_info is not None for r in caplog.records] == [True, False]
 
-    async def test_not_requested_means_no_bridge_call(self) -> None:
+    @pytest.mark.parametrize(
+        ("domain", "kwargs", "warning"),
+        [
+            ("knx", {}, None),
+            ("ha_mcp_tools", {"include_ws_commands": True}, "was ignored"),
+            (
+                None,
+                {"include_ws_commands": True},
+                "ws_commands not listed: the entry carries no domain",
+            ),
+        ],
+        ids=["not_requested", "component_entry", "no_domain"],
+    )
+    async def test_no_bridge_call_and_no_list(
+        self, domain: str | None, kwargs: dict[str, Any], warning: str | None
+    ) -> None:
         bridge = AsyncMock()
         with patch.object(module, "integration_commands", bridge):
-            result = await _get(_client(), entry_id="e1")
+            result = await _get(_client(), domain, entry_id="e1", **kwargs)
         bridge.assert_not_awaited()
         assert "ws_commands" not in result
-
-    async def test_component_entry_lists_nothing(self) -> None:
-        bridge = AsyncMock()
-        with patch.object(module, "integration_commands", bridge):
-            result = await _get(
-                _client(), "ha_mcp_tools", entry_id="e1", include_ws_commands=True
-            )
-        bridge.assert_not_awaited()
-        assert "ws_commands" not in result
-        assert "include_ws_commands was ignored" in result["warnings"][0]
-
-    async def test_an_entry_without_a_domain_lists_nothing(self) -> None:
-        bridge = AsyncMock()
-        with patch.object(module, "integration_commands", bridge):
-            result = await _get(
-                _client(), None, entry_id="e1", include_ws_commands=True
-            )
-        bridge.assert_not_awaited()
-        assert "ws_commands" not in result
-        assert result["warnings"] == [
-            "ws_commands not listed: the entry carries no domain"
-        ]
+        assert (
+            (warning in result["warnings"][0]) if warning else "warnings" not in result
+        )
 
     async def test_list_mode_ignores_the_flag_with_a_warning(self) -> None:
         tools = IntegrationTools(_client())
@@ -205,18 +201,6 @@ class TestSend:
             "ws_command": "knx/get_entity_config",
             "result": {"info": {"name": "Demo"}},
         }
-
-    @pytest.mark.parametrize(
-        "command", ["config/core/update", "knxx/other", "knx", "auth/x"]
-    )
-    async def test_only_the_entrys_own_prefix_is_sent(self, command: str) -> None:
-        client = _client()
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command=command
-            )
-        assert "'knx/'" in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.parametrize("ws_data", [{"type": "call_service"}, {"id": 1}])
     async def test_ws_data_cannot_set_the_message_envelope(
@@ -279,39 +263,30 @@ class TestSend:
         assert ("may have been applied" in response["error"]["message"]) is unverified
 
     @pytest.mark.parametrize(
-        ("domain", "command", "ws_data", "fragment"),
+        ("domain", "kwargs", "fragment"),
         [
-            ("ha_mcp_tools", "ha_mcp_tools/info", None, "ha-mcp's own"),
-            ("knx", "knx/subscribe_telegrams", None, "one-shot"),
+            ("knx", {"ws_command": "config/core/update"}, "'knx/'"),
+            ("knx", {"ws_command": "knxx/other"}, "'knx/'"),
+            ("knx", {"ws_command": "knx"}, "'knx/'"),
+            ("knx", {"ws_command": "auth/x"}, "'knx/'"),
+            ("ha_mcp_tools", {"ws_command": "ha_mcp_tools/info"}, "ha-mcp's own"),
+            ("knx", {"ws_command": "knx/subscribe_telegrams"}, "one-shot"),
             # Snapshot deletion stays with ha_manage_backup.
-            ("backup", "backup/delete", {"backup_id": "abc"}, "ha_manage_backup"),
+            (
+                "backup",
+                {"ws_command": "backup/delete", "ws_data": {"backup_id": "abc"}},
+                "ha_manage_backup",
+            ),
+            ("knx", {"ws_command": "knx/x", "config": {"a": 1}}, "takes no config"),
+            ("knx", {"ws_command": "knx/x", "describe": True}, "takes no describe"),
+            ("knx", {"ws_data": {"a": 1}}, "needs ws_command"),
+            ("knx", {"ws_command": "knx/x", "entry_id": None}, "needs entry_id"),
         ],
-        ids=["component_entry", "streaming", "snapshot_deletion"],
     )
-    async def test_refused_commands(
-        self, domain: str, command: str, ws_data: dict[str, Any] | None, fragment: str
+    async def test_refused_calls_send_nothing(
+        self, domain: str, kwargs: dict[str, Any], fragment: str
     ) -> None:
         client = _client(domain)
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command=command, ws_data=ws_data
-            )
-        assert fragment in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.parametrize(
-        ("kwargs", "fragment"),
-        [
-            ({"ws_command": "knx/x", "config": {"a": 1}}, "takes no config"),
-            ({"ws_command": "knx/x", "describe": True}, "takes no describe"),
-            ({"ws_data": {"a": 1}}, "needs ws_command"),
-            ({"ws_command": "knx/x", "entry_id": None}, "needs entry_id"),
-        ],
-    )
-    async def test_other_modes_are_refused(
-        self, kwargs: dict[str, Any], fragment: str
-    ) -> None:
-        client = _client()
         with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
                 **{"entry_id": "e1", **kwargs}
