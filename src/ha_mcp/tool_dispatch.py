@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # Call proxies dispatch the envelope's ``name`` back through middleware. Policy
@@ -37,3 +38,25 @@ def is_approval_management_call(name: str, args: dict[str, Any]) -> bool:
         name == _APPROVAL_MANAGEMENT_TOOL
         and args.get("action") in _APPROVAL_MANAGEMENT_ACTIONS
     )
+
+
+def coerce_proxy_arguments(arguments: Any) -> dict[str, Any] | None:
+    """Normalise a call-proxy envelope's ``arguments`` to a dict or None.
+
+    The categorized proxies tolerate ``arguments`` arriving as a JSON string
+    (small models sometimes serialize it) and json.loads it after middleware
+    runs. A dict is used as-is; an absent value (``None``) becomes ``{}`` (a
+    legitimate no-argument call); a string is parsed and only a JSON *object*
+    yields a dict. Anything else returns None, meaning "malformed envelope".
+    """
+    if isinstance(arguments, dict):
+        return arguments
+    if arguments is None:
+        return {}
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except (json.JSONDecodeError, ValueError, RecursionError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
