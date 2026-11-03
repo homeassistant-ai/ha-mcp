@@ -820,7 +820,7 @@ def _accept_or_retry(
             # Best effort: the rejected answer fails with its original reason.
             print(f"  retry call failed: {exc}", file=sys.stderr)
             if _out_of_time():
-                reason += " (time budget exhausted; not retrying)"
+                reason += " (retry failed; time budget exhausted)"
         else:
             translated = retry.get(_string_id(item))
             reason = _validate(item, translated)

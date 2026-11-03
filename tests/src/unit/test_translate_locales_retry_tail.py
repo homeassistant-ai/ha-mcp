@@ -3,7 +3,8 @@
 Every retryable failure in ``_call_gemini``, a transport error as much as an
 unusable answer, ends in one shared tail: stop after the fifth attempt, stop
 once the time budget is spent, otherwise wait and retry. The first tests drive
-it through the transport-error path with a monkeypatched transport. The
+it with a monkeypatched transport, through a transport error and a retryable
+HTTP status. The
 corrective retry ``_accept_or_retry`` asks for a rejected string runs only
 while the same budget lasts, and a run whose budget runs out between two
 requests stops there. Every test records the sleeps and runs on a stopped
@@ -189,7 +190,8 @@ def test_failed_retry_fails_the_string_not_the_run(
 ) -> None:
     """A retry the engine fails must leave only its string failed; its wait
     still paces the next request while the budget lasts. A retry that failed
-    on the spent budget says so, like a string the budget kept from a retry."""
+    after the deadline says the budget is spent, so the failure summary does
+    not hide it."""
     _deadline_in(monkeypatch, 3600)
 
     def fails(_prompt: str) -> dict[str, Any]:
@@ -202,7 +204,7 @@ def test_failed_retry_fails_the_string_not_the_run(
     failed = _accept({}, failures)
     assert failed == {("messages", "greeting")}
     assert len(sleeps) == (0 if crosses_deadline else 1)
-    budget_note = failures[0].endswith("(time budget exhausted; not retrying)")
+    budget_note = failures[0].endswith("(retry failed; time budget exhausted)")
     assert budget_note is crosses_deadline
 
 
