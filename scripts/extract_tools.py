@@ -883,9 +883,10 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
         # regenerated at all, which is the loudest thing this script has to
         # say.
         raise ValueError(
-            f"{README_PATH.name} is missing the tool-table markers "
-            f"({README_START_MARKER!r} / {README_END_MARKER!r}); restore them "
-            "so the table can be regenerated"
+            f"{README_PATH.name} needs the tool-table markers "
+            f"({README_START_MARKER!r} / {README_END_MARKER!r}) directly inside "
+            "a <details> ... </details> block; restore them so the table can "
+            "be regenerated"
         )
 
     readme = re.sub(r"tools-[^-]+-blue", f"tools-{count}-blue", readme)
