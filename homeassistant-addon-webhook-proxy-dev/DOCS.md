@@ -371,3 +371,12 @@ for that connection. It uses the same webhook secret and OAuth login. The normal
 URL keeps its usual access; this is a client mode, not a separate credential
 permission. Both this app (add-on) and the target MCP server need a version that
 supports the suffix. Reconnect your client after changing its URL.
+
+### Per-URL tool catalog
+
+Append `/catalog/full` or `/catalog/search` to your webhook URL, alone or after
+`/readonly` (`/readonly/catalog/search`), to give that client a fixed tool
+catalog: the full tool list, or ha-mcp's search tools. The plain URL follows the
+server's `enable_tool_search` option. It uses the same webhook secret and OAuth
+login. Both this app (add-on) and the target MCP server need a version that
+supports the suffix. Reconnect your client after changing its URL.

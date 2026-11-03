@@ -385,18 +385,18 @@ Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, C
 
 For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-app settings UI for fine-grained tool enable/disable/pin.
 
-### Per-connection tool catalog
+### Per-URL tool catalog
 
-`ENABLE_TOOL_SEARCH` is only the default. When several clients share one server, each connection can choose its own catalog, so a client with built-in tool search keeps the full list while a small-context client gets the search tools:
+`ENABLE_TOOL_SEARCH` still defaults to off, and it sets the catalog of the main endpoint only. When several clients share one server, give each the URL for the catalog it needs: a client with built-in tool search keeps the full list, a small-context client gets the search tools. The suffixes are fixed overrides that ignore `ENABLE_TOOL_SEARCH`:
 
 ```text
-Server default:  https://example.com/private_your_secret
-Full catalog:    https://example.com/private_your_secret/catalog/full
-Search tools:    https://example.com/private_your_secret/catalog/search
-Both suffixes:   https://example.com/private_your_secret/readonly/catalog/search
+Main endpoint (follows ENABLE_TOOL_SEARCH):  https://example.com/private_your_secret
+Always the full catalog:                     https://example.com/private_your_secret/catalog/full
+Always the search tools:                     https://example.com/private_your_secret/catalog/search
+Read-only, search tools:                     https://example.com/private_your_secret/readonly/catalog/search
 ```
 
-A client that supports MCP extensions can choose instead, without a special URL, by declaring `io.github.homeassistant-ai/tool-catalog` with `{"mode": "full"}` or `{"mode": "search"}` in its client capabilities. Its declaration wins over the URL. Over HTTP, which ha-mcp serves statelessly, that takes protocol 2026-07-28, where each request's `_meta` carries the capabilities; an older client's `initialize` capabilities do not reach its later requests, so it uses the URL. Over stdio the `initialize` declaration applies, and `ENABLE_TOOL_SEARCH` in that client's server environment works too. The server advertises the extension with the modes it offers and the connection's default. The suffixes work on the server's own HTTP endpoint; Home Assistant webhook URLs (Webhook Proxy app, embedded integration) accept only `/readonly`, so a webhook client chooses through the extension.
+Each URL keeps its catalog for the life of the connection, so a client picks its catalog only by the URL it is given. Reconnect the client after changing its URL so it refreshes its tool list. Home Assistant webhook URLs accept the same suffixes, alone or after `/readonly`: `https://your-ha.example/api/webhook/<webhook-id>/catalog/search`. This requires the updated embedded integration or Webhook Proxy dev app (add-on), together with the updated MCP server. Stdio runs one client per server process, so set `ENABLE_TOOL_SEARCH` in that client's server environment instead.
 
 ---
 

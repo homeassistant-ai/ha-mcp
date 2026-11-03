@@ -379,7 +379,7 @@ Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy
 - Other clients with native deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost.
 - When you need direct tool access without the search step.
 
-This is the default for connections that do not choose. To give one client a different catalog, append `/catalog/full` or `/catalog/search` to its direct HTTP MCP URL, or let a client that supports MCP extensions request it; see [Per-connection tool catalog](https://github.com/homeassistant-ai/ha-mcp#per-connection-tool-catalog). Webhook URLs do not accept these suffixes.
+This option (off by default) sets the catalog of the main MCP URL only. To give one client a fixed catalog regardless of it, append `/catalog/full` or `/catalog/search` to that client's MCP or webhook URL, optionally after `/readonly`; see [Per-URL tool catalog](https://github.com/homeassistant-ai/ha-mcp#per-url-tool-catalog).
 
 Requires app restart to take effect.
 
