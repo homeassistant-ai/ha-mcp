@@ -38,7 +38,7 @@ from .tool_catalog import (
     CATALOG_MODES,
     default_catalog_mode,
     install_catalog_instructions,
-    mark_search_unavailable,
+    set_search_available,
 )
 from .tools.helpers import raise_tool_error
 from .tools.tool_hints import read_only_hints
@@ -537,8 +537,10 @@ class HomeAssistantSmartMCPServer:
                 "CategorizedSearchTransform not available — every endpoint "
                 "serves the full tool catalog. Install fastmcp>=3.1 to fix."
             )
-            mark_search_unavailable()
+            set_search_available(False)
+            self.mcp.instructions = self._instructions["full"]
             return
+        set_search_available(True)
         install_catalog_instructions(self.mcp, self._instructions)
 
         # Build the always_visible list: defaults (minus tools the user

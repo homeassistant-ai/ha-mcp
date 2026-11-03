@@ -216,7 +216,7 @@ def test_missing_search_transform_serves_the_full_catalog_everywhere(monkeypatch
     get_global_settings().enable_tool_search = True
     srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
     srv.settings = get_global_settings()
-    srv.mcp = mcp = HttpTransportFastMCP("no search")
+    srv.mcp = mcp = HttpTransportFastMCP("no search", instructions="search text")
     srv._instructions = {"full": "full text", "search": "search text"}
     srv._user_enabled_tools, srv._user_pinned_tools = set(), []
     mcp.tool(annotations={"readOnlyHint": True})(read_tool)
@@ -227,6 +227,23 @@ def test_missing_search_transform_serves_the_full_catalog_everywhere(monkeypatch
     with TestClient(app) as client:
         for path in ("/mcp", "/mcp/catalog/search"):
             assert _tool_names(client, path) == {"read_tool"}
+            assert _initialize(client, path, {})[0]["instructions"] == "full text"
+
+
+def test_a_later_server_with_the_search_transform_serves_search(monkeypatch):
+    """The component rebuilds its server in place; one failed import must not
+    leave every later server serving the full catalog."""
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    monkeypatch.setattr(tool_catalog, "_search_available", False)
+    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
+    srv.settings = get_global_settings()
+    srv.mcp = HttpTransportFastMCP("search")
+    srv._instructions = {"full": "full text", "search": "search text"}
+    srv._user_enabled_tools, srv._user_pinned_tools = set(), []
+    srv._apply_tool_search()
+    with catalog_endpoint("search"):
+        assert tool_search_active()
 
 
 def read_tool() -> str:

@@ -42,15 +42,16 @@ CATALOG_MODES: tuple[CatalogMode, ...] = ("full", "search")
 _endpoint_mode: ContextVar[CatalogMode | None] = ContextVar(
     "ha_mcp_endpoint_catalog_mode", default=None
 )
-# Cleared when the search transform cannot be installed: every endpoint
-# then serves, and describes, the full catalog.
+# False while the search transform cannot be installed: every endpoint then
+# serves, and describes, the full catalog. Set by each server it builds, so
+# a later server in the process (the component restarts in place) resets it.
 _search_available = True
 
 
-def mark_search_unavailable() -> None:
-    """Serve the full catalog on every endpoint for this process."""
+def set_search_available(available: bool) -> None:
+    """Record whether this process's server installed the search transform."""
     global _search_available
-    _search_available = False
+    _search_available = available
 
 
 def default_catalog_mode() -> CatalogMode:
