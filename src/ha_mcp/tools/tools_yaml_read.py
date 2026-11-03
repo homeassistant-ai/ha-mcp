@@ -20,6 +20,7 @@ import asyncio
 import fnmatch
 import json
 import logging
+import posixpath
 import re
 from typing import Annotated, Any, cast
 
@@ -488,13 +489,22 @@ async def _resolve_target_files(
     # ordinary expansion match, so nobody named it and a bad read stays a
     # warning.
     literal_paths = set(literal)
-    named = literal_paths if _names_a_file(pattern) else set()
-    targets = sorted(set(matched) | literal_paths)
+    target_set = set(matched) | literal_paths
+    named: set[str] = set()
+    if _names_a_file(pattern):
+        if isinstance(literal_result, Exception):
+            requested = posixpath.normpath(file)
+            named = {path for path in target_set if path == requested}
+        else:
+            named = set(literal_paths)
+    targets = sorted(target_set)
     warnings.extend(
         _absent_literal_warnings(
             file,
             pattern,
-            literal_found=bool(named) or isinstance(literal_result, Exception),
+            literal_found=bool(named)
+            or isinstance(matched_result, Exception)
+            or isinstance(literal_result, Exception),
             target_count=len(targets),
         )
     )

@@ -455,6 +455,53 @@ async def test_literal_lookup_failure_keeps_the_pattern_matches():
     ]
 
 
+async def test_pattern_failure_does_not_claim_the_file_is_absent():
+    """A failed pattern lookup is not evidence that the pattern matched nothing."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
+
+    def list_files(payload):
+        if payload["pattern"] == "svc[[]a].yaml":
+            return {"success": True, "files": []}
+        return {"success": False, "error": "Path not allowed.", "files": []}
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+    assert out["success"] is True
+    assert out["warnings"] == [
+        "Pattern listing failed: Path not allowed. Files it would have matched "
+        "may be missing from this result."
+    ]
+
+
+async def test_named_bracketed_file_stays_strict_when_literal_listing_fails():
+    """The requested name is still the named target when its lookup fails."""
+    from .test_yaml_read_tool import _make_tool
+
+    def list_files(payload):
+        if payload["pattern"] == "svc[[]].yaml":
+            return {"success": False, "error": "Path not allowed.", "files": []}
+        return {
+            "success": True,
+            "files": [{"path": "packages/svc[].yaml", "is_dir": False}],
+        }
+
+    def read(payload):
+        return {
+            "success": True,
+            "path": payload["path"],
+            "content": "...",
+            "subtree": None,
+            "parse_error": "not valid YAML",
+        }
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[].yaml")
+
+
 async def test_both_lookups_failing_raises():
     """The realistic component failure is path-based and hits both lookups.
 
