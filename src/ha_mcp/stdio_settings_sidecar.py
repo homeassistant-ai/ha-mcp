@@ -62,7 +62,7 @@ import socket
 import subprocess
 import sys
 import threading
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -183,12 +183,7 @@ def _save_sidecar_state(port: int, secret_path: str) -> None:
 
 
 def read_sidecar_url() -> str | None:
-    """Return the current sidecar URL, or None if no sidecar is running.
-
-    Reads ``~/.ha-mcp/ui.url`` if present. Consumed by
-    ``ha_get_overview`` to surface the URL to the LLM (and through it,
-    the user) on every overview call.
-    """
+    """Return the URL recorded in ``ui.url``, or None when absent/unreadable."""
     try:
         return _url_file().read_text().strip() or None
     except FileNotFoundError:
@@ -196,6 +191,14 @@ def read_sidecar_url() -> str | None:
     except OSError:
         logger.debug("Cannot read sidecar URL file", exc_info=True)
         return None
+
+
+def live_sidecar_url() -> str | None:
+    """Return the URL ``ha_get_overview`` may surface: UI enabled, recorded pid alive."""
+    pid = _read_recorded_pid()
+    if _is_disabled() or pid is None or not _pid_alive(pid):
+        return None
+    return read_sidecar_url()
 
 
 def _is_disabled() -> bool:
@@ -817,10 +820,10 @@ def _bind_listener(preferred: int, source: str) -> socket.socket:
 def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
     """Retire any previous sidecar and spawn a fresh one.
 
-    Called once from stdio ``main()`` after argument validation. No-op
-    when the sidecar is disabled (env var or sentinel), when a
-    concurrent parent already holds the spawn lock, or when subprocess
-    spawn raises (best effort; the MCP server continues regardless).
+    Called once from stdio ``main()`` after argument validation. When the
+    sidecar is disabled (env var or sentinel) it only retires a running one
+    (#2954). No-op when a concurrent parent already holds the spawn lock or
+    when subprocess spawn raises (best effort; the MCP server continues).
 
     A previously spawned sidecar is never reused (issue #2131): it
     serves the code and environment of the parent that spawned it, which
@@ -838,6 +841,9 @@ def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
             "Settings UI sidecar disabled (env var or %s sentinel); skipping spawn.",
             _disabled_sentinel().name,
         )
+        with _spawn_lock() as acquired:
+            if acquired:
+                _shutdown_existing_sidecar()
         return
 
     # Serialize concurrent spawn attempts. Two parent stdio processes
@@ -953,10 +959,10 @@ def _do_spawn() -> None:
         if log_handle is not None:
             log_handle.close()
         return
+    # Reap the child on exit: a zombie still passes os.kill(pid, 0) (#2954).
+    threading.Thread(target=proc.wait, name="sidecar-reaper", daemon=True).start()
 
-    # The child writes its own pid/url file once it's bound — but log the
-    # spawn here so users grepping the parent stderr see something
-    # immediately, even before the child reports back.
+    # Log now so parent stderr shows the spawn before the child publishes.
     logger.info(
         "Spawned settings UI sidecar pid=%d (log: %s). URL written to %s once ready.",
         proc.pid,
@@ -1129,13 +1135,6 @@ def _write_pid_url(url: str) -> None:
             # there's a live sidecar with an unreadable URL.
             with contextlib.suppress(FileNotFoundError, OSError):
                 pid_path.unlink()
-
-
-# Note: a custom ``_install_shutdown_handlers`` lived here previously.
-# Removed because uvicorn's ``Server.run()`` already installs SIGTERM /
-# SIGINT handlers that set ``should_exit = True`` — the same behavior
-# the custom handler provided. The /shutdown HTTP endpoint reaches the
-# same stop callable via ``app.state.shutdown_state`` and is unaffected.
 
 
 def _build_shutdown_handler(
@@ -1348,12 +1347,18 @@ def _build_app(
         )
     )
 
+    # uvicorn re-raises a captured SIGTERM after shutdown, killing the process
+    # before run_main's finally; app shutdown is the last code a signal reaches.
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: Any) -> AsyncIterator[None]:
+        yield
+        _cleanup_owned_serving_files()
+
     app = Starlette(
         routes=routes,
         middleware=[Middleware(SecurityMiddleware)],
+        lifespan=_lifespan,
     )
-    # Stash the shutdown_state on the app so run_main() can install the
-    # uvicorn stop callable into it once the server is built.
     app.state.shutdown_state = shutdown_state
     app.state.shutdown_lock = shutdown_lock
     return app
@@ -1438,10 +1443,8 @@ def run_main() -> int:
     def _stop() -> None:
         server.should_exit = True
 
-    # Wire the stop callable into app state so the /shutdown HTTP
-    # endpoint can reach it. OS signals (SIGTERM / SIGINT) are handled
-    # by uvicorn's own ``Server.run()`` installation — see the note
-    # earlier in this module for why we don't install our own.
+    # Wire the stop callable into app state so the /shutdown HTTP endpoint
+    # can reach it; uvicorn's ``Server.run()`` handles SIGTERM / SIGINT.
     with app.state.shutdown_lock:
         app.state.shutdown_state["stop"] = _stop
 
@@ -1465,12 +1468,8 @@ def run_main() -> int:
         # exists to close.
         server.run(sockets=[listener])
     finally:
-        # Best-effort cleanup of serving files on graceful exit — but only
-        # the ones this process still owns. The retire wait in
-        # _shutdown_existing_sidecar is bounded, so a slow exit can outlive
-        # its replacement's file writes; a blind unlink here would delete
-        # the NEW sidecar's discovery files. (ui.state is deliberately
-        # never cleaned: it carries the stable URL to the next spawn.)
+        # Covers exits that never reach app shutdown. ui.state is kept on
+        # purpose: it carries the stable URL to the next spawn.
         _cleanup_owned_serving_files()
 
     return 0
