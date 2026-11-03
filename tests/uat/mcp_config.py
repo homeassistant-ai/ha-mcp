@@ -10,6 +10,7 @@ import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,17 +27,34 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
+def mcp_server_action(args: argparse.Namespace) -> str:
+    """What a run does to get its MCP server, for the log (never the URL)."""
+    if args.mcp_url:
+        return "Connecting to the running MCP server"
+    source = f"uvx download @ {args.branch}" if args.branch else "local"
+    return f"Starting MCP server ({source})"
+
+
 def read_dev_env_urls(path: str | Path) -> tuple[str, str]:
     """``(ha_url, mcp_url)`` from a decrypted dev environment URLs file.
 
     The file holds ``HA: <url>`` and ``MCP: <url>`` lines
     (docs/dev-ha-env.md); a tunnel being restarted shows as ``down``.
     """
+    try:
+        text = Path(path).read_text()
+    except OSError as e:
+        raise ValueError(f"cannot read the dev environment URLs file: {e}") from e
     urls: dict[str, str] = {}
-    for line in Path(path).read_text().splitlines():
+    for line in text.splitlines():
         key, _, value = line.partition(":")
         urls[key.strip()] = value.strip()
-    missing = [k for k in ("HA", "MCP") if not urls.get(k, "").startswith("http")]
+
+    def usable(url: str) -> bool:
+        parsed = urlparse(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+    missing = [k for k in ("HA", "MCP") if not usable(urls.get(k, ""))]
     if missing:
         raise ValueError(
             f"{path} has no usable {' or '.join(missing)} URL; download and "

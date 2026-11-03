@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -40,9 +41,17 @@ def test_dev_env_file_sets_the_ha_and_mcp_urls(tmp_path):
     assert (args.ha_url, args.mcp_url) == (HA, MCP)
 
 
-def test_a_tunnel_that_is_down_is_refused(tmp_path):
+@pytest.mark.parametrize("mcp", ["down", "https://", "httpdown"])
+def test_a_urls_file_without_a_usable_mcp_url_is_refused(tmp_path, mcp):
+    """A tunnel being restarted shows as ``down``; the run must stop with the
+    re-download hint, not fail later at the connection."""
     with pytest.raises(ValueError, match="no usable MCP URL"):
-        mcp_config.read_dev_env_urls(_urls_file(tmp_path, mcp="down"))
+        mcp_config.read_dev_env_urls(_urls_file(tmp_path, mcp=mcp))
+
+
+def test_a_missing_urls_file_is_an_argument_error(tmp_path):
+    with pytest.raises(ValueError, match="cannot read"):
+        mcp_config.read_dev_env_urls(tmp_path / "missing.txt")
 
 
 @pytest.mark.parametrize(
@@ -97,8 +106,69 @@ def test_run_story_dev_env_runs_against_the_environment(tmp_path, monkeypatch):
     assert exc.value.code == 0
     args = captured["args"]
     assert (args.ha_url, args.mcp_url, args.ha_token) == (HA, MCP, TEST_TOKEN)
-    # Each test prompt runs through mcp_config.py, which must reach the same server.
-    assert args.extra_args[args.extra_args.index("--mcp-url") + 1] == MCP
+
+    # A test prompt runs through run_uat.py, which must reach the same server.
+    sent: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        sent["cmd"] = cmd
+        return argparse.Namespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(run_story.subprocess, "run", _fake_run)
+    run_story._run_test_prompt(
+        "prompt", "claude", HA, TEST_TOKEN, None, args.extra_args
+    )
+    assert sent["cmd"][sent["cmd"].index("--mcp-url") + 1] == MCP
+
+    # The inline OpenAI agent connects to the same server itself.
+    assert _inline_agent_server(args, monkeypatch) == MCP
+
+
+def _inline_agent_server(args: argparse.Namespace, monkeypatch) -> str:
+    """The server URL the inline OpenAI agent's MCP client is built with."""
+    import contextlib
+
+    from uat import openai_agent
+    from uat.stories import run_story
+
+    from ha_mcp._vendor import fastmcp
+
+    seen: dict = {}
+
+    class _Client:
+        def __init__(self, config):
+            seen["config"] = config
+
+        async def __aenter__(self):
+            raise RuntimeError("not connecting in a unit test")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _OpenAI:
+        async def close(self):
+            return None
+
+    async def _warm(**kwargs):
+        return _OpenAI(), "model", None
+
+    monkeypatch.setattr(fastmcp, "Client", _Client)
+    monkeypatch.setattr(openai_agent, "create_and_warm_openai_client", _warm)
+    args.base_url, args.api_key, args.model, args.max_tools = (
+        "http://llm/v1",
+        "k",
+        None,
+        None,
+    )
+
+    async def _setup():
+        async with contextlib.AsyncExitStack() as stack:
+            return await run_story._setup_inline_agent(
+                "openai", args.ha_url, args.ha_token, args, stack, {}, [], [], "", ""
+            )
+
+    assert asyncio.run(_setup()) is None  # the fake client refused to connect
+    return seen["config"]["mcpServers"]["home-assistant"]["url"]
 
 
 def test_claude_agent_gets_no_tools_or_settings_beyond_the_bat_server():

@@ -779,10 +779,9 @@ async def run(args: argparse.Namespace) -> dict:
 
     try:
         logger.info(f"HA: {ha_url}")
+        # The MCP URL is not logged: its secret path grants access to the server.
         logger.info(
-            f"MCP source: {mcp_source}"
-            + (f" ({args.branch})" if args.branch else "")
-            + (f" ({args.mcp_url})" if args.mcp_url else "")
+            f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else "")
         )
         logger.info(f"Agents: {', '.join(active_agents)}")
 
@@ -800,7 +799,6 @@ async def run(args: argparse.Namespace) -> dict:
             "scenario": scenario,
             "ha_url": ha_url,
             "mcp_source": mcp_source,
-            "mcp_url": args.mcp_url,
             "branch": args.branch,
             "results": agent_results,
         }

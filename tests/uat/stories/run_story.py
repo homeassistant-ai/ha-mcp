@@ -87,10 +87,10 @@ sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # for scripts/ subdirectory imports
 
 from scripts.verify_story import verify_ha_checks  # noqa: E402
+from uat import mcp_config  # noqa: E402
 from uat._inprocess import inprocess_mcp_client  # noqa: E402
 from uat._logging import configure_cli_logging  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
-from uat.mcp_config import add_target_args, apply_dev_env, parse_mcp_env  # noqa: E402
 from uat.run_uat import SuggestingArgumentParser  # noqa: E402
 
 logger = logging.getLogger("uat.stories.run_story")
@@ -1042,7 +1042,6 @@ async def _setup_inline_agent(
     openai_tools)`` on success, or ``None`` if setup failed (a per-story failure
     row is recorded before returning).
     """
-    from uat.mcp_config import build_stdio_mcp_config
     from uat.openai_agent import (
         create_and_warm_openai_client,
         fetch_openai_tools,
@@ -1050,7 +1049,7 @@ async def _setup_inline_agent(
 
     from ha_mcp._vendor.fastmcp import Client as _MCPClient
 
-    config = build_stdio_mcp_config(
+    config = mcp_config.build_stdio_mcp_config(
         ha_url, ha_token, args.branch, mcp_env_dict or None, args.mcp_url
     )
     try:
@@ -1079,8 +1078,7 @@ async def _setup_inline_agent(
         )
         return None
     try:
-        source = f"uvx download @ {args.branch}" if args.branch else "local"
-        logger.info(f"[{agent}] Starting MCP server ({source})...")
+        logger.info(f"[{agent}] {mcp_config.mcp_server_action(args)}...")
         inline_mcp_client = await agent_stack.enter_async_context(_MCPClient(config))
         openai_tools = await fetch_openai_tools(
             inline_mcp_client, max_tools=args.max_tools
@@ -1558,7 +1556,7 @@ async def run_stories(
     # Each entry: (agent, story_id, story, exit_code, summary, session_file, passed)
     backend_aborted = False  # set if any agent aborted on an unreachable backend
 
-    mcp_env_dict = parse_mcp_env(
+    mcp_env_dict = mcp_config.parse_mcp_env(
         getattr(args, "mcp_env", None),
         base_url=None if args.mcp_url else args.base_url,
         on_default_applied=logger.info,
@@ -1604,7 +1602,7 @@ def main() -> None:
         "--all", action="store_true", help="Run all s*.yaml stories in catalog/"
     )
     parser.add_argument("--agents", default="gemini", help="Comma-separated agent list")
-    add_target_args(parser)
+    mcp_config.add_target_args(parser)
     parser.add_argument(
         "--dry-run", action="store_true", help="Print BAT scenario JSON"
     )
@@ -1676,7 +1674,7 @@ def main() -> None:
         parser.error("--base-url is required when using the openai agent")
 
     configure_cli_logging()
-    apply_dev_env(parser, args)
+    mcp_config.apply_dev_env(parser, args)
 
     if args.all:
         stories = sorted(CATALOG_DIR.glob("s*.yaml"))
