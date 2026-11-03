@@ -1,13 +1,15 @@
 """Unit tests for the webhook-proxy promote/reset transform engine.
 
-These exercise the pure helpers of ``scripts/webhook_proxy_sync.py`` without
-touching the filesystem: the semver bump math, the monotonic dev-reset rule
-(including the case where stable's base is *behind* dev's), and the start.py
-identity each flavor's profile writes, which names the other flavor as its
-sibling.
+Most tests exercise the pure helpers of ``scripts/webhook_proxy_sync.py`` on
+strings: the semver bump math, the monotonic dev-reset rule (including the
+case where stable's base is *behind* dev's), and the per-file transforms, among
+them the start.py identity each flavor's profile writes (which names the other
+flavor as its sibling), the Dockerfile labels and the manifest identity.
 
-The full round-trip (that ``reset``/``promote`` produce a version-only diff on
-a clean tree) is guaranteed by the acceptance gate in the build spec, not here.
+The dev version rewrite and the full round-trip run on copies under
+``tmp_path``. The round-trip tests (``reset``/``promote`` of one committed
+add-on tree reproduces the other) run only at sync points; see the note on
+``_sync_point_only`` below.
 """
 
 import importlib.util

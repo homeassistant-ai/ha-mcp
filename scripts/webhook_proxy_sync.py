@@ -198,7 +198,8 @@ def apply_start_py_identity(text: str, dst: Flavor) -> str:
     The four mutual-exclusion constants and the flavor-descriptor comment do
     NOT follow the blanket rename (the sibling relationship flips), so each is
     rewritten explicitly and robustly regardless of what the rename produced.
-    The sibling's identity is the other profile's own.
+    The sibling's slug, mutex id and flavor word come from the other profile;
+    ``SIBLING_LABEL`` comes from ``dst.sibling_label``.
     """
     sibling = DEV if dst is STABLE else STABLE
     for name, value in (
@@ -369,7 +370,6 @@ def _ruff_format(paths: list[Path], root: Path) -> None:
 
 
 def _edit(path: Path, transform: Callable[[str], str]) -> None:
-    """Rewrite ``path`` in place through ``transform``."""
     path.write_text(transform(path.read_text(encoding="utf-8")), encoding="utf-8")
 
 
