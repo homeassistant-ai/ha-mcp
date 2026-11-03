@@ -9,9 +9,15 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
+from pathlib import Path
 
 import pytest
+
+# ``tests/uat`` is not a package, so ``uat.*`` imports need ``tests/`` on the
+# path; set it here so a single test file collects on its own.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _DATA_DIR = tempfile.mkdtemp(prefix="ha-mcp-uat-")
 

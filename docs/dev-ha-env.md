@@ -98,6 +98,9 @@ Run it **from your fork only**. The job refuses to run in
    uv run python .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt describe ha_search
    uv run python .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt call ha_search '{"query": "kitchen"}'
    ```
+   To run BAT scenarios or stories against the environment, pass the
+   decrypted file to the BAT runners' `--dev-env` option
+   ([`tests/uat/README.md`](../tests/uat/README.md#dev-environment)).
    Do the setup and the checks with the tools as well. Creating or verifying
    state through `HA:`'s REST API routes around the tools under test, so a
    gap in them goes unnoticed.

@@ -87,6 +87,7 @@ sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # for scripts/ subdirectory imports
 
 from scripts.verify_story import verify_ha_checks  # noqa: E402
+from uat import mcp_config  # noqa: E402
 from uat._inprocess import inprocess_mcp_client  # noqa: E402
 from uat._logging import configure_cli_logging  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
@@ -1045,11 +1046,12 @@ async def _setup_inline_agent(
         create_and_warm_openai_client,
         fetch_openai_tools,
     )
-    from uat.run_uat import build_stdio_mcp_config
 
     from ha_mcp._vendor.fastmcp import Client as _MCPClient
 
-    config = build_stdio_mcp_config(ha_url, ha_token, args.branch, mcp_env_dict or None)
+    config = mcp_config.build_stdio_mcp_config(
+        ha_url, ha_token, args.branch, mcp_env_dict or None, args.mcp_url
+    )
     try:
         (
             openai_client,
@@ -1076,8 +1078,7 @@ async def _setup_inline_agent(
         )
         return None
     try:
-        source = f"uvx download @ {args.branch}" if args.branch else "local"
-        logger.info(f"[{agent}] Starting MCP server ({source})...")
+        logger.info(f"[{agent}] {mcp_config.mcp_server_action(args)}...")
         inline_mcp_client = await agent_stack.enter_async_context(_MCPClient(config))
         openai_tools = await fetch_openai_tools(
             inline_mcp_client, max_tools=args.max_tools
@@ -1543,11 +1544,9 @@ async def run_stories(
     When --ha-url is provided, all agents share the external instance.
     """
     run_start = time.monotonic()
-    sha, describe = get_git_info()
+    sha, describe = mcp_config.running_server_revision(args) or get_git_info()
     agent_list = [a.strip() for a in args.agents.split(",")]
     using_external_ha = bool(args.ha_url)
-
-    from uat.run_uat import parse_mcp_env
 
     rc = _preflight_stories(args, agent_list, using_external_ha)
     if rc is not None:
@@ -1557,9 +1556,9 @@ async def run_stories(
     # Each entry: (agent, story_id, story, exit_code, summary, session_file, passed)
     backend_aborted = False  # set if any agent aborted on an unreachable backend
 
-    mcp_env_dict = parse_mcp_env(
+    mcp_env_dict = mcp_config.parse_mcp_env(
         getattr(args, "mcp_env", None),
-        base_url=args.base_url,
+        base_url=None if args.mcp_url else args.base_url,
         on_default_applied=logger.info,
     )
     effective_mcp_env: list[str] = [f"{k}={v}" for k, v in mcp_env_dict.items()]
@@ -1603,9 +1602,7 @@ def main() -> None:
         "--all", action="store_true", help="Run all s*.yaml stories in catalog/"
     )
     parser.add_argument("--agents", default="gemini", help="Comma-separated agent list")
-    parser.add_argument("--branch", help="Git branch/tag to install ha-mcp from")
-    parser.add_argument("--ha-url", help="Use existing HA instance (skip container)")
-    parser.add_argument("--ha-token", help="HA long-lived access token")
+    mcp_config.add_target_args(parser)
     parser.add_argument(
         "--dry-run", action="store_true", help="Print BAT scenario JSON"
     )
@@ -1677,6 +1674,7 @@ def main() -> None:
         parser.error("--base-url is required when using the openai agent")
 
     configure_cli_logging()
+    mcp_config.apply_dev_env(parser, args)
 
     if args.all:
         stories = sorted(CATALOG_DIR.glob("s*.yaml"))

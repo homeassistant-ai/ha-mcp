@@ -13,13 +13,13 @@ Usage:
     echo '{"test_prompt":"Search for light entities."}' | uv run python tests/uat/run_uat.py --agents gemini
     uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
     uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
+    uv run python tests/uat/run_uat.py --dev-env dev-ha-env-urls.txt --agents claude
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import atexit
 import difflib
 import json
 import logging
@@ -30,7 +30,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
@@ -46,6 +45,12 @@ sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 from uat._logging import configure_cli_logging  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
+from uat.mcp_config import (  # noqa: E402
+    parse_mcp_env,
+    resolve_running_server,
+    write_gemini_mcp_config,
+    write_stdio_mcp_config,
+)
 
 HA_IMAGE = HA_TEST_IMAGE
 
@@ -138,18 +143,6 @@ class HAContainer:
 # ---------------------------------------------------------------------------
 # MCP Config Generation
 # ---------------------------------------------------------------------------
-def mcp_server_command(branch: str | None) -> list[str]:
-    """Build the MCP server command for stdio mode."""
-    if branch:
-        return [
-            "uvx",
-            "--from",
-            f"git+https://github.com/homeassistant-ai/ha-mcp.git@{branch}",
-            "ha-mcp",
-        ]
-    return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
-
-
 def preflight_check_docker(timeout: float = 5.0) -> str | None:
     """Return an error string if the Docker daemon is unreachable, else None."""
     try:
@@ -187,121 +180,6 @@ def preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
     except requests.RequestException as e:
         return f"OpenAI endpoint {base_url} is not reachable ({type(e).__name__}): {e}"
     return None
-
-
-def _build_mcp_env(
-    ha_url: str, ha_token: str, extra_env: dict[str, str] | None
-) -> dict[str, str]:
-    # Override with --mcp-env LOG_LEVEL=INFO when debugging the server.
-    # A fresh config dir keeps the developer's ~/.ha-mcp tool pins and
-    # settings out of the results; --mcp-env HA_MCP_CONFIG_DIR=... opts in.
-    # The backup dir is pinned too: the server otherwise keeps using a
-    # populated ~/.local/share/ha_mcp/backups.
-    config_dir = tempfile.mkdtemp(prefix="ha-mcp-bat-")
-    atexit.register(shutil.rmtree, config_dir, ignore_errors=True)
-    env = {
-        "HOMEASSISTANT_URL": ha_url,
-        "HOMEASSISTANT_TOKEN": ha_token,
-        "LOG_LEVEL": "WARNING",
-        "HA_MCP_CONFIG_DIR": config_dir,
-        "HAMCP_BACKUP_DIR": str(Path(config_dir) / "backups"),
-        "HA_MCP_DISABLE_SETTINGS_UI": "1",
-    }
-    if extra_env:
-        env.update(extra_env)
-    return env
-
-
-def parse_mcp_env(
-    raw_mcp_env: list[str] | None,
-    base_url: str | None = None,
-    on_default_applied: Callable[[str], None] | None = None,
-) -> dict[str, str]:
-    """Parse ``KEY=VALUE`` pairs into a dict, with the local-model default.
-
-    A bare ``KEY`` (no ``=``) maps to an empty string — useful for
-    boolean-presence flags. When ``base_url`` is set (targeting a local
-    OpenAI-compatible endpoint), ``ENABLE_TOOL_SEARCH=true`` is injected
-    unless the caller already set it. Local models typically can't prefill
-    the full tool catalog, so tool search is the default for that path.
-    Override with an explicit ``ENABLE_TOOL_SEARCH=...`` pair.
-
-    If ``on_default_applied`` is provided, it is called with a human-readable
-    message each time a default is injected.
-    """
-    pairs = raw_mcp_env or []
-    env = {k: v for pair in pairs for k, _, v in [pair.partition("=")]}
-    if base_url and "ENABLE_TOOL_SEARCH" not in env:
-        env["ENABLE_TOOL_SEARCH"] = "true"
-        if on_default_applied:
-            on_default_applied(
-                "Defaulting ENABLE_TOOL_SEARCH=true for local model (--base-url set)"
-            )
-    return env
-
-
-def build_stdio_mcp_config(
-    ha_url: str,
-    ha_token: str,
-    branch: str | None,
-    extra_env: dict[str, str] | None = None,
-) -> dict:
-    """Build the stdio MCP config dict (format shared with Claude's --mcp-config).
-
-    The dict can be passed directly to ``fastmcp.Client(config)`` for in-process
-    use, or serialized to a file via ``write_stdio_mcp_config`` for CLI agents
-    that expect a file path.
-    """
-    cmd = mcp_server_command(branch)
-    env = _build_mcp_env(ha_url, ha_token, extra_env)
-    return {
-        "mcpServers": {
-            "home-assistant": {
-                "command": cmd[0],
-                "args": cmd[1:],
-                "env": env,
-            }
-        }
-    }
-
-
-def write_stdio_mcp_config(
-    ha_url: str,
-    ha_token: str,
-    branch: str | None,
-    extra_env: dict[str, str] | None = None,
-) -> Path:
-    """Write the stdio MCP config to a temporary JSON file, return its path."""
-    config = build_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", prefix="claude_mcp_", delete=False
-    ) as f:
-        json.dump(config, f)
-    return Path(f.name)
-
-
-def write_gemini_mcp_config(
-    ha_url: str,
-    ha_token: str,
-    branch: str | None,
-    workdir: Path,
-    extra_env: dict[str, str] | None = None,
-) -> None:
-    """Write .gemini/settings.json in the given workdir."""
-    cmd = mcp_server_command(branch)
-    gemini_dir = workdir / ".gemini"
-    gemini_dir.mkdir(exist_ok=True)
-    env = _build_mcp_env(ha_url, ha_token, extra_env)
-    config = {
-        "mcpServers": {
-            "homeassistant": {
-                "command": cmd[0],
-                "args": cmd[1:],
-                "env": env,
-            }
-        }
-    }
-    (gemini_dir / "settings.json").write_text(json.dumps(config))
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +334,9 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
 def build_claude_cmd(
     prompt: str, mcp_config_path: Path, model: str = "sonnet"
 ) -> list[str]:
+    # The agent gets the BAT server's tools and nothing else: no built-in
+    # tools (shell, files, web) and no settings or CLAUDE.md from the machine
+    # running BAT, which could point it at another Home Assistant.
     return [
         "claude",
         "-p",
@@ -463,6 +344,10 @@ def build_claude_cmd(
         "--mcp-config",
         str(mcp_config_path),
         "--strict-mcp-config",
+        "--tools",
+        "",
+        "--setting-sources",
+        "",
         "--allowedTools",
         "mcp__home-assistant",
         "--output-format",
@@ -602,6 +487,7 @@ async def run_agent_scenario(
     no_think: bool = False,
     max_tokens: int | None = None,
     extra_env: dict[str, str] | None = None,
+    mcp_url: str | None = None,
 ) -> dict:
     """Run a full scenario (setup/test/teardown) for one agent."""
     results: dict = {"available": True}
@@ -611,10 +497,14 @@ async def run_agent_scenario(
     gemini_workdir: Path | None = None
 
     if agent_name in ("claude", "openai"):
-        stdio_config_path = write_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
+        stdio_config_path = write_stdio_mcp_config(
+            ha_url, ha_token, branch, extra_env, mcp_url
+        )
     elif agent_name == "gemini":
         gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_bat_"))
-        write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir, extra_env)
+        write_gemini_mcp_config(
+            ha_url, ha_token, branch, gemini_workdir, extra_env, mcp_url
+        )
 
     try:
         for phase in ("setup_prompt", "test_prompt", "teardown_prompt"):
@@ -805,7 +695,7 @@ def _resolve_active_agents(
 def _run_preflight_checks(args: argparse.Namespace, active_agents: list[str]) -> None:
     # Preflight: fail fast if Docker or the OpenAI endpoint is unreachable,
     # rather than stalling inside container startup / model warmup.
-    if not args.ha_url:
+    if not args.ha_url and not getattr(args, "dev_env", None):
         err = preflight_check_docker()
         if err:
             raise RuntimeError(err)
@@ -842,6 +732,7 @@ async def _run_all_agents(
             no_think=getattr(args, "no_think", False),
             max_tokens=getattr(args, "max_tokens", None),
             extra_env=extra_env,
+            mcp_url=getattr(args, "mcp_url", None),
         )
 
     # Add unavailable agents
@@ -871,12 +762,13 @@ async def run(args: argparse.Namespace) -> dict:
 
     agents, active_agents = _resolve_active_agents(args)
 
+    resolve_running_server(args)
     _run_preflight_checks(args, active_agents)
 
     # Start HA (container or external)
     ha_url = args.ha_url
     ha_token = args.ha_token or TEST_TOKEN
-    mcp_source = "branch" if args.branch else "local"
+    mcp_source = "running" if args.mcp_url else "branch" if args.branch else "local"
 
     container: HAContainer | None = None
     if not ha_url:
@@ -887,6 +779,7 @@ async def run(args: argparse.Namespace) -> dict:
 
     try:
         logger.info(f"HA: {ha_url}")
+        # The MCP URL is not logged: its secret path grants access to the server.
         logger.info(
             f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else "")
         )
@@ -926,6 +819,7 @@ Examples:
   uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
   uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
   uv run python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
+  uv run python tests/uat/run_uat.py --dev-env dev-ha-env-urls.txt --agents claude
         """,
     )
     parser.add_argument(
@@ -948,6 +842,17 @@ Examples:
     parser.add_argument(
         "--branch",
         help="Git branch/tag to install ha-mcp from (default: local code)",
+    )
+    parser.add_argument(
+        "--mcp-url",
+        help="Have the agents use this running ha-mcp server (streamable HTTP) "
+        "instead of starting one; needs --ha-url",
+    )
+    parser.add_argument(
+        "--dev-env",
+        metavar="URLS_FILE",
+        help="Run against a dev environment: its decrypted dev-ha-env-urls "
+        "file sets --ha-url and --mcp-url (docs/dev-ha-env.md)",
     )
     parser.add_argument(
         "--timeout",
