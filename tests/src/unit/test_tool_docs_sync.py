@@ -218,6 +218,16 @@ class TestExtractToolsScriptRobustness:
             f"an explicit encoding: {offenders}. Pass encoding='utf-8'."
         )
 
+    def test_readme_table_between_the_markers_is_regenerated(self) -> None:
+        start, end = extract_tools.README_START_MARKER, extract_tools.README_END_MARKER
+        stale = f"<details>\n{start}\nSTALE_ROW\n{end}\n</details>\n"
+        tools = [{"name": "ha_example", "tags": ["Search"]}]
+        regenerated = extract_tools.update_readme(tools, content=stale)
+        assert "STALE_ROW" not in regenerated
+        assert "`ha_example`" in regenerated
+        # The markers survive, so the next run can regenerate the table again.
+        assert extract_tools.update_readme(tools, content=regenerated) == regenerated
+
     def test_lost_readme_markers_fail_instead_of_reporting_in_sync(self) -> None:
         """A README whose markers are gone must not compare equal to itself.
 
@@ -227,6 +237,13 @@ class TestExtractToolsScriptRobustness:
         """
         with pytest.raises(ValueError, match="tool-table markers"):
             extract_tools.update_readme([], content="# README\n\nNo markers here.\n")
+
+    def test_readme_markers_outside_details_fail(self) -> None:
+        """Markers present but not directly inside ``<details>`` cannot be
+        regenerated in place either; ``--check`` must not report them in sync."""
+        start, end = extract_tools.README_START_MARKER, extract_tools.README_END_MARKER
+        with pytest.raises(ValueError, match="directly inside a <details>"):
+            extract_tools.update_readme([], content=f"{start}\nSTALE_ROW\n{end}\n")
 
     def test_lost_docs_markers_raise_rather_than_exit(self) -> None:
         """The sibling failure, reported the same way.

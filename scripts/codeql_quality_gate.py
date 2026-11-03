@@ -283,61 +283,24 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "test_tools_utility_error_log_structured.py. CodeQL's single-file "
         "analysis misses the cross-module import.",
     ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_EMPTY_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_UNPARSEABLE_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_UNSORTED_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_OUT_OF_ORDER_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_NESTED_PAREN_THREAD_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_ANSI_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_TRACEBACK_LOG",
-        "",
-        "Cross-module use: fixture leaf module; read by "
-        "test_tools_utility_error_log_structured.py.",
+    *(
+        (
+            "py/unused-global-variable",
+            "tests/src/unit/_error_log_structured_fixtures.py",
+            name,
+            "",
+            "Cross-module use: fixture leaf module; read by "
+            "test_tools_utility_error_log_structured.py.",
+        )
+        for name in (
+            "_EMPTY_LOG",
+            "_UNPARSEABLE_LOG",
+            "_UNSORTED_LOG",
+            "_OUT_OF_ORDER_LOG",
+            "_NESTED_PAREN_THREAD_LOG",
+            "_ANSI_LOG",
+            "_TRACEBACK_LOG",
+        )
     ),
     (
         "py/unused-import",

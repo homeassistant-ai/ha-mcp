@@ -157,6 +157,17 @@ def test_staged_measurement_ignores_an_unstaged_shrink(temp_repo: Path) -> None:
     assert ratchet.measure(temp_repo) == {"big.py": LIMIT + 1}
 
 
+def test_ref_measurement_ignores_a_staged_change(temp_repo: Path) -> None:
+    """``--base`` judges the base commit. Measuring the index instead would
+    compare the PR's own head with itself."""
+    _stage(temp_repo, "big.py", LIMIT + 1)
+    commit(temp_repo)
+    _stage(temp_repo, "big.py", LIMIT + 3)
+
+    assert ratchet.measure(temp_repo, ref="HEAD") == {"big.py": LIMIT + 1}
+    assert ratchet.measure(temp_repo, staged=True) == {"big.py": LIMIT + 3}
+
+
 def test_staged_measurement_uses_the_staged_exclusions(temp_repo: Path) -> None:
     """An exclusion left unstaged must not hide a file the commit contains."""
     _stage(temp_repo, "vendor/big.py", LIMIT + 1)
