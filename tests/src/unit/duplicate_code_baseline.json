@@ -612,10 +612,6 @@
     "custom_components/ha_mcp_tools/oauth_legacy.py::_b64url_decode",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_b64url_decode"
   ],
-  "9973029249c7": [
-    "src/ha_mcp/read_only.py::ReadOnlyMiddleware._coerce_arguments",
-    "src/ha_mcp/visibility/enforcement.py::_coerce_arguments"
-  ],
   "9ada52f05d49": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_stable_origin_or_unreproducible",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_stable_origin_or_unreproducible"
