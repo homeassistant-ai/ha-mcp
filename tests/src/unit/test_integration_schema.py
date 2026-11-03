@@ -22,7 +22,8 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
-from ha_mcp.tools import config_entry_flow_introspect, integration_schema
+from ha_mcp.tools import config_entry_flow_introspect
+from ha_mcp.tools.config_helpers import describe as flow_describe
 from ha_mcp.tools.integration_schema import (
     fetch_config_subentry_schema,
     fetch_options_schema,
@@ -285,7 +286,7 @@ async def test_an_entry_read_closes_its_options_flow_after_an_error(
     # ha_get_integration's options probe (not strict) degrades a raw error to a
     # warning; a step with no form to describe still fails.
     monkeypatch.setattr(
-        integration_schema, "describe_form", AsyncMock(side_effect=RuntimeError("x"))
+        flow_describe, "describe_form", AsyncMock(side_effect=RuntimeError("x"))
     )
     client = _client(_form("init", _HOST) if raw else {**_MENU, "type": "progress"})
     client.abort_options_flow.side_effect = TimeoutError()

@@ -14,8 +14,7 @@ form fails the call.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from typing import Any, NoReturn
+from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -27,19 +26,17 @@ from ..redaction import (
     redaction_enabled,
     sentinel_replacement,
 )
-from .config_entry_flow_errors import (
-    FlowRef,
-    abort_reason_text,
-    progress_action_text,
-)
+from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import iter_schema_fields
-from .config_entry_flow_introspect import abort_probe_flow, menu_choices
-from .config_helpers.describe import describe_form
+from .config_entry_flow_introspect import abort_probe_flow
+from .config_helpers.describe import describe_step
 from .helpers import raise_tool_error, validate_identifier_not_empty
 
 logger = logging.getLogger(__name__)
 
-_Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+_MENU_NOTE = (
+    "Pass one as menu_choice to ha_set_integration(describe=True) to describe its form."
+)
 
 
 def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -159,98 +156,11 @@ def _entry_domain(entry: dict[str, Any] | None) -> str | None:
     return domain if isinstance(domain, str) and domain else None
 
 
-def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> NoReturn:
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"menu_choice {menu_choice!r} does not apply: {why}.",
-            context={"menu_choice": menu_choice, **context},
-            suggestions=["Drop menu_choice, or pass one of menu_options"],
-        )
-    )
-
-
 def _put_payload(resp: dict[str, Any], key: str, payload: dict[str, Any]) -> None:
     """``payload`` as ``resp[key]``, its ``warnings`` moved to the response's."""
     if warnings := payload.pop("warnings", None):
         resp.setdefault("warnings", []).extend(warnings)
     resp[key] = payload
-
-
-async def _describe_step(
-    client: Any,
-    step: dict[str, Any],
-    *,
-    flow: FlowRef,
-    menu_choice: str | None,
-    submit: _Submit,
-) -> dict[str, Any]:
-    """Describe a flow's first step, or the form behind ``menu_choice``.
-
-    A step that is not a form, menu or abort raises; the callers abort the flow.
-    """
-    chosen: dict[str, Any] = {}
-    if step.get("type") == "menu":
-        choices = menu_choices(step)
-        if menu_choice is None:
-            return {
-                "flow_type": "menu",
-                "step_id": step.get("step_id"),
-                "menu_options": choices,
-                "note": "Pass one as menu_choice to ha_set_integration("
-                "describe=True) to describe its form.",
-            }
-        if menu_choice not in choices:
-            _refuse_menu_choice(
-                menu_choice, "the flow's menu does not offer it", menu_options=choices
-            )
-        step = await submit(step["flow_id"], {"next_step_id": menu_choice})
-        chosen = {"menu_choice": menu_choice}
-    elif menu_choice is not None and step.get("type") not in ("abort", "create_entry"):
-        # An abort or a finished flow is reported below, not hidden by this.
-        _refuse_menu_choice(
-            menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
-        )
-    step_type = step.get("type")
-    if step_type == "abort":
-        return {
-            "flow_type": "abort",
-            **chosen,
-            "aborted": step.get("reason"),
-            **await abort_reason_text(client, flow, step),
-        }
-    if step_type == "menu":
-        return {
-            "flow_type": "menu",
-            "step_id": step.get("step_id"),
-            **chosen,
-            "menu_options": menu_choices(step),
-        }
-    if step_type != "form":
-        progress: dict[str, Any] = {}
-        if step_type == "progress":
-            progress = {
-                "progress_action": step.get("progress_action"),
-                **await progress_action_text(client, flow, step),
-            }
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"The flow reached a {step_type!r} step, which has no form to "
-                "describe; the flow is being aborted",
-                suggestions=[
-                    "Run this flow in the Home Assistant UI "
-                    "(Settings > Devices & Services)."
-                ],
-                context={"step_id": step.get("step_id"), **chosen, **progress},
-            )
-        )
-    return {
-        "flow_type": "form",
-        "step_id": step.get("step_id"),
-        **chosen,
-        **await describe_form(client, flow.domain, flow.path, step),
-    }
 
 
 async def fetch_options_schema(
@@ -295,12 +205,13 @@ async def fetch_options_schema(
             _put_payload(
                 resp,
                 "options_schema",
-                await _describe_step(
+                await describe_step(
                     client,
                     flow_result,
                     flow=FlowRef(_entry_domain(entry), "options", entry_id),
                     menu_choice=None,
                     submit=client.submit_options_flow_step,
+                    menu_note=_MENU_NOTE,
                 ),
             )
         finally:
@@ -362,7 +273,7 @@ async def fetch_config_subentry_schema(
             {
                 "subentry_type": subentry_type,
                 "subentry_id": subentry_id,
-                **await _describe_step(
+                **await describe_step(
                     client,
                     flow_result,
                     flow=FlowRef(
@@ -372,6 +283,7 @@ async def fetch_config_subentry_schema(
                     ),
                     menu_choice=menu_choice,
                     submit=client.submit_config_subentry_flow_step,
+                    menu_note=_MENU_NOTE,
                 ),
             },
         )

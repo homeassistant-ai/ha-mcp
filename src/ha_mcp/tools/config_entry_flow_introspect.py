@@ -1,8 +1,8 @@
 """Read-only introspection of a helper's config flow.
 
 Starts a flow only to read its first form (or its menu, or the branch form a
-``menu_choice`` picks) and always aborts it. Feeds ``describe`` and the
-``data_schema`` attached to flow errors; split out of
+``menu_choice`` picks) and always aborts it. Feeds the ``data_schema`` and
+``menu_options`` attached to helper flow errors; split out of
 ``config_entry_flow_walker``, which drives flows to completion. Also holds the
 shielded flow abort, which ``config_entry_flow_abort`` builds on.
 """
@@ -80,17 +80,11 @@ class _FlowType(StrEnum):
 
 
 def _form_info(step: dict[str, Any]) -> dict[str, Any]:
-    """A FORM step's schema, the step_id that keys its help text, and HA's
-    ``last_step`` (``False``: a fixed form follows; ``None``: one may, chosen
-    from the answers), else {}."""
+    """A FORM step's schema, else {}."""
     schema = step.get("data_schema")
     if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
         return {}
-    return {
-        "schema": schema,
-        "step_id": step.get("step_id"),
-        "last_step": step.get("last_step"),
-    }
+    return {"schema": schema}
 
 
 async def _process_menu_flow_result(
@@ -113,10 +107,7 @@ async def _process_menu_flow_result(
             )
         except (HomeAssistantAPIError, TimeoutError):
             return info
-        info = _form_info(step)
-        if info:
-            info["branch"] = menu_choice  # the menu was answered
-        return info
+        return _form_info(step)
 
     if choices := menu_choices(flow_result):
         info["menu_options"] = choices
@@ -148,12 +139,12 @@ async def fetch_helper_flow_info(
     ``_handle_flow_helper``) and the menu-sub-types path (used when a
     menu-rooted helper has no branch chosen yet — issue #1186).
 
-    Behaviour (``describe`` is the main caller):
+    Behaviour:
 
-    - FORM at top: ``{"schema": [...], "step_id": ..., "last_step": ...}``
+    - FORM at top: ``{"schema": [...]}``
     - MENU at top with ``menu_choice``: submits and returns the branch form
-      in the same shape plus ``branch`` (no ``menu_options`` since the caller
-      already picked a branch)
+      in the same shape (no ``menu_options`` since the caller already picked
+      a branch)
     - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
     - any failure or unparseable shape, including a ``menu_choice`` HA
       rejects: ``{}`` (callers branch on ``"schema" in info`` /
