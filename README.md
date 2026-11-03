@@ -396,7 +396,7 @@ Search tools:    https://example.com/private_your_secret/catalog/search
 Both suffixes:   https://example.com/private_your_secret/readonly/catalog/search
 ```
 
-A client that supports MCP extensions can choose instead, without a special URL, by declaring `io.github.homeassistant-ai/tool-catalog` with `{"mode": "full"}` or `{"mode": "search"}` in its client capabilities. Its declaration wins over the URL. Over HTTP, which ha-mcp serves statelessly, that takes protocol 2026-07-28, where each request's `_meta` carries the capabilities; an older client's `initialize` capabilities do not reach its later requests, so it uses the URL. Over stdio the `initialize` declaration applies, and `ENABLE_TOOL_SEARCH` in that client's server environment works too. The server advertises the extension with the modes it offers and the connection's default.
+A client that supports MCP extensions can choose instead, without a special URL, by declaring `io.github.homeassistant-ai/tool-catalog` with `{"mode": "full"}` or `{"mode": "search"}` in its client capabilities. Its declaration wins over the URL. Over HTTP, which ha-mcp serves statelessly, that takes protocol 2026-07-28, where each request's `_meta` carries the capabilities; an older client's `initialize` capabilities do not reach its later requests, so it uses the URL. Over stdio the `initialize` declaration applies, and `ENABLE_TOOL_SEARCH` in that client's server environment works too. The server advertises the extension with the modes it offers and the connection's default. The suffixes work on the server's own HTTP endpoint; Home Assistant webhook URLs (Webhook Proxy app, embedded integration) accept only `/readonly`, so a webhook client chooses through the extension.
 
 ---
 
