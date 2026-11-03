@@ -34,8 +34,8 @@ def _make_mcp() -> FastMCP:
 
 def _patch_tool_search(monkeypatch, *, enabled: bool) -> None:
     monkeypatch.setattr(
-        "ha_mcp.tools.tool_search_hint_middleware.get_global_settings",
-        lambda: SimpleNamespace(enable_tool_search=enabled),
+        "ha_mcp.tools.tool_search_hint_middleware.tool_search_active",
+        lambda: enabled,
     )
 
 

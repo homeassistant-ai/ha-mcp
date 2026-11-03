@@ -529,6 +529,7 @@ async def test_unknown_parameter_falls_back_when_schema_lookup_fails(lookup, cap
     assert "unknown-argument hint omitted" in caplog.text
 
 
+@pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.asyncio
 async def test_unknown_parameter_hint_through_the_search_proxy():
     """Through ha_call_read_tool the hint names the inner tool's parameters."""
