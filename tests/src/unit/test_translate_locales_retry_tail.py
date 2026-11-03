@@ -215,18 +215,21 @@ def test_each_chunk_request_is_paced_while_the_budget_lasts(
     budget lasts, every answered chunk must be followed by a wait."""
     _deadline_in(monkeypatch, 3600)
     monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
-    monkeypatch.setattr(
-        translate_locales,
-        "_call_gemini",
-        lambda _prompt: {"messages:greeting": "Hallo", "messages:farewell": "Tschüss"},
-    )
+    waits_before: list[int] = []
+
+    def engine(_prompt: str) -> dict[str, str]:
+        waits_before.append(len(sleeps))
+        return {"messages:greeting": "Hallo", "messages:farewell": "Tschüss"}
+
+    monkeypatch.setattr(translate_locales, "_call_gemini", engine)
     items = [
         translate_locales.WorkItem("de", "messages", "greeting", "Hello"),
         translate_locales.WorkItem("de", "messages", "farewell", "Goodbye"),
     ]
     _, failures, _, _ = translate_locales._translate_locale("de", items)
     assert failures == []
-    assert len(sleeps) == 2, "one wait after each of the two chunk requests"
+    assert waits_before == [0, 1], "a wait between the requests"
+    assert len(sleeps) == 2, "a wait after each request"
     assert all(delay > 0 for delay in sleeps), "a chunk request must be paced"
 
 
