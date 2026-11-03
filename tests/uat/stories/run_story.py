@@ -1544,7 +1544,7 @@ async def run_stories(
     When --ha-url is provided, all agents share the external instance.
     """
     run_start = time.monotonic()
-    sha, describe = get_git_info()
+    sha, describe = mcp_config.running_server_revision(args) or get_git_info()
     agent_list = [a.strip() for a in args.agents.split(",")]
     using_external_ha = bool(args.ha_url)
 

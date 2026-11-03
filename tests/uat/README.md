@@ -213,7 +213,7 @@ echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --dev-env dev-
 uv run python tests/uat/stories/run_story.py --all --agents claude --dev-env dev-ha-env-urls.txt
 ```
 
-The agents use the environment's ha-mcp server, so `--branch` and `--mcp-env` do not apply: the server is the one the environment runs, set by its `track_ref`. Story setup and verification still run in-process against the environment's Home Assistant. The environment keeps its state between runs. To compare a branch with master, start one environment on each and run the same scenarios against both.
+The agents use the environment's ha-mcp server, so `--branch` and `--mcp-env` do not apply: the server is the one the environment runs, set by its `track_ref`. Story setup and verification still run in-process against the environment's Home Assistant. The environment keeps its state between runs. Story results record the revision as `unknown` (`version: running server`), since the code under test is the environment's, not the local checkout. To compare a branch with master, start one environment on each and run the same scenarios against both, with a separate `--results-file` for each.
 
 ## Dependencies
 

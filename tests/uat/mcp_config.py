@@ -35,6 +35,15 @@ def mcp_server_action(args: argparse.Namespace) -> str:
     return f"Starting MCP server ({source})"
 
 
+def running_server_revision(args: argparse.Namespace) -> tuple[str, str] | None:
+    """The ``(sha, version)`` a story result records for a running server.
+
+    Its code is not the local checkout and the runner cannot see its commit,
+    so the result says so instead of recording the local revision.
+    """
+    return ("unknown", "running server") if args.mcp_url else None
+
+
 def read_dev_env_urls(path: str | Path) -> tuple[str, str]:
     """``(ha_url, mcp_url)`` from a decrypted dev environment URLs file.
 

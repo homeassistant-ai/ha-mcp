@@ -106,6 +106,9 @@ def test_run_story_dev_env_runs_against_the_environment(tmp_path, monkeypatch):
     assert exc.value.code == 0
     args = captured["args"]
     assert (args.ha_url, args.mcp_url, args.ha_token) == (HA, MCP, TEST_TOKEN)
+    # The code under test is the environment's: its results must not claim the
+    # local checkout's revision.
+    assert mcp_config.running_server_revision(args) == ("unknown", "running server")
 
     # A test prompt runs through run_uat.py, which must reach the same server.
     sent: dict = {}
