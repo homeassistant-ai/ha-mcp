@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -428,10 +430,8 @@ async def test_root_level_glob_lists_config_root():
     assert seen["path"] == "."
 
 
-async def test_literal_lookup_failure_raises():
-    """Both lookups walk the same directory, so a listing failure on the
-    literal one is a broken request, not one unreadable file - it raises rather
-    than silently returning only what the pattern pass found."""
+async def test_literal_lookup_failure_keeps_the_pattern_matches():
+    """A failed literal lookup must not discard the pattern's sibling match."""
 
     def list_files(payload):
         if payload["pattern"] == "svc[[]a].yaml":
@@ -444,10 +444,14 @@ async def test_literal_lookup_failure_raises():
     fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
 
     out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
     assert out["success"] is True
+    assert out["count"] == 1
+    assert out["matches"][0]["file"] == "packages/svca.yaml"
+    assert out["files_searched"] == 1
     assert out["warnings"] == [
-        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result.",
-        "packages/svc[a].yaml was not searched because its listing failed.",
+        "Literal listing failed: Path not allowed. Files it would have matched "
+        "may be missing from this result."
     ]
 
 
@@ -460,14 +464,24 @@ async def test_both_lookups_failing_raises():
     """
     fn, _ = await _make_tool(
         {
+            "find_yaml_key": {"success": False, "error": "component too old"},
             "list_files": {"success": False, "error": "Path not allowed.", "files": []},
             "read_file": _read_ok("x\n"),
         }
     )
 
-    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
-    assert out["success"] is True
-    assert out["warnings"] == [
-        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result.",
-        "packages/svc[a].yaml was not searched because its listing failed.",
-    ]
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+
+async def test_bracketed_lookup_propagates_cancellation(monkeypatch):
+    """Cancellation is not a listing failure and must not be swallowed."""
+    from ha_mcp.tools import tools_yaml_read
+
+    async def _cancel(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(tools_yaml_read, "_list_files_matching", _cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await tools_yaml_read._resolve_target_files(object(), "packages/svc[a].yaml")

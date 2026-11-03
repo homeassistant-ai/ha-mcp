@@ -21,7 +21,7 @@ import fnmatch
 import json
 import logging
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from pydantic import Field
 
@@ -433,9 +433,9 @@ async def _resolve_target_files(
     The guard is any bracket, not a closed class: an unclosed or empty bracket
     is literal to ``fnmatch`` and so matches its own name, which means both
     lookups return it and the deduplication below is what keeps it a single
-    target. A listing failure on either lookup raises rather than degrading -
-    the directory is the same one in both calls, so a failure there is a broken
-    request, not one unreadable file among several.
+    target. A listing failure on one lookup keeps the other lookup's matches
+    and adds a warning; when both fail the error propagates to the caller's
+    discovery-aware handling.
 
     When the literal lookup comes back empty the caller named a file that does
     not exist, and the pattern's siblings would otherwise be reported as if the
@@ -452,11 +452,36 @@ async def _resolve_target_files(
 
     # The two lookups are independent, so run them together rather than paying
     # two sequential round-trips; the reads below fan out for the same reason.
-    matched, literal = await asyncio.gather(
+    matched_result, literal_result = await asyncio.gather(
         _list_files_matching(client, file, directory, pattern),
         _list_files_matching(
             client, file, directory, _METACHAR_RE.sub(r"[\1]", pattern)
         ),
+        return_exceptions=True,
+    )
+    for result in (matched_result, literal_result):
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            raise result
+    failures = [
+        result
+        for result in (matched_result, literal_result)
+        if isinstance(result, Exception)
+    ]
+    if len(failures) == 2:
+        raise failures[0]
+    warnings: list[str] = []
+    if failures:
+        which = "Pattern" if isinstance(matched_result, Exception) else "Literal"
+        reason = _failure_reason(failures[0]).rstrip(". ")
+        warnings.append(
+            f"{which} listing failed: {reason}. Files it would have matched may "
+            "be missing from this result."
+        )
+    matched = (
+        [] if isinstance(matched_result, Exception) else cast(list[str], matched_result)
+    )
+    literal = (
+        [] if isinstance(literal_result, Exception) else cast(list[str], literal_result)
     )
     # Both lookups always contribute targets; only whether a literal hit counts
     # as *named* depends on the request. Under a pattern it is merged as an
@@ -465,8 +490,13 @@ async def _resolve_target_files(
     literal_paths = set(literal)
     named = literal_paths if _names_a_file(pattern) else set()
     targets = sorted(set(matched) | literal_paths)
-    warnings = _absent_literal_warnings(
-        file, pattern, literal_found=bool(named), target_count=len(targets)
+    warnings.extend(
+        _absent_literal_warnings(
+            file,
+            pattern,
+            literal_found=bool(named) or isinstance(literal_result, Exception),
+            target_count=len(targets),
+        )
     )
     return [(target, target not in named) for target in targets], warnings
 
