@@ -238,6 +238,13 @@ class TestExtractToolsScriptRobustness:
         with pytest.raises(ValueError, match="tool-table markers"):
             extract_tools.update_readme([], content="# README\n\nNo markers here.\n")
 
+    def test_readme_markers_outside_details_fail(self) -> None:
+        """Markers present but not directly inside ``<details>`` cannot be
+        regenerated in place either; ``--check`` must not report them in sync."""
+        start, end = extract_tools.README_START_MARKER, extract_tools.README_END_MARKER
+        with pytest.raises(ValueError, match="directly inside a <details>"):
+            extract_tools.update_readme([], content=f"{start}\nSTALE_ROW\n{end}\n")
+
     def test_lost_docs_markers_raise_rather_than_exit(self) -> None:
         """The sibling failure, reported the same way.
 
