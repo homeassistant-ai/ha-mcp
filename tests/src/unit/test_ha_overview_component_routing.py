@@ -169,7 +169,7 @@ def _quiet_tail(monkeypatch: Any) -> None:
     absent so a real settings sidecar on the host machine can't leak a
     ``settings_url`` into the assertions.
     """
-    monkeypatch.setattr("ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None)
+    monkeypatch.setattr("ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None)
     monkeypatch.setattr("ha_mcp.settings_ui.get_http_settings_prefix", lambda: None)
 
 

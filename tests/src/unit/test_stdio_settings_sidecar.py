@@ -218,7 +218,7 @@ class TestSidecarDisableGates:
 
 
 class TestReadSidecarUrl:
-    """``read_sidecar_url`` is what ha_get_overview consumes."""
+    """``read_sidecar_url`` returns ui.url as written."""
 
     def test_returns_url_when_file_present(self, tmp_data_dir: Path) -> None:
         url = "http://127.0.0.1:54321/private_abc/settings"
@@ -1946,7 +1946,7 @@ class TestDiscoverabilityFlow:
     """Pin the end-to-end flow ha_get_overview's settings_url participates in.
 
     Unit tests elsewhere check that ``ha_get_overview`` includes the URL
-    when ``read_sidecar_url()`` returns one — but they don't verify the
+    when ``live_sidecar_url()`` returns one — but they don't verify the
     URL actually responds at ``/settings``. If the producer (run_main's
     URL-file writer) and the consumer (the Starlette routes built by
     _build_app) drift on the secret-path format or the route suffix,
@@ -2019,7 +2019,7 @@ class TestDiscoverabilityFlow:
         url = f"http://127.0.0.1:{port}{secret_path}/settings"
         (tmp_data_dir / "ui.url").write_text(url + "\n")
 
-        # The consumer side: ha_get_overview reads via read_sidecar_url.
+        # The consumer side: ha_get_overview reads via live_sidecar_url.
         # Confirm the producer's URL round-trips through the consumer
         # unchanged — otherwise Claude hands the user a truncated URL.
         surfaced = sidecar.read_sidecar_url()
