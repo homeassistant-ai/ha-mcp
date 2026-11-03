@@ -234,68 +234,6 @@ async def test_the_client_tls_override_reaches_the_pooled_client(
 
 
 @pytest.mark.asyncio
-async def test_domain_map_returns_the_unique_ids_for_the_domain(
-    client: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _arrange(
-        monkeypatch,
-        send=AsyncMock(
-            return_value={
-                "result": {
-                    "entries": [
-                        {"entry_id": "a", "unique_id": "u-a"},
-                        {"entry_id": "b", "unique_id": "u-b"},
-                        # A genuinely absent unique_id is the ONE valid omission.
-                        {"entry_id": "c", "unique_id": None},
-                    ]
-                }
-            }
-        ),
-    )
-
-    assert await mod.fetch_domain_unique_ids(client, "shelly") == {
-        "a": "u-a",
-        "b": "u-b",
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "entries",
-    [
-        pytest.param(["not-a-dict"], id="non_dict_row"),
-        pytest.param([{"entry_id": 7, "unique_id": "u"}], id="non_string_entry_id"),
-        pytest.param([{"entry_id": "a", "unique_id": 7}], id="non_string_unique_id"),
-        pytest.param([{"entry_id": "a"}], id="row_predating_the_field"),
-        pytest.param(
-            [{"entry_id": "a", "unique_id": "u"}, {"entry_id": "b"}],
-            id="one_good_one_pre_field",
-        ),
-    ],
-)
-async def test_domain_map_is_unusable_rather_than_incomplete(
-    client: Any, monkeypatch: pytest.MonkeyPatch, entries: Any
-) -> None:
-    """A partial map would be read as a COMPLETED duplicate scan.
-
-    Dropping a malformed row could drop the very duplicate the scan exists to
-    catch, so incomplete must be indistinguishable from unreadable.
-    """
-    _arrange(monkeypatch, send=AsyncMock(return_value={"result": {"entries": entries}}))
-
-    assert await mod.fetch_domain_unique_ids(client, "shelly") is None
-
-
-@pytest.mark.asyncio
-async def test_domain_map_is_none_without_the_capability(
-    client: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _arrange(monkeypatch, supported=False)
-
-    assert await mod.fetch_domain_unique_ids(client, "shelly") is None
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("extra", "degraded"),
     [

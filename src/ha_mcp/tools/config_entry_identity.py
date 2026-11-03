@@ -4,14 +4,11 @@ A reconfigure edits connection settings in place, so the check that it still
 points at the same physical thing is the whole safety story. This module owns
 reading that identity from the registries (and, for ``unique_id``, from the
 ha_mcp_tools component, since Home Assistant's own API never exposes it),
-classifying entries related through a shared device, and comparing before
-against after.
+classifying entries related through a shared device, and comparing it with
+the caller's anchors before a reconfigure step is answered.
 
 Every read here raises rather than producing a half-filled identity: an empty
 list means "the entry has none", never "we could not tell".
-
-The manual rollback metadata a reconfigure reports alongside that identity is
-built here too.
 """
 
 import logging
@@ -30,7 +27,6 @@ from .component_config_entries import (
 )
 from .component_devices import fetch_device_list_via_component
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
-from .config_entry_flow_errors import ReconfigureStatus
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -82,8 +78,6 @@ _KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset(
 
 
 _DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
-# Read-back attempts and the backoff between them. A network integration's
-# reload does real I/O, so the budget has to outlast a slow probe.
 
 
 def _normalise_identity_value(value: Any) -> str:
@@ -350,40 +344,19 @@ def _has_reconfigure_identity_anchor(
     )
 
 
-def _verification_state(before_present: bool, after_present: bool) -> str:
-    """Describe what happened to one identity value across the flow."""
-    if before_present and after_present:
-        return "preserved"
-    if after_present:
-        return "gained_during_change"
-    if before_present:
-        return "lost_during_change"
-    return "absent"
-
-
 def _raise_identity_mismatch(
     entry_id: str,
     message: str,
     *,
     before: ReconfigureIdentity,
-    after: ReconfigureIdentity,
     expected: dict[str, Any],
-    status: str | None = None,
 ) -> NoReturn:
-    """Raise for an identity anchor that does not hold.
-
-    ``status`` is supplied by the post-commit callers so the outcome survives
-    :func:`_raise_post_commit_verification_error`; pre-flow callers leave it
-    unset, because nothing was applied.
-    """
+    """Raise for an identity anchor that does not hold; nothing was applied."""
     context: dict[str, Any] = {
         "entry_id": entry_id,
         "expected_identity": expected,
         "before_identity": before.as_payload(),
-        "after_identity": after.as_payload(),
     }
-    if status is not None:
-        context["status"] = status
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -395,151 +368,3 @@ def _raise_identity_mismatch(
             context=context,
         )
     )
-
-
-def _verify_reconfigure_identity_fields(
-    *,
-    entry_id: str,
-    before: dict[str, Any],
-    before_identity: ReconfigureIdentity,
-    after: dict[str, Any],
-    after_identity: ReconfigureIdentity,
-    expected_identity: dict[str, Any],
-) -> None:
-    """Verify the identity anchors that must survive a reconfigure flow.
-
-    ``prepare_reconfigure_request`` has already proved ``expected == before``
-    for device_id and entity_ids, and the guards below prove ``after ==
-    before`` for them, so an expected-vs-after check on those two could never
-    fire and is deliberately absent.
-
-    unique_id and MAC are different, and both checks below are reachable.
-    unique_id may legitimately change (an integration re-keying on
-    reconfigure), so only LOSING it raises on its own and
-    ``expected_unique_id`` is what pins the value. ``expected_mac``'s pre-flow
-    comparison ran against the BEFORE MACs, so comparing it to the after MACs
-    is a real check.
-    """
-    # Read from the identity objects: Home Assistant's config-entry fragment
-    # has no unique_id, so before/after would both be None here forever and
-    # this guard would never fire.
-    comparable = before_identity.unique_id_known and after_identity.unique_id_known
-    before_unique_id = before_identity.unique_id if comparable else None
-    after_unique_id = after_identity.unique_id if comparable else None
-    # LOSING a unique_id is the hazard: the entry becomes indistinguishable to
-    # HA's discovery, which then creates a duplicate. CHANGING it is not — an
-    # integration may legitimately re-key on reconfigure via
-    # async_update_reload_and_abort(unique_id=...); `filesize` does exactly
-    # that, since its unique_id is the file path being reconfigured. A caller
-    # who needs the value pinned says so with expected_unique_id, checked next.
-    if comparable and before_unique_id is not None and after_unique_id is None:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow cleared the entry unique_id, which lets the next "
-            "discovery create a duplicate entry",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-    expected_unique_id = expected_identity.get("unique_id")
-    if (
-        expected_unique_id is not None
-        and comparable
-        and after_unique_id != expected_unique_id
-    ):
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure result does not match expected unique_id",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-    before_device_ids = set(before_identity.device_ids)
-    after_device_ids = set(after_identity.device_ids)
-    if before_device_ids and after_device_ids != before_device_ids:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow changed the associated device_id",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-    before_entity_ids = set(before_identity.entity_ids)
-    after_entity_ids = set(after_identity.entity_ids)
-    if before_entity_ids and after_entity_ids != before_entity_ids:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow changed the associated entity set",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-    expected_mac = expected_identity.get("mac")
-    before_macs = set(before_identity.macs)
-    after_macs = set(after_identity.macs)
-    # Unlike the device and entity guards, this one requires BOTH sets to be
-    # non-empty, so losing every MAC passes unless expected_mac was supplied.
-    # Deliberate: MACs come from a device's registry `connections`, which some
-    # integrations re-register with `identifiers` only after a reload. A device
-    # swap is already caught by the device guard above, so treating an emptied
-    # set as a mismatch would raise a POST-COMMIT identity error on a perfectly
-    # good reconfigure. A MAC that changes to a different one still fails here.
-    if before_macs and after_macs and before_macs != after_macs:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow changed the associated MAC/IEEE identity",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-    if expected_mac is not None and (
-        not after_macs or _normalise_identity_value(expected_mac) not in after_macs
-    ):
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure result does not match expected MAC",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-
-def build_reconfigure_rollback_metadata(
-    entry_id: str,
-    domain: str,
-) -> dict[str, Any]:
-    """Describe the manual rollback path for an existing config entry.
-
-    The snapshot the auto-backup layer captures is Home Assistant's config
-    entry fragment (``config_entries/get`` over WebSocket, which serializes
-    ``ConfigEntry.as_json_fragment``). That fragment carries no ``data`` key,
-    so the entry's connection settings are not in it: the snapshot is audit
-    evidence, not an automatic endpoint rollback. An operator must repeat the
-    official reconfigure flow with the known previous values.
-    """
-    return {
-        "strategy": "official_reconfigure_flow",
-        "automatic": False,
-        "operator_action_required": True,
-        "manual_required": True,
-        "manual_reason": "previous_config_unavailable",
-        "entry_id": entry_id,
-        "domain": domain,
-        "previous_config": None,
-        "backup_scope": "edits",
-        "backup_restore_supported": False,
-        "backup_restore_note": (
-            "The generic integration snapshot is audit evidence only; its shared "
-            "restore handler does not restore connection settings. Use the official "
-            "reconfigure flow instead."
-        ),
-    }

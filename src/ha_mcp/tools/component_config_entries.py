@@ -152,55 +152,6 @@ async def fetch_config_entries(
     )
 
 
-async def fetch_domain_unique_ids(client: Any, domain: str) -> dict[str, str] | None:
-    """Map ``entry_id -> unique_id`` for one domain, or ``None`` if unreadable.
-
-    One read, not one per candidate. The duplicate scan needs the unique_id of
-    every same-domain entry, and Home Assistant's own config-entry rows carry
-    none — so without this the scan can only ever compare entry_ids and must
-    not claim it checked unique_ids.
-
-    A genuinely ``None`` ``unique_id`` is the ONLY value omitted from the map,
-    so a present key always means a real value. Anything malformed returns
-    ``None`` for the whole map instead: the duplicate scan reads a returned map
-    as a COMPLETED check, so an incomplete one could drop the very duplicate
-    row it exists to catch.
-    """
-    read = await fetch_config_entries(client, domain=domain)
-    if read is None:
-        return None
-    mapping: dict[str, str] = {}
-    for row in read.rows:
-        if "unique_id" not in row:
-            # An older component: the field is missing wholesale.
-            logger.debug(
-                "%s rows for domain %s predate the unique_id field",
-                WS_CONFIG_ENTRIES,
-                domain,
-            )
-            return None
-        entry_id = row.get("entry_id")
-        unique_id = row["unique_id"]
-        if not isinstance(entry_id, str) or (
-            unique_id is not None and not isinstance(unique_id, str)
-        ):
-            # A partial map would be read as a COMPLETED scan by the duplicate
-            # check, so a malformed duplicate row could be dropped and let
-            # verification pass. Incomplete must be indistinguishable from
-            # unreadable.
-            logger.debug(
-                "%s returned a malformed row for domain %s; map unusable",
-                WS_CONFIG_ENTRIES,
-                domain,
-            )
-            return None
-        # unique_id None is a valid answer (the entry has none) and is the one
-        # value legitimately omitted from the map.
-        if unique_id is not None:
-            mapping[entry_id] = unique_id
-    return mapping
-
-
 async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqueId:
     """Read one config entry's ``unique_id`` through the component.
 

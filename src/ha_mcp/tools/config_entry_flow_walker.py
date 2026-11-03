@@ -70,8 +70,6 @@ _RECONFIGURE_SUCCESS_REASONS = frozenset(
 POST_COMMIT_STATUSES = frozenset(
     {
         ReconfigureStatus.APPLIED_BUT_INCOMPLETE,
-        ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        ReconfigureStatus.APPLIED_AND_VERIFIED,
         ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
     }
 )

@@ -102,24 +102,13 @@ class ReconfigureStatus(StrEnum):
     ``APPLIED_BUT_UNVERIFIED`` for a submit or poll whose answer was lost.
     """
 
-    #: Preflight: validated, the flow only read and aborted, nothing applied.
-    PREVIEW = "preview"
-    #: A confirmation was required and none was supplied.
-    CONFIRMATION_REQUIRED = "confirmation_required"
-    #: The supplied confirm_token no longer matches the entry's state.
-    STALE_PREFLIGHT = "stale_preflight"
     #: The flow was aborted before any value reached Home Assistant.
     FLOW_ABORTED_BEFORE_APPLY = "flow_aborted_before_apply"
     #: Home Assistant rejected the change; nothing was committed.
     APPLY_FAILED = "apply_failed"
     #: Committed, but the flow never consumed every supplied value.
     APPLIED_BUT_INCOMPLETE = "applied_but_incomplete"
-    #: Committed, and the entry no longer carries the identity it had.
-    APPLIED_IDENTITY_MISMATCH = "applied_identity_mismatch"
-    #: Committed, identity intact, and the entry reloaded cleanly.
-    APPLIED_AND_VERIFIED = "applied_and_verified"
-    #: Committed or maybe committed: the answer was lost, or the result could
-    #: not be fully verified.
+    #: Maybe committed: the answer was lost.
     APPLIED_BUT_UNVERIFIED = "applied_but_unverified"
 
 

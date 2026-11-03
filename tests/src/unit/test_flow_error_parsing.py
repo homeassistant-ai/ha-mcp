@@ -44,8 +44,7 @@ from ha_mcp.tools.config_entry_flow_errors import (
     raise_form_errors,
 )
 from ha_mcp.tools.config_entry_flow_walker import _handle_flow_steps
-from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_step
-from ha_mcp.tools.integration_flow_steps import FlowTarget
+from ha_mcp.tools.integration_flow_steps import FlowTarget, drive_flow
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -657,12 +656,14 @@ class TestFlowTextFromCore:
         }
 
         with pytest.raises(ToolError) as exc_info:
-            await _run_reconfigure_step(
+            await drive_flow(
                 client,
                 FlowTarget("reconfigure", "shelly", "e1"),
                 flow_id=None,
-                flow_config={"host": "10.0.0.3"},
+                config={"host": "10.0.0.3"},
                 menu_choice=None,
+                abort=False,
+                start=lambda: client.start_reconfigure_flow("shelly", "e1"),
             )
 
         body = _parse_tool_error(exc_info.value)
@@ -685,15 +686,17 @@ class TestFlowTextFromCore:
             "errors": {"base": "not_valid"},
         }
 
-        flow_id, step = await _run_reconfigure_step(
+        step = await drive_flow(
             client,
             FlowTarget("reconfigure", "filesize", "e1"),
             flow_id=None,
-            flow_config={"file_path": "/nope/x.txt"},
+            config={"file_path": "/nope/x.txt"},
             menu_choice=None,
+            abort=False,
+            start=lambda: client.start_reconfigure_flow("filesize", "e1"),
         )
 
-        assert flow_id == "rc-flow"
+        assert step["flow_id"] == "rc-flow"
         assert step["errors"] == {"base": "not_valid"}
         client.submit_config_flow_step.assert_awaited_once()
         client.abort_config_flow.assert_not_awaited()

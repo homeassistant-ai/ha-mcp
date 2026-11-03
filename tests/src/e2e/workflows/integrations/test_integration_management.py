@@ -12,7 +12,6 @@ from ...utilities.assertions import (
     assert_mcp_success,
     safe_call_tool,
 )
-from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -475,10 +474,8 @@ class TestIntegrationManagement:
 
     # The fixture seeds a `filesize` entry (see
     # tests/initial_test_state/.storage/core.config_entries). It is the only
-    # integration in the harness that implements async_step_reconfigure, and it
-    # commits through async_update_reload_and_abort — the same HA call whose
-    # scheduled reload the verification retry loop has to outlast — so the
-    # confirmed path gets real CI coverage instead of skipping forever.
+    # integration in the harness that implements async_step_reconfigure, so
+    # the reconfigure path gets real CI coverage instead of skipping forever.
     RECONFIGURE_ENTRY_ID = "01KRECONFIGUREE2E000000001"
     RECONFIGURE_PATH_A = "/config/www/filesize_e2e_a.txt"
     RECONFIGURE_PATH_B = "/config/www/filesize_e2e_b.txt"
@@ -494,12 +491,11 @@ class TestIntegrationManagement:
         assert entry.get("domain") == "filesize", entry
         assert entry.get("supports_reconfigure") is True, entry
 
-    async def test_reconfigure_first_call_opens_the_flow_and_submits_nothing(
+    async def test_reconfigure_without_config_opens_the_flow_and_submits_nothing(
         self, mcp_client, ha_client
     ):
-        """The first call opens the reconfigure flow, returns its form with a
-        flow_id and token, and leaves the entry untouched; config passed there
-        is not submitted."""
+        """A reconfigure call without config opens the flow and returns its
+        form; the entry stays untouched until a call answers it."""
         translations = await ha_client.send_websocket_message(
             {
                 "type": "frontend/get_translations",
@@ -519,36 +515,30 @@ class TestIntegrationManagement:
             try:
                 result = await mcp.call_tool_success(
                     "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_B},
-                    },
+                    {"entry_id": self.RECONFIGURE_ENTRY_ID, "reconfigure": True},
                 )
                 flow_id = result.get("flow_id")
 
-                assert result.get("status") == "preview", result
-                assert "preview" not in result, result
-                assert result.get("operation") == "reconfigure", result
                 assert flow_id, result
-                confirm_token = result.get("confirm_token")
-                assert isinstance(confirm_token, str) and confirm_token.startswith(
-                    "sha256:"
-                ), result
                 assert result["flow_type"] == "form", result
                 assert result["step_id"] == "reconfigure", result
                 fields = {f["name"]: f for f in result["fields"]}
                 assert fields["file_path"]["description"] == file_path_label, result
-                assert any("not submitted" in w for w in result["warnings"]), result
-                assert "reconfigure_form" not in result
-                assert "target_config" not in result
 
                 after = await mcp.call_tool_success(
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
                 )
             finally:
                 if flow_id:
-                    await self._abort(mcp, flow_id)
+                    await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": self.RECONFIGURE_ENTRY_ID,
+                            "reconfigure": True,
+                            "flow_id": flow_id,
+                            "abort": True,
+                        },
+                    )
 
         before_entry = before.get("entry", before)
         after_entry = after.get("entry", after)
@@ -564,71 +554,8 @@ class TestIntegrationManagement:
             field: before_entry.get(field) for field in stable_fields
         }
 
-    async def _abort(self, mcp, flow_id: str):
-        """End a reconfigure flow; it needs no token."""
-        return await mcp.call_tool_success(
-            "ha_set_integration",
-            {
-                "entry_id": self.RECONFIGURE_ENTRY_ID,
-                "reconfigure": True,
-                "flow_id": flow_id,
-                "abort": True,
-            },
-        )
-
-    async def test_reconfigure_rejects_a_stale_or_missing_token(self, mcp_client):
-        """Every step after the first needs the token issued for that flow; a
-        refused step leaves the flow open."""
-        flow_id = None
-        async with MCPAssertions(mcp_client) as mcp:
-            try:
-                preview = await mcp.call_tool_success(
-                    "ha_set_integration",
-                    {"entry_id": self.RECONFIGURE_ENTRY_ID, "reconfigure": True},
-                )
-                flow_id = preview["flow_id"]
-                stale = await mcp.call_tool_failure(
-                    "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_A},
-                        # The token is bound to the flow it was issued for.
-                        "flow_id": "not-the-flow-the-token-was-issued-for",
-                        "confirm_token": preview["confirm_token"],
-                    },
-                )
-                missing = await mcp.call_tool_failure(
-                    "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_A},
-                        "flow_id": flow_id,
-                    },
-                )
-                # Refused, not closed: the flow can still be read and ended.
-                reread = await mcp.call_tool_success(
-                    "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "flow_id": flow_id,
-                        "confirm_token": preview["confirm_token"],
-                    },
-                )
-            finally:
-                if flow_id:
-                    await self._abort(mcp, flow_id)
-
-        assert stale.get("status") == "stale_preflight", stale
-        assert "confirm_token" not in stale, stale
-        assert missing.get("status") == "confirmation_required", missing
-        assert reread.get("flow_id") == flow_id, reread
-        assert reread.get("step_id") == "reconfigure", reread
-
-    async def test_reconfigure_confirmed_applies_and_verifies(self, mcp_client):
-        """The confirmed path drives HA's real reconfigure flow end to end.
+    async def test_reconfigure_applies_through_the_flow(self, mcp_client):
+        """A call with config answers HA's real reconfigure flow end to end.
 
         Targets whichever of the two paths the entry is NOT currently on, and
         restores the starting one in a `finally`. filesize's reconfigure step
@@ -642,10 +569,8 @@ class TestIntegrationManagement:
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
             )
             # `title` is the observable: filesize names the entry after the
-            # file's basename and retitles it on reconfigure. The entry's
-            # unique_id would be the more direct signal, but Home Assistant
-            # does not expose it — `ConfigEntry.as_json_fragment` omits it, and
-            # every config-entry endpoint serializes through that fragment.
+            # file's basename and retitles it on reconfigure. Home Assistant
+            # does not expose the entry's unique_id.
             start_title = (current.get("entry", current) or {}).get("title")
             target = (
                 self.RECONFIGURE_PATH_A
@@ -658,56 +583,16 @@ class TestIntegrationManagement:
                 else self.RECONFIGURE_PATH_A
             )
             try:
-                preview = await mcp.call_tool_success(
-                    "ha_set_integration",
-                    {"entry_id": self.RECONFIGURE_ENTRY_ID, "reconfigure": True},
-                )
                 result = await mcp.call_tool_success(
                     "ha_set_integration",
                     {
                         "entry_id": self.RECONFIGURE_ENTRY_ID,
                         "reconfigure": True,
                         "config": {"file_path": target},
-                        "flow_id": preview["flow_id"],
-                        "confirm_token": preview["confirm_token"],
                     },
                 )
 
-                assert result.get("operation") == "reconfigure", result
-                # The entry reloads cleanly and keeps its identity, so this is
-                # the fully verified outcome — not the degraded one the reload
-                # race used to produce for a reconfigure that worked.
-                assert result.get("status") == "applied_and_verified", result
-                verification = result.get("verification", {})
-                assert verification.get("entry_state") == "loaded", result
-                assert verification.get("operational_state_verified") is True, result
-                assert verification.get("identity_verification") == "complete", result
-                # Against a real core the change stream must be what answered.
-                # Every unit fixture builds its own frames, so a parser that
-                # rejects the shape Home Assistant actually sends
-                # (`as_json_fragment` emits `modified_at.timestamp()`, a float)
-                # degrades every reconfigure to polling with the suite still
-                # green. This is the only assertion that sees the real shape.
-                assert verification.get("operational_state_source") == "observed", (
-                    result
-                )
-                # filesize keys its entry on the file path, so a path change
-                # re-keys the unique_id through
-                # async_update_reload_and_abort(unique_id=...). That is a
-                # legitimate re-key, reported rather than refused — and it is
-                # only observable where a live ha_mcp_tools component surface
-                # can supply it, which is the sole source of a config entry's
-                # unique_id. On the no-tools lanes with no active component
-                # entry (#2292) there is no such source, and the server reports
-                # that honestly instead of guessing
-                # (config_entry_reconfigure.py's
-                # ``unavailable_without_component``).
-                assert verification.get("unique_id_verification") == (
-                    "changed_during_change"
-                    if component_surface_available()
-                    else "unavailable_without_component"
-                ), result
-
+                assert result.get("reason") == "reconfigure_successful", result
                 changed = await mcp.call_tool_success(
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
                 )
@@ -716,18 +601,11 @@ class TestIntegrationManagement:
                     changed_entry
                 )
             finally:
-                if start_path != target:
-                    restore_preview = await mcp.call_tool_success(
-                        "ha_set_integration",
-                        {"entry_id": self.RECONFIGURE_ENTRY_ID, "reconfigure": True},
-                    )
-                    await mcp.call_tool_success(
-                        "ha_set_integration",
-                        {
-                            "entry_id": self.RECONFIGURE_ENTRY_ID,
-                            "reconfigure": True,
-                            "config": {"file_path": start_path},
-                            "flow_id": restore_preview["flow_id"],
-                            "confirm_token": restore_preview["confirm_token"],
-                        },
-                    )
+                await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": start_path},
+                    },
+                )

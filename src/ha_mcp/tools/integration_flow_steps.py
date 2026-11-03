@@ -10,8 +10,8 @@ caller aborts it.
 Which flow manager a ``flow_id`` belongs to follows from the anchors:
 ``domain`` is the setup flow, ``entry_id`` the options flow, and
 ``entry_id`` with ``reconfigure=True`` the entry's reconfigure flow (a config
-flow with the reconfigure source). The reconfigure policy (identity anchors,
-confirm token, verification) lives in ``integration_reconfigure``.
+flow with the reconfigure source), whose identity anchors are checked by
+``config_entry_reconfigure`` before every call that may submit.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from .config_entry_flow_walker import (
     _wait_for_progress,
     raise_reconfigure_created_entry,
 )
-from .config_entry_identity import build_reconfigure_rollback_metadata
+from .config_entry_reconfigure import check_reconfigure_identity
 from .config_helpers.describe import compact_schema, describe_form
 from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
@@ -341,7 +341,7 @@ async def settle(
                 suggestions=[
                     "Check that entry in Home Assistant. Continue a "
                     "reconfigure flow with entry_id and reconfigure=True, "
-                    "which verifies the entry after the change."
+                    "which checks the entry's identity first."
                 ],
                 context={
                     "flow_id": flow_id,
@@ -401,30 +401,6 @@ async def open_step_answer(
     }
 
 
-async def reconfigure_step_response(
-    client: Any,
-    target: FlowTarget,
-    flow_id: str,
-    step: dict[str, Any],
-    entry: dict[str, Any],
-    warnings: list[str],
-) -> dict[str, Any]:
-    """The entry's reconfigure flow open at a form or menu, as the answer."""
-    entry_id, domain = cast(str, target.entry_id), entry["domain"]
-    response = {
-        **await open_step_answer(client, target, flow_id, step),
-        "status": ReconfigureStatus.PREVIEW,
-        "operation": "reconfigure",
-        "entry_id": entry_id,
-        "domain": domain,
-        "title": entry.get("title"),
-        "rollback": build_reconfigure_rollback_metadata(entry_id, domain),
-    }
-    if warnings:
-        response.setdefault("warnings", []).extend(warnings)
-    return response
-
-
 def _require_flow_id(step: dict[str, Any], target: FlowTarget) -> str:
     flow_id = step.get("flow_id")
     if isinstance(flow_id, str) and flow_id:
@@ -440,9 +416,18 @@ def _require_flow_id(step: dict[str, Any], target: FlowTarget) -> str:
 
 def _finished_response(target: FlowTarget, step: dict[str, Any]) -> dict[str, Any]:
     """``create_entry`` of a setup or options flow, in the shape
-    ``create_config_entry`` and ``update_config_entry_options`` return."""
+    ``create_config_entry`` and ``update_config_entry_options`` return, or a
+    reconfigure flow's success abort."""
     result = step.get("result")
     result = result if isinstance(result, dict) else {}
+    if target.kind == "reconfigure":
+        return {
+            "success": True,
+            "entry_id": target.entry_id,
+            "domain": target.domain,
+            "reason": step.get("reason"),
+            "message": f"{target.domain} integration reconfigured",
+        }
     if target.kind == "options":
         return {
             "success": True,
@@ -471,7 +456,7 @@ async def drive_flow(
     abort: bool,
     start: Any,
 ) -> dict[str, Any]:
-    """One ``ha_set_integration`` call on a setup or options flow.
+    """One ``ha_set_integration`` call on a setup, options or reconfigure flow.
 
     Without ``flow_id`` the flow is started with ``start()``; ``menu_choice``
     then answers its opening menu and ``config`` the form that follows, so a
@@ -486,7 +471,7 @@ async def drive_flow(
         step = await start()
         flow_id = _require_flow_id(step, target)
         step = await settle(client, target, flow_id, step)
-        if menu_choice is not None and step.get("type") != "create_entry":
+        if menu_choice is not None and step.get("type") in ("form", "menu"):
             step = await settle(
                 client,
                 target,
@@ -500,7 +485,7 @@ async def drive_flow(
                     current=step,
                 ),
             )
-        if config is not None and step.get("type") != "create_entry":
+        if config is not None and step.get("type") in ("form", "menu"):
             step = await settle(
                 client,
                 target,
@@ -527,7 +512,7 @@ async def drive_flow(
                 client, target, flow_id, config=config, menu_choice=menu_choice
             ),
         )
-    if step.get("type") == "create_entry":
+    if step.get("type") not in ("form", "menu"):
         return _finished_response(target, step)
     return await open_step_answer(client, target, flow_id, step)
 
@@ -592,19 +577,37 @@ async def run_integration_step(
     menu_choice: str | None,
     abort: bool,
     describe: bool,
+    expected_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """``ha_set_integration`` on a setup (``domain``) or options (``entry_id``)
-    flow. ``describe`` opens the flow without submitting a form; otherwise a
-    new flow's first form gets ``config`` (``{}`` when omitted)."""
+    """``ha_set_integration`` on a setup (``domain``), options (``entry_id``)
+    or reconfigure (``entry_id`` with ``expected_identity``) flow.
+    ``describe`` opens the flow without submitting a form; otherwise a new
+    setup or options flow's first form gets ``config`` (``{}`` when omitted).
+    A new reconfigure flow without ``config`` returns its first step, and
+    every reconfigure call except an abort checks the identity anchors first."""
     if describe and (flow_id is not None or config is not None or abort):
         _refuse(
             "describe=True opens a flow and submits no form: drop config, "
             "flow_id and abort",
             flow_id=flow_id,
         )
-    if flow_id is None and not describe and config is None and menu_choice is None:
-        config = {}
-    if domain is not None:
+    warnings: list[str] = []
+    if expected_identity is not None:
+        entry_id = validate_identifier_not_empty(entry_id, "entry_id")
+        entry: dict[str, Any] = {}
+        if not abort:
+            entry, warnings = await check_reconfigure_identity(
+                client, entry_id, expected_identity
+            )
+        target = FlowTarget("reconfigure", entry.get("domain"), entry_id)
+
+        async def start() -> dict[str, Any]:
+            return cast(
+                dict[str, Any],
+                await client.start_reconfigure_flow(target.domain, entry_id),
+            )
+
+    elif domain is not None:
         refuse_component_entry(domain, action="add an entry for")
         target = FlowTarget("setup", domain)
 
@@ -618,7 +621,15 @@ async def run_integration_step(
         async def start() -> dict[str, Any]:
             return cast(dict[str, Any], await client.start_options_flow(entry_id))
 
-    return await drive_flow(
+    if (
+        target.kind != "reconfigure"
+        and flow_id is None
+        and not describe
+        and config is None
+        and menu_choice is None
+    ):
+        config = {}
+    response = await drive_flow(
         client,
         target,
         flow_id=flow_id,
@@ -627,28 +638,6 @@ async def run_integration_step(
         abort=abort,
         start=start,
     )
-
-
-async def start_reconfigure_step(
-    client: Any, target: FlowTarget
-) -> tuple[str, dict[str, Any]]:
-    """Open the entry's reconfigure flow; return its flow_id and first step."""
-    started = await client.start_reconfigure_flow(target.domain, target.entry_id)
-    flow_id = started.get("flow_id")
-    if not isinstance(flow_id, str) or not flow_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to start the integration reconfigure flow",
-                suggestions=[
-                    "Confirm that the entry still exists and supports reconfigure"
-                ],
-                context={
-                    "entry_id": target.entry_id,
-                    "domain": target.domain,
-                    "status": ReconfigureStatus.APPLY_FAILED,
-                    "details": started,
-                },
-            )
-        )
-    return flow_id, await settle(client, target, flow_id, started)
+    if warnings:
+        response.setdefault("warnings", []).extend(warnings)
+    return response

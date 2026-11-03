@@ -45,8 +45,7 @@ from ha_mcp.tools.config_entry_flow_walker import (
     _handle_flow_steps,
     leaves_flow_open,
 )
-from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_step
-from ha_mcp.tools.integration_flow_steps import FlowTarget
+from ha_mcp.tools.integration_flow_steps import FlowTarget, drive_flow
 
 _PROGRESS = {
     "type": "progress",
@@ -254,12 +253,14 @@ async def test_reconfigure_progress_timeout_keeps_the_flow_open_and_carries_flow
     }
 
     with pytest.raises(ToolError) as exc_info:
-        await _run_reconfigure_step(
+        await drive_flow(
             client,
             FlowTarget("reconfigure", "demo", "e1"),
             flow_id=None,
-            flow_config={"host": "h"},
+            config={"host": "h"},
             menu_choice=None,
+            abort=False,
+            start=lambda: client.start_reconfigure_flow("demo", "e1"),
         )
 
     payload = json.loads(str(exc_info.value))
@@ -373,14 +374,15 @@ async def test_a_failed_write_closes_its_flow_and_keeps_its_error(
 
 async def _reconfigure(client: AsyncMock, step: dict[str, Any]) -> Any:
     client.start_reconfigure_flow.return_value = step
-    _, settled = await _run_reconfigure_step(
+    return await drive_flow(
         client,
         FlowTarget("reconfigure", "demo", "e1"),
         flow_id=None,
-        flow_config={},
+        config={},
         menu_choice=None,
+        abort=False,
+        start=lambda: client.start_reconfigure_flow("demo", "e1"),
     )
-    return settled
 
 
 _FLOW_KINDS = [

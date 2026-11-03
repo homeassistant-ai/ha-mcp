@@ -65,7 +65,7 @@ from .ignored_entries import normalize_ignored_entry
 from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_flow_steps import run_integration_step
 from .integration_reconfigure import (
-    ReconfigureRunner,
+    refuse_reconfigure_conflicts,
     reject_reconfigure_only_parameters,
 )
 from .integration_schema import (
@@ -1386,15 +1386,12 @@ class IntegrationTools:
         domain="integration",
         id_param="entry_id",
         domain_resolver=resolve_config_entry_backup_domain,
-        # Every reconfigure request validates the entry and confirmation before
-        # the inner apply helper captures the normal edit snapshot.
         # A ws_command changes the integration's own storage, not the entry
         # the snapshot holds.
         # A call that submits nothing (describe, a re-read, an abort) changes
         # nothing to snapshot.
         skip_fn=lambda kwargs: (
-            bool(kwargs.get("reconfigure"))
-            or bool(kwargs.get("describe"))
+            bool(kwargs.get("describe"))
             or bool(kwargs.get("abort"))
             or kwargs.get("log_level") is not None
             or kwargs.get("ws_command") is not None
@@ -1458,9 +1455,9 @@ class IntegrationTools:
                 description=(
                     "Use the existing config entry's official reconfigure flow "
                     "(its connection settings) instead of its options flow. "
-                    "Without flow_id this checks the entry's identity, opens "
-                    "the flow and returns its first step with flow_id and "
-                    "confirm_token; nothing is submitted."
+                    "Every call checks the entry's identity first. Without "
+                    "flow_id and config this opens the flow and returns its "
+                    "first step; nothing is submitted."
                 ),
             ),
         ] = False,
@@ -1470,7 +1467,7 @@ class IntegrationTools:
                 default=None,
                 description=(
                     "Requires reconfigure=True. Device registry ID the entry "
-                    "must still own, before and after the change."
+                    "must still own."
                 ),
             ),
         ] = None,
@@ -1505,18 +1502,6 @@ class IntegrationTools:
                 description=(
                     "Requires reconfigure=True. Exact entity IDs that must "
                     "remain associated with the entry."
-                ),
-            ),
-        ] = None,
-        confirm_token: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description=(
-                    "Requires reconfigure=True and flow_id: the token the "
-                    "flow's first call returned, needed on every later call "
-                    "of that flow except abort. Refused once the entry's "
-                    "identity no longer matches it."
                 ),
             ),
         ] = None,
@@ -1652,9 +1637,9 @@ class IntegrationTools:
         - Update options: entry_id + config — the entry's options flow (what
           the "Configure" button does in the HA UI), one step per call.
         - Reconfigure: entry_id + reconfigure=True — connection settings
-          such as host, port, credentials. The first call checks the entry's
-          identity and returns the first step with confirm_token; each later
-          call passes flow_id + confirm_token + config.
+          such as host, port, credentials, one step per call. Each call
+          first checks the entry's identity; the first call without config
+          returns the flow's first step.
         - Log level: log_level + domain (or entry_id) — sets how much the
           integration logs; read it back with ha_get_integration's log_level.
         - Integration command: entry_id + ws_command (+ ws_data) — what the
@@ -1705,9 +1690,7 @@ class IntegrationTools:
         change may be saved, so check it before retrying. An aborted flow
         returns Core's own text next to the key (reason_text). Reconfigure
         edits the settings a live integration connects with: a wrong host or
-        credential takes it offline, and there is no automatic rollback — the
-        returned rollback metadata describes repeating the official flow by
-        hand with the previous values, which this tool cannot read back.
+        credential takes it offline, and there is no automatic rollback.
 
         EXAMPLES:
         - Add: ha_set_integration(domain="local_calendar", config={"calendar_name": "Chores"})
@@ -1715,14 +1698,13 @@ class IntegrationTools:
         - Answer a menu: ha_set_integration(domain="...", flow_id="...", menu_choice="<one of menu_options>")
         - See the setup form first: ha_set_integration(domain="workday", describe=True)
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
-        - Reconfigure: ha_set_integration(entry_id="abc123", reconfigure=True), then ha_set_integration(entry_id="abc123", reconfigure=True, flow_id="...", confirm_token="sha256:...", config={"host": "10.0.0.5"})
+        - Reconfigure: ha_set_integration(entry_id="abc123", reconfigure=True), then ha_set_integration(entry_id="abc123", reconfigure=True, flow_id="...", config={"host": "10.0.0.5"})
         - Cancel a flow: ha_set_integration(domain="knx", flow_id="...", abort=True)
         - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
         - KNX project: ha_set_integration(entry_id="abc123", ws_command="knx/get_knx_project")
         """
         # Only reconfigure takes these; every other mode refuses them.
         reconfigure_guards: dict[str, Any] = {
-            "confirm_token": confirm_token,
             "expected_device_id": expected_device_id,
             "expected_unique_id": expected_unique_id,
             "expected_mac": expected_mac,
@@ -1792,16 +1774,21 @@ class IntegrationTools:
                 )
 
             if reconfigure:
-                return await ReconfigureRunner(self._client).handle_mode(
-                    entry_id=entry_id,
-                    domain=domain,
-                    enabled=enabled,
-                    describe=describe,
-                    config=config,
+                return await run_integration_step(
+                    self._client,
+                    domain=None,
+                    entry_id=refuse_reconfigure_conflicts(entry_id, domain, enabled),
                     flow_id=flow_id,
+                    config=config,
                     menu_choice=menu_choice,
                     abort=abort,
-                    **reconfigure_guards,
+                    describe=describe,
+                    expected_identity={
+                        "device_id": expected_device_id,
+                        "unique_id": expected_unique_id,
+                        "mac": expected_mac,
+                        "entity_ids": list(expected_entity_ids or []),
+                    },
                 )
 
             reject_reconfigure_only_parameters(**reconfigure_guards)
