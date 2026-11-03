@@ -211,19 +211,13 @@ async def test_a_failed_describe_abort_is_a_warning_unless_the_flow_is_gone(
     assert [r.levelname for r in caplog.records if "abort" in r.getMessage()] == [level]
 
 
-_LEFT_OPEN = {
-    "options": ("abort_options_flow", "the options flow f1 was closed"),
-    "subentry": ("abort_config_subentry_flow", "the subentry flow f1 was closed"),
-}
 _ABORT_ANSWERS = [
-    pytest.param(None, False, id="aborted"),
+    pytest.param(None, id="aborted"),
+    pytest.param(HomeAssistantAPIError("API error: 404", status_code=404), id="gone"),
     pytest.param(
-        HomeAssistantAPIError("API error: 404", status_code=404), False, id="gone"
+        HomeAssistantAPIError("API error: 500", status_code=500), id="http-500"
     ),
-    pytest.param(
-        HomeAssistantAPIError("API error: 500", status_code=500), True, id="http-500"
-    ),
-    pytest.param(TimeoutError(), True, id="timeout"),
+    pytest.param(TimeoutError(), id="timeout"),
 ]
 
 
@@ -260,14 +254,13 @@ _ENDINGS = {
     ("kind", "ending"),
     [("options", "described")] + [("subentry", ending) for ending in _ENDINGS],
 )
-@pytest.mark.parametrize(("abort_error", "left_open"), _ABORT_ANSWERS)
-async def test_a_describe_says_when_its_flow_may_still_be_open(
-    kind: str, ending: str, abort_error: Exception | None, left_open: bool
+@pytest.mark.parametrize("abort_error", _ABORT_ANSWERS)
+async def test_a_describe_closes_its_flow_whatever_the_abort_answers(
+    kind: str, ending: str, abort_error: Exception | None
 ) -> None:
     first_step, menu_choice, error = _ENDINGS[ending]
     client = _client(first_step)
-    abort, consequence = _LEFT_OPEN[kind]
-    getattr(client, abort).side_effect = abort_error
+    getattr(client, _ABORTS[kind]).side_effect = abort_error
     getattr(client, _FLOW_METHODS[kind][0]).side_effect = HomeAssistantAPIError(
         "API error: 500", status_code=500
     )
@@ -275,26 +268,22 @@ async def test_a_describe_says_when_its_flow_may_still_be_open(
 
     if error is None:
         await _described(kind, client, resp)
-        warnings = resp.get("warnings", [])
     else:
-        # An error left open comes back structured (a raw one converted), with
-        # the warning.
-        with pytest.raises(ToolError if left_open else error) as exc_info:
+        # The describe's own error comes back as it was raised.
+        with pytest.raises(error):
             await _described(kind, client, resp, menu_choice=menu_choice)
-        is_tool_error = isinstance(exc_info.value, ToolError)
-        warnings = _error(exc_info).get("warnings", []) if is_tool_error else []
 
-    assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
-    assert len(warnings) == int(left_open)
+    getattr(client, _ABORTS[kind]).assert_awaited_once_with("f1")
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raw", [True, False], ids=["raw", "no-form"])
-async def test_an_error_left_open_on_the_entry_read_keeps_the_warning(
+async def test_an_entry_read_closes_its_options_flow_after_an_error(
     monkeypatch: pytest.MonkeyPatch, raw: bool
 ) -> None:
-    # ha_get_integration's options probe (not strict) degrades a raw error to
-    # warnings; a step with no form to describe still fails, with the warning.
+    # ha_get_integration's options probe (not strict) degrades a raw error to a
+    # warning; a step with no form to describe still fails.
     monkeypatch.setattr(
         integration_schema, "describe_form", AsyncMock(side_effect=RuntimeError("x"))
     )
@@ -303,14 +292,16 @@ async def test_an_error_left_open_on_the_entry_read_keeps_the_warning(
     resp = _resp()
 
     if not raw:
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(ToolError):
             await fetch_options_schema(client, "e1", resp)
-        resp = _error(exc_info)
+        # Only the read's own warning: the menu-less step holds no options.
+        (warning,) = resp["warnings"]
+        assert warning.startswith("options for e1 could not be read")
     else:
         await fetch_options_schema(client, "e1", resp)
-        assert resp["warnings"][1].startswith("options schema probe failed for e1")
-    assert "the options flow f1 was closed" in resp["warnings"][0]
-    assert len(resp["warnings"]) == 1 + raw
+        assert len(resp["warnings"]) == 1
+        assert resp["warnings"][0].startswith("options schema probe failed for e1")
+    client.abort_options_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio
@@ -581,7 +572,7 @@ async def test_an_entry_flow_that_finishes_gets_the_no_form_error(kind: str) -> 
     message = _error(exc_info)["error"]["message"]
     assert "'create_entry' step, which has no form" in message
     assert message.endswith("the flow is being aborted")
-    assert "did not confirm" in _error(exc_info)["warnings"][0]
+    assert "warnings" not in _error(exc_info)
 
 
 _PROGRESS_STEP = {

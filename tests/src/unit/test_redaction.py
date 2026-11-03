@@ -31,7 +31,6 @@ from ha_mcp.redaction import (
 )
 from ha_mcp.tools.component_config_entries import ComponentEntries
 from ha_mcp.tools.config_entry_flow import _reject_redaction_sentinels
-from ha_mcp.tools.config_entry_flow_abort import flow_left_open
 from ha_mcp.tools.integration_schema import (
     options_from_form_flow,
     redact_component_options,
@@ -698,19 +697,11 @@ class TestRedactComponentOptions:
         tools._client.start_options_flow.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("abort_error", "left_open"),
-        [
-            (RuntimeError("abort failed"), True),
-            (HomeAssistantAPIError("API error: 404", status_code=404), False),
-        ],
-        ids=["failed", "gone"],
-    )
-    async def test_abort_failure_does_not_break_redaction(self, abort_error, left_open):
+    async def test_abort_failure_does_not_break_redaction(self):
         tools = self._tools_with_flow(
             {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
         )
-        tools._client.abort_options_flow.side_effect = abort_error
+        tools._client.abort_options_flow.side_effect = RuntimeError("abort failed")
         entry = {
             "entry_id": "e1",
             "supports_options": True,
@@ -719,8 +710,7 @@ class TestRedactComponentOptions:
         warnings: list[str] = []
         await redact_component_options(tools._client, "e1", entry, warnings)
         assert entry["options"] == {"api_key": REDACTED_SET}
-        # An abort Home Assistant did not confirm may leave the probe open.
-        assert warnings == ([flow_left_open("options", "f1")] if left_open else [])
+        assert warnings == []
 
 
 class TestEmbeddedSentinelRejection:

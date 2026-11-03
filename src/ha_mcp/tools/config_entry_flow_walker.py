@@ -232,8 +232,7 @@ def _raise_no_answer(
             f"Assistant ({detail}); the change may have been applied",
             suggestions=[
                 "Do not retry automatically: a retry can create a duplicate "
-                "entry, repeat the change, or be refused as already_in_progress "
-                "while this flow stays open. Check the config entry in Home "
+                "entry or repeat the change. Check the config entry in Home "
                 "Assistant first."
             ],
             context={

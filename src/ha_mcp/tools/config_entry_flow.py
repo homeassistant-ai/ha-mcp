@@ -28,7 +28,7 @@ introspect <- errors <- progress <- walker.
 
 - ``config_entry_flow_abort``: aborting a failed walk's flow, shielded
 - ``config_entry_flow_introspect``: the flow-type vocabulary, the shielded
-  abort and its left-open check, and the read-only helper flow introspection
+  abort, and the read-only helper flow introspection
 - ``config_entry_flow_errors``: Home Assistant's flow answers as structured
   errors, and the reconfigure outcome vocabulary
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
@@ -55,8 +55,6 @@ from ..redaction import placeholder_option_keys
 from .config_entry_flow_abort import (
     abort_failed_flow,
     abort_failed_flow_type_only,
-    flow_left_open,
-    raise_if_flow_left_open,
 )
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
@@ -584,14 +582,10 @@ async def _run_config_subentry_flow(
         )
     except (Exception, asyncio.CancelledError) as flow_error:
         if not leaves_flow_open(flow_error):
-            raise_if_flow_left_open(
-                flow_error,
-                await abort_failed_flow(
-                    client.abort_config_subentry_flow,
-                    flow_id,
-                    kind="config subentry flow",
-                ),
-                flow_left_open("subentry", flow_id),
+            await abort_failed_flow(
+                client.abort_config_subentry_flow,
+                flow_id,
+                kind="config subentry flow",
             )
         raise
 
@@ -853,7 +847,7 @@ async def _update_config_entry_options(
         else:
             should_abort = not leaves_flow_open(flow_err)
         if should_abort:
-            abort_err = await abort_failed_flow_type_only(
+            await abort_failed_flow_type_only(
                 client.abort_options_flow,
                 flow_id,
                 "Failed to abort options flow %s for entry %s "
@@ -862,12 +856,6 @@ async def _update_config_entry_options(
                 entry_id,
                 flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
             )
-            # A restore reports its own failure (OptionsFlowError) and has no
-            # warnings channel; an unconfirmed abort shows only in the log above.
-            if progress is None:
-                raise_if_flow_left_open(
-                    flow_err, abort_err, flow_left_open("options", flow_id)
-                )
         raise
 
     entry = result["entry"].get("result", {})
@@ -946,11 +934,7 @@ async def create_config_entry(
         )
     except (Exception, asyncio.CancelledError) as flow_error:
         if not leaves_flow_open(flow_error):
-            raise_if_flow_left_open(
-                flow_error,
-                await abort_failed_flow(client.abort_config_flow, flow_id),
-                flow_left_open("setup", flow_id),
-            )
+            await abort_failed_flow(client.abort_config_flow, flow_id)
         raise
 
     entry = result["entry"].get("result", {})

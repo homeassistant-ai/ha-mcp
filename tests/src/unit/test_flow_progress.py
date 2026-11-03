@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -269,146 +268,6 @@ async def test_reconfigure_progress_timeout_keeps_the_flow_open_and_carries_flow
     client.abort_config_flow.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("run", "consequence"),
-    [
-        pytest.param("create", "already_in_progress", id="create"),
-        pytest.param("subentry", "subentry flow f1", id="subentry"),
-        pytest.param("options", "options flow f1", id="options"),
-    ],
-)
-@pytest.mark.parametrize(
-    ("abort_error", "left_open"),
-    [
-        pytest.param(None, False, id="aborted"),
-        pytest.param(
-            HomeAssistantAPIError("API error: 404", status_code=404), False, id="gone"
-        ),
-        pytest.param(
-            HomeAssistantAPIError("API error: 500", status_code=500),
-            True,
-            id="http-500",
-        ),
-    ],
-)
-async def test_a_failed_write_says_when_its_flow_may_still_be_open(
-    monkeypatch: pytest.MonkeyPatch,
-    run: str,
-    consequence: str,
-    abort_error: Exception | None,
-    left_open: bool,
-) -> None:
-    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
-    client = _client(strings={})
-    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
-    write, abort = {
-        "create": (_create_entry, client.abort_config_flow),
-        "subentry": (_create_subentry, client.abort_config_subentry_flow),
-        "options": (_update_options, client.abort_options_flow),
-    }[run]
-    abort.side_effect = abort_error
-
-    with pytest.raises(ToolError) as exc_info:
-        await write(client, dict(_PROGRESS))
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["error"]["code"] == "TIMEOUT_OPERATION"
-    warnings = payload.get("warnings", [])
-    assert [w for w in warnings if consequence in w] == (warnings if left_open else [])
-    assert len(warnings) == int(left_open)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("run", "submit", "abort", "consequence", "status"),
-    [
-        pytest.param(
-            "create", "submit_config_flow_step", "abort_config_flow",
-            "already_in_progress", 500, id="create",
-        ),
-        pytest.param(
-            "subentry", "submit_config_subentry_flow_step",
-            "abort_config_subentry_flow", "subentry flow f1", 500, id="subentry",
-        ),
-        pytest.param(
-            "options", "submit_options_flow_step", "abort_options_flow",
-            "options flow f1", 500, id="options",
-        ),
-    ],
-)  # fmt: skip
-@pytest.mark.parametrize("left_open", [False, True], ids=["aborted", "timeout"])
-@pytest.mark.parametrize("cancelled", [False, True], ids=["answered", "cancelled"])
-async def test_a_raw_write_error_left_open_comes_back_with_the_warning(
-    caplog: pytest.LogCaptureFixture,
-    run: str,
-    submit: str,
-    abort: str,
-    consequence: str,
-    status: int,
-    left_open: bool,
-    cancelled: bool,
-) -> None:
-    # Home Assistant answered the submit with an error, which the walk treats
-    # as not committed, so it aborts the flow. A cancellation stays one.
-    client = _client(strings={})
-    getattr(client, submit).side_effect = (
-        asyncio.CancelledError()
-        if cancelled
-        else HomeAssistantAPIError(f"API error: {status}", status_code=status)
-    )
-    getattr(client, abort).side_effect = TimeoutError() if left_open else None
-    write = {
-        "create": _create_entry,
-        "subentry": _create_subentry,
-        "options": _update_options,
-    }[run]
-    converted = left_open and not cancelled
-    raised = (
-        asyncio.CancelledError
-        if cancelled
-        else ToolError
-        if converted
-        else HomeAssistantAPIError
-    )
-
-    with caplog.at_level(logging.ERROR), pytest.raises(raised) as exc_info:
-        await write(client, dict(_FORM))
-
-    getattr(client, abort).assert_awaited_once_with("f1")
-    # Off the tool's handler, the error it would have logged is logged here.
-    logged = [r for r in caplog.records if r.levelno >= logging.ERROR]
-    assert [f"API error: {status}" in r.getMessage() for r in logged] == (
-        [True] if converted else []
-    )
-    if converted:
-        error = json.loads(str(exc_info.value))
-        assert f"API error: {status}" in error["error"]["message"]
-        # The code still comes from the status, as at the tool's handler.
-        code = {500: "SERVICE_CALL_FAILED", 403: "AUTH_INVALID_TOKEN"}[status]
-        assert error["error"]["code"] == code
-        assert error["error"]["suggestions"][-1].endswith("may not have been applied.")
-        assert not any("target entity" in s for s in error["error"]["suggestions"])
-        (warning,) = error["warnings"]
-        assert consequence in warning
-
-
-@pytest.mark.asyncio
-async def test_an_unclassified_write_error_left_open_is_logged_once(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    client = _client(strings={})
-    client.submit_config_flow_step.side_effect = RuntimeError("PRIMARY")
-    client.abort_config_flow.side_effect = TimeoutError()
-
-    with caplog.at_level(logging.ERROR), pytest.raises(ToolError):
-        await _create_entry(client, dict(_FORM))
-
-    (record,) = [r for r in caplog.records if r.levelno >= logging.ERROR]
-    assert "PRIMARY" in record.getMessage()
-    assert record.exc_info is not None
-
-
 # --- a submit or poll that gets no answer may have committed -----------------
 #
 # The GET re-runs async_configure: past progress_done that is the step that
@@ -445,6 +304,71 @@ async def _update_options(client: AsyncMock, step: dict[str, Any]) -> Any:
 async def _create_subentry(client: AsyncMock, step: dict[str, Any]) -> Any:
     client.start_config_subentry_flow.return_value = step
     return await set_config_subentry(client, "e1", "plane", {})
+
+
+_ABORT_ANSWERS = [
+    pytest.param(None, id="aborted"),
+    pytest.param(HomeAssistantAPIError("API error: 404", status_code=404), id="gone"),
+    pytest.param(
+        HomeAssistantAPIError("API error: 500", status_code=500), id="http-500"
+    ),
+    pytest.param(TimeoutError(), id="timeout"),
+]
+_WRITES = {
+    "create": (_create_entry, "submit_config_flow_step", "abort_config_flow"),
+    "subentry": (
+        _create_subentry,
+        "submit_config_subentry_flow_step",
+        "abort_config_subentry_flow",
+    ),
+    "options": (_update_options, "submit_options_flow_step", "abort_options_flow"),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run", list(_WRITES))
+@pytest.mark.parametrize("abort_error", _ABORT_ANSWERS)
+async def test_a_write_out_of_progress_budget_closes_its_flow(
+    monkeypatch: pytest.MonkeyPatch, run: str, abort_error: Exception | None
+) -> None:
+    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
+    client = _client(strings={})
+    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
+    write, _, abort = _WRITES[run]
+    getattr(client, abort).side_effect = abort_error
+
+    with pytest.raises(ToolError) as exc_info:
+        await write(client, dict(_PROGRESS))
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+    assert "warnings" not in payload
+    getattr(client, abort).assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run", list(_WRITES))
+@pytest.mark.parametrize("abort_error", _ABORT_ANSWERS)
+@pytest.mark.parametrize("cancelled", [False, True], ids=["answered", "cancelled"])
+async def test_a_failed_write_closes_its_flow_and_keeps_its_error(
+    run: str, abort_error: Exception | None, cancelled: bool
+) -> None:
+    # Home Assistant answered the submit with an error, which the walk treats
+    # as not committed, so it aborts the flow. The error, or the cancellation,
+    # comes back as it was raised.
+    client = _client(strings={})
+    write, submit, abort = _WRITES[run]
+    getattr(client, submit).side_effect = (
+        asyncio.CancelledError()
+        if cancelled
+        else HomeAssistantAPIError("API error: 500", status_code=500)
+    )
+    getattr(client, abort).side_effect = abort_error
+
+    with pytest.raises(asyncio.CancelledError if cancelled else HomeAssistantAPIError):
+        await write(client, dict(_FORM))
+
+    getattr(client, abort).assert_awaited_once_with("f1")
 
 
 async def _reconfigure(client: AsyncMock, step: dict[str, Any]) -> Any:

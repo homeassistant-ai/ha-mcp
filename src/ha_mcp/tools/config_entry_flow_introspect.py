@@ -4,8 +4,7 @@ Starts a flow only to read its first form (or its menu, or the branch form a
 ``menu_choice`` picks) and always aborts it. Feeds ``describe`` and the
 ``data_schema`` attached to flow errors; split out of
 ``config_entry_flow_walker``, which drives flows to completion. Also holds the
-shielded flow abort and the check whether an abort left its flow open, which
-``config_entry_flow_abort`` builds on.
+shielded flow abort, which ``config_entry_flow_abort`` builds on.
 """
 
 import asyncio
@@ -28,11 +27,6 @@ def _flow_gone(err: BaseException | None) -> bool:
     """Whether ``err`` is Core's 404 for a flow that no longer exists: it
     already finished (abort, create_entry)."""
     return getattr(err, "status_code", None) == 404
-
-
-def abort_left_flow_open(abort_err: Exception | None) -> bool:
-    """Whether a failed abort may have left its flow open (a 404: it is gone)."""
-    return abort_err is not None and not _flow_gone(abort_err)
 
 
 async def shielded_abort(
@@ -65,20 +59,14 @@ async def shielded_abort(
 
 async def abort_probe_flow(
     abort: Callable[[str], Awaitable[Any]], flow_id: str, *, quiet: bool = False
-) -> bool:
+) -> None:
     """Abort a flow opened only to read it, shielded: a cancelled read still
-    closes it. A failure logs at warning, at debug when ``quiet``.
-
-    Returns whether the flow may still be open: the abort failed with
-    anything other than Core's 404 for a flow that is already gone.
-    """
-    return abort_left_flow_open(
-        await shielded_abort(
-            abort,
-            flow_id,
-            failure=f"flow {flow_id} abort failed",
-            level=logging.DEBUG if quiet else logging.WARNING,
-        )
+    closes it. A failure logs at warning, at debug when ``quiet``."""
+    await shielded_abort(
+        abort,
+        flow_id,
+        failure=f"flow {flow_id} abort failed",
+        level=logging.DEBUG if quiet else logging.WARNING,
     )
 
 

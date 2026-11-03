@@ -1,59 +1,37 @@
-"""Aborting a flow after a failed walk, without hiding the walk's error, and
-closing a flow opened only to read it."""
+"""Aborting a flow after a failed walk, without hiding the walk's error."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import anyio
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-from ..errors import ErrorCode
 from .config_entry_flow_introspect import (
     _ABORT_TIMEOUT_S,
-    abort_left_flow_open,
-    abort_probe_flow,
+    _flow_gone,
     shielded_abort,
 )
-from .config_entry_flow_walker import flow_error_payload
-from .helpers import exception_to_structured_error, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
 
-def flow_left_open(kind: str, flow_id: str) -> str:
-    """The warning for a ``kind`` flow whose abort Home Assistant did not confirm."""
-    unconfirmed = (
-        f"Home Assistant did not confirm that the {kind} flow {flow_id} was closed."
-    )
-    if kind == "setup":
-        return (
-            f"{unconfirmed} While it stays open (until it ends or Home Assistant "
-            "restarts), a new setup of the same device or account can abort "
-            "with already_in_progress."
-        )
-    return f"{unconfirmed} It stays open until it ends or Home Assistant restarts."
-
-
 async def abort_failed_flow(
     abort: Callable[[str], Awaitable[Any]], flow_id: str, *, kind: str = "flow"
-) -> Exception | None:
-    """Abort a still-pending flow without hiding the original failure; return
-    the abort's own error, if any. ``kind`` names the flow in the log."""
-    return await shielded_abort(
+) -> None:
+    """Abort a still-pending flow without hiding the original failure.
+    ``kind`` names the flow in the log."""
+    await shielded_abort(
         abort, flow_id, failure=f"Failed to abort {kind} {flow_id} after error"
     )
 
 
 async def abort_failed_flow_type_only(
     abort: Callable[[str], Awaitable[Any]], flow_id: str, msg: str, *args: object
-) -> Exception | None:
-    """Abort a flow after a failed write; return the abort's error.
+) -> None:
+    """Abort a flow after a failed write.
 
     A failure logs ``msg % (*args, error_type)`` at warning, at debug when the
     flow is already gone: the error's type only, never its text, which may
@@ -64,83 +42,8 @@ async def abort_failed_flow_type_only(
             await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
     except Exception as abort_err:  # noqa: BLE001
         logger.log(
-            logging.WARNING if abort_left_flow_open(abort_err) else logging.DEBUG,
+            logging.DEBUG if _flow_gone(abort_err) else logging.WARNING,
             msg,
             *args,
             type(abort_err).__name__,
         )
-        return abort_err
-    return None
-
-
-# Replaces the classified suggestions, which name a service and an entity.
-_UNCONFIRMED_SUGGESTION = (
-    "A describe changed nothing; after a write, check the config entries before "
-    "retrying, since the change may or may not have been applied."
-)
-
-
-def _raise_with_warning(flow_error: BaseException, warning: str) -> None:
-    """Raise ``flow_error`` again as a structured error with ``warning`` in its
-    warnings; a cancellation is left to the caller to re-raise.
-
-    A raw error (a lost connection, an HTTP error) is classified by
-    ``exception_to_structured_error`` and logged at error, as the tool's handler
-    would have done, but without the handler's context, and with a suggestion
-    that fits a flow instead of the classified service ones.
-    """
-    if isinstance(flow_error, ToolError):
-        payload = flow_error_payload(flow_error)
-    elif isinstance(flow_error, Exception):
-        payload = exception_to_structured_error(
-            flow_error, raise_error=False, suggestions=[_UNCONFIRMED_SUGGESTION]
-        )
-        # An unclassified error is logged there already, with its traceback.
-        if payload["error"].get("code") != ErrorCode.INTERNAL_ERROR:
-            logger.error("Flow failed and its abort is unconfirmed: %s", flow_error)
-    else:
-        return
-    if payload:
-        payload.setdefault("warnings", []).append(warning)
-        raise_tool_error(payload)
-
-
-def raise_if_flow_left_open(
-    flow_error: BaseException, abort_err: Exception | None, left_open: str
-) -> None:
-    """If the abort after ``flow_error`` is not confirmed, raise ``flow_error``
-    again as a structured error with ``left_open`` in its warnings (see
-    ``_raise_with_warning``). A cancellation is not converted: the caller
-    re-raises it as it is, without the warning."""
-    if abort_left_flow_open(abort_err):
-        _raise_with_warning(flow_error, left_open)
-
-
-@asynccontextmanager
-async def closing_probe_flow(
-    abort: Callable[[str], Awaitable[Any]],
-    flow_id: str | None,
-    left_open: str,
-    resp: dict[str, Any],
-    *,
-    keep_raw_errors: bool = False,
-) -> AsyncIterator[None]:
-    """Abort the flow ``flow_id``, opened only to read it, when the block ends.
-
-    If Home Assistant does not confirm the abort, ``left_open`` goes into
-    ``resp``'s warnings. When the block raised, it also goes into that error's
-    warnings: a raw error is raised again as a structured one (see
-    ``_raise_with_warning``), and a cancellation passes unchanged, without it.
-    ``keep_raw_errors`` lets a raw error through unchanged, for a caller that
-    turns it into a warning in ``resp``.
-    """
-    try:
-        yield
-    except (Exception, asyncio.CancelledError) as flow_error:
-        if flow_id and await abort_probe_flow(abort, flow_id):
-            resp.setdefault("warnings", []).append(left_open)
-            if not keep_raw_errors or isinstance(flow_error, ToolError):
-                _raise_with_warning(flow_error, left_open)
-        raise
-    if flow_id and await abort_probe_flow(abort, flow_id):
-        resp.setdefault("warnings", []).append(left_open)

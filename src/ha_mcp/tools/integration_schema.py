@@ -27,7 +27,6 @@ from ..redaction import (
     redaction_enabled,
     sentinel_replacement,
 )
-from .config_entry_flow_abort import closing_probe_flow, flow_left_open
 from .config_entry_flow_errors import (
     FlowRef,
     abort_reason_text,
@@ -90,11 +89,8 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-async def _options_form_schema(
-    client: Any, entry_id: Any, warnings: list[str]
-) -> list[Any] | None:
-    """The options flow's first-form schema, or None when it cannot be read.
-    An abort Home Assistant does not confirm adds the left-open warning."""
+async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
+    """The options flow's first-form schema, or None when it cannot be read."""
     data_schema: list[Any] | None = None
     flow_id = None
     try:
@@ -117,8 +113,8 @@ async def _options_form_schema(
             exc_info=True,
         )
     finally:
-        if flow_id and await abort_probe_flow(client.abort_options_flow, flow_id):
-            warnings.append(flow_left_open("options", flow_id))
+        if flow_id:
+            await abort_probe_flow(client.abort_options_flow, flow_id)
     return data_schema
 
 
@@ -142,7 +138,7 @@ async def redact_component_options(
         return
     if not entry.get("supports_options"):
         return
-    data_schema = await _options_form_schema(client, entry_id, warnings)
+    data_schema = await _options_form_schema(client, entry_id)
     if isinstance(data_schema, list):
         entry["options"] = redact_options_by_flow_schema(options, data_schema)
     else:
@@ -276,13 +272,7 @@ async def fetch_options_schema(
     try:
         flow_result = await client.start_options_flow(entry_id)
         flow_id = flow_result.get("flow_id")
-        async with closing_probe_flow(
-            client.abort_options_flow,
-            flow_id,
-            flow_left_open("options", flow_id),
-            resp,
-            keep_raw_errors=True,
-        ):
+        try:
             if flow_result.get("type") == "form" and entry is not None:
                 if populate_options:
                     entry["options"] = options_from_form_flow(flow_result)
@@ -313,6 +303,9 @@ async def fetch_options_schema(
                     submit=client.submit_options_flow_step,
                 ),
             )
+        finally:
+            if flow_id:
+                await abort_probe_flow(client.abort_options_flow, flow_id)
     except ToolError:
         raise
     except Exception as schema_err:
@@ -362,12 +355,7 @@ async def fetch_config_subentry_schema(
         show_advanced_options=show_advanced_options,
     )
     flow_id = flow_result.get("flow_id")
-    async with closing_probe_flow(
-        client.abort_config_subentry_flow,
-        flow_id,
-        flow_left_open("subentry", flow_id),
-        resp,
-    ):
+    try:
         _put_payload(
             resp,
             "subentry_schema",
@@ -387,6 +375,9 @@ async def fetch_config_subentry_schema(
                 ),
             },
         )
+    finally:
+        if flow_id:
+            await abort_probe_flow(client.abort_config_subentry_flow, flow_id)
 
 
 async def describe_flow_form(
