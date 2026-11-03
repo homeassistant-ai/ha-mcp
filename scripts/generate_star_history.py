@@ -22,7 +22,7 @@ from urllib.request import Request, urlopen
 API_VERSION = "2022-11-28"
 DEFAULT_REPOSITORY = "homeassistant-ai/ha-mcp"
 DEFAULT_OUTPUT_DIR = Path("site/public/star-history")
-DEFAULT_START_ON = date(2026, 1, 1)
+CHART_START_ON = date(2026, 1, 1)
 WIDTH = 960
 HEIGHT = 520
 PLOT_LEFT = 82
@@ -279,7 +279,7 @@ def _line_path(coordinates: Sequence[tuple[float, float]]) -> str:
 
 
 def _window_history(history: StarHistory) -> StarHistory:
-    points = tuple(point for point in history.points if point.day >= DEFAULT_START_ON)
+    points = tuple(point for point in history.points if point.day >= CHART_START_ON)
     if not points:
         raise ValueError("chart start date must not follow generated_on")
     return StarHistory(history.repository, history.generated_on, points)
@@ -400,12 +400,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, today: date | None = None) -> int:
     args = _parse_args(argv)
     try:
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
         timestamps = fetch_starred_at(args.repository, token)
-        history = aggregate_daily(args.repository, timestamps)
+        history = aggregate_daily(args.repository, timestamps, generated_on=today)
         written = write_charts(history, args.output_dir)
     except (OSError, RuntimeError, ValueError) as err:
         print(f"error: {err}", file=sys.stderr)

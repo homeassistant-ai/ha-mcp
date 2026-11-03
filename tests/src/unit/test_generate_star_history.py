@@ -20,12 +20,6 @@ generator = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(generator)
 
 
-class _FrozenClock(datetime):
-    @classmethod
-    def now(cls, tz=None):
-        return datetime(2026, 3, 2, 12, tzinfo=tz)
-
-
 class _Response(io.BytesIO):
     def __enter__(self):
         return self
@@ -187,11 +181,9 @@ def test_main_charts_the_fetched_stars_of_the_requested_repository(
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(generator, "fetch_starred_at", fake_fetch)
     monkeypatch.setattr(generator, "write_charts", fake_write)
-    # main() ends the chart on the clock's date.
-    monkeypatch.setattr(generator, "datetime", _FrozenClock)
 
     argv = ["--repository", "owner/repo", "--output-dir", str(tmp_path)]
-    assert generator.main(argv) == 0
+    assert generator.main(argv, today=date(2026, 3, 2)) == 0
     assert fetched == [("owner/repo", "token")]
     [(history, output_dir)] = charted
     assert output_dir == tmp_path
