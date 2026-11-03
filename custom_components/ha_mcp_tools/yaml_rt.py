@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import threading
 from collections.abc import Callable
@@ -10,6 +11,8 @@ from datetime import date, datetime
 from io import StringIO
 from typing import Any
 
+from annotatedyaml import SECRET_YAML
+from annotatedyaml.loader import FastSafeLoader
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarbool import ScalarBoolean
 
@@ -38,14 +41,12 @@ class _TaggedScalar:
         return hash((self.tag, self.value))
 
 
-_HA_TAGS = (
-    "!include",
-    "!include_dir_list",
-    "!include_dir_named",
-    "!include_dir_merge_list",
-    "!include_dir_merge_named",
-    "!secret",
-    "!env_var",
+_HA_TAGS = tuple(
+    sorted(
+        tag
+        for tag in FastSafeLoader.yaml_constructors
+        if isinstance(tag, str) and tag.startswith("!")
+    )
 )
 
 
@@ -228,3 +229,84 @@ def yaml_jsonify(node: Any) -> Any:
     if isinstance(node, (datetime, date)):
         return node.isoformat()
     return str(node)
+
+
+def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
+    """Walk ``parts`` in ``node``, rejecting paths that cross a file boundary.
+
+    The returned file is the one that writes the first segment. Every mapping
+    along the path must come from that same file: if an ``!include`` supplies
+    an intermediate mapping, no single file holds the full dotted path and a
+    read addressed by that path cannot use it.
+    """
+    root_file = getattr(node, "__config_file__", None)
+    if not isinstance(root_file, str):
+        return False, None
+    # secrets.yaml values are secret payloads, not config definitions; a
+    # mapping-valued !secret is nested under its secret name, not a file root.
+    if os.path.basename(root_file) == SECRET_YAML:
+        return False, None
+    current = node
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current_file = getattr(current, "__config_file__", root_file)
+        if current_file != root_file:
+            return False, None
+        current = current[part]
+    return True, root_file
+
+
+def _walk_yaml_mappings(
+    node: Any,
+    parts: list[str],
+    seen: set[int],
+    found: set[str],
+    parent_file: str | None = None,
+) -> None:
+    """Walk mappings, matching ``parts`` only at the top of each file.
+
+    A definition is a top-level key of the file that writes it. Matching every
+    nested mapping would report a key such as ``sensor`` under ``template`` as
+    a top-level definition, and the read addressed from that file cannot
+    supply the path. A mapping whose ``__config_file__`` differs from its
+    parent's starts a new file, so it is a root too.
+    """
+    if id(node) in seen:
+        return
+    seen.add(id(node))
+    node_file = getattr(node, "__config_file__", None)
+    at_file_root = parent_file is None or (
+        isinstance(node_file, str) and node_file != parent_file
+    )
+    children: Any
+    if isinstance(node, dict):
+        if at_file_root:
+            matched, path = _key_value(node, parts)
+            if matched and path:
+                found.add(path)
+        children = node.values()
+    elif isinstance(node, list):
+        children = node
+    else:
+        return
+    child_parent = node_file if isinstance(node_file, str) else parent_file
+    for child in children:
+        if isinstance(child, (dict, list)):
+            _walk_yaml_mappings(child, parts, seen, found, child_parent)
+
+
+def find_yaml_key_files(config: Any, yaml_path: str) -> list[str]:
+    """Return files whose mappings define ``yaml_path`` in Core's loaded config.
+
+    Core's ``annotatedyaml`` loader tags every mapping it loads with
+    ``__config_file__``. Walking the merged config finds keys in packages and
+    included folders that a one-level glob cannot see. Values are never
+    returned; only the source file names leave this function.
+    """
+    parts = yaml_path.split(".")
+    if not all(parts):
+        return []
+    found: set[str] = set()
+    _walk_yaml_mappings(config, parts, set(), found)
+    return sorted(found)
