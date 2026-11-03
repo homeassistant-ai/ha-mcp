@@ -192,69 +192,13 @@ the `enabled` and `category` parameters out of the stored config, blueprint
 empty-list stripping, the best-practice checker and the reference
 validator.
 
-`ha_get_integration` and `ha_set_integration` pass Core's config-entry
-contracts through. An entry is Core's `ConfigEntry.as_json_fragment` row with
-every field kept: from the component's `config_entries` command (which adds
-`unique_id` and the stored options) or Core's REST entry list otherwise. On
-the REST path the list's `domain` and `integration_type` go to Core's
-`?domain=` and `?type=`, so Core's own matching rule applies (an unknown type
-is not rejected). The component path sends the type as `type_filter`, which
-the component matches with Core's own `?type=` helper
-(`_async_matching_config_entries_json_fragments`), so the list is one read; a
-component without the `config_entries_type_filter` capability gets no type, and
-that path keeps the rows whose entry ids Core's `?type=` answer holds. One entry is read with
-WebSocket `config_entries/get_single`, Core's `not_found` being the 404; the
-REST list is the fallback when no WebSocket answer comes back or Core answers
-`unauthorized` (`get_single` is admin-only, the REST list is not).
-`include_schema` (options flow), `ha_set_integration(describe=True)` (the
-setup flow of `domain`, or an entry's options or subentry flow),
-`include_subentry_schema` and the reconfigure preview
-start Core's own flow, describe its first step in the helper describe's compact
-`fields` shape (current values from `suggested_value`, help text from Core's
-strings) and abort it. A menu lists Core's menu options;
-`ha_set_integration(describe=True)` (with `domain`, or `entry_id` and
-optionally `subentry_type`) takes `menu_choice` and submits it as
-`next_step_id` to the same flow. Form errors, abort reasons and progress
-actions keep Core's key and add Core's string (`error_text`, `reason_text`,
-and `progress_action_text` on the errors for a progress step: the budget
-timeout and a describe that reaches one), looked up as the frontend's flow
-dialogs do under `config`, `options` or `config_subentries.<type>` and filled
-with the step's `description_placeholders`; a key without a string stays raw.
-An abort's `translation_domain` names the owning integration, and a subentry
-abort then reads that integration's `config.abort`, as the frontend's `dev`
-branch does (the release Core 2026.8.0 pins still reads
-`config_subentries.<type>.abort`). A progress step
-is driven by the GET on the flow the frontend sends. `log_persistence` reaches
-`logger/integration_log_level` as Core's `persistence` unchanged, so Core
-validates it. HA-MCP policies here: the 120 s progress budget, the reconfigure
-preview's key check against the form, refusing writes to ha-mcp's own entries,
-secret redaction, reporting a submit or progress GET whose answer is lost as
-`applied_but_unverified` and leaving that flow open (Core may have committed
-it), reporting an ignored entry as `supports_options: false` and
-`supports_reconfigure: false` and starting neither flow on it (Core never sets
-it up, so its flows can fail), and failing a setup describe whose step Core finishes
-(naming the entry Core created, not undoing it) or any describe that reaches a
-step without a form.
-
-An integration's own WebSocket commands, the API its panel uses, go through
-the component's `ha_mcp_tools/integration_commands` bridge (capability
-`integration_commands`). `ha_get_integration(include_ws_commands=True)` lists
-the entry domain's `<domain>/` commands from Core's registry
-(`hass.data["websocket_api"]`), each with its registered request schema
-serialized as `core_contract.py` serializes one; a command Core registers
-without fields (schema `False`) is described with Core's
-`BASE_COMMAND_MESSAGE_SCHEMA`. `ha_set_integration(entry_id=..., ws_command=...,
-ws_data=...)` sends one: the bridge runs the registered validator without the
-handler, and the server sends the command over WebSocket only when it passes.
-The `<domain>/` prefix of the entry is the bridge's permission boundary, and
-the server checks it too. HA-MCP policies here: refusing ha-mcp's own entries,
-refusing streaming commands and snapshot routes as `ha_call_service`'s
-`ws_command` does, and taking no auto-backup (the command changes the
-integration's own storage, not the entry). Core marks no command as read-only,
-so every call is a write and read-only mode blocks it, the KNX project read
-(`knx/get_knx_project`) included; keeping reads would need a hand-kept list.
-Without the capability the list is absent with a warning, and a command is
-sent unvalidated with a warning; Core still validates it on receipt.
+An integration's own `<domain>/` WebSocket commands, the API its panel uses,
+are listed through the component, which reads Core's registry
+(`hass.data["websocket_api"]`) and serializes each command's registered request
+schema; a command registered without fields (schema `False`) is described with
+Core's `BASE_COMMAND_MESSAGE_SCHEMA`. A call is sent over WebSocket as given:
+Core validates it against that schema before the handler runs, so the tool
+passes Core's error through instead of validating first.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
