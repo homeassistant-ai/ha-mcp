@@ -28,7 +28,7 @@ async def test_skill_guide_example_naming_hidden_entity_is_not_refused(
     set_config, proxied
 ):
     set_config(enabled=True, enforce=True, deny_entity_ids=["light.kitchen"])
-    client = FakeClient(fail=True)
+    client = FakeClient()
 
     result = await make_mw(get_client=lambda: client).on_call_tool(
         _guide_context(proxied), _returns(text_result(_GUIDE_TEXT))
