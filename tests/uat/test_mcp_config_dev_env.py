@@ -41,7 +41,7 @@ def test_dev_env_file_sets_the_ha_and_mcp_urls(tmp_path):
     assert (args.ha_url, args.mcp_url) == (HA, MCP)
 
 
-@pytest.mark.parametrize("mcp", ["down", "https://", "httpdown"])
+@pytest.mark.parametrize("mcp", ["down", "https://", "httpdown", "http://:8123"])
 def test_a_urls_file_without_a_usable_mcp_url_is_refused(tmp_path, mcp):
     """A tunnel being restarted shows as ``down``; the run must stop with the
     re-download hint, not fail later at the connection."""
@@ -193,3 +193,17 @@ def test_gemini_agent_gets_no_built_in_tools(tmp_path):
     mcp_config.write_gemini_mcp_config(HA, "token", None, tmp_path, mcp_url=MCP)
     settings = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
     assert settings["tools"]["core"] == []
+
+
+def test_run_story_refuses_mcp_url_passed_through_to_run_uat(monkeypatch):
+    """``-- --mcp-url`` would reach only the subprocess agents: the inline agent
+    and the recorded revision would describe the local server instead."""
+    from uat.stories import run_story
+
+    story = next((Path(run_story.__file__).parent / "catalog").glob("t01_*.yaml"))
+    monkeypatch.setattr(
+        sys, "argv", ["run_story.py", str(story), "--", "--mcp-url", MCP]
+    )
+    with pytest.raises(SystemExit) as exc:
+        run_story.main()
+    assert exc.value.code == 2  # argparse's usage error

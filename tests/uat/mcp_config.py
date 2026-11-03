@@ -61,7 +61,7 @@ def read_dev_env_urls(path: str | Path) -> tuple[str, str]:
 
     def usable(url: str) -> bool:
         parsed = urlparse(url)
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+        return parsed.scheme in ("http", "https") and bool(parsed.hostname)
 
     missing = [k for k in ("HA", "MCP") if not usable(urls.get(k, ""))]
     if missing:
@@ -238,6 +238,10 @@ def add_target_args(parser: argparse.ArgumentParser) -> None:
 
 def apply_dev_env(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Point a story run at ``--dev-env``'s Home Assistant and ha-mcp server."""
+    if any(a.split("=")[0] == "--mcp-url" for a in args.extra_args):
+        # Passed through to run_uat.py alone, it would reach only the
+        # subprocess agents, not the inline agent or the recorded revision.
+        parser.error("pass the running server with --dev-env, not --mcp-url after --")
     try:
         resolve_running_server(args)
     except ValueError as e:
