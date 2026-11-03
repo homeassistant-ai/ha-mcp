@@ -1,8 +1,10 @@
 """An integration's own ``<domain>/`` WebSocket commands, the API its panel uses.
 
 Core registers each command with its request schema; the component's
-``integration_commands`` bridge describes those schemas and validates a call
-against them. Core marks no command as read-only, so sending one is a write.
+``integration_commands`` bridge describes those schemas. Core validates every
+call against its schema before the handler runs, so a call is sent as given
+and Core's error comes back unchanged. Core marks no command as read-only, so
+sending one is a write.
 """
 
 import logging
@@ -13,11 +15,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from .backup_access import guard_snapshot_route
 from .config_entry_flow import is_component_domain, refuse_component_entry
-from .core_contract import (
-    UPDATE_COMPONENT_SUGGESTION,
-    command_payload,
-    integration_commands,
-)
+from .core_contract import command_payload, integration_commands
 from .helpers import extract_tool_error_message, raise_tool_error
 from .util_helpers import is_streaming_ws_command, websocket_error_message
 
@@ -93,11 +91,7 @@ async def _list_commands(client: Any, domain: Any) -> dict[str, Any]:
 async def send_ws_command(
     client: Any, entry_id: str, command: str, data: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Send one of the entry's own commands once Core's schema accepts it.
-
-    When the component cannot validate it, the command is sent unchecked, with
-    a warning saying why.
-    """
+    """Send one of the entry's own commands; Core validates it against its schema."""
     payload = data or {}
     context = {"entry_id": entry_id, "ws_command": command}
     if is_streaming_ws_command(command):
@@ -126,34 +120,6 @@ async def send_ws_command(
             )
         )
     guard_snapshot_route(ws_command=command, ws_params=payload)
-    validation = await integration_commands(client, domain, command, payload)
-    validated = validation["status"] == "validated"
-    if validated and not isinstance(validation.get("valid"), bool):
-        logger.warning(
-            "The component answered status %r for %s without a verdict; "
-            "nothing was sent",
-            validation["status"],
-            command,
-        )
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"The component answered status {validation['status']!r} "
-                "without a verdict; nothing was sent",
-                context=context,
-                suggestions=[UPDATE_COMPONENT_SUGGESTION],
-            )
-        )
-    if validated and validation["valid"] is False:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                "Home Assistant Core's schema for this command rejects the "
-                "ws_data; nothing was sent",
-                context={**context, "errors": validation.get("errors", [])},
-                suggestions=[_LIST_SUGGESTION],
-            )
-        )
     result = await client.send_websocket_message(message)
     if not result.get("success"):
         raise_tool_error(
@@ -163,16 +129,9 @@ async def send_ws_command(
                 context=context,
             )
         )
-    resp: dict[str, Any] = {
+    return {
         "success": True,
         "entry_id": entry_id,
         "ws_command": command,
         "result": result.get("result"),
     }
-    if not validated:
-        # Only a passed validation sends without a warning.
-        reason = validation.get("reason") or (
-            f"the component answered {validation['status']!r}, not a validation"
-        )
-        resp["warnings"] = [f"Not validated before sending: {reason}"]
-    return resp

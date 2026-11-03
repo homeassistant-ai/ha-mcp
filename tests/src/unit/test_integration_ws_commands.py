@@ -11,14 +11,12 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import integration_ws_commands as module
 from ha_mcp.tools.component_api import ComponentCaps
-from ha_mcp.tools.core_contract import UPDATE_COMPONENT_SUGGESTION
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_component_ws_search import _REAL_VOL, FakeHass
 
-_VALID = {"status": "validated", "valid": True, "errors": []}
 _NOT_EXPOSED = (
-    "The installed component does not expose the listing and validation of an "
+    "The installed component does not expose the listing of an "
     "integration's own WebSocket commands."
 )
 _COMMAND_LIST = {
@@ -118,7 +116,7 @@ class TestListing:
         assert result["entry"] == {"domain": "knx"}
         assert "ws_commands" not in result
         assert result["warnings"] == [
-            "ws_commands not listed: Could not obtain the listing and validation "
+            "ws_commands not listed: Could not obtain the listing "
             "of an integration's own WebSocket commands: ws down"
         ]
 
@@ -129,14 +127,14 @@ class TestListing:
         with stack, caplog.at_level("WARNING"):
             result = await _get(_client(), entry_id="e1", include_ws_commands=True)
         assert result["warnings"] == [
-            "ws_commands not listed: Could not obtain the listing and validation "
+            "ws_commands not listed: Could not obtain the listing "
             "of an integration's own WebSocket commands: malformed "
             "ha_mcp_tools/integration_commands response (status 'weird')"
         ]
         assert [r.exc_info is not None for r in caplog.records] == [True, False]
 
     async def test_the_listing_asks_for_the_domain_only(self) -> None:
-        # A command or payload key would turn the listing into a validation.
+        # The component's bridge takes the domain and nothing else.
         stack, ws = _bridge(json.loads(json.dumps(_COMMAND_LIST)))
         with stack:
             result = await _get(_client(), entry_id="e1", include_ws_commands=True)
@@ -186,9 +184,10 @@ class TestListing:
 
 
 class TestSend:
-    async def test_sends_a_validated_command_without_a_backup(self) -> None:
+    async def test_sends_the_command_as_given_without_a_backup(self) -> None:
+        # Core validates the call itself; the bridge is not asked first.
         client = _client()
-        bridge = AsyncMock(return_value=_VALID)
+        bridge = AsyncMock()
         with (
             patch.object(module, "integration_commands", bridge),
             patch(
@@ -205,182 +204,45 @@ class TestSend:
                 ws_command="knx/get_entity_config",
                 ws_data={"entity_id": "light.x"},
             )
-        bridge.assert_awaited_once_with(
-            client, "knx", "knx/get_entity_config", {"entity_id": "light.x"}
-        )
+        bridge.assert_not_awaited()
         client.send_websocket_message.assert_awaited_once_with(
             {"type": "knx/get_entity_config", "entity_id": "light.x"}
         )
         capture.assert_not_awaited()
-        assert result["result"] == {"info": {"name": "Demo"}}
-        assert "warnings" not in result
+        assert result == {
+            "success": True,
+            "entry_id": "e1",
+            "ws_command": "knx/get_entity_config",
+            "result": {"info": {"name": "Demo"}},
+        }
 
     @pytest.mark.parametrize(
         "command", ["config/core/update", "knxx/other", "knx", "auth/x"]
     )
     async def test_only_the_entrys_own_prefix_is_sent(self, command: str) -> None:
         client = _client()
-        bridge = AsyncMock(return_value=_VALID)
-        with (
-            patch.object(module, "integration_commands", bridge),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
                 entry_id="e1", ws_command=command
             )
         assert "'knx/'" in _error(exc_info)["message"]
-        bridge.assert_not_awaited()
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_a_schema_rejection_sends_nothing(self) -> None:
-        client = _client()
-        errors = [{"path": ["entity_id"], "message": "required key not provided"}]
-        bridge = AsyncMock(
-            return_value={"status": "validated", "valid": False, "errors": errors}
-        )
-        with (
-            patch.object(module, "integration_commands", bridge),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity"
-            )
-        payload = json.loads(str(exc_info.value))
-        assert payload["error"]["code"] == "VALIDATION_FAILED"
-        assert payload["errors"] == errors
         client.send_websocket_message.assert_not_awaited()
 
     async def test_component_entries_are_refused(self) -> None:
         client = _client("ha_mcp_tools")
-        bridge = AsyncMock(return_value=_VALID)
-        with (
-            patch.object(module, "integration_commands", bridge),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
                 entry_id="e1", ws_command="ha_mcp_tools/info"
             )
         assert "ha-mcp's own" in _error(exc_info)["message"]
-        bridge.assert_not_awaited()
         client.send_websocket_message.assert_not_awaited()
-
-    async def test_without_the_capability_core_alone_validates(self) -> None:
-        client = _client()
-        caps = ComponentCaps(1, "test", frozenset({"core_contract"}), {})
-        with patch(
-            "ha_mcp.tools.core_contract.get_component_caps",
-            AsyncMock(return_value=caps),
-        ):
-            result = await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/get_knx_project"
-            )
-        client.send_websocket_message.assert_awaited_once_with(
-            {"type": "knx/get_knx_project"}
-        )
-        assert result["warnings"] == [
-            f"Not validated before sending: {_NOT_EXPOSED} "
-            "Core still validates actual requests."
-        ]
-
-    async def test_an_answer_that_is_no_validation_sends_with_a_warning(
-        self,
-    ) -> None:
-        client = _client()
-        bridge = AsyncMock(return_value={"status": "available", "commands": []})
-        with patch.object(module, "integration_commands", bridge):
-            result = await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/get_knx_project"
-            )
-        client.send_websocket_message.assert_awaited_once()
-        assert result["warnings"] == [
-            "Not validated before sending: the component answered 'available', "
-            "not a validation"
-        ]
-
-    @pytest.mark.parametrize("verdict", [{}, {"valid": None}, {"valid": "yes"}])
-    async def test_a_validation_without_a_verdict_sends_nothing(
-        self, verdict: dict[str, Any], caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # A malformed bridge answer, not a schema rejection of the ws_data.
-        client = _client()
-        bridge = AsyncMock(return_value={"status": "validated", **verdict})
-        with (
-            patch.object(module, "integration_commands", bridge),
-            caplog.at_level("WARNING"),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity", ws_data={"pin": "1234"}
-            )
-        error = _error(exc_info)
-        assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "status 'validated' without a verdict" in error["message"]
-        assert error["suggestion"] == UPDATE_COMPONENT_SUGGESTION
-        (record,) = [r for r in caplog.records if "without a verdict" in r.message]
-        assert record.levelname == "WARNING"
-        assert "1234" not in caplog.text
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.parametrize(
-        ("answer", "shown"),
-        [
-            ({"status": "weird", "pin": "1234"}, "(status 'weird')"),
-            ({"status": {"pin": "1234"}}, "(a dict status)"),
-            (RuntimeError("ws down"), "ws down"),
-        ],
-        ids=["status", "odd-status", "failed"],
-    )
-    async def test_a_malformed_answer_names_its_status_and_the_component_update(
-        self, answer: dict[str, Any] | Exception, shown: str
-    ) -> None:
-        stack, _ws = _bridge(answer)
-        with stack, pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(_client()).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity"
-            )
-        error = _error(exc_info)
-        assert error["message"].endswith(shown)
-        assert "1234" not in str(exc_info.value)
-        malformed = not isinstance(answer, Exception)
-        assert (error["suggestion"] == UPDATE_COMPONENT_SUGGESTION) is malformed
-
-    async def test_a_validation_sends_the_command_and_its_payload(self) -> None:
-        stack, ws = _bridge(_VALID)
-        with stack:
-            await IntegrationTools(_client()).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity", ws_data={"a": 1}
-            )
-        ws.send_command.assert_awaited_once_with(
-            "ha_mcp_tools/integration_commands",
-            domain="knx",
-            command="knx/delete_entity",
-            payload={"a": 1},
-        )
-
-    async def test_a_failed_bridge_keeps_the_ws_data_out_of_the_error(self) -> None:
-        stack, _ws = _bridge(RuntimeError("ws down"))
-        with stack, pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(_client()).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity", ws_data={"pin": "1234"}
-            )
-        body = json.loads(str(exc_info.value))
-        assert "pin" not in str(exc_info.value)
-        assert (body["domain"], body["command"]) == ("knx", "knx/delete_entity")
 
     @pytest.mark.parametrize("ws_data", [{"type": "call_service"}, {"id": 1}])
     async def test_ws_data_cannot_set_the_message_envelope(
         self, ws_data: dict[str, Any]
     ) -> None:
-        # Without the component's validation only this guard stands.
         client = _client()
-        caps = ComponentCaps(1, "test", frozenset({"core_contract"}), {})
-        with (
-            patch(
-                "ha_mcp.tools.core_contract.get_component_caps",
-                AsyncMock(return_value=caps),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
                 entry_id="e1", ws_command="knx/get_knx_project", ws_data=ws_data
             )
@@ -388,41 +250,24 @@ class TestSend:
         assert "reserved" in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
 
-    async def test_a_failed_bridge_sends_nothing(self) -> None:
+    async def test_cores_schema_rejection_comes_back_as_its_error(self) -> None:
         client = _client()
-        with (
-            patch(
-                "ha_mcp.tools.core_contract.get_component_caps",
-                AsyncMock(side_effect=RuntimeError("ws down")),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity"
-            )
-        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_a_core_error_is_a_service_failure(self) -> None:
-        client = _client()
+        message = "not a valid option at 'bogus'"
         client.send_websocket_message = AsyncMock(
             return_value={
                 "success": False,
-                "error": {"code": "home_assistant_error", "message": "No entity"},
+                "error": {"code": "invalid_format", "message": message},
             }
         )
-        with (
-            patch.object(
-                module, "integration_commands", AsyncMock(return_value=_VALID)
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/delete_entity"
+                entry_id="e1",
+                ws_command="knx/get_entity_config",
+                ws_data={"bogus": 1},
             )
         error = _error(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
-        assert error["message"] == "No entity"
+        assert error["message"] == message
 
     async def test_streaming_commands_are_refused(self) -> None:
         client = _client()
@@ -435,18 +280,13 @@ class TestSend:
 
     async def test_snapshot_deletion_stays_with_ha_manage_backup(self) -> None:
         client = _client("backup")
-        bridge = AsyncMock(return_value=_VALID)
-        with (
-            patch.object(module, "integration_commands", bridge),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
                 entry_id="e1",
                 ws_command="backup/delete",
                 ws_data={"backup_id": "abc"},
             )
         assert "ha_manage_backup" in _error(exc_info)["message"]
-        bridge.assert_not_awaited()
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.parametrize(
@@ -476,7 +316,7 @@ class TestSend:
         ("core_contract", "Core contract discovery/validation"),
         (
             "integration_commands",
-            "the listing and validation of an integration's own WebSocket commands",
+            "the listing of an integration's own WebSocket commands",
         ),
     ],
 )
@@ -539,8 +379,6 @@ async def test_server_bridge_reaches_the_component_producer(
     client = Mock(
         base_url="http://test-integration-commands", token="t", verify_ssl=True
     )
-    result = await core_contract.integration_commands(
-        client, "knx", "knx/delete_entity", {}
-    )
-    assert result["valid"] is False
-    assert result["errors"][0]["path"] == ["entity_id"]
+    result = await core_contract.integration_commands(client, "knx")
+    assert result["status"] == "available"
+    assert [row["command"] for row in result["commands"]] == ["knx/delete_entity"]

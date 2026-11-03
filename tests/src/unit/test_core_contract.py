@@ -41,31 +41,19 @@ def test_contract_validation_cannot_override_transport(payload: dict[str, Any]) 
         validate_request(FakeHass(), "energy/save_prefs", payload)
 
 
-@pytest.mark.parametrize(
-    ("command", "params"),
-    [
-        ("ha_mcp_tools/core_contract", {"command": "energy/save_prefs"}),
-        (
-            "ha_mcp_tools/integration_commands",
-            {"domain": "knx", "command": "knx/delete_entity"},
-        ),
-    ],
-)
-def test_a_registered_bridge_command_accepts_a_payload(
-    command: str, params: dict[str, Any]
-) -> None:
+def test_the_core_contract_bridge_accepts_a_payload() -> None:
     # The server sends what it validates as payload; Core checks the message
     # against this schema before the bridge runs.
-    from custom_components.ha_mcp_tools.core_contract import command_specs
+    from custom_components.ha_mcp_tools.core_contract import COMMAND, command_specs
 
     from .test_component_ws_search import _REAL_VOL
 
     (schema,) = [
         spec
         for spec, _run, _prep in command_specs(_REAL_VOL)
-        if spec[_REAL_VOL.Required("type")] == command
+        if spec[_REAL_VOL.Required("type")] == COMMAND
     ]
-    message = {"type": command, **params, "payload": {"entity_id": "light.x"}}
+    message = {"type": COMMAND, "command": "energy/save_prefs", "payload": {"a": 1}}
     assert _REAL_VOL.Schema(schema)(message) == message
 
 

@@ -3,9 +3,10 @@ E2E: an integration entry's own WebSocket commands, the API its panel uses.
 
 The test container has no KNX entry. The listing runs against its
 shopping_list entry, whose integration registers shopping_list/* commands,
-so the list cannot pass empty; ha_set_integration's refusal of a command
-outside the entry's prefix runs against the first entry that is not
-ha-mcp's own. Sending a KNX command needs a KNX entry and is covered by the
+so the list cannot pass empty, and Core's own rejection of a call that does
+not match a command's schema runs against the same entry;
+ha_set_integration's refusal of a command outside the entry's prefix runs
+against the first entry that is not ha-mcp's own. Sending a KNX command needs a KNX entry and is covered by the
 unit tests.
 """
 
@@ -52,6 +53,25 @@ async def test_include_ws_commands_lists_only_the_entrys_own_commands(mcp_client
         assert row["command"].startswith("shopping_list/"), row
         assert "description_complete" in row, row
     logger.info("shopping_list lists %d ws_commands", len(commands))
+
+
+@pytest.mark.asyncio
+async def test_cores_schema_rejection_of_ws_data_is_returned(mcp_client):
+    async with MCPAssertions(mcp_client) as mcp:
+        listing = await mcp.call_tool_success(
+            "ha_get_integration", {"domain": "shopping_list"}
+        )
+        entries = listing.get("data", listing).get("entries", [])
+        assert entries, "the test container has no shopping_list entry"
+        await mcp.call_tool_failure(
+            "ha_set_integration",
+            {
+                "entry_id": entries[0]["entry_id"],
+                "ws_command": "shopping_list/items",
+                "ws_data": {"bogus": 1},
+            },
+            expected_error="bogus",
+        )
 
 
 @pytest.mark.asyncio

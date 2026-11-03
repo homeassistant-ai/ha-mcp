@@ -72,54 +72,24 @@ def test_a_command_without_fields_is_described_with_cores_message_schema(
         _REAL_VOL.Required("id"),
         "type",
     }
-    rejected = _execute()(
-        hass, {"domain": "knx", "command": "knx/get_knx_project", "payload": {"x": 1}}
+
+
+def test_the_bridge_takes_the_domain_only() -> None:
+    # Core validates a call to the domain's command when it is sent.
+    from custom_components.ha_mcp_tools.core_contract import (
+        INTEGRATION_COMMAND,
+        command_specs,
     )
-    assert rejected["valid"] is False
-    accepted = _execute()(
-        hass, {"domain": "knx", "command": "knx/get_knx_project", "payload": {}}
-    )
-    assert accepted["valid"] is True
 
-
-def test_validation_uses_the_registered_schema_without_running_the_handler() -> None:
-    handler = Mock(side_effect=AssertionError("validation must never dispatch"))
-    hass = FakeHass()
-    hass.data["websocket_api"] = {
-        "knx/delete_entity": (
-            handler,
-            _REAL_VOL.Schema(
-                {
-                    _REAL_VOL.Required("id"): int,
-                    _REAL_VOL.Required("type"): str,
-                    _REAL_VOL.Required("entity_id"): str,
-                }
-            ),
-        )
-    }
-    msg: dict[str, Any] = {"domain": "knx", "command": "knx/delete_entity"}
-    invalid = _execute()(hass, {**msg, "payload": {}})
-    assert invalid["status"] == "validated"
-    assert invalid["valid"] is False
-    assert invalid["errors"][0]["path"] == ["entity_id"]
-    valid = _execute()(hass, {**msg, "payload": {"entity_id": "light.x"}})
-    assert valid["valid"] is True
-    handler.assert_not_called()
-
-
-def test_a_command_outside_the_domain_prefix_is_refused() -> None:
-    hass = _hass(config__core__update=_REAL_VOL.Schema({}))
-    with pytest.raises(ValueError, match="knx/"):
-        _execute()(
-            hass, {"domain": "knx", "command": "config/core/update", "payload": {}}
-        )
-
-
-def test_an_unregistered_command_is_unavailable_not_valid() -> None:
-    result = _execute()(
-        _hass(), {"domain": "knx", "command": "knx/gone", "payload": {}}
-    )
-    assert result["status"] == "unavailable"
+    (schema,) = [
+        spec
+        for spec, _run, _prep in command_specs(_REAL_VOL)
+        if spec[_REAL_VOL.Required("type")] == INTEGRATION_COMMAND
+    ]
+    message = {"type": INTEGRATION_COMMAND, "domain": "knx"}
+    assert _REAL_VOL.Schema(schema)(message) == message
+    with pytest.raises(_REAL_VOL.Invalid):
+        _REAL_VOL.Schema(schema)({**message, "command": "knx/delete_entity"})
 
 
 def test_info_advertises_integration_commands() -> None:

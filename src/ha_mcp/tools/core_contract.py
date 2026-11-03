@@ -69,21 +69,13 @@ async def core_contract(
     )
 
 
-async def integration_commands(
-    client: Any,
-    domain: str,
-    command: str | None = None,
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """List ``domain``'s own WebSocket commands, or validate a call to one."""
-    params: dict[str, Any] = {"domain": domain}
-    if command is not None:
-        params.update(command=command, payload=payload or {})
+async def integration_commands(client: Any, domain: str) -> dict[str, Any]:
+    """List ``domain``'s own WebSocket commands with their request schemas."""
     return await _contract_bridge(
         client,
         "integration_commands",
-        params,
-        "the listing and validation of an integration's own WebSocket commands",
+        {"domain": domain},
+        "the listing of an integration's own WebSocket commands",
     )
 
 
