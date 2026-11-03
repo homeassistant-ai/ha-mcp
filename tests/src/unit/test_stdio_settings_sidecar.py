@@ -853,14 +853,13 @@ class TestSeedStateFromUrl:
 class TestMaybeSpawnGates:
     """``maybe_spawn`` short-circuits in the documented cases."""
 
-    def test_maybe_spawn_skips_when_disabled(
+    def test_maybe_spawn_retires_but_never_spawns_when_disabled(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Disabled means fully inert: no retire POST, no spawn.
+        """Disabling must stop a sidecar spawned before the switch was set (#2954).
 
-        The disabled check must run BEFORE the retire flow — a reorder
-        would have a deliberately disabled install still POSTing
-        /shutdown (and clearing the sentinel that records the disable).
+        The retire clears only a sentinel its own POST created, so a user's
+        Stop survives it (``test_preexisting_sentinel_survives_the_replace``).
         """
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
         with (
@@ -869,7 +868,7 @@ class TestMaybeSpawnGates:
         ):
             sidecar.maybe_spawn()
         popen.assert_not_called()
-        shutdown.assert_not_called()
+        shutdown.assert_called_once_with()
 
     def test_maybe_spawn_replaces_live_sidecar(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
