@@ -99,3 +99,24 @@ def test_run_story_dev_env_runs_against_the_environment(tmp_path, monkeypatch):
     assert (args.ha_url, args.mcp_url, args.ha_token) == (HA, MCP, TEST_TOKEN)
     # Each test prompt runs through mcp_config.py, which must reach the same server.
     assert args.extra_args[args.extra_args.index("--mcp-url") + 1] == MCP
+
+
+def test_claude_agent_gets_no_tools_or_settings_beyond_the_bat_server():
+    """A BAT agent must reach only the server under test: Claude's built-in
+    tools (shell, files, web) and the machine's settings and CLAUDE.md could
+    point it at another Home Assistant."""
+    from uat.run_uat import build_claude_cmd
+
+    cmd = build_claude_cmd("prompt", Path("mcp.json"))
+    # Claude Code's CLI: an empty --tools disables every built-in tool, and an
+    # empty --setting-sources loads no user, project or local settings.
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert cmd[cmd.index("--setting-sources") + 1] == ""
+    assert "--strict-mcp-config" in cmd
+
+
+def test_gemini_agent_gets_no_built_in_tools(tmp_path):
+    """Gemini CLI registers only the built-in tools ``tools.core`` lists."""
+    mcp_config.write_gemini_mcp_config(HA, "token", None, tmp_path, mcp_url=MCP)
+    settings = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+    assert settings["tools"]["core"] == []

@@ -334,6 +334,9 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
 def build_claude_cmd(
     prompt: str, mcp_config_path: Path, model: str = "sonnet"
 ) -> list[str]:
+    # The agent gets the BAT server's tools and nothing else: no built-in
+    # tools (shell, files, web) and no settings or CLAUDE.md from the machine
+    # running BAT, which could point it at another Home Assistant.
     return [
         "claude",
         "-p",
@@ -341,6 +344,10 @@ def build_claude_cmd(
         "--mcp-config",
         str(mcp_config_path),
         "--strict-mcp-config",
+        "--tools",
+        "",
+        "--setting-sources",
+        "",
         "--allowedTools",
         "mcp__home-assistant",
         "--output-format",

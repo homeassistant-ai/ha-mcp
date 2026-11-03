@@ -159,7 +159,9 @@ def write_gemini_mcp_config(
         cmd = mcp_server_command(branch)
         env = _build_mcp_env(ha_url, ha_token, extra_env)
         server = {"command": cmd[0], "args": cmd[1:], "env": env}
-    config = {"mcpServers": {"homeassistant": server}}
+    # An empty core-tool list registers none of Gemini's built-in tools (shell,
+    # files, web), so the agent can only use the BAT server.
+    config = {"mcpServers": {"homeassistant": server}, "tools": {"core": []}}
     (gemini_dir / "settings.json").write_text(json.dumps(config))
 
 
