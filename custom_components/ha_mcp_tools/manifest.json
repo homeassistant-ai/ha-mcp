@@ -12,6 +12,11 @@
         "network",
         "recorder"
     ],
+    "categories": [
+        "ai_voice",
+        "diy_makers",
+        "hubs_protocols"
+    ],
     "codeowners": [
         "@homeassistant-ai"
     ],
