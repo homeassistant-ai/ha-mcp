@@ -1,14 +1,14 @@
-"""The retries of ``scripts/translate_locales.py`` and its time budget.
+"""The retries, request pacing and time budget of ``scripts/translate_locales.py``.
 
 Every retryable failure in ``_call_gemini``, a transport error as much as an
 unusable answer, ends in one shared tail: stop after the fifth attempt, stop
 once the time budget is spent, otherwise wait and retry. The first tests drive
 it with a monkeypatched transport, through a transport error and a retryable
-HTTP status. The
-corrective retry ``_accept_or_retry`` asks for a rejected string runs only
-while the same budget lasts, and a run whose budget runs out between two
-requests stops there. Every test records the sleeps and runs on a stopped
-clock.
+HTTP status. The corrective retry ``_accept_or_retry`` asks for a rejected
+string runs only while the same budget lasts. Each chunk request is followed
+by a wait, answered or failed, while the budget lasts and the engine has not
+been given up on, and a run whose budget runs out between two requests stops
+there. Every test records the sleeps and runs on a stopped clock.
 """
 
 from __future__ import annotations
@@ -208,17 +208,21 @@ def test_failed_retry_fails_the_string_not_the_run(
     assert budget_note is crosses_deadline
 
 
+@pytest.mark.parametrize("first_call_fails", [False, True])
 def test_each_chunk_request_is_paced_while_the_budget_lasts(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], first_call_fails: bool
 ) -> None:
     """Unpaced chunk requests run into the engine's rate limit; while the
-    budget lasts, every answered chunk must be followed by a wait."""
+    budget lasts, every chunk request must be followed by a wait, a failed one
+    too: it can end on a rate-limit answer."""
     _deadline_in(monkeypatch, 3600)
     monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
     waits_before: list[int] = []
 
     def engine(_prompt: str) -> dict[str, str]:
         waits_before.append(len(sleeps))
+        if first_call_fails and len(waits_before) == 1:
+            raise SystemExit("Gemini API call failed: HTTP 429")
         return {"messages:greeting": "Hallo", "messages:farewell": "Tschüss"}
 
     monkeypatch.setattr(translate_locales, "_call_gemini", engine)
@@ -227,10 +231,50 @@ def test_each_chunk_request_is_paced_while_the_budget_lasts(
         translate_locales.WorkItem("de", "messages", "farewell", "Goodbye"),
     ]
     _, failures, _, _ = translate_locales._translate_locale("de", items)
-    assert failures == []
+    assert len(failures) == (1 if first_call_fails else 0)
     assert waits_before == [0, 1], "a wait between the requests"
     assert len(sleeps) == 2, "a wait after each request"
     assert all(delay > 0 for delay in sleeps), "a chunk request must be paced"
+
+
+def test_a_chunk_call_failing_past_the_deadline_skips_its_pacing_wait(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    """A failed chunk call can return after the deadline; its pacing wait then
+    paces no request, since the run stops on the budget."""
+    _deadline_in(monkeypatch, 3600)
+
+    def fails_past_the_deadline(_prompt: str) -> dict[str, str]:
+        _deadline_in(monkeypatch, -1)
+        raise SystemExit("Gemini API call failed: HTTP 503")
+
+    monkeypatch.setattr(translate_locales, "_call_gemini", fails_past_the_deadline)
+    items = [translate_locales.WorkItem("de", "messages", "greeting", "Hello")]
+    translate_locales._translate_locale("de", items)
+    assert sleeps == []
+
+
+def test_giving_up_on_the_engine_skips_the_pacing_wait(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    """The failed call that gives up on the engine stops the run's engine
+    calls, so a wait after it would pace no request."""
+    _deadline_in(monkeypatch, 3600)
+    monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
+    calls: list[str] = []
+
+    def engine(prompt: str) -> dict[str, str]:
+        calls.append(prompt)
+        raise SystemExit("Gemini API call failed: HTTP 503")
+
+    monkeypatch.setattr(translate_locales, "_call_gemini", engine)
+    items = [
+        translate_locales.WorkItem("de", "messages", key, "Hello")
+        for key in ("one", "two", "three")
+    ]
+    _, _, _, dead = translate_locales._translate_locale("de", items)
+    assert dead
+    assert len(sleeps) == len(calls) - 1, "no wait after the give-up failure"
 
 
 def test_budget_spent_mid_run_keeps_the_answers_and_stops(

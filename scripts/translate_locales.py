@@ -896,20 +896,20 @@ def _translate_surface(
             return True, consecutive_engine_failures
         try:
             response = _call_gemini(_prompt(locale, chunk, surface, queued_keys))
+            consecutive_engine_failures = 0
         except SystemExit as exc:
             consecutive_engine_failures += 1
+            reason = f"engine call failed ({exc})"
             for sid in chunk:
                 item = by_id[sid]
-                failures.append(
-                    f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
-                )
+                failures.append(f"{locale}/{item.section}/{item.key}: {reason}")
                 failed.add((item.section, item.key))
             if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
                 return True, consecutive_engine_failures
-            continue
-        consecutive_engine_failures = 0
         if not _out_of_time():  # past the deadline the wait paces no request
             time.sleep(_SECONDS_BETWEEN_REQUESTS)
+        if consecutive_engine_failures:  # the call failed: no answer to accept
+            continue
         for sid in chunk:
             _accept_or_retry(
                 locale,
