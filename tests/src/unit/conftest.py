@@ -347,7 +347,7 @@ def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def tool_search_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Serve the search catalog to connections that do not choose one."""
+    """Serve the search catalog on the main endpoint (``ENABLE_TOOL_SEARCH``)."""
     from ha_mcp.config import get_global_settings
 
     monkeypatch.setattr(get_global_settings(), "enable_tool_search", True)
