@@ -37,7 +37,8 @@ from .server_tool_text import (
 from .tool_catalog import (
     CATALOG_MODES,
     default_catalog_mode,
-    install_catalog_negotiation,
+    install_catalog_instructions,
+    mark_search_unavailable,
 )
 from .tools.helpers import raise_tool_error
 from .tools.tool_hints import read_only_hints
@@ -520,23 +521,25 @@ class HomeAssistantSmartMCPServer:
             logger.exception("Failed to apply SearchKeywordsTransform")
 
     def _apply_tool_search(self) -> None:
-        """Install the CategorizedSearchTransform and catalog negotiation.
+        """Install the CategorizedSearchTransform and per-endpoint instructions.
 
-        For connections in search mode (see ``tool_catalog``), replaces the
-        full tool catalog with a unified BM25 search tool and
-        three categorized call proxies (read/write/delete). Pinned tools
-        remain directly visible in list_tools() for individual permission
-        gating. The ``ha_get_skill_guide`` tool is pinned via
-        ``DEFAULT_PINNED_TOOLS`` (transforms/categorized_search.py) so the
-        bundled skill trigger-conditions stay in the catalog — no explicit
-        ``pinned.append(...)`` for it here.
-
-        Note: ``_apply_search_keyword_enrichment`` already ran before this
-        method and installed ``SearchKeywordsTransform`` — the enriched
+        For endpoints in search mode (see ``tool_catalog``), replaces the full
+        catalog with a BM25 search tool and read/write/delete call proxies.
+        Pinned tools, ``ha_get_skill_guide`` among them via
+        ``DEFAULT_PINNED_TOOLS``, stay directly visible for permission gating.
+        ``_apply_search_keyword_enrichment`` already ran, so the enriched
         catalog is what the categorized transform indexes.
         """
-        install_catalog_negotiation(self.mcp, self._instructions)
-        from .transforms import CategorizedSearchTransform
+        try:
+            from .transforms import CategorizedSearchTransform
+        except ImportError:
+            logger.error(
+                "CategorizedSearchTransform not available — every endpoint "
+                "serves the full tool catalog. Install fastmcp>=3.1 to fix."
+            )
+            mark_search_unavailable()
+            return
+        install_catalog_instructions(self.mcp, self._instructions)
 
         # Build the always_visible list: defaults (minus tools the user
         # explicitly toggled to "enabled" in the Tools tab) + user pins.

@@ -1,10 +1,11 @@
-"""One server gives each connection the tool catalog it negotiated."""
+"""Each endpoint URL serves one fixed tool catalog."""
 
 import json
 
 import pytest
 from starlette.testclient import TestClient
 
+from ha_mcp import tool_catalog
 from ha_mcp._vendor import fastmcp
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp_types import (
@@ -15,10 +16,9 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.http_transport import HttpTransportFastMCP
 from ha_mcp.read_only import ReadOnlyToolsTransform
 from ha_mcp.tool_catalog import (
-    TOOL_CATALOG_EXTENSION_ID,
-    ToolCatalogExtension,
     ToolCatalogInstructionsMiddleware,
     catalog_endpoint,
+    tool_search_active,
 )
 from ha_mcp.transforms.categorized_search import (
     CategorizedSearchTransform,
@@ -69,7 +69,6 @@ def _server() -> HttpTransportFastMCP:
 
     mcp.add_transform(ReadOnlyToolsTransform())
     mcp.add_transform(CategorizedSearchTransform())
-    mcp.add_extension(ToolCatalogExtension())
     mcp.add_middleware(ToolCatalogInstructionsMiddleware(lambda mode: f"{mode} text"))
     return mcp
 
@@ -117,7 +116,8 @@ def _initialize(client, path, capabilities):
 
 
 def _extension(mode):
-    return {"extensions": {TOOL_CATALOG_EXTENSION_ID: {"mode": mode}}}
+    """A client capability asking for a catalog, which the server ignores."""
+    return {"extensions": {"io.github.homeassistant-ai/tool-catalog": {"mode": mode}}}
 
 
 def _modern_params(capabilities):
@@ -159,60 +159,32 @@ def test_server_default_applies_and_endpoint_overrides_it():
         assert _tool_names(client, "/mcp/catalog/full") == FULL
 
 
-def test_initialize_capability_selects_the_session_catalog_and_instructions():
-    app = _server().http_app(path="/mcp")
+ENDPOINT_MODES = (
+    ("/mcp", "full"),
+    ("/mcp/catalog/search", "search"),
+    ("/mcp/readonly/catalog/search", "search"),
+)
+
+
+@pytest.mark.parametrize("stateless", [False, True])
+def test_initialize_describes_the_endpoints_catalog(stateless):
+    """Client capabilities never change the catalog: clients do not refresh
+    their tool list, so only the URL may choose it."""
+    app = _server().http_app(path="/mcp", stateless_http=stateless)
     with TestClient(app) as client:
-        result, session = _initialize(client, "/mcp/catalog/search", _extension("full"))
-        assert result["instructions"] == "full text"
-        assert _tool_names(client, "/mcp/catalog/search", headers=session) == FULL
+        for path, mode in ENDPOINT_MODES:
+            other = "full" if mode == "search" else "search"
+            result, session = _initialize(client, path, _extension(other))
+            assert result["instructions"] == f"{mode} text"
+            names = _tool_names(client, path, headers=session)
+            assert ("ha_search_tools" in names) == (mode == "search")
 
-        result, session = _initialize(client, "/mcp/catalog/search", {})
-        assert result["instructions"] == "search text"
-        assert _tool_names(client, "/mcp/catalog/search", headers=session) == SEARCH
 
-
-def test_stateless_http_describes_the_catalog_later_requests_get():
-    """Stateless HTTP forgets initialize capabilities, so they must not
-    change the instructions either: those would promise the wrong tools."""
+def test_discover_describes_the_endpoints_catalog():
     app = _server().http_app(path="/mcp", stateless_http=True)
     with TestClient(app) as client:
-        result, _ = _initialize(client, "/mcp", _extension("search"))
-        assert result["instructions"] == "full text"
-        assert _tool_names(client, "/mcp") == FULL
-        result, _ = _initialize(client, "/mcp/catalog/search", _extension("full"))
-        assert result["instructions"] == "search text"
-        assert _tool_names(client, "/mcp/catalog/search") == SEARCH
-
-
-def test_unknown_client_mode_falls_back_to_the_connection_default():
-    app = _server().http_app(path="/mcp")
-    with TestClient(app) as client:
-        result, session = _initialize(client, "/mcp", _extension("everything"))
-        assert result["instructions"] == "full text"
-        assert _tool_names(client, "/mcp", headers=session) == FULL
-
-
-def test_per_request_meta_selects_the_catalog():
-    """Protocol 2026-07-28 repeats client capabilities in each request."""
-    app = _server().http_app(path="/mcp", stateless_http=True)
-    with TestClient(app) as client:
-        for capabilities, expected in (
-            (_extension("search"), SEARCH),
-            ({}, FULL),
-        ):
-            names = _tool_names(
-                client,
-                "/mcp",
-                _modern_params(capabilities),
-                _modern_headers("tools/list"),
-            )
-            assert names == expected
-
-
-def test_discover_advertises_modes_and_the_connection_default():
-    app = _server().http_app(path="/mcp", stateless_http=True)
-    with TestClient(app) as client:
-        for path, default in (("/mcp", "full"), ("/mcp/catalog/search", "search")):
+        for path, mode in ENDPOINT_MODES:
+            other = "full" if mode == "search" else "search"
             _response, reply = _post(
                 client,
                 path,
@@ -220,16 +192,45 @@ def test_discover_advertises_modes_and_the_connection_default():
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "server/discover",
-                    "params": _modern_params({}),
+                    "params": _modern_params(_extension(other)),
                 },
                 _modern_headers("server/discover"),
             )
-            result = reply["result"]
-            assert result["capabilities"]["extensions"][TOOL_CATALOG_EXTENSION_ID] == {
-                "modes": ["full", "search"],
-                "default": default,
-            }
-            assert result["instructions"] == f"{default} text"
+            assert reply["result"]["instructions"] == f"{mode} text"
+            names = _tool_names(
+                client,
+                path,
+                _modern_params(_extension(other)),
+                _modern_headers("tools/list"),
+            )
+            assert ("ha_search_tools" in names) == (mode == "search")
+
+
+def test_missing_search_transform_serves_the_full_catalog_everywhere(monkeypatch):
+    """Without the transform, a search URL must not promise search tools."""
+    from ha_mcp import transforms
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    monkeypatch.setattr(tool_catalog, "_search_available", True)
+    monkeypatch.delattr(transforms, "CategorizedSearchTransform")
+    get_global_settings().enable_tool_search = True
+    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
+    srv.settings = get_global_settings()
+    srv.mcp = mcp = HttpTransportFastMCP("no search")
+    srv._instructions = {"full": "full text", "search": "search text"}
+    srv._user_enabled_tools, srv._user_pinned_tools = set(), []
+    mcp.tool(annotations={"readOnlyHint": True})(read_tool)
+    srv._apply_tool_search()
+    with catalog_endpoint("search"):
+        assert not tool_search_active()
+    app = mcp.http_app(path="/mcp", stateless_http=True)
+    with TestClient(app) as client:
+        for path in ("/mcp", "/mcp/catalog/search"):
+            assert _tool_names(client, path) == {"read_tool"}
+
+
+def read_tool() -> str:
+    return "read succeeded"
 
 
 async def test_full_catalog_connection_keeps_its_tools_and_descriptions():

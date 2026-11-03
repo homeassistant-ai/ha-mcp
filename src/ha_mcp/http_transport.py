@@ -115,12 +115,7 @@ class HttpTransportFastMCP(FastMCP):
                 kwargs["middleware"] = middleware
         app = super().http_app(*args, **kwargs)
         if app.state.transport_type == "streamable-http":
-            stateless = kwargs.get("stateless_http", args[3] if len(args) > 3 else None)
-            if stateless is None:
-                stateless = fastmcp.settings.stateless_http
-            app.add_middleware(
-                EndpointSelectors, path=app.state.path, stateless=stateless
-            )
+            app.add_middleware(EndpointSelectors, path=app.state.path)
         return app
 
 
@@ -128,17 +123,16 @@ class EndpointSelectors:
     """Route connection-selecting suffixes through the same authenticated MCP app.
 
     ``/readonly`` restricts the connection to reads; ``/catalog/full`` and
-    ``/catalog/search`` choose its tool catalog mode. A connection may use
-    both, read-only first (``/readonly/catalog/search``). The credential
+    ``/catalog/search`` fix its tool catalog. A connection may use both,
+    read-only first (``/readonly/catalog/search``). The credential
     still works at the normal endpoint. Settings and other HTTP routes are
     not aliased.
     """
 
-    def __init__(self, app: ASGIApp, path: str, *, stateless: bool) -> None:
+    def __init__(self, app: ASGIApp, path: str) -> None:
         self.app = app
         self.path = path
         self.base = path.rstrip("/")
-        self.stateless = stateless
 
     def _selectors(self, route_path: str) -> tuple[bool, CatalogMode | None] | None:
         """``(read_only, catalog_mode)`` for a selector suffix, else None."""
@@ -159,20 +153,18 @@ class EndpointSelectors:
             await self.app(scope, receive, send)
             return
         from .read_only import read_only_request
-        from .tool_catalog import catalog_endpoint, stateless_request
+        from .tool_catalog import catalog_endpoint
 
         route_path = _get_route_path(scope)
         selected = self._selectors(route_path.rstrip("/"))
+        if selected is None:
+            await self.app(scope, receive, send)
+            return
+        read_only, mode = selected
+        prefix = scope["path"][: -len(route_path)]
+        path = prefix + self.path
+        scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
         with ExitStack() as stack:
-            if self.stateless:
-                stack.enter_context(stateless_request())
-            if selected is None:
-                await self.app(scope, receive, send)
-                return
-            read_only, mode = selected
-            prefix = scope["path"][: -len(route_path)]
-            path = prefix + self.path
-            scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
             if read_only:
                 stack.enter_context(read_only_request())
             if mode is not None:
