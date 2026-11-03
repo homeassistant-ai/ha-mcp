@@ -35,7 +35,10 @@ README_END_MARKER = "<!-- TOOLS_TABLE_END -->"
 DOCS_START_MARKER = "<!-- ADDON_TOOLS_START -->"
 DOCS_END_MARKER = "<!-- ADDON_TOOLS_END -->"
 
-TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py"])
+TOOL_FILES = sorted(
+    list(TOOLS_DIR.glob("tools_*.py"))
+    + [TOOLS_DIR / "backup.py", TOOLS_DIR / "event_call.py"]
+)
 
 ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
@@ -476,7 +479,10 @@ def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
     if not isinstance(slice_node, ast.Tuple) or not slice_node.elts:
         return info
 
-    info["type"] = ast.unparse(slice_node.elts[0])
+    # The type may carry metadata of its own: ``Annotated[Annotated[list[X],
+    # Field(min_length=1)] | None, Field(description=...)]`` bounds the list
+    # branch (pydantic's minItems) and describes the whole parameter.
+    info.update(_extract_field_info(slice_node.elts[0], scope))
     # Everything after the type is metadata, but only ``Field(...)`` carries
     # keywords this catalog describes. A bare validator (JSON_STRING_COERCION)
     # is a name rather than a call; another metadata call's keywords are its
@@ -874,28 +880,20 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
     )
     new_block = f"<details>\n{table}\n</details>"
 
-    if pattern.search(readme):
-        readme = pattern.sub(new_block, readme)
-    else:
-        old_pattern = re.compile(
-            r"<details>\s*\n<summary><b>[^<]*Complete Tool List[^<]*</b></summary>.*?</details>",
-            re.DOTALL,
+    readme, replaced = pattern.subn(new_block, readme)
+    if not replaced:
+        # Not a warning: returning the content unchanged made ``--check``
+        # report "All files in sync" on the very failure it had just
+        # printed, because an unchanged return compares equal to the file
+        # it came from. Losing the markers means the table can no longer be
+        # regenerated at all, which is the loudest thing this script has to
+        # say.
+        raise ValueError(
+            f"{README_PATH.name} needs the tool-table markers "
+            f"({README_START_MARKER!r} / {README_END_MARKER!r}) directly inside "
+            "a <details> ... </details> block; restore them so the table can "
+            "be regenerated"
         )
-        if old_pattern.search(readme):
-            readme = old_pattern.sub(new_block, readme)
-        else:
-            # Not a warning: returning the content unchanged made ``--check``
-            # report "All files in sync" on the very failure it had just
-            # printed, because an unchanged return compares equal to the file
-            # it came from. Losing the markers means the table can no longer be
-            # regenerated at all, which is the loudest thing this script has to
-            # say.
-            raise ValueError(
-                f"{README_PATH.name} is missing the tool-table markers "
-                f"({README_START_MARKER!r} / {README_END_MARKER!r}) and no "
-                "legacy Complete Tool List block was found; restore them so "
-                "the table can be regenerated"
-            )
 
     readme = re.sub(r"tools-[^-]+-blue", f"tools-{count}-blue", readme)
     return readme

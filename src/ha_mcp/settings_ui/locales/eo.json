@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count} sekurkopio(-j) estas uzata(-j). Provu denove post kiam la aktiva kapto aŭ restarigo finiĝos.",
     "backup.bulk.unknown": "Ne eblis konfirmi la rezulton de la forigo. Kontrolu la liston de sekurkopioj antaŭ ol provi denove.",
     "filesystem.custom.title": "Propraj dosiersistemaj vojoj (disvolvita)",
-    "filesystem.custom.help": "Kromaj vojoj (unu po linio), kiujn dosieraj iloj rajtas <strong>legi kaj skribi</strong>. Agord-rilataj vojoj, inkluzive de ekzaktaj dosiernomoj kiel <code>sensor.yaml</code>, kaj vojoj sub <code>/share</code>, <code>/media</code>, <code>/ssl</code>, kaj <code>/backup</code> estas subtenataj. Ĉiu eniro permesas tiun vojon kaj ĉion sub ĝi. Eniroj estas komparataj laŭvorte; ĵokeroj kiel <code>*</code> ne estas subtenataj. Vi ankaŭ povas administri ĉi tiujn vojojn en Home Assistant sub Agordoj → Aparatoj kaj Servoj → HA-MCP Custom Component → HA-MCP File & YAML Tools → Agordi; ambaŭ lokoj redaktas la saman agordon kaj tuj aplikas ŝanĝojn.",
+    "filesystem.custom.help": "Kromaj vojoj (po unu en ĉiu linio) kiujn dosieraj iloj povas <strong>legi kaj skribi</strong>. Agord-rilataj vojoj, inkluzive de ekzakta dosiernomo kiel <code>sensor.yaml</code>, kaj vojoj sub <code>/share</code>, <code>/media</code>, kaj <code>/ssl</code> (nur-legeblaj en HAOS kaj Supervised) estas subtenataj. Ĉiu eniro permesas tiun vojon kaj ĉion sub ĝi. Eniroj estas kongruigitaj laŭlitere; sovaĝaj signoj kiel <code>*</code> ne estas subtenataj. Vi ankaŭ povas administri ĉi tiujn vojojn en Home Assistant sub Agordoj → Aparatoj kaj Servoj → HA-MCP Custom Component → HA-MCP File & YAML Tools → Agordi; ambaŭ lokoj redaktas la saman agordon kaj tuj aplikas ŝanĝojn.",
     "filesystem.custom.blocked": "Ĉiam blokita: {paths}, trairo de vojo (<code>..</code>), kaj absolutaj vojoj ekster permesitaj HAOS-volumoj.",
     "filesystem.custom.enable_first": "Ebligu beta-funkciojn kaj dosiersistemajn ilojn supre por redakti.",
     "filesystem.custom.unavailable": "Propraj vojoj nuntempe ne disponeblas.",
@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "Akiri Aŭtomatigan Agordon",
-      "description": "Akiri la agordon de aŭtomatigo de Home Assistant."
+      "description": "Akiri la konservitan agordon de Home Assistant aŭtomatigo."
     },
     "ha_config_get_calendar_events": {
       "title": "Akiri Kalendarajn Eventojn",

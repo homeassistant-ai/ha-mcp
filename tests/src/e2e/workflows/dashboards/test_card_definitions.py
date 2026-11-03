@@ -86,6 +86,7 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
             "ha_config_set_dashboard",
             {
                 "url_path": path,
+                "title": "E2E Dashboard",
                 "config": {
                     "views": [
                         {"title": "Checks", "cards": cards},
@@ -206,6 +207,7 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(
             "ha_config_set_dashboard",
             {
                 "url_path": path,
+                "title": "E2E Dashboard",
                 "config": {"views": [{"title": "Custom", "cards": cards}]},
                 "MandatoryBPS": False,
             },
@@ -348,6 +350,7 @@ async def test_componentless_writes_keep_static_card_guidance(mcp_client):
             "ha_config_set_dashboard",
             {
                 "url_path": path,
+                "title": "E2E Dashboard",
                 "config": {"views": [{"title": "Guide", "path": "guide", "cards": []}]},
                 "MandatoryBPS": True,
             },
@@ -397,6 +400,7 @@ async def test_common_card_coverage_tracks_the_installed_frontend(
             "ha_config_set_dashboard",
             {
                 "url_path": path,
+                "title": "E2E Dashboard",
                 "config": {
                     "views": [
                         {
@@ -478,6 +482,7 @@ async def test_described_fields_match_stored_card_configuration(mcp_client):
             "ha_config_set_dashboard",
             {
                 "url_path": path,
+                "title": "E2E Dashboard",
                 "config": {
                     "views": [
                         {
@@ -596,7 +601,12 @@ async def test_editor_advice_does_not_claim_valid_runtime_options_are_invalid(
     try:
         saved = await mcp.call_tool_success(
             "ha_config_set_dashboard",
-            {"url_path": path, "config": config, "MandatoryBPS": False},
+            {
+                "url_path": path,
+                "title": "E2E Dashboard",
+                "config": config,
+                "MandatoryBPS": False,
+            },
         )
         assert all(
             "editor schema advisory; runtime support may differ" in warning

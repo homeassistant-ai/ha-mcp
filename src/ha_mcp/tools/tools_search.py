@@ -647,17 +647,17 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
                 ),
             }
 
-        # Surface the stdio settings UI sidecar URL when a URL file is present.
+        # Surface the stdio settings UI sidecar URL while a sidecar serves it.
         # Added *after* ``project_fields`` so it survives every ``fields=`` projection
         # (issue #863).
-        from ..stdio_settings_sidecar import read_sidecar_url
+        from ..stdio_settings_sidecar import live_sidecar_url
 
         projected = project_fields(
             result,
             parsed_fields,
             available_fields=_OVERVIEW_AVAILABLE_FIELDS,
         )
-        sidecar_url = read_sidecar_url()
+        sidecar_url = live_sidecar_url()
         if sidecar_url:
             projected["settings_url"] = sidecar_url
         else:

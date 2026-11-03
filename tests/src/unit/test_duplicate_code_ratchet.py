@@ -272,9 +272,9 @@ class Store:
 
 
 @pytest.fixture
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def temp_repo(tmp_path: Path) -> Path:
     """An empty git repository with no exclusions and an empty baseline."""
-    return make_ratchet_repo(tmp_path, monkeypatch, ratchet.BASELINE_NAME)
+    return make_ratchet_repo(tmp_path, ratchet.BASELINE_NAME)
 
 
 def _stage(repo: Path, path: str, content: bytes) -> None:

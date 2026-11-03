@@ -4,8 +4,8 @@
 The stable (``homeassistant-addon-webhook-proxy``) and dev
 (``homeassistant-addon-webhook-proxy-dev``) flavors are a hand-maintained
 duplicate: the same code with a fixed *identity* rewrite between them. This
-module encodes that identity as two :class:`Flavor` profiles that are exact
-inverses of each other, and applies it mechanically:
+module encodes that identity as two :class:`Flavor` profiles, each naming the
+other as its sibling, and applies it mechanically:
 
 * ``--direction promote``  copies dev -> stable (SRC=dev, DST=stable)
 * ``--direction reset``    copies stable -> dev (SRC=stable, DST=dev)
@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
-# Flavor identity profiles (exact inverses of each other)
+# Flavor identity profiles (each one's sibling is the other)
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Flavor:
@@ -54,18 +55,18 @@ class Flavor:
     config_description: str
     boot: str
     stage: str | None
-    sibling_slug_base: str
     mutex_notification_id: str
-    sibling_mutex_notification_id: str
+    # Not derivable from the other profile: no field there carries the short
+    # label ("Webhook Proxy" / "Webhook Proxy (Dev)") start.py uses for it.
     sibling_label: str
     async_register_name: str
     dockerfile_hass_name: str
     dockerfile_hass_description: str
     manifest_name: str
     # The flavor-descriptor comment in start.py flips like the mutex constants:
-    # "This is the {flavor_word} flavor: its sibling is the {sibling_word} add-on."
+    # "This is the {flavor_word} flavor: its sibling is the <sibling's
+    # flavor_word, lowercased> add-on."
     flavor_word: str
-    sibling_word: str
 
 
 STABLE = Flavor(
@@ -79,16 +80,13 @@ STABLE = Flavor(
     ),
     boot="auto",
     stage=None,
-    sibling_slug_base="ha_mcp_webhook_proxy_dev",
     mutex_notification_id="mcp_proxy_mutex",
-    sibling_mutex_notification_id="mcp_proxy_dev_mutex",
     sibling_label="Webhook Proxy (Dev)",
     async_register_name="MCP Proxy",
     dockerfile_hass_name="Nabu Casa - Webhook Proxy for HA MCP",
     dockerfile_hass_description="Remote access proxy for HA MCP via webhook",
     manifest_name="MCP Webhook Proxy",
     flavor_word="STABLE",
-    sibling_word="dev",
 )
 
 DEV = Flavor(
@@ -102,16 +100,13 @@ DEV = Flavor(
     ),
     boot="manual",
     stage="experimental",
-    sibling_slug_base="ha_mcp_webhook_proxy",
     mutex_notification_id="mcp_proxy_dev_mutex",
-    sibling_mutex_notification_id="mcp_proxy_mutex",
     sibling_label="Webhook Proxy",
     async_register_name="MCP Proxy (Dev)",
     dockerfile_hass_name="Nabu Casa - Webhook Proxy for HA MCP (Dev)",
     dockerfile_hass_description="DEV channel — remote access proxy for HA MCP via webhook",
     manifest_name="MCP Webhook Proxy (Dev)",
     flavor_word="DEV",
-    sibling_word="stable",
 )
 
 
@@ -203,35 +198,21 @@ def apply_start_py_identity(text: str, dst: Flavor) -> str:
     The four mutual-exclusion constants and the flavor-descriptor comment do
     NOT follow the blanket rename (the sibling relationship flips), so each is
     rewritten explicitly and robustly regardless of what the rename produced.
+    The sibling's slug, mutex id and flavor word come from the other profile;
+    ``SIBLING_LABEL`` comes from ``dst.sibling_label``.
     """
-    text = re.sub(
-        r'^SIBLING_SLUG_BASE = "[^"]*"',
-        f'SIBLING_SLUG_BASE = "{dst.sibling_slug_base}"',
-        text,
-        flags=re.M,
-    )
-    text = re.sub(
-        r'^MUTEX_NOTIFICATION_ID = "[^"]*"',
-        f'MUTEX_NOTIFICATION_ID = "{dst.mutex_notification_id}"',
-        text,
-        flags=re.M,
-    )
-    text = re.sub(
-        r'^SIBLING_MUTEX_NOTIFICATION_ID = "[^"]*"',
-        f'SIBLING_MUTEX_NOTIFICATION_ID = "{dst.sibling_mutex_notification_id}"',
-        text,
-        flags=re.M,
-    )
-    text = re.sub(
-        r'^SIBLING_LABEL = "[^"]*"',
-        f'SIBLING_LABEL = "{dst.sibling_label}"',
-        text,
-        flags=re.M,
-    )
+    sibling = DEV if dst is STABLE else STABLE
+    for name, value in (
+        ("SIBLING_SLUG_BASE", sibling.slug),
+        ("MUTEX_NOTIFICATION_ID", dst.mutex_notification_id),
+        ("SIBLING_MUTEX_NOTIFICATION_ID", sibling.mutex_notification_id),
+        ("SIBLING_LABEL", dst.sibling_label),
+    ):
+        text = re.sub(rf'^{name} = "[^"]*"', f'{name} = "{value}"', text, flags=re.M)
     text = re.sub(
         r"# This is the \w+ flavor: its sibling is the \w+ add-on\.",
         f"# This is the {dst.flavor_word} flavor: its sibling is the "
-        f"{dst.sibling_word} add-on.",
+        f"{sibling.flavor_word.lower()} add-on.",
         text,
     )
     return text
@@ -248,16 +229,11 @@ def apply_async_register_name(text: str, dst: Flavor) -> str:
 
 def apply_dockerfile_labels(text: str, dst: Flavor) -> str:
     """Set the two ``io.hass.*`` labels (the COPY line is handled by rename)."""
-    text = re.sub(
-        r'io\.hass\.name="[^"]*"',
-        f'io.hass.name="{dst.dockerfile_hass_name}"',
-        text,
-    )
-    text = re.sub(
-        r'io\.hass\.description="[^"]*"',
-        f'io.hass.description="{dst.dockerfile_hass_description}"',
-        text,
-    )
+    for label, value in (
+        ("name", dst.dockerfile_hass_name),
+        ("description", dst.dockerfile_hass_description),
+    ):
+        text = re.sub(rf'io\.hass\.{label}="[^"]*"', f'io.hass.{label}="{value}"', text)
     return text
 
 
@@ -316,22 +292,13 @@ def transform_docs(src_text: str, src: Flavor, dst: Flavor) -> str:
 
 def apply_manifest(text: str, dst: Flavor, version: str) -> str:
     """Set ``domain``/``name``/``version`` in the component manifest.json."""
-    text = re.sub(
-        r'("domain":\s*")[^"]*(")',
-        lambda m: m.group(1) + dst.component + m.group(2),
+    values = {"domain": dst.component, "name": dst.manifest_name, "version": version}
+    # Lambda replacement: the value is literal text, not a regex template.
+    return re.sub(
+        r'("(domain|name|version)":\s*")[^"]*(")',
+        lambda m: m.group(1) + values[m.group(2)] + m.group(3),
         text,
     )
-    text = re.sub(
-        r'("name":\s*")[^"]*(")',
-        lambda m: m.group(1) + dst.manifest_name + m.group(2),
-        text,
-    )
-    text = re.sub(
-        r'("version":\s*")[^"]*(")',
-        lambda m: m.group(1) + version + m.group(2),
-        text,
-    )
-    return text
 
 
 def transform_config_yaml(src_text: str, dst: Flavor, version: str) -> str:
@@ -376,20 +343,6 @@ def transform_config_yaml(src_text: str, dst: Flavor, version: str) -> str:
     return "\n".join(lines)
 
 
-def profiles_are_inverse(a: Flavor, b: Flavor) -> bool:
-    """True if two flavor profiles are exact identity inverses of each other."""
-    return (
-        a.slug == b.sibling_slug_base
-        and b.slug == a.sibling_slug_base
-        and a.mutex_notification_id == b.sibling_mutex_notification_id
-        and b.mutex_notification_id == a.sibling_mutex_notification_id
-        and a.flavor_word.lower() == b.sibling_word
-        and b.flavor_word.lower() == a.sibling_word
-        and a.sibling_label != b.sibling_label
-        and a.component != b.component
-    )
-
-
 # ---------------------------------------------------------------------------
 # Orchestration (filesystem I/O)
 # ---------------------------------------------------------------------------
@@ -416,6 +369,10 @@ def _ruff_format(paths: list[Path], root: Path) -> None:
     )
 
 
+def _edit(path: Path, transform: Callable[[str], str]) -> None:
+    path.write_text(transform(path.read_text(encoding="utf-8")), encoding="utf-8")
+
+
 def rebase_dev_version(new_stable: str, root: Path = REPO_ROOT) -> str:
     """Rewrite the dev flavor's version files onto ``new_stable``'s line.
 
@@ -428,15 +385,10 @@ def rebase_dev_version(new_stable: str, root: Path = REPO_ROOT) -> str:
     """
     dev_dir = root / DEV.addon_dir
     new_dev = reset_version(_read_config_version(dev_dir / "config.yaml"), new_stable)
-    config_yaml = dev_dir / "config.yaml"
-    config_yaml.write_text(
-        transform_config_yaml(config_yaml.read_text(encoding="utf-8"), DEV, new_dev),
-        encoding="utf-8",
-    )
-    manifest = dev_dir / DEV.component / "manifest.json"
-    manifest.write_text(
-        apply_manifest(manifest.read_text(encoding="utf-8"), DEV, new_dev),
-        encoding="utf-8",
+    _edit(dev_dir / "config.yaml", lambda t: transform_config_yaml(t, DEV, new_dev))
+    _edit(
+        dev_dir / DEV.component / "manifest.json",
+        lambda t: apply_manifest(t, DEV, new_dev),
     )
     return new_dev
 
@@ -497,24 +449,14 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
         if p.is_file() and "__pycache__" not in p.parts
     ]
     for path in rename_targets:
-        original = path.read_text(encoding="utf-8")
-        path.write_text(
-            rename_tokens(original, src.component, dst.component), encoding="utf-8"
-        )
+        _edit(path, lambda t: rename_tokens(t, src.component, dst.component))
 
     # 3. Overwrite the flip-affected identity in start.py.
     start_py = dst_dir / "start.py"
-    start_py.write_text(
-        apply_start_py_identity(start_py.read_text(encoding="utf-8"), dst),
-        encoding="utf-8",
-    )
+    _edit(start_py, lambda t: apply_start_py_identity(t, dst))
 
     # 4. Overwrite the async_register display name.
-    init_py = dst_comp / "__init__.py"
-    init_py.write_text(
-        apply_async_register_name(init_py.read_text(encoding="utf-8"), dst),
-        encoding="utf-8",
-    )
+    _edit(dst_comp / "__init__.py", lambda t: apply_async_register_name(t, dst))
 
     # 5. Rebuild config.yaml from SRC + DST identity + version.
     config_yaml = dst_dir / "config.yaml"
@@ -526,18 +468,10 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
     )
 
     # 6. Set the Dockerfile labels.
-    dockerfile = dst_dir / "Dockerfile"
-    dockerfile.write_text(
-        apply_dockerfile_labels(dockerfile.read_text(encoding="utf-8"), dst),
-        encoding="utf-8",
-    )
+    _edit(dst_dir / "Dockerfile", lambda t: apply_dockerfile_labels(t, dst))
 
     # 7. Set manifest domain/name/version.
-    manifest = dst_comp / "manifest.json"
-    manifest.write_text(
-        apply_manifest(manifest.read_text(encoding="utf-8"), dst, version),
-        encoding="utf-8",
-    )
+    _edit(dst_comp / "manifest.json", lambda t: apply_manifest(t, dst, version))
 
     # Re-wrap .py lines whose length crossed 88 cols due to the token swap.
     _ruff_format([start_py, *sorted(dst_comp.rglob("*.py"))], root)

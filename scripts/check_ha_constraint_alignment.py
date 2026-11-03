@@ -200,15 +200,13 @@ def _fetch_constraints(ha_version: str) -> str | None:
                 )
                 raise SystemExit(1) from err
             last_error = err
-            if attempt < _FETCH_ATTEMPTS - 1:
-                time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
         except (urllib.error.URLError, OSError) as err:
             last_error = err
-            if attempt < _FETCH_ATTEMPTS - 1:
-                # No sleep after the final attempt — it would only push the
-                # worst case past the job's own timeout, turning a clean
-                # exit 2 into an opaque runner kill.
-                time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
+        if attempt < _FETCH_ATTEMPTS - 1:
+            # No sleep after the final attempt — it would only push the
+            # worst case past the job's own timeout, turning the clean
+            # fail-open exit into an opaque runner kill.
+            time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
     print(f"ERROR: could not fetch {url}: {last_error}", file=sys.stderr)
     return None
 

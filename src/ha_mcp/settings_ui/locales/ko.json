@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count}개의 백업이 사용 중입니다. 활성 캡처 또는 복원이 완료된 후 다시 시도하세요.",
     "backup.bulk.unknown": "삭제 결과를 확인할 수 없습니다. 다시 시도하기 전에 백업 목록을 확인하세요.",
     "filesystem.custom.title": "사용자 지정 파일 시스템 경로 (고급)",
-    "filesystem.custom.help": "파일 도구가 <strong>읽고 쓸 수 있는</strong> 추가 경로입니다(줄당 하나씩 입력). 정확한 파일 이름(<code>sensor.yaml</code> 등)을 포함한 설정 상대 경로와 <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> 하위 경로가 지원됩니다. 각 항목은 해당 경로와 그 하위의 모든 항목을 허용합니다. 항목은 문자 그대로 일치하며 <code>*</code> 같은 와일드카드는 지원되지 않습니다. 홈 아시스턴트의 설정 → 기기 및 서비스 → HA-MCP 사용자 정의 구성 요소 → HA-MCP 파일 및 YAML 도구 → 구성에서도 이 경로들을 관리할 수 있으며, 두 위치 모두 동일한 설정을 편집하고 즉시 변경 사항이 적용됩니다.",
+    "filesystem.custom.help": "파일 도구가 <strong>읽고 쓸 수 있는</strong> 추가 경로입니다(줄당 하나). <code>sensor.yaml</code>과 같은 정확한 파일 이름을 포함하여 설정 상대 경로와 <code>/share</code>, <code>/media</code>, <code>/ssl</code>(HAOS 및 Supervised에서는 읽기 전용) 아래의 경로가 지원됩니다. 각 항목은 해당 경로 및 그 하위의 모든 경로를 허용합니다. 항목은 문자 그대로 일치하며 <code>*</code>과 같은 와일드카드는 지원되지 않습니다. Home Assistant의 설정 → 기기 및 서비스 → HA-MCP 커스텀 구성 요소 → HA-MCP File & YAML Tools → 구성에서도 이 경로들을 관리할 수 있습니다. 두 위치 모두 동일한 설정을 편집하며 변경 사항이 즉시 적용됩니다.",
     "filesystem.custom.blocked": "항상 차단됨: {paths}, 경로 탈출(<code>..</code>), 허용된 HAOS 볼륨 밖의 절대 경로.",
     "filesystem.custom.enable_first": "편집하려면 위에서 베타 기능과 파일 시스템 도구를 켜세요.",
     "filesystem.custom.unavailable": "현재 사용자 지정 경로를 사용할 수 없습니다.",
@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "자동화 설정 조회",
-      "description": "Home Assistant 자동화 구성을 가져옵니다."
+      "description": "Home Assistant 자동화의 저장된 설정을 가져옵니다."
     },
     "ha_config_get_calendar_events": {
       "title": "캘린더 일정 조회",

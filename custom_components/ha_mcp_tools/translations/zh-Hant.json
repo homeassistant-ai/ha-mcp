@@ -65,7 +65,7 @@
           "extra_yaml_keys": "額外的 YAML 寫入金鑰"
         },
         "data_description": {
-          "allowed_dirs": "相對於 config 目錄的路徑，包含精確的檔名（例如 sensor.yaml），或是 /share、/media、/ssl 與 /backup底下的路徑。每個項目都會被授予該路徑及其下方所有內容的讀寫權限；請將每個路徑輸入為獨立的列表項目。項目會以字面值進行比對；不支援如 * 的萬用字元。會略過目錄普遍遍歷與其他不允許的路徑。",
+          "allowed_dirs": "相對於 config 目錄的路徑，包含精確的檔名（例如 sensor.yaml），或位於 /share、/media 與 /ssl 下的路徑（在 HAOS 與 Supervised 上為唯讀）。每個項目均會被授予該路徑及其下方所有內容的讀寫權限；請將每個路徑輸入為獨立的清單項目。項目採字面相異比對；不支援如 * 的萬用字元。目錄跳脫與其他不允許的路徑將會被捨棄。",
           "extra_yaml_keys": "除了內建金鑰之外，ha_config_set_yaml 可以寫入的頂層金鑰，適用於此安裝上的 YAML 優先整合（例如 alert2）。信任邊界金鑰將被略過。"
         }
       },

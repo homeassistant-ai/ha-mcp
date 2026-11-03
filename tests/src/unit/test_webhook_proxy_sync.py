@@ -1,15 +1,17 @@
 """Unit tests for the webhook-proxy promote/reset transform engine.
 
-These exercise the pure helpers of ``scripts/webhook_proxy_sync.py`` without
-touching the filesystem: the semver bump math, the monotonic dev-reset rule
-(including the case where stable's base is *behind* dev's), and the assertion
-that the STABLE and DEV identity profiles are exact inverses of each other.
+Most tests exercise the pure string transforms of ``scripts/webhook_proxy_sync.py``:
+the semver bump math, the monotonic dev-reset rule (including the case where
+stable's base is *behind* dev's) and the per-file transforms.
 
-The full round-trip (that ``reset``/``promote`` produce a version-only diff on
-a clean tree) is guaranteed by the acceptance gate in the build spec, not here.
+The dev version rewrite runs on files the test writes under ``tmp_path``. The
+round-trip tests (``reset``/``promote`` of a copy of one committed add-on tree
+reproduces the other) run only at sync points; see the note on
+``_sync_point_only`` below.
 """
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -168,31 +170,78 @@ def test_rebase_dev_version_writes_both_files_in_place(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The STABLE and DEV identity profiles are exact inverses
+# The STABLE and DEV identity profiles
 # ---------------------------------------------------------------------------
-def test_profiles_are_exact_inverses():
-    assert sync.profiles_are_inverse(sync.STABLE, sync.DEV)
-    assert sync.profiles_are_inverse(sync.DEV, sync.STABLE)
+def test_dev_component_is_the_stable_component_with_a_dev_suffix():
+    assert sync.DEV.component == sync.STABLE.component + "_dev"
 
 
-def test_inverse_swappable_identity_fields():
-    stable, dev = sync.STABLE, sync.DEV
-    # each flavor's slug is the other's sibling-slug-base
-    assert stable.slug == dev.sibling_slug_base
-    assert dev.slug == stable.sibling_slug_base
-    # each flavor's own mutex id is the other's sibling-mutex id
-    assert stable.mutex_notification_id == dev.sibling_mutex_notification_id
-    assert dev.mutex_notification_id == stable.sibling_mutex_notification_id
-    # flavor/sibling words cross over
-    assert stable.flavor_word.lower() == dev.sibling_word
-    assert dev.flavor_word.lower() == stable.sibling_word
-    # the component token differs by exactly the "_dev" suffix
-    assert dev.component == stable.component + "_dev"
+_START_PY_IDENTITY = (
+    "# This is the {word} flavor: its sibling is the {sibling_word} add-on.\n"
+    'SIBLING_SLUG_BASE = "{slug}"\n'
+    'MUTEX_NOTIFICATION_ID = "{mutex}"\n'
+    'SIBLING_MUTEX_NOTIFICATION_ID = "{sibling_mutex}"\n'
+    'SIBLING_LABEL = "{label}"\n'
+)
 
 
-def test_profiles_not_inverse_of_themselves():
-    assert not sync.profiles_are_inverse(sync.STABLE, sync.STABLE)
-    assert not sync.profiles_are_inverse(sync.DEV, sync.DEV)
+# Expected values are the ones the committed start.py of each flavor carries.
+@pytest.mark.parametrize(
+    ("dst", "expected"),
+    [
+        (
+            sync.DEV,
+            {
+                "word": "DEV",
+                "sibling_word": "stable",
+                "slug": "ha_mcp_webhook_proxy",
+                "mutex": "mcp_proxy_dev_mutex",
+                "sibling_mutex": "mcp_proxy_mutex",
+                "label": "Webhook Proxy",
+            },
+        ),
+        (
+            sync.STABLE,
+            {
+                "word": "STABLE",
+                "sibling_word": "dev",
+                "slug": "ha_mcp_webhook_proxy_dev",
+                "mutex": "mcp_proxy_mutex",
+                "sibling_mutex": "mcp_proxy_dev_mutex",
+                "label": "Webhook Proxy (Dev)",
+            },
+        ),
+    ],
+    ids=["DEV", "STABLE"],
+)
+def test_start_py_identity_names_the_other_flavor_as_sibling(dst, expected):
+    source = _START_PY_IDENTITY.format(
+        word="X", sibling_word="y", slug="", mutex="", sibling_mutex="", label=""
+    )
+    flipped = sync.apply_start_py_identity(source, dst)
+    assert flipped == _START_PY_IDENTITY.format(**expected)
+
+
+@pytest.mark.parametrize("dst", [sync.DEV, sync.STABLE], ids=["DEV", "STABLE"])
+def test_dockerfile_labels_take_the_flavor_values(dst):
+    labels = sync.apply_dockerfile_labels(
+        'io.hass.name="x"\nio.hass.description="y"\n', dst
+    )
+    assert labels == (
+        f'io.hass.name="{dst.dockerfile_hass_name}"\n'
+        f'io.hass.description="{dst.dockerfile_hass_description}"\n'
+    )
+
+
+@pytest.mark.parametrize("dst", [sync.DEV, sync.STABLE], ids=["DEV", "STABLE"])
+def test_manifest_takes_the_flavor_identity_and_the_version(dst):
+    manifest = '{"domain": "a", "name": "b", "version": "0", "iot_class": "c"}'
+    assert json.loads(sync.apply_manifest(manifest, dst, "9.9.9")) == {
+        "domain": dst.component,
+        "name": dst.manifest_name,
+        "version": "9.9.9",
+        "iot_class": "c",
+    }
 
 
 # ---------------------------------------------------------------------------

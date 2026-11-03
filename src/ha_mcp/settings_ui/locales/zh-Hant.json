@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "有 {count} 個備份正在使用中。請在主動擷取或還原完成後重試。",
     "backup.bulk.unknown": "無法確認刪除結果。請在重試之前檢查備份列表。",
     "filesystem.custom.title": "自訂檔案系統路徑（進階）",
-    "filesystem.custom.help": "檔案工具可以<strong>讀取和寫入</strong>的額外路徑（每行一個）。支援相對於設定的路徑（包含確切檔名，例如 <code>sensor.yaml</code>），以及 <code>/share</code>、<code>/media</code>、<code>/ssl</code> 和 <code>/backup</code> 下的路徑。每個條目允許該路徑及其下方的所有內容。條目會以字面值進行比對；不支援諸如 <code>*</code> 的萬用字元。您也可以在 Home Assistant 的「設定」→「裝置與服務」→「HA-MCP Custom Component」→「HA-MCP File & YAML Tools」→「設定」中管理這些路徑；兩個位置會編輯相同的設定並立即套用變更。",
+    "filesystem.custom.help": "檔案工具可以<strong>讀取和寫入</strong>的額外路徑（每行一個）。支援相對於設定的路徑（包含精確的檔名，例如 <code>sensor.yaml</code>）以及 <code>/share</code>、<code>/media</code> 和 <code>/ssl</code> 下的路徑（在 HAOS 和 Supervised 上為唯讀）。每個項目允許該路徑及其下的所有內容。項目會以字面值進行比對；不支援諸如 <code>*</code> 的萬用字元。您也可以在 Home Assistant 中的「設定」→「裝置與服務」→「HA-MCP Custom Component」→「HA-MCP File & YAML Tools」→「設定」來管理這些路徑；兩個地方都會編輯相同的設定並立即套用變更。",
     "filesystem.custom.blocked": "永遠封鎖：{paths}、路徑走訪 (<code>..</code>)，以及允許的 HAOS 磁碟區以外的絕對路徑。",
     "filesystem.custom.enable_first": "請先啟用上方的 Beta 功能與檔案系統工具才能進行編輯。",
     "filesystem.custom.unavailable": "自訂路徑目前無法使用。",
@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "取得自動化設定",
-      "description": "取得 Home Assistant 自動化設定。"
+      "description": "取得 Home Assistant 自動化的儲存設定。"
     },
     "ha_config_get_calendar_events": {
       "title": "取得行事曆活動",

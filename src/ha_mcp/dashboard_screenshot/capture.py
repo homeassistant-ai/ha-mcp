@@ -26,6 +26,7 @@ from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
 from .engine_compat import is_legacy_puppet
 from .provision import TOKEN_HINT, EngineKind, resolve_engine
+from .theme_check import check_requested_theme
 from .theme_guard import ThemeGuard
 
 logger = logging.getLogger(__name__)
@@ -886,6 +887,11 @@ async def capture_dashboard_images(
         render_timeout_seconds=render_timeout_seconds,
     )
     viewports = _capture_viewports(options)
+    theme_warnings = await check_requested_theme(
+        client, options.theme, options.dark_mode
+    )
+    if capture_warnings is not None:
+        capture_warnings.extend(theme_warnings)
 
     engine_target = await resolve_engine()
     engine_url = engine_target.url

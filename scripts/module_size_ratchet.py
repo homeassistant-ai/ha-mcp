@@ -48,10 +48,9 @@ def read_text(
 ) -> str:
     """Return one file's text from the working tree, with ``staged`` from
     the index, or with ``ref`` from that commit."""
-    if ref:
-        return _git(repo_root, "show", f"{ref}:{path}").decode("utf-8")
-    if staged:
-        return _git(repo_root, "show", f":{path}").decode("utf-8")
+    if ref or staged:
+        # ``git show :<path>`` (empty ref) reads the index.
+        return _git(repo_root, "show", f"{ref or ''}:{path}").decode("utf-8")
     return (repo_root / path).read_text("utf-8")
 
 
@@ -146,29 +145,23 @@ def _working_tree_contents(
     return contents
 
 
-def _staged_contents(repo_root: Path, excluded: tuple[str, ...]) -> dict[str, bytes]:
-    blobs: dict[str, str] = {}
-    entries = _git(repo_root, "ls-files", "-s", "-z").decode("utf-8")
-    for entry in entries.split("\0"):
-        # Each entry is "<mode> <object> <stage>\t<path>".
-        meta, _, path = entry.partition("\t")
-        # Regular files only: a submodule or a symlink has another mode.
-        if in_scope(path, excluded) and meta.startswith("100"):
-            blobs[path] = meta.split()[1]
-    return _read_blobs(repo_root, blobs)
-
-
-def _ref_contents(
-    repo_root: Path, ref: str, excluded: tuple[str, ...]
+def _git_contents(
+    repo_root: Path, excluded: tuple[str, ...], ref: str | None
 ) -> dict[str, bytes]:
+    """Read the in-scope files of ``ref``'s tree, or of the index without one."""
+    # ls-tree entries are "<mode> blob <object>\t<path>", ls-files -s entries
+    # "<mode> <object> <stage>\t<path>": the object id sits in another field.
+    command: tuple[str, ...]
+    if ref:
+        command, field = ("ls-tree", "-r", "-z", ref), 2
+    else:
+        command, field = ("ls-files", "-s", "-z"), 1
     blobs: dict[str, str] = {}
-    entries = _git(repo_root, "ls-tree", "-r", "-z", ref).decode("utf-8")
-    for entry in entries.split("\0"):
-        # Each entry is "<mode> blob <object>\t<path>".
+    for entry in _git(repo_root, *command).decode("utf-8").split("\0"):
         meta, _, path = entry.partition("\t")
         # Regular files only: a submodule or a symlink has another mode.
         if in_scope(path, excluded) and meta.startswith("100"):
-            blobs[path] = meta.split()[2]
+            blobs[path] = meta.split()[field]
     return _read_blobs(repo_root, blobs)
 
 
@@ -202,10 +195,9 @@ def read_sources(
     ``ref`` that commit.
     """
     excluded = excluded_prefixes(repo_root, staged, ref)
-    if ref:
-        return _ref_contents(repo_root, ref, excluded)
-    read = _staged_contents if staged else _working_tree_contents
-    return read(repo_root, excluded)
+    if ref or staged:
+        return _git_contents(repo_root, excluded, ref)
+    return _working_tree_contents(repo_root, excluded)
 
 
 def measure(

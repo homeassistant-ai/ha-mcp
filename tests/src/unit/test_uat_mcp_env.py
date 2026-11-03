@@ -9,12 +9,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-RUN_UAT = Path(__file__).resolve().parents[2] / "uat" / "run_uat.py"
+MCP_CONFIG = Path(__file__).resolve().parents[2] / "uat" / "mcp_config.py"
 
 # Load by path: ``uat`` is not importable as a package from pytest's rootdir.
-spec = importlib.util.spec_from_file_location("run_uat", str(RUN_UAT))
-run_uat = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(run_uat)
+spec = importlib.util.spec_from_file_location("mcp_config", str(MCP_CONFIG))
+mcp_config = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mcp_config)
 
 _PROBE = """
 import json
@@ -41,7 +41,7 @@ _HOST_VARS = {
 
 def _server_view(mcp_env: dict[str, str] | None, home: Path) -> dict:
     """Resolve the data dir, backup dir and sidecar switch the server would see."""
-    config = run_uat.build_stdio_mcp_config(
+    config = mcp_config.build_stdio_mcp_config(
         "http://127.0.0.1:9", "unused", None, mcp_env
     )
     server_env = config["mcpServers"]["home-assistant"]["env"]
@@ -77,7 +77,7 @@ def test_mcp_env_config_dir_overrides_isolation(tmp_path):
     """``--mcp-env HA_MCP_CONFIG_DIR=...`` still runs BAT with chosen settings."""
     chosen = tmp_path / "chosen"
     chosen.mkdir()
-    mcp_env = run_uat.parse_mcp_env([f"HA_MCP_CONFIG_DIR={chosen}"])
+    mcp_env = mcp_config.parse_mcp_env([f"HA_MCP_CONFIG_DIR={chosen}"])
 
     view = _server_view(mcp_env, tmp_path / "home")
 

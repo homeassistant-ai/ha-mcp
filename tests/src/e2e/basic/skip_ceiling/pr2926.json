@@ -1,0 +1,9 @@
+{
+  "reason": "#2926 adds two requires_tools_entry tests in tests/src/e2e/workflows/filesystem/test_yaml_read.py (blueprint !input preservation and nested-package key discovery). Both need the File & YAML Tools entry, so they skip at collection on each of the four no-tools lanes and run everywhere else.",
+  "deltas": {
+    "container_no_tools": 2,
+    "embedded_no_tools": 2,
+    "haos_embedded_no_tools": 2,
+    "haos_inaddon_no_tools": 2
+  }
+}

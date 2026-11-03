@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,21 @@ build = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build)
 
 CHANGELOG_URL = "https://github.com/homeassistant-ai/ha-mcp/releases"
+
+
+@pytest.fixture
+def git(tmp_path: Path) -> Callable[..., str]:
+    """Run git in a fresh repository under ``tmp_path``; return its output."""
+
+    def run(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    run("init")
+    run("config", "user.name", "Release regression")
+    run("config", "user.email", "test@example.invalid")
+    return run
 
 
 def test_format_release_notes_lists_subjects_as_bullets() -> None:
@@ -72,16 +88,9 @@ def test_format_release_notes_filters_noise_subjects() -> None:
 
 @pytest.mark.parametrize("component_changed", [False, True])
 def test_release_stamp_does_not_count_as_a_component_change(
-    tmp_path: Path, component_changed: bool
+    tmp_path: Path, git: Callable[..., str], component_changed: bool
 ) -> None:
     """Match the server-only release reproduced on the HAOS dev instance."""
-
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    git("init")
-    git("config", "user.name", "Release regression")
-    git("config", "user.email", "test@example.invalid")
     component = tmp_path / "custom_components" / "ha_mcp_tools"
     component.mkdir(parents=True)
     version = component / "const.py"
@@ -170,6 +179,59 @@ def test_previous_dev_tag_compares_build_numbers_numerically() -> None:
 
 def test_the_first_dev_build_has_no_previous_one() -> None:
     assert build.previous_dev_tag(["v9.0.0"], "9.0.0.dev1") is None
+
+
+def test_a_pin_that_is_not_a_dev_build_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    output = tmp_path / "notes.md"
+    argv = ["--repo-dir", str(tmp_path), "--dev-pin", "9.0.0", "--out", str(output)]
+    assert build.main(argv) == 1
+    assert "not a dev build version: 9.0.0" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_dev_notes_list_the_commits_since_the_previous_dev_build(
+    tmp_path: Path, git: Callable[..., str]
+) -> None:
+    """Dev pre-release notes must list only the pull requests merged after the
+    previous dev build up to the snapshotted commit, and name the build they
+    install. It passes the options publish-dev passes: the triggering commit's
+    SHA as the source, before the new build has a tag. Like publish-dev, it puts
+    the previous build's tag on a stamp commit that only the tag references."""
+    git("commit", "--allow-empty", "-m", "feat: before the previous build (#1)")
+    git("commit", "--allow-empty", "-m", "chore: stamp the previous build")
+    git("tag", "v9.0.0.dev1")
+    git("reset", "--hard", "HEAD~1")
+    git("commit", "--allow-empty", "-m", "fix: in the snapshot (#2)")
+    snapshot = git("rev-parse", "HEAD")
+    git("commit", "--allow-empty", "-m", "feat: after the snapshot (#3)")
+    output = tmp_path / "notes.md"
+    argv = [
+        "--repo-dir",
+        str(tmp_path),
+        "--dev-pin",
+        "9.0.0.dev2",
+        "--dist",
+        "ha-mcp-test",
+        "--source",
+        snapshot,
+        "--source-label",
+        "owner/repo@abc1234",
+        "--out",
+        str(output),
+    ]
+    assert build.main(argv) == 0
+    notes = output.read_text(encoding="utf-8")
+    assert notes.startswith(
+        "## HA-MCP Custom Component 9.0.0 (development pre-release)\n"
+    )
+    assert "from owner/repo@abc1234," in notes
+    assert "Installs ha-mcp-test==9.0.0.dev2." in notes
+    assert "- fix: in the snapshot (#2)" in notes
+    assert "before the previous build" not in notes
+    assert "after the snapshot" not in notes
 
 
 def test_dev_notes_list_each_merged_pull_request() -> None:

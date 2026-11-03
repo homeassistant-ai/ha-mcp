@@ -21,6 +21,34 @@ import pytest
 if TYPE_CHECKING:
     from ha_mcp.tools.component_api import ComponentCaps
 
+# annotatedyaml is a Home Assistant runtime dependency; the component imports
+# FastSafeLoader directly so the loader's real tag registry is the only source.
+# Unit tests run without HA, so provide its constructor registry before any
+# component import.
+if "annotatedyaml.loader" not in sys.modules:
+    _annotatedyaml = SimpleNamespace()
+    _annotatedyaml_loader = SimpleNamespace()
+
+    class _AnnotatedYamlLoader:
+        pass
+
+    _AnnotatedYamlLoader.yaml_constructors = {
+        "!include": None,
+        "!include_dir_list": None,
+        "!include_dir_named": None,
+        "!include_dir_merge_list": None,
+        "!include_dir_merge_named": None,
+        "!secret": None,
+        "!env_var": None,
+        "!input": None,
+    }
+    _annotatedyaml_loader.FastSafeLoader = _AnnotatedYamlLoader
+    _annotatedyaml.loader = _annotatedyaml_loader
+    _annotatedyaml.Secrets = MagicMock
+    _annotatedyaml.SECRET_YAML = "secrets.yaml"
+    sys.modules["annotatedyaml"] = _annotatedyaml
+    sys.modules["annotatedyaml.loader"] = _annotatedyaml_loader
+
 # Core's generated flow registry, which the component imports at module level
 # for its flow-helper set. Home Assistant is not a unit-test dependency, and the
 # module must exist before any test module imports the component. The helper
@@ -139,6 +167,11 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
       the ``@with_auto_backup`` pre-write hook fails on their ``base_url``.
     - ``HA_MCP_DISABLE_UPDATE_CHECK=1``: the status tools would otherwise call
       pypi.org.
+    - No inherited ``GIT_*`` variables, and no global or system git config:
+      lefthook runs the suite inside a git hook, whose variables would make
+      git in ``tmp_path`` act on the contributor's repository (#2907), and a
+      global ``commit.gpgsign`` or ``tag.gpgsign`` would break the tests'
+      commits and tags. Details: *Git isolation* in ``tests/AGENTS.md``.
 
     The cached ``Settings`` is reset too, since it holds the values read for
     the previous test. ``monkeypatch`` restores all of it after each test, so
@@ -151,6 +184,10 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
     monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
+    for name in [var for var in os.environ if var.startswith("GIT_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     try:
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.utils.data_paths import get_data_dir
@@ -220,6 +257,7 @@ _HA_CONST_DEFAULTS = {
     "EVENT_STATE_CHANGED": "state_changed",
     "ENTITY_MATCH_NONE": "none",
     "ENTITY_MATCH_ALL": "all",
+    "MATCH_ALL": "*",
 }
 
 
@@ -227,19 +265,25 @@ _HA_CONST_DEFAULTS = {
 def _ensure_ha_const_names():
     """Guarantee the ``homeassistant.const`` names the component imports.
 
-    The ``call_service`` confirmation-waiter imports ``EVENT_STATE_CHANGED`` and
-    ``reference_data`` imports ``ENTITY_MATCH_NONE`` / ``ENTITY_MATCH_ALL`` from
-    ``homeassistant.const`` function-locally. Home Assistant is not a unit-test
-    dependency, so that submodule is whatever a test module stubbed — and under
-    full-suite collection an earlier module can install a ``homeassistant.const``
-    stub lacking those names, making the import raise (component tests + the
+    The ``call_service`` confirmation-waiter imports ``EVENT_STATE_CHANGED``,
+    ``call_event`` imports ``MATCH_ALL``, and ``reference_data`` imports
+    ``ENTITY_MATCH_NONE`` / ``ENTITY_MATCH_ALL`` from ``homeassistant.const``
+    function-locally. Home Assistant is not a unit-test dependency, so that
+    submodule is whatever a test module stubbed — and under full-suite
+    collection an earlier module can install a ``homeassistant.const`` stub
+    lacking those names, making the import raise (component tests + the
     write-path contract/routing tests then fail only in the full suite, never in
     isolation). This adds the missing constants — always present in real HA —
     onto whatever stub is live, preserving its other attributes; it never
     replaces a populated stub.
+
+    A ``Mock`` attribute counts as missing: a ``MagicMock`` stub answers every
+    name with a Mock, which imports fine but is not Core's value, so
+    ``MATCH_ALL`` would come back as a Mock instead of ``"*"``.
     """
     import sys
     from types import SimpleNamespace
+    from unittest.mock import Mock
 
     mod = sys.modules.get("homeassistant.const")
     if mod is None:
@@ -247,7 +291,8 @@ def _ensure_ha_const_names():
     else:
         try:
             for name, value in _HA_CONST_DEFAULTS.items():
-                if not getattr(mod, name, None):
+                current = getattr(mod, name, None)
+                if not current or isinstance(current, Mock):
                     setattr(mod, name, value)
         except (AttributeError, TypeError):
             sys.modules["homeassistant.const"] = SimpleNamespace(**_HA_CONST_DEFAULTS)

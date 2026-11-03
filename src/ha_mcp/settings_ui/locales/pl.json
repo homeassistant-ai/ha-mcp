@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count} kopii zapasowych jest w użyciu. Spróbuj ponownie po zakończeniu aktywnego tworzenia lub przywracania.",
     "backup.bulk.unknown": "Nie udało się potwierdzić wyniku usuwania. Sprawdź listę kopii zapasowych przed ponowną próbą.",
     "filesystem.custom.title": "Niestandardowe ścieżki systemu plików (zaawansowane)",
-    "filesystem.custom.help": "Dodatkowe ścieżki (po jednej w linii), które narzędzia plikowe mogą <strong>odczytywać i zapisywać</strong>. Obsługiwane są ścieżki względne względem konfiguracji, w tym dokładne nazwy plików, takie jak <code>sensor.yaml</code>, oraz ścieżki w katalogach <code>/share</code>, <code>/media</code>, <code>/ssl</code> i <code>/backup</code>. Każdy wpis zezwala na dostęp do tej ścieżki oraz wszystkiego, co się w niej znajduje. Wpisy są dopasowywane dosłownie; znaki wieloznaczne, takie jak <code>*</code>, nie są obsługiwane. Możesz również zarządzać tymi ścieżkami w Home Assistant w sekcji Ustawienia → Urządzenia i usługi → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfiguruj; obie lokalizacje edytują to samo ustawienie i natychmiast wprowadzają zmiany.",
+    "filesystem.custom.help": "Dodatkowe ścieżki (po jednej w linii), do których narzędzia plikowe mogą <strong>mieć dostęp do odczytu i zapisu</strong>. Obsługiwane są ścieżki względem konfiguracji, w tym dokładne nazwy plików, takie jak <code>sensor.yaml</code>, oraz ścieżki w katalogach <code>/share</code>, <code>/media</code> i <code>/ssl</code> (tylko do odczytu w systemach HAOS i Supervised). Każdy wpis zezwala na dostęp do tej ścieżki oraz wszystkiego, co się w niej znajduje. Wpisy są dopasowywane dosłownie; symbole wieloznaczne, takie jak <code>*</code>, nie są obsługiwane. Ścieżkami tymi możesz również zarządzać w Home Assistant, przechodząc do Ustawienia → Urządzenia i usługi → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfiguruj; w obu miejscach edytujesz to samo ustawienie, a zmiany wprowadzane są natychmiast.",
     "filesystem.custom.blocked": "Zawsze blokowane: {paths}, przechodzenie po ścieżkach (<code>..</code>) oraz ścieżki bezwzględne poza dozwolonymi woluminami HAOS.",
     "filesystem.custom.enable_first": "Włącz funkcje beta i narzędzia systemu plików powyżej, aby edytować.",
     "filesystem.custom.unavailable": "Niestandardowe ścieżki są obecnie niedostępne.",
@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "Pobierz konfigurację automatyzacji",
-      "description": "Pobierz konfigurację automatyzacji Home Assistant."
+      "description": "Pobierz zapisaną konfigurację automatyzacji Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Pobierz wydarzenia z kalendarza",

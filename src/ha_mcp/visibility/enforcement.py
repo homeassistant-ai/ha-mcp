@@ -5,7 +5,8 @@ The visibility filter (``visibility/``) normally only declutters ``ha_search`` /
 ``"enforce": true`` in ``entity_visibility.json``), the
 :class:`VisibilityInboundEnforcement` / :class:`VisibilityOutboundEnforcement`
 middleware pair makes the hidden set unreadable across tool reads, except for
-the deliberately unrestricted-by-default ``ha_report_issue`` diagnostic
+the never-gated server tools (``ha_get_skill_guide``, ``ha_search_tools``,
+``ha_dev_*``) and the unrestricted-by-default ``ha_report_issue`` diagnostic
 escape hatch — "refuse on contact":
 
 - **Direct reads are concealed.** A call whose arguments name a hidden entity_id
@@ -67,7 +68,7 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from ..renamed_tools import current_tool_name
-from ..tool_dispatch import CALL_PROXY_META_TOOLS
+from ..tool_dispatch import CALL_PROXY_META_TOOLS, coerce_proxy_arguments
 from ..tools.helpers import raise_tool_error
 from . import resolver
 from .identifier_aliases import (
@@ -107,6 +108,10 @@ _CUSTOM_TOOL = "ha_manage_custom_tool"
 
 # Diagnostic tool deliberately outside the visibility barrier unless opted in.
 _REPORT_ISSUE_TOOL = "ha_report_issue"
+# Always outside the barrier: bundled docs and tool schemas whose examples can
+# name a hidden id (#2949), and the ha_dev_* developer override by design.
+_UNGATED_TOOLS = frozenset({"ha_get_skill_guide", "ha_search_tools"})
+_UNGATED_PREFIX = "ha_dev_"
 # State reads have a shape-bounded scrub exception before the outbound scan.
 _STATE_TOOL = "ha_get_state"
 
@@ -511,21 +516,6 @@ def _unscannable_reason(name: str, args: dict[str, Any]) -> str | None:
     return None
 
 
-def _coerce_arguments(arguments: Any) -> dict[str, Any] | None:
-    """Normalise a proxy envelope's ``arguments`` to a dict or None (mirrors read_only)."""
-    if isinstance(arguments, dict):
-        return arguments
-    if arguments is None:
-        return {}
-    if isinstance(arguments, str):
-        try:
-            parsed = json.loads(arguments)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        return parsed if isinstance(parsed, dict) else None
-    return None
-
-
 def _unwrap_proxy_call(args: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     """Extract the innermost proxy target and arguments, or None if unusable.
 
@@ -540,7 +530,7 @@ def _unwrap_proxy_call(args: dict[str, Any]) -> tuple[str, dict[str, Any]] | Non
     if not isinstance(raw_name, str):
         return None
     name = current_tool_name(raw_name)
-    arguments = _coerce_arguments(args.get("arguments"))
+    arguments = coerce_proxy_arguments(args.get("arguments"))
     while (
         name in CALL_PROXY_META_TOOLS
         and isinstance(arguments, dict)
@@ -548,7 +538,7 @@ def _unwrap_proxy_call(args: dict[str, Any]) -> tuple[str, dict[str, Any]] | Non
     ):
         raw_name = arguments["name"]
         name = current_tool_name(raw_name)
-        arguments = _coerce_arguments(arguments.get("arguments"))
+        arguments = coerce_proxy_arguments(arguments.get("arguments"))
     if arguments is None:
         return None
     return name, arguments
@@ -599,13 +589,10 @@ class _VisibilityEnforcementBase(Middleware):
             resolver.load_visibility_config, resolver.get_data_dir()
         )
 
-    async def _active_config(
-        self,
-        tool_name: str,
-        *,
-        emit_report_issue_diagnostic: bool = False,
+    async def _load_config_or_last_good(
+        self, tool_name: str
     ) -> VisibilityConfig | None:
-        """Return the config when enforce is active, ``None`` when passthrough.
+        """Load the config, falling back to the last good load (``None`` if none).
 
         The active-mode gate must not crash the call with an opaque trace on an
         unloadable config (a hand-edit typo would break EVERY tool call), nor
@@ -613,7 +600,7 @@ class _VisibilityEnforcementBase(Middleware):
         enforce was on). Policy: fall back to the last config this process
         loaded successfully — for the common non-enforce install that preserves
         availability, and for an enforce install it preserves the boundary.
-        With no good load ever, fail CLOSED like PolicyMiddleware does.
+        With no good load ever, the caller fails CLOSED like PolicyMiddleware.
 
         Each half diagnoses a distinct config-load failure. A context-local
         marker suppresses only the second traceback when both halves fail during
@@ -643,6 +630,18 @@ class _VisibilityEnforcementBase(Middleware):
                 )
                 if warning_emitted is not None:
                     _config_load_warning_emitted.set(True)
+        return config
+
+    async def _active_config(
+        self,
+        tool_name: str,
+        *,
+        emit_report_issue_diagnostic: bool = False,
+    ) -> VisibilityConfig | None:
+        """Return the config when enforce is active, ``None`` when passthrough."""
+        if tool_name in _UNGATED_TOOLS or tool_name.startswith(_UNGATED_PREFIX):
+            return None
+        config = await self._load_config_or_last_good(tool_name)
         # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
         # the toggle is off, not only a registry-failure fallback. A missing or
         # corrupt first config load follows that safe default; a last-known-good

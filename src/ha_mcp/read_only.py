@@ -31,7 +31,6 @@ whether the call is a read (allowed) or a write (blocked).
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -49,7 +48,7 @@ from ha_mcp._vendor.fastmcp.tools import Tool
 from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
 from .renamed_tools import current_tool_name
-from .tool_dispatch import CALL_PROXY_META_TOOLS
+from .tool_dispatch import CALL_PROXY_META_TOOLS, coerce_proxy_arguments
 from .tools.helpers import raise_tool_error
 
 if TYPE_CHECKING:
@@ -477,32 +476,6 @@ class ReadOnlyMiddleware(Middleware):
             return "write"
         return "unknown"
 
-    @staticmethod
-    def _coerce_arguments(arguments: Any) -> dict[str, Any] | None:
-        """Normalise a proxy envelope's ``arguments`` to a dict or None.
-
-        The categorized proxies tolerate ``arguments`` arriving as a JSON
-        string (small models sometimes serialize it) and json.loads it
-        AFTER this middleware runs (categorized_search.py ~313-352). So:
-        a dict is used as-is; an absent value (``None``) becomes ``{}``
-        (a legitimate no-argument call, not malformed); a string is
-        parsed and only a JSON *object* yields a dict. Anything else — an
-        unparseable string, a non-dict JSON value (list/scalar/null), or
-        a non-str/non-dict type — returns None, meaning "malformed
-        envelope".
-        """
-        if isinstance(arguments, dict):
-            return arguments
-        if arguments is None:
-            return {}
-        if isinstance(arguments, str):
-            try:
-                parsed = json.loads(arguments)
-            except (json.JSONDecodeError, ValueError):
-                return None
-            return parsed if isinstance(parsed, dict) else None
-        return None
-
     @classmethod
     def _unwrap_proxy_call(
         cls,
@@ -518,7 +491,7 @@ class ReadOnlyMiddleware(Middleware):
         lets the middleware decide on the inner call first. Mirrors the
         proxy's own double-wrap unwrapping.
 
-        ``arguments`` is coerced at every level (see _coerce_arguments)
+        ``arguments`` is coerced at every level (see coerce_proxy_arguments)
         because the proxy accepts it as a JSON string. Returns None when
         there is no usable envelope — including when ``arguments`` is a
         MALFORMED string (json.loads fails, or the JSON is not an object).
@@ -528,7 +501,7 @@ class ReadOnlyMiddleware(Middleware):
         (categorized_search.py ~313-352), so no write can occur.
         """
         name = args.get("name")
-        arguments = cls._coerce_arguments(args.get("arguments"))
+        arguments = coerce_proxy_arguments(args.get("arguments"))
         while (
             isinstance(name, str)
             and name in CALL_PROXY_META_TOOLS
@@ -536,7 +509,7 @@ class ReadOnlyMiddleware(Middleware):
             and isinstance(arguments.get("name"), str)
         ):
             name = arguments.get("name")
-            arguments = cls._coerce_arguments(arguments.get("arguments"))
+            arguments = coerce_proxy_arguments(arguments.get("arguments"))
         if not isinstance(name, str):
             return None
         if arguments is None:

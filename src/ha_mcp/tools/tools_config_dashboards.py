@@ -2474,7 +2474,7 @@ class DashboardConfigTools:
         ] = None,
         title: Annotated[
             str | None,
-            Field(description="Dashboard display name shown in sidebar"),
+            Field(description="Sidebar name; required when creating a dashboard"),
         ] = None,
         icon: Annotated[
             str | None,
@@ -3093,14 +3093,14 @@ class DashboardConfigTools:
         show_in_sidebar: bool | None,
     ) -> str | None:
         """Create a new storage-mode dashboard and return its dashboard_id."""
-        # Core's create schema supplies require_admin/show_in_sidebar defaults.
+        # Core requires the title and defaults require_admin/show_in_sidebar.
         create_data: dict[str, Any] = {
             "type": "lovelace/dashboards/create",
             "url_path": url_path,
-            "title": title or url_path.replace("-", " ").title(),
             **{
                 key: value
                 for key, value in {
+                    "title": title,
                     "icon": icon or None,
                     "require_admin": require_admin,
                     "show_in_sidebar": show_in_sidebar,
@@ -3150,7 +3150,7 @@ class DashboardConfigTools:
                 error_msg = error_msg.get("message", str(error_msg))
             raise_tool_error(
                 create_error_response(
-                    code=ErrorCode.SERVICE_CALL_FAILED,
+                    code=ws_failure_code(meta_result),
                     message=f"Failed to update dashboard metadata: {error_msg}",
                     context={"action": "update", "url_path": url_path},
                 )
@@ -3657,9 +3657,9 @@ class DashboardConfigTools:
         """
         Delete a storage-mode dashboard completely.
 
-        WARNING: This permanently deletes the dashboard and all its configuration.
-        Cannot be undone. YAML-mode dashboards are defined in configuration.yaml
-        and cannot be deleted through the API.
+        WARNING: This deletes the dashboard and all its configuration; with auto-backup
+        on, ha_manage_backup(scope='edits', action='restore') re-creates it. YAML-mode
+        dashboards are defined in configuration.yaml and cannot be deleted via the API.
 
         HA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves
         either form to the actual registry ID before deletion. 'default' is an

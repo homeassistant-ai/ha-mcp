@@ -60,11 +60,9 @@ _SLUG_STRIP = re.compile(r"[^\w\s-]")
 # plain-word heading slugifies the same either way.
 #
 # Two anchors cited in the bundled SKILL.md were dead this way (one em dash,
-# one ampersand). Scope of the damage, precisely: nothing REQUESTED them at
-# runtime — every anchored ref in src/ is one of ten single-hyphen anchors —
-# so no WARNING was emitted (extract_section misses do log, see
-# resolve_skill_files) and no production call returned empty. They were
-# prose citations that would not have resolved if followed.
+# one ampersand). The best-practice checker also emits a double-hyphen
+# anchor (`#purpose-specific-triggers--conditions-default-since-20267`), so
+# a warning's embedded section depends on this rule too.
 _SLUG_SPACES = re.compile(r"\s")
 
 

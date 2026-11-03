@@ -1,4 +1,4 @@
-"""How the in-process server reaches Home Assistant core over loopback (#1890)."""
+"""How the component reaches Home Assistant core's own listener (#1890, #2950)."""
 
 from __future__ import annotations
 
@@ -12,14 +12,17 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::"})
+
 
 def derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
-    """Resolve the loopback base URL for HA core from the http integration.
+    """Resolve the base URL of HA core's own listener from the http integration.
 
-    Returns ``(url, verify_ssl)`` where ``verify_ssl`` is ``False`` when the
-    URL is ``https`` (HA's certificate is issued for its hostname, never for
-    127.0.0.1, so verification on the loopback hop can only fail) and ``None``
-    when no override of the server's default is needed.
+    Used by the in-process server and the ``ha_auth`` token forward. Returns
+    ``(url, verify_ssl)`` where ``verify_ssl`` is ``False`` when the URL is
+    ``https`` (HA's certificate is issued for its hostname, not this address,
+    so verification on this hop cannot be relied on) and ``None`` when no
+    override of the caller's default verification is needed.
 
     The hardcoded ``http://127.0.0.1:8123`` default this replaces broke every
     instance with ``http.ssl_certificate`` configured (issue #1890): port 8123
@@ -52,6 +55,17 @@ def derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
         and 0 < port_raw <= 65535
         else 8123
     )
+    # Core's bind address (the first ``server_host``) when it names one, so
+    # a listener restricted to a LAN address is still reached (#2950).
+    host_raw = getattr(api, "host", None)
+    host = (
+        host_raw
+        if isinstance(host_raw, str) and host_raw not in _WILDCARD_HOSTS
+        # An IPv6 wildcard alone opens an IPv6-only socket.
+        else ("::1" if host_raw == "::" else "127.0.0.1")
+    )
+    if ":" in host:
+        host = f"[{host}]"
     if getattr(api, "use_ssl", False) is True:
-        return f"https://127.0.0.1:{port}", False
-    return f"http://127.0.0.1:{port}", None
+        return f"https://{host}:{port}", False
+    return f"http://{host}:{port}", None

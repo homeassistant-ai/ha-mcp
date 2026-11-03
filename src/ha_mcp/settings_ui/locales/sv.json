@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count} säkerhetskopia(-or) används. Försök igen när den aktiva åtgärden för att skapa eller återställa kopian är klar.",
     "backup.bulk.unknown": "Det gick inte att bekräfta raderingsresultatet. Kontrollera säkerhetskopielistan innan du försöker igen.",
     "filesystem.custom.title": "Anpassade filsystemssökvägar (avancerat)",
-    "filesystem.custom.help": "Extra sökvägar (en per rad) som filverktyg kan <strong>läsa och skriva</strong> till. Konfigurationsrelaterade sökvägar, inklusive exakta filnamn som <code>sensor.yaml</code>, samt sökvägar under <code>/share</code>, <code>/media</code>, <code>/ssl</code> och <code>/backup</code> stöds. Varje post tillåter den sökvägen och allt under den. Posterna matchas bokstavligen; jokertecken som <code>*</code> stöds inte. Du kan också hantera dessa sökvägar i Home Assistant under Inställningar → Enheter och tjänster → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurera; båda platserna redigerar samma inställning och tillämpar ändringar omedelbart.",
+    "filesystem.custom.help": "Extra sökvägar (en per rad) som filverktyg får <strong>läsa och skriva</strong>. Konfigurationsrelaterade sökvägar, inklusive exakta filnamn som <code>sensor.yaml</code>, samt sökvägar under <code>/share</code>, <code>/media</code> och <code>/ssl</code> (skrivskyddade på HAOS och Supervised) stöds. Varje post tillåter den sökvägen och allt under den. Poster matchas ordagrant; jokertecken som <code>*</code> stöds inte. Du kan också hantera dessa sökvägar i Home Assistant under Inställningar → Enheter och tjänster → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurera; båda platserna ändrar samma inställning och tillämpar ändringar omedelbart.",
     "filesystem.custom.blocked": "Alltid blockerad: {paths}, sökvägsgenomgång (<code>..</code>), och absoluta sökvägar utanför tillåtna HAOS-volymer.",
     "filesystem.custom.enable_first": "Aktivera beta-funktioner och filsystemverktyg ovan för att redigera.",
     "filesystem.custom.unavailable": "Anpassade sökvägar är för närvarande inte tillgängliga.",
@@ -574,7 +574,7 @@
     },
     "ha_config_get_automation": {
       "title": "Hämta Automatiseringskonfiguration",
-      "description": "Hämta konfiguration för Home Assistant-automatisering."
+      "description": "Hämta en Home Assistant-automations lagrade konfiguration."
     },
     "ha_config_get_calendar_events": {
       "title": "Hämta Kalenderhändelser",

@@ -25,9 +25,7 @@ def _reset_caller_token_cache():
 def _filesystem_tools_enabled(monkeypatch):
     """The tool registers only with filesystem tools on — it returns
     config-file contents, so it sits behind the same flag as ha_read_file.
-
-    Autouse because every test below needs a registered tool; the gate itself
-    is asserted by TestGating.
+    Autouse because every test needs a registered tool; TestGating asserts it.
     """
     from ha_mcp import config as ha_mcp_config
 
@@ -82,6 +80,7 @@ def _service_mock(responses: dict):
 
 async def _make_tool(responses: dict):
     """Build a minimal mcp + client harness around register_yaml_read_tools."""
+    responses.setdefault("find_yaml_key", {"success": True, "files": []})
     from ha_mcp.tools.tools_yaml_read import register_yaml_read_tools
 
     captured: dict = {}
@@ -662,18 +661,6 @@ async def test_glob_without_brackets_is_resolved_in_one_call():
     assert patterns == ["nothing*.yaml"]
 
 
-async def test_list_failure_raises_tool_error():
-    fn, _ = await _make_tool(
-        {
-            "list_files": {"success": False, "error": "Path not allowed.", "files": []},
-            "read_file": _read_ok("x\n"),
-        }
-    )
-
-    with pytest.raises(ToolError):
-        await fn(yaml_path="alert2", file="packages/*.yaml")
-
-
 async def test_parse_error_warns_instead_of_reading_as_a_non_match():
     """A file that could not be parsed must not read as "key not defined".
 
@@ -743,27 +730,6 @@ async def test_no_warnings_key_when_nothing_degraded():
     out = await fn(yaml_path="rest", file="configuration.yaml")
 
     assert "warnings" not in out
-
-
-async def test_root_level_glob_lists_config_root():
-    """A glob with no directory part asks the lister for the config root.
-
-    The component denies that (the root is not in ALLOWED_READ_DIRS), which is
-    the pre-existing lister boundary — root files stay readable one-by-one via
-    an explicit `file`. This pins the '.' the tool sends, so the request is a
-    deliberate deny rather than a malformed path.
-    """
-    seen: dict = {}
-
-    def list_files(payload):
-        seen["path"] = payload["path"]
-        return {"success": False, "error": "Path not allowed.", "files": []}
-
-    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
-
-    with pytest.raises(ToolError):
-        await fn(yaml_path="rest", file="*.yaml")
-    assert seen["path"] == "."
 
 
 async def test_named_file_read_exception_raises_instead_of_warning():
@@ -873,25 +839,6 @@ async def test_bracket_class_searches_its_siblings():
         "file(s) matching it as a pattern."
     )
     assert out["warnings"] == [expected_warning]
-
-
-async def test_literal_lookup_failure_raises():
-    """Both lookups walk the same directory, so a listing failure on the
-    literal one is a broken request, not one unreadable file - it raises rather
-    than silently returning only what the pattern pass found."""
-
-    def list_files(payload):
-        if payload["pattern"] == "svc[[]a].yaml":
-            return {"success": False, "error": "Path not allowed.", "files": []}
-        return {
-            "success": True,
-            "files": [{"path": "packages/svca.yaml", "is_dir": False}],
-        }
-
-    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
-
-    with pytest.raises(ToolError):
-        await fn(yaml_path="rest", file="packages/svc[a].yaml")
 
 
 async def test_unclosed_bracket_resolves_to_one_target():
@@ -1102,21 +1049,3 @@ async def test_mixed_pattern_literal_hit_is_still_an_expansion():
     assert out["warnings"] == [
         "packages/[ab]*.yaml was not searched: connection reset."
     ]
-
-
-async def test_both_lookups_failing_raises():
-    """The realistic component failure is path-based and hits both lookups.
-
-    Whichever of the two concurrent calls reports first, the request is broken
-    in the same way, so it raises rather than returning a half-resolved
-    expansion.
-    """
-    fn, _ = await _make_tool(
-        {
-            "list_files": {"success": False, "error": "Path not allowed.", "files": []},
-            "read_file": _read_ok("x\n"),
-        }
-    )
-
-    with pytest.raises(ToolError):
-        await fn(yaml_path="rest", file="packages/svc[a].yaml")

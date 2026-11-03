@@ -218,7 +218,7 @@ class TestSidecarDisableGates:
 
 
 class TestReadSidecarUrl:
-    """``read_sidecar_url`` is what ha_get_overview consumes."""
+    """``read_sidecar_url`` returns ui.url as written."""
 
     def test_returns_url_when_file_present(self, tmp_data_dir: Path) -> None:
         url = "http://127.0.0.1:54321/private_abc/settings"
@@ -853,14 +853,13 @@ class TestSeedStateFromUrl:
 class TestMaybeSpawnGates:
     """``maybe_spawn`` short-circuits in the documented cases."""
 
-    def test_maybe_spawn_skips_when_disabled(
+    def test_maybe_spawn_retires_but_never_spawns_when_disabled(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Disabled means fully inert: no retire POST, no spawn.
+        """Disabling must stop a sidecar spawned before the switch was set (#2954).
 
-        The disabled check must run BEFORE the retire flow — a reorder
-        would have a deliberately disabled install still POSTing
-        /shutdown (and clearing the sentinel that records the disable).
+        The retire clears only a sentinel its own POST created, so a user's
+        Stop survives it (``test_preexisting_sentinel_survives_the_replace``).
         """
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
         with (
@@ -869,7 +868,7 @@ class TestMaybeSpawnGates:
         ):
             sidecar.maybe_spawn()
         popen.assert_not_called()
-        shutdown.assert_not_called()
+        shutdown.assert_called_once_with()
 
     def test_maybe_spawn_replaces_live_sidecar(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -1947,7 +1946,7 @@ class TestDiscoverabilityFlow:
     """Pin the end-to-end flow ha_get_overview's settings_url participates in.
 
     Unit tests elsewhere check that ``ha_get_overview`` includes the URL
-    when ``read_sidecar_url()`` returns one — but they don't verify the
+    when ``live_sidecar_url()`` returns one — but they don't verify the
     URL actually responds at ``/settings``. If the producer (run_main's
     URL-file writer) and the consumer (the Starlette routes built by
     _build_app) drift on the secret-path format or the route suffix,
@@ -2020,7 +2019,7 @@ class TestDiscoverabilityFlow:
         url = f"http://127.0.0.1:{port}{secret_path}/settings"
         (tmp_data_dir / "ui.url").write_text(url + "\n")
 
-        # The consumer side: ha_get_overview reads via read_sidecar_url.
+        # The consumer side: ha_get_overview reads via live_sidecar_url.
         # Confirm the producer's URL round-trips through the consumer
         # unchanged — otherwise Claude hands the user a truncated URL.
         surfaced = sidecar.read_sidecar_url()

@@ -4,10 +4,14 @@ Read this before changing tools that wrap Home Assistant APIs, whether they
 read or write. Core owns its request schemas, defaults, conversions and
 response fields. HA-MCP owns tool orchestration and safety policies.
 
-Native covers Core, the frontend, Supervisor and the hassio proxy alike. When a
-tool has more than one native path (Core REST vs WebSocket, Supervisor vs
-Core), a migration keeps every capability the current tool has and adds the
-native ones; it never trades one native capability for another.
+Native covers Core, the frontend, Supervisor and the hassio proxy alike. A
+migration rebuilds the tool on the native path that serves it best; the
+transport, parameters and response shape the tool has today are not
+constraints. When more than one native path exists (Core REST vs WebSocket,
+Supervisor vs Core), compare what each accepts and returns (error text and
+codes, contexts, fields) and build on the one that does more, keeping the other
+only for a capability the first lacks. Every capability an agent has today
+stays reachable; how the old tool reached it does not have to.
 
 A tool not yet migrated under #2632 gets no piecemeal changes to its non-native
 paths, and that includes bug fixes. The whole tool is redone when it is
@@ -97,6 +101,19 @@ would refuse on before replying: the config check, `recorder/info`'s
 same test the frontend's restart dialog applies). When the recorder or the
 backup manager does not answer, it says so in `warnings` instead of claiming
 the check passed.
+
+`ha_call_event` prefers the component's `ha_mcp_tools/call_event` bridge
+(capability `call_event`). The bridge reads `hass.bus.async_listeners()` and
+calls `hass.bus.async_fire()` in one pass, returning the event's context and
+the exact-event and `MATCH_ALL` listener counts. Without the component the tool
+fires Core's WebSocket `fire_event`, which returns the same context; listener
+counts come from `GET /api/events` before the fire. `state_changed` stays on the
+REST `POST /api/events/{event_type}` route because only `APIEventView` rebuilds
+its `old_state`/`new_state` dicts into State objects. A WebSocket command that
+provably was not sent falls back to that REST route and says so in `warnings`;
+a timeout or dropped socket after the send returns `partial` rather than an
+error that invites a retry. `context_id` is the event context's `id`; an
+automation triggered by the event records it as `parent_id` in its trace.
 
 Todo item adds, updates and removals by name prefer the component's
 `ha_mcp_tools/todo_item` bridge (capability `todo_item`). It resolves an item

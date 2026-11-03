@@ -1144,9 +1144,7 @@ class TestTimeBudget:
             raise AssertionError("engine called after the deadline")
 
         monkeypatch.setattr(translate_locales, "_call_gemini", must_not_call)
-        monkeypatch.setattr(
-            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
-        )
+        monkeypatch.setattr(translate_locales, "_DEADLINE", float("-inf"))
         items = [
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),
@@ -1171,10 +1169,8 @@ class TestTimeBudget:
             "post",
             lambda *_a, **_k: pytest.fail("HTTP call after the deadline"),
         )
-        monkeypatch.setattr(
-            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
-        )
-        with pytest.raises(SystemExit, match="time budget"):
+        monkeypatch.setattr(translate_locales, "_DEADLINE", float("-inf"))
+        with pytest.raises(SystemExit, match="before the engine call"):
             translate_locales._call_gemini("prompt")
 
 

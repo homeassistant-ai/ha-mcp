@@ -18,6 +18,8 @@ existence check, and the auto-backup capture read.
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -212,64 +214,59 @@ async def test_list_parity_includes_yaml() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_icon_less_dashboard_shape_diverges() -> None:
-    """An icon-less dashboard's row shape diverges by key presence, not value.
+async def test_list_rows_are_cores_stored_items() -> None:
+    """The component lists each dashboard as Core's own list does.
 
-    The component builds each row as ``{key: meta.get(key) ...}``
-    (``websocket_api/dashboards.py:_dashboard_list_rows``), so a dashboard whose stored
-    config never set an ``icon`` still carries the key with value ``None``.
-    Real HA's ``lovelace/dashboards/list`` response for the same dashboard
-    omits a never-set key entirely. This pins that documented, functionally
-    harmless divergence (``row.get("icon")`` is ``None`` on both paths) rather
-    than forcing src to manufacture parity.
+    Core's ``lovelace/dashboards/list`` sends each dashboard's stored item as
+    is: a never-set ``icon`` is absent, and a field Core adds later is there.
+    A hand-kept key list would add ``icon: None`` and drop the new field.
     """
-    hass = _component_hass(
-        {
-            "bare": FakeDashboard(
-                "bare",
-                "storage",
-                config={
-                    "id": "id-bare",
-                    "url_path": "bare",
-                    "title": "Bare",
-                    "show_in_sidebar": True,
-                    "require_admin": False,
-                },  # no "icon" key at all
-            )
-        }
-    )
-    ws = _real_component_ws(hass)
-    comp_client = RoutingClient()
-    with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(list_only=True)
-
-    comp_row = comp_resp["dashboards"][0]
-    assert "icon" in comp_row
-    assert comp_row["icon"] is None
-
-    # Legacy: the real HA lovelace/dashboards/list response for a dashboard
-    # that never had an icon set simply omits the key.
-    bare_legacy_row = {
+    stored = {
         "id": "id-bare",
         "url_path": "bare",
         "title": "Bare",
         "show_in_sidebar": True,
         "require_admin": False,
         "mode": "storage",
+        "sidebar_order": 3,
     }
+    hass = _component_hass(
+        {"bare": FakeDashboard("bare", "storage", config=dict(stored))}
+    )
+    ws = _real_component_ws(hass)
+    comp_client = RoutingClient()
+    with patch_ws(ws, tools_config_dashboards):
+        comp_resp = await _build_get_dashboard(comp_client)(list_only=True)
+
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    legacy_client = RoutingClient(dashboards_list=[bare_legacy_row])
+    legacy_client = RoutingClient(dashboards_list=[dict(stored)])
     with patch_ws(legacy_ws, tools_config_dashboards):
         legacy_resp = await _build_get_dashboard(legacy_client)(list_only=True)
 
-    legacy_row = legacy_resp["dashboards"][0]
-    assert "icon" not in legacy_row
+    assert comp_resp["dashboards"] == legacy_resp["dashboards"] == [stored]
 
-    # The rows diverge by key presence...
-    assert comp_row != legacy_row
-    # ...but agree on the effective value either way (both absent/None).
-    assert comp_row.get("icon") is None
-    assert legacy_row.get("icon") is None
+
+@pytest.mark.asyncio
+async def test_list_carries_the_fields_core_accepts_on_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restoring settings needs Core's update schema, not a copy of it."""
+
+    class _Optional:
+        def __init__(self, key: str) -> None:
+            self.schema = key
+
+    fields = {_Optional(k): None for k in ("title", "icon", "sidebar_order")}
+    monkeypatch.setitem(
+        sys.modules,
+        "homeassistant.components.lovelace.const",
+        SimpleNamespace(STORAGE_DASHBOARD_UPDATE_FIELDS=fields),
+    )
+    hass = _component_hass({"home": _storage_dash("home", "Home")})
+    prep_out = await wsapi._dashboards_prep(hass, {"mode": "list"})
+    result = wsapi._do_dashboards(hass, {"mode": "list"}, **prep_out)
+
+    assert result["update_fields"] == ["title", "icon", "sidebar_order"]
 
 
 # --- get parity ---------------------------------------------------------------

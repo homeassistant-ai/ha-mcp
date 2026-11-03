@@ -15,6 +15,7 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
         "ha_config_set_dashboard",
         {
             "url_path": "test-python",
+            "title": "E2E Dashboard",
             "config": {
                 "views": [
                     {
@@ -67,6 +68,7 @@ async def test_python_transform_pattern_update(mcp_client, ha_client):
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-pattern",
+            "title": "E2E Dashboard",
             "config": {
                 "views": [
                     {
@@ -121,7 +123,11 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
     # Create dashboard
     await mcp.call_tool_success(
         "ha_config_set_dashboard",
-        {"url_path": "test-python-security", "config": {"views": [{"cards": []}]}},
+        {
+            "url_path": "test-python-security",
+            "title": "E2E Dashboard",
+            "config": {"views": [{"cards": []}]},
+        },
     )
 
     get_result = await mcp.call_tool_success(
@@ -150,7 +156,11 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
 
     await mcp.call_tool_success(
         "ha_config_set_dashboard",
-        {"url_path": "test-python-hash", "config": {"views": []}},
+        {
+            "url_path": "test-python-hash",
+            "title": "E2E Dashboard",
+            "config": {"views": []},
+        },
     )
 
     # Try without config_hash - should fail
@@ -193,7 +203,11 @@ async def test_python_transform_add_card(mcp_client, ha_client):
     # Create dashboard
     await mcp.call_tool_success(
         "ha_config_set_dashboard",
-        {"url_path": "test-python-add", "config": {"views": [{"cards": []}]}},
+        {
+            "url_path": "test-python-add",
+            "title": "E2E Dashboard",
+            "config": {"views": [{"cards": []}]},
+        },
     )
 
     # Get config_hash
@@ -234,6 +248,7 @@ async def test_python_transform_delete_card(mcp_client, ha_client):
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-delete",
+            "title": "E2E Dashboard",
             "config": {
                 "views": [
                     {
@@ -284,7 +299,11 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
     # Create dashboard
     await mcp.call_tool_success(
         "ha_config_set_dashboard",
-        {"url_path": "test-python-conflict", "config": {"views": [{"cards": []}]}},
+        {
+            "url_path": "test-python-conflict",
+            "title": "E2E Dashboard",
+            "config": {"views": [{"cards": []}]},
+        },
     )
 
     # Get config_hash
@@ -337,6 +356,7 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
         "ha_config_set_dashboard",
         {
             "url_path": "test-hash-stability",
+            "title": "E2E Dashboard",
             "config": {
                 "views": [
                     {
@@ -384,6 +404,7 @@ async def test_python_transform_replace_string_method(mcp_client, ha_client):
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-replace",
+            "title": "E2E Dashboard",
             "config": {
                 "views": [
                     {
@@ -432,6 +453,7 @@ async def test_python_transform_index_error_hints_at_search_mode(mcp_client, ha_
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-bad-index",
+            "title": "E2E Dashboard",
             "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
         },
     )
@@ -465,6 +487,7 @@ async def test_python_transform_key_error_hints_at_search_mode(mcp_client, ha_cl
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-bad-key",
+            "title": "E2E Dashboard",
             "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
         },
     )
@@ -501,6 +524,7 @@ async def test_python_transform_unrelated_runtime_error_no_search_hint(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-type-error",
+            "title": "E2E Dashboard",
             "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
         },
     )
@@ -557,6 +581,7 @@ async def test_python_transform_returns_authoritative_post_save_hash(
             "ha_config_set_dashboard",
             {
                 "url_path": url_path,
+                "title": "E2E Dashboard",
                 "config": {
                     "views": [{"cards": [{"type": "markdown", "content": "v1"}]}]
                 },

@@ -65,7 +65,7 @@
           "extra_yaml_keys": "Yazmağa icazə verilən əlavə YAML açarları"
         },
         "data_description": {
-          "allowed_dirs": "Konfiqurasiya qovluğuna nəzərən yollar, o cümlədən sensor.yaml kimi dəqiq fayl adları və ya /share, /media, /ssl və /backup daxilindəki yollar. Hər qeyd həmin yol və onun daxilindəki hər şey üçün oxuma və yazma icazəsi verir; hər yolu ayrıca siyahı elementi kimi daxil edin. Qeydlər simvolbəsimvol uyğunlaşdırılır; * kimi əvəzedici simvollar dəstəklənmir. Qovluq sərhədindən kənara çıxan və digər icazə verilməyən yollar nəzərə alınmır.",
+          "allowed_dirs": "Konfiqurasiya qovluğuna nisbətən yollar (sensor.yaml kimi dəqiq fayl adları daxil olmaqla) və ya /share, /media və /ssl altındakı yollar (HAOS və Supervised-də yalnız oxumaq üçün). Hər bir giriş həmin yola və ondan aşağıdakı hər şeyə oxumaq və yazmaq icazəsi verir; hər bir yolu ayrı siyahı elementi kimi daxil edin. Girişlər hərfi olaraq uyğunlaşdırılır; * kimi şablon simvollar dəstəklənmir. Keçid və digər icazə verilməyən yollar silinir.",
           "extra_yaml_keys": "Bu quraşdırmada əsasən YAML istifadə edən inteqrasiyalar (məsələn, alert2) üçün ha_config_set_yaml alətinin daxili açarlardan əlavə yaza biləcəyi ən üst səviyyəli açarlar. Etimad sərhədini müəyyən edən açarlar nəzərə alınmır."
         }
       },

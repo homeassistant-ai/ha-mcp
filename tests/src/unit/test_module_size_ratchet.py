@@ -130,9 +130,9 @@ def test_last_line_without_a_newline_is_counted() -> None:
 
 
 @pytest.fixture
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def temp_repo(tmp_path: Path) -> Path:
     """An empty git repository with no exclusions and an empty baseline."""
-    return make_ratchet_repo(tmp_path, monkeypatch, ratchet.BASELINE_NAME)
+    return make_ratchet_repo(tmp_path, ratchet.BASELINE_NAME)
 
 
 def _stage(repo: Path, path: str, lines: int) -> None:
@@ -155,6 +155,17 @@ def test_staged_measurement_ignores_an_unstaged_shrink(temp_repo: Path) -> None:
 
     assert ratchet.measure(temp_repo, staged=True) == {"big.py": LIMIT + 2}
     assert ratchet.measure(temp_repo) == {"big.py": LIMIT + 1}
+
+
+def test_ref_measurement_ignores_a_staged_change(temp_repo: Path) -> None:
+    """``--base`` judges the base commit. Measuring the index instead would
+    compare the PR's own head with itself."""
+    _stage(temp_repo, "big.py", LIMIT + 1)
+    commit(temp_repo)
+    _stage(temp_repo, "big.py", LIMIT + 3)
+
+    assert ratchet.measure(temp_repo, ref="HEAD") == {"big.py": LIMIT + 1}
+    assert ratchet.measure(temp_repo, staged=True) == {"big.py": LIMIT + 3}
 
 
 def test_staged_measurement_uses_the_staged_exclusions(temp_repo: Path) -> None:

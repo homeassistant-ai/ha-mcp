@@ -91,7 +91,7 @@ class _CoreTokenSession:
         self.status = status
         self.calls = []
 
-    def post(self, url, *, data, timeout):
+    def post(self, url, *, data, timeout, ssl=True):
         self.calls.append({"url": url, "data": data, "timeout": timeout})
         if self.error is not None:
             raise self.error
@@ -779,11 +779,7 @@ async def test_ha_auth_token_forwards_translated_client_id(
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "core_token_base_url",
-        lambda _hass: "https://core.example",
-    )
+    _pin_core_token_base(monkeypatch)
     client = await unified_view_client_factory(
         mode="ha_auth", session=session, dcr_key=dcr_key
     )
@@ -814,11 +810,7 @@ async def test_ha_auth_refresh_forwards_translated_client_id(
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "core_token_base_url",
-        lambda _hass: "https://core.example",
-    )
+    _pin_core_token_base(monkeypatch)
     client = await unified_view_client_factory(
         mode="ha_auth", session=session, dcr_key=dcr_key
     )
@@ -846,11 +838,7 @@ async def test_ha_auth_authorization_code_without_redirect_uses_default_path(
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "core_token_base_url",
-        lambda _hass: "https://core.example",
-    )
+    _pin_core_token_base(monkeypatch)
     client = await unified_view_client_factory(
         mode="ha_auth", session=session, dcr_key=dcr_key
     )
@@ -882,11 +870,7 @@ async def test_ha_auth_token_timeout_returns_temporarily_unavailable(
     session = _CoreTokenSession(error=TimeoutError())
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "core_token_base_url",
-        lambda _hass: "https://core.example",
-    )
+    _pin_core_token_base(monkeypatch)
     client = await unified_view_client_factory(
         mode="ha_auth", session=session, dcr_key=dcr_key
     )
@@ -1224,11 +1208,7 @@ async def test_ha_auth_refresh_with_redirect_uri_translates_like_authorize(
     origin for them."""
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "core_token_base_url",
-        lambda _hass: "https://core.example",
-    )
+    _pin_core_token_base(monkeypatch)
     redirect = "https://oauth-redirect.googleusercontent.com/r/ha-mcp"
     client_id = oauth_dcr.mint_client_id(
         dcr_key,
@@ -1299,9 +1279,8 @@ CORE_BODY_WITH_REFRESH = (
 def _pin_core_token_base(monkeypatch) -> None:
     """Point the server-side forward at a fixed core base URL."""
     monkeypatch.setattr(
-        oauth_ha_auth,
-        "core_token_base_url",
-        lambda _hass: "https://core.example",
+        "custom_components.ha_mcp_tools.loopback_url.derive_loopback_url",
+        lambda _hass: ("https://core.example", False),
     )
 
 

@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count} ehtiyat nüsxə istifadə olunur. Aktiv nüsxə yaratma və ya bərpa əməliyyatı bitdikdən sonra yenidən cəhd edin.",
     "backup.bulk.unknown": "Silmə nəticəsini təsdiqləmək mümkün olmadı. Yenidən cəhd etməzdən əvvəl ehtiyat nüsxə siyahısını yoxlayın.",
     "filesystem.custom.title": "Fərdi fayl sistemi yolları (qabaqcıl)",
-    "filesystem.custom.help": "Fayl alətlərinin <strong>oxuya və yaza</strong> biləcəyi əlavə yollar (hər sətirdə bir yol). <code>sensor.yaml</code> kimi dəqiq fayl adları da daxil olmaqla konfiqurasiya qovluğuna nəzərən yollar və <code>/share</code>, <code>/media</code>, <code>/ssl</code> və <code>/backup</code> daxilindəki yollar dəstəklənir. Hər qeyd həmin yola və onun daxilindəki hər şeyə icazə verir. Qeydlər yazıldığı kimi uyğunlaşdırılır; <code>*</code> kimi əvəzedici simvollar dəstəklənmir. Bu yolları Home Assistant-da Parametrlər → Cihazlar və xidmətlər → HA-MCP fərdi komponenti → HA-MCP File & YAML Tools → Konfiqurasiya et bölməsində də idarə edə bilərsiniz; hər iki yerdə eyni parametr redaktə olunur və dəyişikliklər dərhal tətbiq edilir.",
+    "filesystem.custom.help": "Fayl alətlərinin <strong>oxuya və yaza biləcəyi</strong> əlavə yollar (hər sətirdə bir ədəd). <code>sensor.yaml</code> kimi dəqiq fayl adları daxil olmaqla, konfiqurasiya ilə əlaqəli yollar, həmçinin <code>/share</code>, <code>/media</code> və <code>/ssl</code> (HAOS və Supervised-də yalnız oxumaq üçündür) altındakı yollar dəstəklənir. Hər bir daxiletmə həmin yola və ondan aşağıdakı hər şeyə icazə verir. Daxiletmələr hərfi şəkildə uyğunlaşdırılır; <code>*</code> kimi şablon işarələri (wildcards) dəstəklənmir. Siz həmçinin bu yolları Home Assistant-da Parametrlər → Cihazlar və Xidmətlər → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfiqurasiya bölməsində idarə edə bilərsiniz; hər iki yer eyni ayarı redaktə edir və dəyişiklikləri dərhal tətbiq edir.",
     "filesystem.custom.blocked": "Həmişə bloklanır: {paths}, yol vasitəsilə üst qovluqlara keçid (<code>..</code>) və icazə verilən HAOS bölmələrindən kənardakı mütləq yollar.",
     "filesystem.custom.enable_first": "Redaktə etmək üçün yuxarıda beta funksiyalarını və fayl sistemi alətlərini aktivləşdirin.",
     "filesystem.custom.unavailable": "Fərdi yollar hazırda əlçatan deyil.",
@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Avtomatlaşdırmanın konfiqurasiyasını al",
-      "description": "Home Assistant avtomatlaşdırma konfiqurasiyasını əldə edin."
+      "description": "Home Assistant avtomatlaşdırmasının yadda saxlanılan konfiqurasiyasını əldə edin."
     },
     "ha_config_get_calendar_events": {
       "title": "Təqvim hadisələrini al",

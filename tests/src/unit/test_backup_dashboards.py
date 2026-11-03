@@ -57,6 +57,25 @@ async def _component_body(_client: Any, _url_path: str) -> Any:
     return _BODY
 
 
+def _component_list(
+    monkeypatch: pytest.MonkeyPatch, update_fields: list[str] | None
+) -> None:
+    """The component ``list`` answer: Core's update fields, or no component."""
+
+    async def via_component(_client: Any, mode: str, **_kw: Any) -> Any:
+        assert mode == "list"
+        if update_fields is None:
+            return None
+        return {"dashboards": [], "update_fields": update_fields}
+
+    monkeypatch.setattr(dash, "_dashboards_via_component", via_component)
+
+
+@pytest.fixture(autouse=True)
+def _no_component(monkeypatch: pytest.MonkeyPatch) -> None:
+    _component_list(monkeypatch, None)
+
+
 class _FakeWs:
     """Answers ``config_not_found`` to saves until a dashboard is created."""
 
@@ -210,7 +229,7 @@ async def test_restore_of_deleted_lovelace_falls_back_to_the_default_store(
     ("row", "expected_create"),
     [
         (
-            # Component rows report an unset icon as None.
+            # Rows captured by an older component report an unset icon as None.
             _row("kitchen-dash", icon=None),
             {
                 "type": "lovelace/dashboards/create",
@@ -218,6 +237,7 @@ async def test_restore_of_deleted_lovelace_falls_back_to_the_default_store(
                 "title": "Kitchen",
                 "show_in_sidebar": True,
                 "require_admin": False,
+                "allow_single_word": True,
             },
         ),
         (
@@ -283,6 +303,57 @@ async def test_restore_to_an_existing_dashboard_saves_its_config_and_settings(
             "show_in_sidebar": True,
         },
     ]
+
+
+@pytest.mark.parametrize(
+    "update_fields",
+    [["title", "icon", "require_admin", "show_in_sidebar", "sidebar_order"], None],
+    ids=["core-update-schema-from-component", "core-row-without-component"],
+)
+async def test_restore_puts_back_a_setting_core_added_after_this_release(
+    monkeypatch: pytest.MonkeyPatch, update_fields: list[str] | None
+) -> None:
+    """A dashboard setting Core adds later is restored like the existing ones."""
+    ws = _FakeWs()
+    ws.created = True
+    monkeypatch.setattr(bm, "_ws_send", ws)
+    _component_list(monkeypatch, update_fields)
+    row = _row("kitchen-dash", icon="mdi:stove", sidebar_order=3)
+    live = _row("kitchen-dash", id="live_id", sidebar_order=9)
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([live], ws.sent))
+
+    await restore_dashboard(object(), row["id"], {"dashboard": row, "config": _BODY})
+
+    update = ws.sent[-1]
+    assert update["type"] == "lovelace/dashboards/update"
+    assert update["sidebar_order"] == 3
+    assert update["icon"] == "mdi:stove"
+    assert not {"id", "url_path", "mode"} & update.keys()
+
+
+async def test_restore_with_the_component_sends_only_what_core_update_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored key Core's update schema does not take would get the update
+    refused after the config was already written; an unset icon still clears."""
+    ws = _FakeWs()
+    ws.created = True
+    monkeypatch.setattr(bm, "_ws_send", ws)
+    _component_list(monkeypatch, ["title", "icon", "require_admin", "show_in_sidebar"])
+    row = _row("kitchen-dash", created_at="2026-11-01")
+    live = _row("kitchen-dash", id="live_id", icon="mdi:stove")
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([live], ws.sent))
+
+    await restore_dashboard(object(), row["id"], {"dashboard": row, "config": _BODY})
+
+    assert ws.sent[-1] == {
+        "type": "lovelace/dashboards/update",
+        "dashboard_id": "live_id",
+        "title": "Kitchen",
+        "icon": None,
+        "require_admin": False,
+        "show_in_sidebar": True,
+    }
 
 
 async def test_restore_writes_nothing_when_the_dashboard_list_cannot_be_read(

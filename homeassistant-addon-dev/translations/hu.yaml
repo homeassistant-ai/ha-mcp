@@ -1,0 +1,331 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/hu.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  verify_ssl:
+    name: TLS-tanúsítványok ellenőrzése
+    description: 'Ellenőrzi a Home Assistant szerver TLS-tanúsítványát. Csak megbízható
+      hálózaton, önműködően aláírt tanúsítvány vagy eltérő állomásnév esetén kapcsolja
+      ki: ez gyengíti az átvitel biztonságát.'
+  ha_tool_concurrency:
+    name: Home Assistant eszközök egyidejűsége
+    description: 'Opcionális korlátozás a külső Home Assistant eszközhívásokra az
+      összes munkamenetben. A belső REST, WebSocket és eszközönkénti elosztott egyidejűség
+      változatlan marad. A 0 korlátlan viselkedést biztosít. A kapacitásra várakozó
+      hívás 60 másodperc után meghiúsul. Tartomány: 0–32.'
+  custom_instructions:
+    name: Egyéni szerverutasítások
+    description: Minden csatlakozó AI-asszisztensnek elküldött szöveg az MCP-szerver
+      utasításainak részeként – például hol tárolják a háztartási jegyzeteket, és
+      mikor kell azokat elolvasni vagy frissíteni. Részét képezi továbbá azon Home
+      Assistant beszélgetési ügynökök (Assist) promptjának is, amelyek ezt az eszközkészletet
+      használják. Használja olyan útmutatásokhoz, amelyeknek az összes klienshez egyszerre
+      kell eljutniuk; tartsa röviden és titkok nélkül. Hagyja üresen, ha nem szeretne
+      semmit hozzáadni. Újraindítást igényel; a kliensek az újrakapcsolódáskor látják
+      a változást.
+  enable_beta_features:
+    name: Béta funkciók engedélyezése (főkapcsoló)
+    description: ⚠ VESZÉLY — ezek az eszközök VÉGLEGESEN KÁROSÍTHATJÁK a Home Assistant-telepítést.
+      Írnak a YAML-konfigurációba, a fájlrendszerbe, egyéni összetevőket telepítenek,
+      tetszőleges homokozóba zárt Pythont futtatnak, és szerkesztik az AI által látott
+      eszközök dokumentációs karakterláncait (docstring). Garancia és támogatási ígéret
+      nincs — SAJÁT FELELŐSSÉGÉRE engedélyezi őket. Készítsen egy Home Assistant biztonsági
+      mentést, mielőtt bekapcsolja, és soha ne engedélyezze éles környezetben biztonsági
+      mentés nélkül. Az alábbi kísérleti aljelzők fő vezérlője; az aljelzők futásidőben
+      figyelmen kívül lesznek hagyva, amíg ez a főkapcsoló ki van kapcsolva, még akkor
+      is, ha kifejezetten igazra (true) vannak állítva. Ugyanez a kapcsoló a webes
+      beállítások felhasználói felületén is megjelenik a „Béta funkciók (veszélyes)”
+      alatt — az újraindításkor bármelyik felület tükrözi a másikat.
+  enable_tool_search:
+    name: Ezközkeresés engedélyezése
+    description: 'A teljes eszközkatalógus cseréje keresésalapú felderítésre. Körülbelül
+      90%-kal, mintegy 5K tokenre csökkenti a tétlen kontextust. ⚠️ NE engedélyezze
+      ezt olyan kliensekben, amelyek saját beépített eszközkereséssel / halasztott
+      eszközökkel rendelkeznek (claude.ai, Claude Desktop, Claude Code) – a két keresési
+      réteg ütközik, és ott a kliens beépített eszközkeresése a jobb választás; hagyja
+      ezt kikapcsolva. Az, hogy az eszközök halasztva vannak-e, a klienstől és a modellkombinációtól
+      függ: akkor használja ezt, amikor a beállítása előre betölti a teljes katalógust
+      – natív halasztott eszközökkel nem rendelkező modellek (pl. Gemini, OpenAI-kompatibilis
+      helyi modellek, Claude Haiku), modellektől függetlenül az összes eszközsémát
+      beágyazó kliensek (pl. GitHub Copilot CLI), vagy kisebb kontextusablakok esetén.
+      Bizonyos Codex modellek és a ChatGPT szintén tartalmaznak halasztott eszközöket
+      – ellenőrizze közvetlenül a klienst/modellt a funkciói megerősítéséhez, hogy
+      ne hagyja ezt feleslegesen bekapcsolva. Az eszközök a ha_search_tools segítségével
+      találhatók meg, és kategorizált proxykon (olvasás/írás/törlés) keresztül hajthatók
+      végre. Az érvénybelépéshez újraindítás szükséges.'
+  tool_search_max_results:
+    name: Ezközkeresési max. találatok
+    description: 'A ha_search_tools hívásonként visszaadott rejtett eszközök maximális
+      száma, ha az eszközkeresés engedélyezve van; az első számok közé sorolt rögzített
+      eszköz ezen felül egy rövid, csak névvel rendelkező bejegyzésként kerül hozzáadásra.
+      Az alacsonyabb értékek (2-3) kontextustokeneket takarítanak meg, de előfordulhat,
+      hogy kihagyják a releváns eszközöket. Újraindítást igényel. Tartomány: 2–10.'
+  enable_tool_security_policies:
+    name: Eszközbiztonsági házirendek engedélyezése (speciális)
+    description: A kockázatos eszközhívások (zár-/riasztásvezérlés, automatizálás
+      írása stb.) korlátozása felhasználói jóváhagyás mögé. Egy védett eszköz hívásakor
+      az ügynök felszólítja a felhasználót, hogy nyissa meg az Eszközbiztonsági házirendek
+      lapot a webes felületen, és kattintson a Jóváhagyás gombra, mielőtt a hívás
+      folytatódna. Az opcionális argumentumfeltételekkel rendelkező eszközönkénti
+      szabályok az Eszközbiztonsági házirendek lapon konfigurálhatók. Alapértelmezés
+      szerint ki van kapcsolva. Az érvénybelépéshez újraindítás szükséges.
+  enable_security_policy_tool:
+    name: AI-ügynökök engedélyezése az eszközök biztonsági házirendjeinek szerkesztéséhez
+    description: 'Regisztrálja a ha_manage_security_policy eszközt, amely lehetővé
+      teszi a csatlakoztatott AI-ügynökök számára az eszközök biztonsági házirendjeinek
+      olvasását és átírását – beleértve a jóváhagyási korlátok eltávolítását is. Alapértelmezés
+      szerint ki van kapcsolva. Független a fenti Eszközbiztonsági házirendek opciótól:
+      ez azt szabályozza, hogy ki szerkesztheti a szabályokat, nem pedig azt, hogy
+      azok érvényben vannak-e. Az eszköz nem láthatja és nem bírálhatja el a függőben
+      lévő jóváhagyásokat. Annak érdekében, hogy az ember a folyamatban maradjon,
+      korlátozza az eszközt az engedélyezése előtt: kapcsolja be a "biztonsági korlátozás"
+      opciót a Manage Security Policy számára a webes felhasználói felület Eszközök
+      lapján. Az érvénybe lépéshez újraindítás szükséges.'
+  read_only_mode:
+    name: Csak olvasható mód
+    description: Az összes írási eszközt kikapcsolja, és eltávolítja az eszközök azon
+      képességét, hogy bármilyen írási vagy romboló hívást végezzenek. A vegyes olvasási/írási
+      eszközök – biztonsági mentések, alkalmazások (bővítmények), energiabeállítások,
+      hangfolyamok és a kódmód, ha engedélyezve van – elérhetőek maradnak, de az írási
+      műveleteik blokkolva vannak. Ugyanaz a kapcsoló, mint a webes felület Ezközök
+      lapján. Alapértelmezés szerint ki van kapcsolva. Az érvénybelépéshez újraindítás
+      szükséges.
+  redact_secrets:
+    name: Titkok elrejtése
+    description: Eltávolítja a titkos adatokat az eszközök válaszaiból, mielőtt azok
+      elérnék az AI-asszisztenst. Az alkalmazás (bővítmény) beállításai és a jelszóként
+      megjelölt integrációs mezők egy beállított/üres jelölőre cserélődnek (így a
+      „konfigurálva van ez a hitelesítő adat?” kérdés megválaszolható marad), a többi
+      eszközválaszból pedig eltávolításra kerülnek a szerver által már látott titkos
+      értékek (a 6 karakternél rövidebb értékek kihagyásra kerülnek, mivel az apró
+      töredékek cseréje megváltoztatná a nem kapcsolódó kimenetet). Egyéb mezők nem
+      kerülnek felismerésre, kivéve az alkalmazásbeállításokban lévő titkos kulcsokat
+      és az alább felsorolt alkalmazásbeállítás-neveket. Alapértelmezés szerint ki
+      van kapcsolva.
+  redact_app_option_keys:
+    name: További elrejtendő alkalmazásbeállítási kulcsok
+    description: Alkalmazásbővítmény (add-on) beállításnevek, amelyeket jelszómezőkként
+      kell elrejteni, olyan alkalmazásokhoz, amelyek sémája sima szövegként tárol
+      titkokat (például backup_password). Vesszővel vagy új sorral válassza el a neveket.
+      A név minden alkalmazásra érvényes; írja be az app_slug:name formátumot, ha
+      egyetlen alkalmazásra szeretné korlátozni. Beállításcsoport megnevezése az abban
+      lévő összes beállításra kiterjed. Csak a Titkok elrejtése (Redact Secrets) bekapcsolt
+      állapotában használatos. Alapértelmezés szerint üres.
+  ipv6_allowed_networks:
+    name: További engedélyezett IPv6-hálózatok
+    description: 'Az IPv6-kliensek csak a helyi hálózatról érik el a szerver saját
+      portját: visszacsatolás (loopback), link-local, egyedi helyi (fc00::/7), valamint
+      azok a hálózatok, amelyekhez a Home Assistant gazdagép közvetlenül csatlakozik.
+      Az IPv4-et ez nem érinti. Adja meg a további engedélyezni kívánt IPv6-hálózatokat
+      vesszővel vagy új sorral elválasztva (például 2001:db8:5::/48). A ::/0 megadásával
+      minden IPv6-kliens engedélyezve lesz, az internetről is, ha az útválasztó átengedi
+      a bejövő IPv6-forgalmat.'
+  enable_mandatory_bps:
+    name: Legjobb gyakorlatokon alapuló útmutatók csatolása íráskor
+    description: Főkapcsoló az írási eszközök készségtartalom-kézbesítési funkciójához
+      (1182. számú probléma). Ha engedélyezve van (alapértelmezett), a hat konfigurációíró
+      eszköz (automatizálások, szkriptek, jelenetek, segédek, irányítópultok, nyers
+      YAML) minden sikeres íráskor csatolja a kanonikus Home Assistant legjobb gyakorlatokat
+      tartalmazó hivatkozási fájlokat a `skill_content` mezőben, ráadásul automatikusan
+      beágyazza a legjobb gyakorlatokra vonatkozó figyelmeztetésekben hivatkozott
+      összes hivatkozási szakaszt. Minden eszköz elérhetővé tesz egy hívásonkénti
+      `MandatoryBPS` paramétert is, amelyet az ügynök hamisra (false) állíthat a későbbi
+      hívások során, miután megkapta a tartalmat. Ha ez a főkapcsoló ki van kapcsolva,
+      SEMMilyen skill_content nem kerül elküldésre, függetlenül a hívásonkénti paramétertől
+      vagy a BP-figyelmeztetésektől. Első választásként BEKAPCSOLVA ajánlott; csak
+      nagyon kis kontextusablakkal rendelkező modellek esetén tiltsa le. Ennek kikapcsolása
+      ronthatja az írás pontosságát. Az érvénybelépéshez újraindítás szükséges.
+  enable_strict_mandatory_bps:
+    name: Szigorú legjobb gyakorlatok mód
+    description: 'Szigorú mód: megakadályozza, hogy a kliens használja az eszközt
+      mindaddig, amíg nem tudja igazolni, hogy elolvasta a legjobb gyakorlatokat.
+      Bekapcsolt állapotban a hat legjobb gyakorlatokon alapuló íróeszköz (automatizálások,
+      szkriptek, jelenetek, segédek, irányítópultok, nyers YAML) blokkolva van, és
+      egy olyan hibaüzenetet ad vissza, amely arra utasítja a klienst, hogy olvassa
+      el a legjobb gyakorlatok készségét a ha_get_skill_guide segítségével, és adja
+      vissza az ott kapott jóváhagyási kulcsot. Bekapcsolt állapotban a ha_get_skill_guide
+      eszköz zárolva van és engedélyezve marad — ez a jóváhagyási kulcs kizárólagos
+      kiadója. A fenti „Legjobb gyakorlatokon alapuló útmutatók csatolása íráskor”
+      opció algeordnetéje, és inaktív, amíg a szülő ki van kapcsolva. Az érvénybelépéshez
+      újraindítás szükséges.'
+  enable_yaml_config_editing:
+    name: YAML-konfiguráció szerkesztésének engedélyezése (béta)
+    description: Béta funkció. Lehetővé teszi az AI-asszisztensek számára, hogy legfelső
+      szintű kulcsokat adjanak hozzá, cseréljenek le vagy távolítsanak el a configuration.yaml
+      és packages/*.yaml fájlokban. Csak a fehérlistán szereplő kulcsok engedélyezettek
+      (pl. template, sensor, command_line, mqtt, knx); a magszintű kulcsok, mint a
+      homeassistant, http és recorder blokkolva vannak. Minden szerkesztés érvényesíti
+      a YAML-szintaxist, lefuttat egy konfigellenőrzést, és automatikus biztonsági
+      mentést készít. A legtöbb kulcs módosításához teljes HA-újraindítás szükséges.
+      Az ismert korlátozásokról lásd a docs/beta.md fájlt. A dedikált eszközök (automatizálások,
+      szkriptek, jelenetek, segédek, sablonérzékelők) előnyben részesítendők, ha elérhetők.
+      SZÜKSÉGES, hogy a fenti (és a webes felületen található) „Béta funkciók engedélyezése”
+      főkapcsoló be legyen kapcsolva — különben ez az aljelző futásidőben figyelmen
+      kívül lesz hagyva, függetlenül az itt megadott értékétől.
+  enable_yaml_edit_confirm:
+    name: Megerősítés szükséges a YAML-szerkesztésekhez (eltérés-előnézet)
+    description: A YAML-konfiguráció szerkesztésének alkapcsolója, alapértelmezés
+      szerint BE (ajánlott). Az első ha_config_set_yaml hívás egy egységes diffet
+      ad vissza arról, hogy pontosan mi változna a lemezen, valamint egy megerősítő
+      tokent, és semmit sem ír ki; a szerkesztés csak akkor kerül mentésre, amikor
+      a hívást megismétlik azzal a tokennel. Azért létezik, hogy a kért szerkesztésen
+      kívüli nem szándékos módosítások még a lemezre kerülés előtt kiszűrésre kerüljenek
+      (1720. számú probléma). Csak akkor kapcsolja ki, ha szerkesztésenként egy kör
+      utazást meg szeretne takarítani.
+  enable_yaml_packages_automation:
+    name: Automatizálás engedélyezése a packages/*.yaml fájlokban
+    description: A YAML-konfiguráció szerkesztésének alkapcsolója. Ha be van kapcsolva,
+      a ha_config_set_yaml elfogadja a yaml_path='automation' paramétert a packages/*.yaml
+      fájlokon belül. Ha ki van kapcsolva, a hívás kliens- és szerveroldalon egyaránt
+      elutasításra kerül. A tárhelymódú eszköz (ha_config_set_automation) nem érintett.
+      Alapértelmezés szerint KI; csak akkor lép életbe, ha a fenti „YAML-konfiguráció
+      szerkesztésének engedélyezése” is be van kapcsolva.
+  enable_yaml_packages_script:
+    name: Szkript engedélyezése a packages/*.yaml fájlokban
+    description: A YAML-konfiguráció szerkesztésének alkapcsolója. Ha be van kapcsolva,
+      a ha_config_set_yaml elfogadja a yaml_path='script' paramétert a packages/*.yaml
+      fájlokon belül. Ha ki van kapcsolva, a hívás kliens- és szerveroldalon egyaránt
+      elutasításra kerül. A tárhelymódú eszköz (ha_config_set_script) nem érintett.
+      Alapértelmezés szerint KI; csak akkor lép életbe, ha a fenti „YAML-konfiguráció
+      szerkesztésének engedélyezése” is be van kapcsolva.
+  enable_yaml_packages_scene:
+    name: Jelenet engedélyezése a packages/*.yaml fájlokban
+    description: A YAML-konfiguráció szerkesztésének alkapcsolója. Ha be van kapcsolva,
+      a ha_config_set_yaml elfogadja a yaml_path='scene' paramétert a packages/*.yaml
+      fájlokon belül. Ha ki van kapcsolva, a hívás kliens- és szerveroldalon egyaránt
+      elutasításra kerül. A tárhelymódú eszköz (ha_config_set_scene) nem érintett.
+      Alapértelmezés szerint KI; csak akkor lép életbe, ha a fenti „YAML-konfiguráció
+      szerkesztésének engedélyezése” is be van kapcsolva.
+  enable_lite_docstrings:
+    name: Egyszerűsített eszköz-dokumentációsztringek engedélyezése (béta)
+    description: 'Béta funkció. Lecseréli a dokumentációsztringeket 15 nagy méretű
+      ha-mcp eszközön (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) rövidebb változatokra,
+      amelyek a sémát és a példákat a ha_get_skill_guide eszközre (vagy annak skill://
+      erőforrására) bízzák. Egy kivétel: a ha_report_issue helyette a saját válaszának
+      instructions mezőjére hivatkozik. FIGYELMEZTETÉS: ez csökkenti a tétlen tokenek
+      felhasználását, de ronthatja az LLM teljesítményét — a tömörített leírások arra
+      támaszkodnak, hogy az LLM ténylegesen meghívja a skill eszközt vagy elolvassa
+      a skill erőforrást a részletekért, ami nem garantált (egyes modellek kihagyják
+      az extra eszközhívást, és kevesebb útmutatást kapnak, mint korábban). Legjobban
+      olyan klienssel párosítható, amely támogatja az MCP-erőforrásokat, vagy az enable_tool_search
+      beállítással. Az életbe lépéshez újraindítás szükséges. IGÉNYLI a fenti (és
+      a webes felületen található) „Béta funkciók engedélyezése” mesterkapcsolót —
+      ellenkező esetben ez az aljelző futásidőben figyelmen kívül lesz hagyva, függetlenül
+      az itteni értékétől.'
+  enable_filesystem_tools:
+    name: Fájlrendszer-eszközök engedélyezése (béta)
+    description: 'Beállítja a HAMCP_ENABLE_FILESYSTEM_TOOLS=true értéket. Engedélyezi
+      a közvetlen fájlolvasási/írási hozzáférést a Home Assistant fájlrendszeréhez.
+      FIGYELMEZTETÉS: Ez az MCP-szervernek érzékeny, közvetlen fájlhozzáférést biztosít
+      a rendszeréhez. Csak akkor engedélyezze, ha megbízik az AI-asszisztensben a
+      fájlműveletek terén. Az érvénybelépéshez újraindítás szükséges. SZÜKSÉGES, hogy
+      a fenti (és a webes felületen található) „Béta funkciók engedélyezése” főkapcsoló
+      be legyen kapcsolva — különben ez az aljelző futásidőben figyelmen kívül lesz
+      hagyva, függetlenül az itt megadott értékétől.'
+  enable_code_mode:
+    name: Egyéni eszközök homokozójának engedélyezése (béta)
+    description: Béta funkció. Engedélyezi a ha_manage_custom_tool eszközt, amely
+      lehetővé teszi az AI-asszisztensek számára egyéni Python-kód létrehozását, futtatását,
+      mentését és törlését egy biztonságos homokozóban (sandbox), ha egyik beépített
+      eszköz sem tudja kezelni a kérést. A kód egy izolált értelmezőben fut fájlrendszer
+      vagy tetszőleges hálózati hozzáférés nélkül. A homokozóban futó kód elérheti
+      a HA REST API-t (api_get/api_post), WebSocket-parancsokat küldhet (ws_send),
+      meghívhatja a létező MCP-eszközöket (call_tool), vagy eltávolíthat egy mentett
+      eszközt (delete_saved_tool). A mentett eszközök alapértelmezés szerint a /data/saved_tools.json
+      fájlba mentődnek, így túl élik az alkalmazás (bővítmény) újraindításait, és
+      láthatók minden olyan kliens számára, amely képes csatlakozni. A ismert korlátozásokról
+      lásd a docs/beta.md fájlt. Az életbe lépéshez újraindítás szükséges. IGÉNYLI
+      a fenti (és a webes felületen található) „Béta funkciók engedélyezése” mesterkapcsolót
+      — ellenkező esetben ez az aljelző futásidőben figyelmen kívül lesz hagyva, függetlenül
+      az itteni értékétől.
+  enable_dashboard_screenshot:
+    name: Vezérlőpult-képernyőkép mód engedélyezése (béta)
+    description: 'Béta funkció — alapértelmezés szerint letiltva. Hozzáadja a ha_get_dashboard_screenshot
+      eszközt, valamint az include_screenshot / return_screenshot opciókat a vezérlőpult
+      lekérdező/beállító eszközökhöz, így az AI-asszisztensek megvizsgálhatják a reszponzív
+      Lovelace-képeket. Támogatja a stabil elnevezett nézeteket, a mobil/táblagép/asztali
+      kötegeket, valamint a PNG/JPEG/WebP/BMP kimenetet. A renderelés egy külön alkalmazásban
+      fut: balloob Puppet vagy WPE Screenshot Engine. Telepítsen és konfiguráljon
+      egy motort a saját Home Assistant hosszú távú hozzáférési tokenjével. A HA OS
+      / Supervised a Supervisoron keresztül fedezi fel az elindított motort; a Docker/Container
+      telepítések oldalkocsiként (sidecar) futtatják, és beállítják a HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL
+      környezeti változót. Semmi nehéz elem nem települ, amíg ezt engedélyezi és nem
+      telepít egy motort. Az életbe lépéshez újraindítás szükséges. IGÉNYLI a fenti
+      (és a webes felületen található) „Béta funkciók engedélyezése” mesterkapcsolót
+      — ellenkező esetben ez az aljelző futásidőben figyelmen kívül lesz hagyva, függetlenül
+      az itteni értékétől.'
+  enable_auto_backup:
+    name: Szerkesztések automatikus biztonsági mentése
+    description: Pillanatkép mentése egy entitásról minden olyan írási vagy törlési
+      eszközhívás előtt, amely módosítja azt. Amíg ez ki van kapcsolva, a fájl- és
+      nyers-YAML eszközök (ha_write_file, ha_delete_file, ha_config_set_yaml) elutasítják
+      az írást.
+  auto_backup_throttle_minutes:
+    name: Automatikus biztonsági mentés korlátozása (perc)
+    description: 'Milyen gyakran készíthet az automatikus biztonsági mentés pillanatképet
+      ugyanarról az entitásról. A 0 minden íráskor készít mentést; a 0-nál nagyobb
+      N legfeljebb entitásonként és N percenként egy pillanatképet rögzít. Tartomány:
+      0–1440.'
+  auto_backup_retain_per_entity:
+    name: Automatikus biztonsági mentés megőrzése (entitásonként)
+    description: 'Az entitásonként legfeljebb megőrzött pillanatképek száma. Minden
+      új rögzítés eltávolítja a legrégebbi pillanatképeket ezen szám felett. Tartomány:
+      1–10000.'
+  enable_snapshot_actions:
+    name: Teljes HA pillanatkép-műveletek engedélyezése
+    description: Lehetővé teszi az MI-asszisztensek számára a teljes Home Assistant
+      pillanatképek kezelését a ha_manage_backup eszközön, valamint a ha_call_service-ben
+      lévő egyenértékű biztonsági mentési szolgáltatásokon és parancsokon keresztül.
+      Ennek kikapcsolása letilt minden pillanatkép-műveletet, beleértve a listázást
+      is. A pillanatképek törlése csak a ha_manage_backup használatával érhető el,
+      és a „Pillanatkép törlésének engedélyezése” beállítást is igényli. A biztonsági
+      mentések szerkesztése és a webes beállítási felületen végzett biztonsági mentési
+      műveletek továbbra is elérhetők maradnak.
+  backup_read_only:
+    name: Biztonsági mentés kezelésének csak olvashatóvá tétele
+    description: Lehetővé teszi az MI-asszisztensek számára a szerkesztési biztonsági
+      mentések listázását, megtekintését és különbség-összehasonlítását, valamint
+      a teljes HA pillanatképek listázását, ha a pillanatkép-műveletek engedélyezve
+      vannak. Blokkolja a kézi biztonsági mentés létrehozását, visszaállítását (beleértve
+      a szerkesztési visszaállításokat) és törlését, ideértve a ha_call_service-ben
+      lévő egyenértékű biztonsági mentési szolgáltatásokat és parancsokat is. Az automatikus
+      szerkesztés előtti biztonsági mentések továbbra is működnek. A webes beállítási
+      felületen egy személy által végzett biztonsági mentési műveletek továbbra is
+      elérhetők maradnak.
+  enable_snapshot_delete:
+    name: Pillanatkép törlésének engedélyezése
+    description: Lehetővé teszi a ha_manage_backup számára a teljes Home Assistant
+      pillanatképek törlését. Egy pillanatkép az utolsó menekülési út lehet egy téves
+      módosítás után, ezért ezt a felhasználónak kell bekapcsolnia. Az ütemezett biztonsági
+      mentések, a legújabb pillanatkép és a minimális kornál fiatalabb pillanatképek
+      védve maradnak.
+  snapshot_delete_min_age_days:
+    name: Pillanatkép minimális kora a törléshez (nap)
+    description: 'Hány naposnak kell lennie egy pillanatképnek ahhoz, hogy törölhető
+      legyen. A 0 kikapcsolja a korlátot; a legújabb pillanatkép és az ütemezett biztonsági
+      mentések védve maradnak. Tartomány: 0–365.'
+  disabled_tools:
+    name: Letiltott eszközök (vesszővel elválasztva)
+    description: Az itt felsorolt eszközök kényszerítve ki vannak kapcsolva és zárolva
+      a webes beállítások felhasználói felületén (Ezközök lap) – ott nem engedélyezhetők
+      újra anélkül, hogy először törölné ezt az opciót. A kötelező eszközök egy kis
+      halmaza (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      nem tiltható le, és továbbra is fut, még akkor is, ha itt szerepelnek. A ha_get_skill_guide
+      csak akkor tiltható le, ha a szigorú legjobb gyakorlatok mód (enable_strict_mandatory_bps)
+      ki van kapcsolva. Vesszővel elválasztott eszköznevek (pl. ha_call_event, ha_eval_template).
+  pinned_tools:
+    name: Rögzített eszközök (vesszővel elválasztva)
+    description: Az itt felsorolt eszközök rögzítve vannak – az Eszközök lap tetején
+      jelennek meg, és nem oldhatók fel a webes beállítások felhasználói felületén
+      anélkül, hogy először törölné ezt opciót. Hasznos az Eszközkeresővel kombinálva.
+      Vesszővel elválasztott eszköznevek.
+  secret_path:
+    name: Titkos útvonal felülbírálása
+    description: 'Opcionális egyéni HTTP-útvonal az MCP-szerverhez. Hagyja üresen
+      az automatikusan generált biztonságos útvonal használatához.
+
+      '

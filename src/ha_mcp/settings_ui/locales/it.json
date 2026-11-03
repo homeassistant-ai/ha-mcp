@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count} backup sono in uso. Riprova al termine dell'acquisizione o del ripristino attivo.",
     "backup.bulk.unknown": "Non è stato possibile confermare il risultato dell'eliminazione. Controlla l'elenco dei backup prima di riprovare.",
     "filesystem.custom.title": "Percorsi di file system personalizzati (avanzato)",
-    "filesystem.custom.help": "Percorsi aggiuntivi (uno per riga) che gli strumenti di file possono <strong>leggere e scrivere</strong>. Sono supportati i percorsi relativi alla configurazione, inclusi nomi di file esatti come <code>sensor.yaml</code>, e i percorsi sotto <code>/share</code>, <code>/media</code>, <code>/ssl</code> e <code>/backup</code>. Ogni voce consente l'accesso a quel percorso e a tutto ciò che si trova al di sotto di esso. Le voci vengono abbinate letteralmente; i caratteri jolly come <code>*</code> non sono supportati. Puoi anche gestire questi percorsi in Home Assistant andando su Impostazioni → Dispositivi e servizi → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configura; entrambe le posizioni modificano la stessa impostazione e applicano le modifiche immediatamente.",
+    "filesystem.custom.help": "Percorsi extra (uno per riga) che gli strumenti per i file possono <strong>leggere e scrivere</strong>. Sono supportati i percorsi relativi alla configurazione, inclusi i nomi di file esatti come <code>sensor.yaml</code>, e i percorsi sotto <code>/share</code>, <code>/media</code> e <code>/ssl</code> (di sola lettura su HAOS e Supervised). Ciascuna voce abilita quel percorso e tutto ciò che si trova al di sotto di esso. Le voci vengono confrontate letteralmente; i caratteri jolly come <code>*</code> non sono supportati. Puoi anche gestire questi percorsi in Home Assistant andando su Impostazioni → Dispositivi e servizi → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configura; entrambe le posizioni modificano la stessa impostazione e applicano le modifiche immediatamente.",
     "filesystem.custom.blocked": "Sempre bloccati: {paths}, il path traversal (<code>..</code>) e i percorsi assoluti al di fuori dei volumi HAOS consentiti.",
     "filesystem.custom.enable_first": "Attiva le funzioni beta e gli strumenti per il filesystem qui sopra per poter modificare.",
     "filesystem.custom.unavailable": "I percorsi personalizzati non sono attualmente disponibili.",
@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Ottieni la configurazione di un'automazione",
-      "description": "Ottieni la configurazione di un'automazione di Home Assistant."
+      "description": "Ottieni la configurazione memorizzata di un'automazione di Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Ottieni gli eventi del calendario",

@@ -1,0 +1,7 @@
+template:
+  - trigger:
+      - platform: event
+        event_type: mcp_nested_2926_probe
+    sensor:
+      - name: mcp_nested_2926
+        state: "ok"

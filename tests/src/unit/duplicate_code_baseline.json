@@ -187,8 +187,7 @@
   "3612c8892dd9": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetAutomationMissingSurfacesAvailableIds.tools",
     "tests/src/unit/test_error_code_consistency_1297.py::TestRemoveAutomationMissingSurfacesAvailableIds.tools",
-    "tests/src/unit/test_error_code_consistency_1297.py::TestSetAutomationMissingSurfacesAvailableIds.tools",
-    "tests/src/unit/test_identifier_validation_family.py::TestAutomationsIdentifierValidation.tools"
+    "tests/src/unit/test_error_code_consistency_1297.py::TestSetAutomationMissingSurfacesAvailableIds.tools"
   ],
   "36579b7ba470": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_resolve_public_addresses",
@@ -481,10 +480,6 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::translated_client_id_for_refresh",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::translated_client_id_for_refresh"
   ],
-  "7da8c37e471e": [
-    "custom_components/ha_mcp_tools/oauth_ha_auth.py::core_token_base_url",
-    "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::core_token_base_url"
-  ],
   "7db8af26861f": [
     "tests/addon/test_webhook_proxy.py::TestAsyncSetupBootMarker.hass",
     "tests/addon/test_webhook_proxy.py::TestDebugLogging.hass",
@@ -616,10 +611,6 @@
   "993b3aefb89c": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::_b64url_decode",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_b64url_decode"
-  ],
-  "9973029249c7": [
-    "src/ha_mcp/read_only.py::ReadOnlyMiddleware._coerce_arguments",
-    "src/ha_mcp/visibility/enforcement.py::_coerce_arguments"
   ],
   "9ada52f05d49": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_stable_origin_or_unreproducible",
@@ -860,7 +851,7 @@
     "src/ha_mcp/utils/entity_membership.py::normalize_member_entity_ids"
   ],
   "d4dfcdf48d4e": [
-    "tests/uat/run_uat.py::mcp_server_command",
+    "tests/uat/mcp_config.py::mcp_server_command",
     "tests/uat/stories/scripts/ha_query.py::mcp_server_command"
   ],
   "d524aa51c882": [

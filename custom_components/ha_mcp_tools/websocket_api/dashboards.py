@@ -20,17 +20,6 @@ from .registry import _plainify
 _LOVELACE_MODE_STORAGE = "storage"
 _LOVELACE_MODE_YAML = "yaml"
 
-# Keys of a stored dashboard collection item (core's STORAGE_DASHBOARD_*_FIELDS),
-# echoed by ``lovelace/dashboards/list`` — the row shape ``list`` mode mirrors.
-_DASHBOARD_ROW_KEYS = (
-    "id",
-    "url_path",
-    "title",
-    "icon",
-    "show_in_sidebar",
-    "require_admin",
-)
-
 # Cap on ``search``-mode matches per call so one WS frame stays bounded. ``docs``
 # is not capped: the server's card search needs whole configs, and the frame
 # stays far below the client's 64 MiB message limit on real installs.
@@ -118,7 +107,16 @@ def _do_dashboards(
             "yaml_skipped": prepped.get("yaml_skipped", 0),
             "load_failed": prepped.get("load_failed", 0),
         }
-    return {"mode": "list", "available": True, "dashboards": prepped.get("rows") or []}
+    listing: dict[str, Any] = {
+        "mode": "list",
+        "available": True,
+        "dashboards": prepped.get("rows") or [],
+    }
+    # Additive: an older server ignores it.
+    update_fields = prepped.get("update_fields")
+    if update_fields is not None:
+        listing["update_fields"] = update_fields
+    return listing
 
 
 async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
@@ -146,7 +144,20 @@ async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str
         ) = await _dashboard_search_docs(dashboards_map, force=mode == "docs")
     else:
         prepped["rows"] = _dashboard_list_rows(dashboards_map)
+        prepped["update_fields"] = _dashboard_update_fields()
     return {"prepped": prepped}
+
+
+def _dashboard_update_fields() -> list[str] | None:
+    """The keys Core's ``lovelace/dashboards/update`` schema accepts, so a restore
+    sends back exactly the settings Core lets it change; ``None`` if unreadable."""
+    try:
+        from homeassistant.components.lovelace.const import (
+            STORAGE_DASHBOARD_UPDATE_FIELDS,
+        )
+    except ImportError:  # pragma: no cover - defensive; core drift
+        return None
+    return [str(getattr(key, "schema", key)) for key in STORAGE_DASHBOARD_UPDATE_FIELDS]
 
 
 def _lovelace_dashboards_map(hass: HomeAssistant) -> Mapping[Any, Any] | None:
@@ -186,20 +197,19 @@ def _lovelace_container(hass: HomeAssistant) -> Any:
 def _dashboard_list_rows(dashboards_map: Mapping[Any, Any]) -> list[dict[str, Any]]:
     """One metadata row per non-default dashboard, tagged with ``mode``.
 
-    Mirrors the ``lovelace/dashboards/list`` row shape (the stored collection item
-    for storage dashboards, read from ``LovelaceConfig.config``) plus an additive
-    ``mode`` so the server can exclude YAML dashboards. The default dashboard
-    (``url_path`` key ``None``) is omitted — the legacy list omits it too and the
-    server special-cases the built-in dashboard as always-existing; ``get`` mode
-    resolves ``None`` to that default instead.
+    Each row is the dashboard's ``LovelaceConfig.config``, as Core's own
+    ``lovelace/dashboards/list`` sends it, plus ``mode`` so the server can
+    exclude YAML dashboards. The default dashboard (``url_path`` key ``None``)
+    is omitted — the legacy list omits it too and the server special-cases the
+    built-in dashboard as always-existing; ``get`` mode resolves ``None`` to
+    that default instead.
     """
     rows: list[dict[str, Any]] = []
     for url_path, dash in dashboards_map.items():
         if url_path is None:
             continue
         config = getattr(dash, "config", None)
-        meta = config if isinstance(config, Mapping) else {}
-        row: dict[str, Any] = {key: meta.get(key) for key in _DASHBOARD_ROW_KEYS}
+        row: dict[str, Any] = dict(config) if isinstance(config, Mapping) else {}
         # The dict key is the authoritative url_path (the metadata may lack it).
         row["url_path"] = url_path
         row["mode"] = _dashboard_mode(dash)

@@ -2186,16 +2186,16 @@ async def _dashboard_resource_like(client: Any, config: dict[str, Any]) -> Any:
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    # Core imported old ``resources:`` entries without a type (RESOURCE_FIELDS).
     payload = _strip_readonly(config, "id", "type")
-    if "type" in config:
+    if "type" in config:  # Core imported old ``resources:`` entries without one
         payload["res_type"] = config["type"]
     update = {"type": "lovelace/resources/update", "resource_id": entity_id}
-    try:
-        return await _ws_send(client, {**update, **payload})
-    except HomeAssistantCommandError as err:
-        if err.code != "not_found":  # not_found: deleted since the snapshot
-            raise
+    async with registry_update_lock("dashboard_resource", entity_id):  # the tool's lock
+        try:
+            return await _ws_send(client, {**update, **payload})
+        except HomeAssistantCommandError as err:
+            if err.code != "not_found":  # not_found: deleted since the snapshot
+                raise
     live = await _dashboard_resource_like(client, config)
     if live is not None:  # an earlier restore re-created it
         return live
@@ -2754,6 +2754,7 @@ async def _fetch_file(client: Any, entity_id: str) -> Any:
     skips it instead of blocking the write or delete. Other read failures
     raise so the capture pipeline logs them at WARNING.
     """
+    from .tools.auto_backup import PathNotAllowedError
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
 
@@ -2765,12 +2766,11 @@ async def _fetch_file(client: Any, entity_id: str) -> Any:
         content = result.get("content")
         return content if isinstance(content, str) else None
     error = str(result.get("error", ""))
-    if (
-        "does not exist" in error
-        or "not a file" in error
-        or "Cannot read binary file" in error
-    ):
+    skips = ("does not exist", "not a file", "Cannot read binary file")
+    if any(marker in error for marker in skips):
         return None
+    if error.startswith("Path not allowed"):
+        raise PathNotAllowedError(entity_id, error)
     raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
 
 

@@ -667,10 +667,9 @@ def _prompt(
 
 def _call_gemini(prompt: str) -> dict[str, Any]:
     """One engine call. The single place a provider swap would touch."""
-    # Deadline-guarded at entry AND before every retry sleep: a worst-case
-    # call (five 180s timeouts plus backoff) runs ~20 minutes, which would
-    # otherwise blow straight through the time budget's slack and into the
-    # job timeout — the one path that loses uncommitted work.
+    # Deadline-guarded at entry AND before every retry sleep: a worst-case call
+    # (five 180s timeouts plus 200s of backoff) runs ~18 minutes, past the time
+    # budget's slack into the job timeout, the one path losing uncommitted work.
     if _out_of_time():
         raise SystemExit("time budget exhausted before the engine call")
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -695,17 +694,13 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
             # Connect/read timeouts, DNS failures, resets — as transient as a
             # 5xx; retry with the same bounded backoff.
             last_error = f"transport error: {exc!r}"
-            if _out_of_time():
-                last_error += " (time budget exhausted; not retrying)"
+        else:
+            parsed, last_error, retryable = _read_answer(response)
+            if parsed is not None:
+                return parsed
+            if not retryable:
                 break
-            delay = 20 * attempt
-            print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
-            time.sleep(delay)
-            continue
-        parsed, last_error, retryable = _read_answer(response)
-        if parsed is not None:
-            return parsed
-        if not retryable:
+        if attempt == 5:
             break
         if _out_of_time():
             last_error += " (time budget exhausted; not retrying)"
@@ -809,9 +804,11 @@ def _accept_or_retry(
     surface: Section,
     queued_keys: Container[str],
 ) -> None:
-    """Validate one translated string, retrying once with the reason."""
+    """Validate one string, retrying once with the reason while the budget lasts."""
     reason = _validate(item, translated)
-    if reason is not None:
+    if reason is not None and _out_of_time():  # _call_gemini would refuse the retry
+        reason += " (time budget exhausted; not retrying)"
+    elif reason is not None:
         try:
             retry = _call_gemini(
                 _prompt(locale, {_string_id(item): item.english}, surface, queued_keys)
@@ -819,13 +816,15 @@ def _accept_or_retry(
                 "Fix that and return the corrected JSON."
             )
         except SystemExit as exc:
-            # The retry is best-effort; an engine failure here degrades to the
-            # original (rejected) answer failing validation below.
+            # Best effort: the rejected answer fails with its original reason.
             print(f"  retry call failed: {exc}", file=sys.stderr)
+            if _out_of_time():
+                reason += " (retry failed; time budget exhausted)"
         else:
             translated = retry.get(_string_id(item))
-        time.sleep(_SECONDS_BETWEEN_REQUESTS)
-        reason = _validate(item, translated)
+            reason = _validate(item, translated)
+        if not _out_of_time():  # past the deadline the wait paces no request
+            time.sleep(_SECONDS_BETWEEN_REQUESTS)
     if reason is None:
         results[(item.section, item.key)] = str(translated)
     else:
@@ -897,19 +896,20 @@ def _translate_surface(
             return True, consecutive_engine_failures
         try:
             response = _call_gemini(_prompt(locale, chunk, surface, queued_keys))
+            consecutive_engine_failures = 0
         except SystemExit as exc:
             consecutive_engine_failures += 1
+            reason = f"engine call failed ({exc})"
             for sid in chunk:
                 item = by_id[sid]
-                failures.append(
-                    f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
-                )
+                failures.append(f"{locale}/{item.section}/{item.key}: {reason}")
                 failed.add((item.section, item.key))
             if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
                 return True, consecutive_engine_failures
+        if not _out_of_time():  # past the deadline the wait paces no request
+            time.sleep(_SECONDS_BETWEEN_REQUESTS)
+        if consecutive_engine_failures:  # the call failed: no answer to accept
             continue
-        consecutive_engine_failures = 0
-        time.sleep(_SECONDS_BETWEEN_REQUESTS)
         for sid in chunk:
             _accept_or_retry(
                 locale,

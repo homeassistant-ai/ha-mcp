@@ -1,0 +1,241 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP egyéni komponens",
+        "description": "Válassza ki, mit szeretne hozzáadni. A **HA-MCP Server** a teljes ha-mcp szervert futtatja a Home Assistanton belül, és egy Home Assistant webhookon keresztül teszi elérhetővé – a legtöbben ezt a telepítést választják. Ez egy önálló szerver, amely teljes mértékben kivált minden egyéb telepítési módot: Alkalmazás (bővítmény), Docker, uvx/PyPI, stdio; ha ezt futtatja, ne futtassa mellette valamelyik másikat.\n\nA **HA-MCP File & YAML Tools** két szerepkört tölthet be. Ha a ha-mcp szerver a Home Assistanton kívül fut – alkalmazás, Docker, uvx/PyPI, stdio –, ez a bejegyzés biztosítja annak a szervernek a folyamaton belüli komponensfunkciókat is, amelyeket kívülről nem érhet el (gyors folyamaton belüli keresés, konfigurációs bejegyzés metaadatai, regisztráció alapú olvasások), így minden külső telepítéshez érdemes hozzáadni, emellett ez szolgál a ha-mcp opcionális fájl-/YAML-eszközei által használt, emelt szintű jogosultságú fájl- és YAML-szerkesztési szolgáltatások kapujaként is. Ha ehelyett a HA-MCP Server bejegyzést adja hozzá, az már eleve biztosítja ezeket a megosztott képességeket, így ez a második bejegyzés ekkor csak az opcionális fájl-/YAML-eszközök kapujaként szükséges. Minden szervertípussal működik, és később bármikor hozzáadható.",
+        "menu_options": {
+          "server": "HA-MCP Server (ajánlott)",
+          "tools": "HA-MCP File & YAML Tools (opcionális)"
+        }
+      },
+      "tools": {
+        "title": "HA-MCP File & YAML Tools",
+        "description": "Beállítja az emelt szintű jogosultságú fájl- és YAML-konfigurációs szolgáltatásokat, amelyek a ha-mcp opcionális fájl-/YAML-szerkesztő eszközei mögött maradnak (funkciójelölők, alapértelmezés szerint letiltva) – ez minden szervertípusra érvényes, beleértve a folyamaton belüli HA-MCP Servert is. Ha a ha-mcp szerver a Home Assistanton kívül fut, ez a bejegyzés biztosítja számára a folyamaton belüli komponensfunkciókat is, amelyeket kívülről nem érhet el (gyors folyamaton belüli keresés, konfigurációs bejegyzés metaadatai, regisztráció alapú olvasások), és amelyeket még a fájl-/YAML-eszközök kikapcsolt állapotában is érdemes használni. Ezt a bejegyzést bármikor hozzáadhatja vagy eltávolíthatja."
+      },
+      "server": {
+        "title": "HA-MCP Server",
+        "description": "Ez a teljes ha-mcp szervert futtatja a Home Assistanton belül. Ez egy önálló szerver, amely teljes mértékben kiváltja az Alkalmazás (bővítmény), a Docker, az uvx/PyPI és a stdio telepítási módokat – ne futtassa egy másik ha-mcp szerver mellett.\n\nAlapértelmezés szerint a Home Assistant ezen gépén kívülről semmi nem éri el: az oldalsáv panelje és a Home Assistant saját beszélgetési ágensei (conversation agents) működnek, de a más eszközökön lévő MCP-kliensek nem tudnak csatlakozni, amíg alább nem választ ki egy távoli elérési módot vagy helyi hálózati hozzáférést. Mindkettőt később bármikor megváltoztathatja az integráció beállításaiban.",
+        "data": {
+          "remote_access": "Távoli hozzáférés a Home Assistanton keresztül",
+          "bind_host": "Hálózati hozzáférés",
+          "admin_token": "Rendszergazdai hozzáférési token",
+          "admin_username": "Vagy: a kifejezetten a HA-MCP-hez létrehozott, csak helyi fiók felhasználóneve",
+          "admin_password": "Annak a fióknak a jelszava"
+        },
+        "data_description": {
+          "remote_access": "Lehetővé teszi, hogy az MCP-kliensek egy Home Assistant webhookon keresztül csatlakozzanak, amely bárhol működik, ahol a Home Assistant elérhető (beleértve a Nabu Casát is). Home Assistant bejelentkezés: az olyan kliensek, mint a claude.ai, egy Home Assistant rendszergazdai fiókkal jelentkeznek be. Régi OAuth: egy ügyfélazonosító (Client ID) és titkos kulcs (Secret), amelyet beilleszthet az ezt igénylő kliensekbe. Titkos URL: maga a webhook-hivatkozás az egyetlen hitelesítő adat – bárki, akinél ott van, minden eszközt használni tud.",
+          "bind_host": "Ki csatlakozhat közvetlenül a szerver saját portjához. Biztonságos alapértelmezés a Csak ez a gép. A Helyi hálózat lehetővé teszi, hogy a hálózatán lévő többi eszköz csatlakozzon a Konfigurálás képernyőn látható titkos, közvetlen elérésű URL-lel.",
+          "admin_token": "Egy rendszergazdai fiók hosszú élettartamú hozzáférési tokenje. A sajátja is megfelelő: nyissa meg a profilját (az Ön neve az oldalsáv alján), válassza a Biztonság lapot, majd a Hosszú élettartamú hozzáférési tokenek alatt kattintson a Token létrehozása lehetőségre. A saját tokenje az otthoni hálózatán kívülről is működik, ha valaha kiszivárogna, és a Home Assistant az Ön nevében rögzíti a szerver módosításait. Biztonságosabb megoldás: egy kifejezetten a HA-MCP-hez létrehozott fiók, amelynél be van kapcsolva a Csak helyi hozzáférés (lásd az alábbi mezőket).",
+          "admin_username": "Csak olyan fiókhoz használható, amelyet kifejezetten a HA-MCP-hez hozott létre a Beállítások → Emberek → Személy hozzáadása menüpontban, a Bejelentkezés engedélyezése, a Csak helyi hozzáférés és a Rendszergazda beállításokkal. Soha ne adja meg itt a saját bejelentkezési adatait: ha a saját fiókját szeretné használni, illessze be inkább a tokenjét fent. A HA-MCP létrehozza ennek a fióknak a tokenjét (HA-MCP Server néven), így senkinek sem kell benne bejelentkeznie, és a jelszó sem kerül tárolásra. A tokenje csak a helyi hálózatról működik, ahol a szerver fut, és a Home Assistant ezen fiók nevében rögzíti a szerver módosításait.",
+          "admin_password": "Egyszeri alkalommal használatos a token létrehozásához. Soha ne a saját jelszavát adja meg."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Ez a bejegyzés már be van állítva.",
+      "unsupported_home_assistant": "A folyamaton belüli HA-MCP Server a Home Assistant {required} vagy újabb verzióját igényli, de ezen a példányon a {installed} fut. A komponens HA-MCP File & YAML Tools bejegyzését továbbra is használhatja egy külső ha-mcp szerverrel, amely alkalmazásként (bővítményként) vagy Docker-konténerként fut."
+    },
+    "error": {
+      "invalid_token": "A Home Assistant nem ismeri fel ezt a tokent. Másolja ki a teljes tokent, vagy hozzon létre egy újat.",
+      "token_not_long_lived": "Ez egy ideiglenes bejelentkezési token, amely lejár. Helyette hozzon létre egy hosszú élettartamú hozzáférési tokent.",
+      "token_not_admin": "Ez a token olyan fiókhoz tartozik, amely nem aktív rendszergazda.",
+      "invalid_login": "Adja meg a kifejezetten a HA-MCP-hez létrehozott, csak helyi rendszergazdai fiók felhasználónevét és jelszavát.",
+      "credentials_needed": "Adja meg egy rendszergazdai fiók felhasználónevét és jelszavát, vagy illesszen be egy hozzáférési tokent."
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_connect_path": "Nem tartalmazhat #, ?, % karaktert vagy szóközt.",
+      "invalid_webhook_id": "A webhookazonosítók nem tartalmazhatnak ferde vonalat (/).",
+      "invalid_oauth_callback": "Minden visszahívásnak https:// URL-nek, vagy a 127.0.0.1, [::1] vagy localhost címen lévő http:// URL-nek kell lennie, felhasználónév, jelszó vagy #fragmentum nélkül, és legfeljebb 2048 karakter hosszúságú lehet. Javítás: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Legfeljebb {max_callbacks} visszahívást adjon meg.",
+      "invalid_token": "A Home Assistant nem ismeri fel ezt a tokent. Másolja ki a teljes tokent, vagy hozzon létre egy újat.",
+      "token_not_long_lived": "Ez egy ideiglenes bejelentkezési token, amely lejár. Helyette hozzon létre egy hosszú élettartamú hozzáférési tokent.",
+      "token_not_admin": "Ez a token olyan fiókhoz tartozik, amely nem aktív rendszergazda.",
+      "invalid_login": "Adja meg a kifejezetten a HA-MCP-hez létrehozott, csak helyi rendszergazdai fiók felhasználónevét és jelszavát.",
+      "credentials_needed": "Adja meg egy rendszergazdai fiók felhasználónevét és jelszavát, vagy illesszen be egy hozzáférési tokent."
+    },
+    "step": {
+      "tools_info": {
+        "title": "HA-MCP File & YAML Tools",
+        "description": "Konfigurálja a ha-mcp opcionális fájl-/YAML-szerkesztő eszközei által használt, emelt szintű jogosultságú fájl- és YAML-szerkesztési szolgáltatásokat. Ezek a beállítások a ha-mcp szerver saját beállítási felületén is megjelennek, és azonnal, újraindítás nélkül érvénybe lépnek. Az érvényteleníthetetlen tiltási korlát továbbra is blokkolja a érzékeny útvonalakat (pl. .storage) és a bizalmi határokat jelölő kulcsokat (homeassistant, http, frontend, lovelace).",
+        "data": {
+          "allowed_dirs": "Extra fájlútvonalak",
+          "extra_yaml_keys": "További YAML-írási kulcsok"
+        },
+        "data_description": {
+          "allowed_dirs": "A konfigurációs könyvtárhoz képest relatív útvonalak, beleértve a pontos fájlneveket is, mint például a sensor.yaml, vagy a /share, /media és /ssl alatti útvonalak (HAOS-on és Supervised rendszeren csak olvashatók). Minden egyes megadott bejegyzés olvasási és írási jogot kap az adott útvonalra és az alatta lévő dolgokra; minden útvonalat külön listaelemként adjon meg. A bejegyzések illesztése pontos egyezés alapján történik; a helyettesítő karakterek, mint például a *, nem támogatottak. A könyvtárstruktúrában való feljebb lépést és az egyéb nem engedélyezett útvonalakat a rendszer elutasítja.",
+          "extra_yaml_keys": "Felsőszintű kulcsok, amelyeket a ha_config_set_yaml beírhat a beépítettek mellett, a YAML-alapú integrációkhoz ezen a telepítésen (pl. alert2). A bizalmi határokat sértő kulcsok elutasításra kerülnek."
+        }
+      },
+      "init": {
+        "title": "HA-MCP szerver",
+        "description": "Konfigurálja a HA-MCP szervert. {panel_hint}Az itteni módosítások a mentéskor lépnek életbe.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "server_port": "MCP szerver figyelési portja",
+          "bind_host": "Hálózati hozzáférés",
+          "webhook_auth": "Hitelesítási mód",
+          "oauth_client_id_override": "Régi (Legacy) OAuth: egyedi kliensazonosító (Client ID) (opcionális)",
+          "oauth_client_secret_override": "Régi (Legacy) OAuth: egyedi klienstitok (Client Secret) (opcionális)",
+          "oauth_regenerate": "Régi (Legacy) OAuth: kliensazonosító/titok újragenerálása most",
+          "pip_spec": "Fejlesztő: ha-mcp csomag felülbírálása",
+          "server_url": "Home Assistant URL (haladóknak)",
+          "external_url": "Külső URL (opcionális)",
+          "webhook_id_override": "Egyedi webhook titok (opcionális)",
+          "secret_path_override": "Egyedi közvetlen hozzáférési útvonal (opcionális)",
+          "regenerate_secrets": "Csatlakozási titkok újragenerálása most",
+          "enable_webhook": "Távoli hozzáférés webhookon keresztül",
+          "enable_llm_api": "Asszisztens LLM API",
+          "llm_api_exposure": "Asszisztens eszközök közzététele",
+          "enable_startup_notification": "Indítási értesítés",
+          "enable_sidebar_panel": "Oldalsáv beállításai panel",
+          "access_off_after_restart": "Hozzáférés kikapcsolása újraindítás után",
+          "oauth_redirect_allowlist": "Engedélyezett OAuth visszahívási URL-ek",
+          "admin_token_replacement": "Rendszergazdai hozzáférési token cseréje (opcionális)",
+          "admin_username": "Vagy váltás a HA-MCP számára létrehozott, csak helyi fiókra: felhasználónév (opcionális)",
+          "admin_password": "Annak a fióknak a jelszava",
+          "oauth_allow_any_callback": "Bármilyen OAuth visszahívási URL engedélyezése (kikapcsolja a fenti listát)"
+        },
+        "data_description": {
+          "server_port": "Az a port, amelyen ez a szerver figyel. A ha-mcp alkalmazás (bővítmény) a 9583-as portot használja, ezért itt az alapértelmezett érték 9584, hogy a kettő egymás mellett futhasson – ha nem futtatja az alkalmazást (bővítményt), bármelyik szabad port megfelel.",
+          "bind_host": "Ki csatlakozhat közvetlenül az MCP szerver portjához. A helyi hálózat elérhetővé teszi a helyi hálózatról, a titkos útvonalat használva hitelesítő adatként, akárcsak az alkalmazás (bővítmény). Ez a gép csak magáról a Home Assistant gépről engedélyez kapcsolatokat – a webhook URL és az oldalsáv panel mindkét módon működik.",
+          "webhook_auth": "Hogyan igazolják magukat az MCP kliensek a webhook URL-en. A titkos URL-lel maga a hivatkozás az egyetlen hitelesítő adat – az OAuth továbbra is fut az azt használó kliensek számára, és az engedélyezett visszahívási URL-re (lásd alább) visszatérő bejelentkezés automatikusan jóváhagyásra kerül: nincs szükség bejelentkezésre, sem kliensazonosítóra vagy titokra. A Home Assistant bejelentkezéssel az olyan kliensek, mint a claude.ai, egy Home Assistant rendszergazdai fiókkal (OAuth) jelentkeznek be. A régi (legacy) OAuth esetén ez az integráció saját bejelentkezési szolgáltatást futtat, és kiad egy kliensazonosítót és titkot, amelyet be kell illeszteni az ezt igénylő kliensekbe – a teljes be- vagy kikapcsoláshoz szükség lehet a Home Assistant újraindítására.",
+          "oauth_client_id_override": "Felülbírálja az automatikusan generált régi (legacy) OAuth kliensazonosítót. Hagyja üresen az aktuális megőrzéséhez. Csak akkor használatos, ha a hitelesítási mód régi (legacy) OAuth-ra van állítva.",
+          "oauth_client_secret_override": "Felülbírálja az automatikusan generált régi (legacy) OAuth klienstitkot. Hagyja üresen az aktuális megőrzéséhez. Csak akkor használatos, ha a hitelesítási mód régi (legacy) OAuth-ra van állítva.",
+          "oauth_regenerate": "Egyszeri művelet: új kliensazonosítót és titkot hoz létre a régi (legacy) OAuth módhoz. Csak a javítási felszólításban kért Home Assistant újraindítás után lép életbe – az újraindításig az előző kliensazonosító és titok továbbra is működik, az újak pedig nem. Ezenkívül törli a fenti két felülbírálási mezőt is.",
+          "pip_spec": "Hagyja üresen a komponens ezen kiadása által telepített ha-mcp szerver futtatásához. Csak egy adott ha-mcp build teszteléséhez (verziórögzítés, pull-request tarball vagy wheel URL); a szerver újratöltésével érvényesül, a Home Assistant újraindítása nélkül. Törölje a párosított szerverre való visszatéréshez.",
+          "server_url": "Az URL, amelyen a folyamaton belüli szerver eléri az Ön Home Assistant rendszerét (általában magát ezt a példányt). Ha üresen hagyja, az érték a példány port- és SSL-beállításaiból adódik; csak akkor adjon meg értéket, ha a szervernek más útvonalra van szüksége.",
+          "external_url": "Elsődleges csatlakozási URL-ként jelenik meg – akkor használja, ha a Home Assistant a saját domainje vagy fordított proxyja (reverse proxy) mögött van. Adja meg a teljes alalcímet a sémával együtt. Közvetlenül a Home Assistantra kell mutatnia – a böngészőben megnyitva el kell érnie a HA bejelentkezési oldalát –, és nem tartalmazhat olyan portot, mint a :8123 (vagy bármilyen más portot), különben a távoli MCP kliensek nem fogják elérni. Hagyja üresen a Nabu Casa / helyi cím automatikus használatához.",
+          "webhook_id_override": "Felülbírálja a véletlenszerű webhook titkot a csatlakozási URL-ben (/api/webhook/...). Az URL a hitelesítő adat – használjon hosszú, nehezen kitalálható értéket. Hagyja üresen az aktuális megőrzéséhez.",
+          "secret_path_override": "Felülbírálja a szerver portján a közvetlen hozzáféréshez használt véletlenszerű útvonalat. Ugyanez a szabály: az útvonal a hitelesítő adat. Hagyja üresen az aktuális megőrzéséhez.",
+          "regenerate_secrets": "Egyszeri művelet: új, véletlenszerű webhook titkot és közvetlen hozzáférési útvonalat hoz létre, azonnal érvénytelenítve a régi csatlakozási URL-eket. Ezenkívül törli a fenti két felülbírálási mezőt is.",
+          "enable_webhook": "Kapcsolja ki a csak helyi módhoz: a Home Assistant webhook egyáltalán nincs regisztrálva, így semmi – beleértve a Nabu Casa szolgáltatást sem – nem érheti el a szervert a Home Assistanton keresztül. A közvetlen szerverport és az oldalsáv panel továbbra is működik.",
+          "enable_llm_api": "Ajánlja fel a teljes eszközkészletet a Home Assistant asszisztenseknek (OpenAI, Google, Ollama, ...): engedélyezett állapotban az asszisztensek kiválaszthatják a „HA-MCP Server” opciót a Home Assistant vezérlése alatt, és használhatják az eszközöket az Asszisztens csevegésből és hangvezérlésből. Az engedélyezés csak választhatóvá teszi – semmit sem tesz közzé, amíg ki nem választja egy asszisztensnél. Használati útmutató: {llm_api_docs_url}",
+          "llm_api_exposure": "Az asszisztenseknek felajánlott eszközkészlet formája. Az eszközkeresés (alapértelmezett) kicsiben tartja az asszisztens kontextusát: egy kompakt API rögzített eszközökkel, valamint keresési/végrehajtási metaeszközökkel. A teljes katalógus közvetlenül felsorolja az összes közzétett eszközt – jobb a nagy kontextusú modellekhez. A „Mindkettő” opció egymás mellett regisztrálja a kettőt, így minden asszisztens a sajátját választhatja ki a Home Assistant vezérlése alatt. Az eszközönkénti közzététel a HA-MCP beállítások paneljén kezelhető; részletek: {llm_api_docs_url}",
+          "enable_startup_notification": "Értesítés megjelenítése minden alkalommal, amikor a Home Assistant elindítja a szervert (nem pedig akkor, amikor a Hozzáférés kapcsoló bekapcsolja), a kizárólag rendszergazdáknak szánt beállítási felületekre mutató hivatkozással. Kapcsolja ki a csendes indításhoz – a csatlakozási URL-ek ezen a képernyőn maradnak.",
+          "enable_sidebar_panel": "A HA-MCP beállítások panel megjelenítése az oldalsávon (csak rendszergazdáknak). Kapcsolja ki az oldalsáv bejegyzés eltávolításához – a szerver beállításai továbbra is elérhetők maradnak ezen a képernyőn.",
+          "access_off_after_restart": "A szerver Hozzáférés kapcsolója a Home Assistant újraindításakor általában megőrzi az utolsó állapotát. Kapcsolja ezt be, hogy a hozzáférés minden újraindítás után kikapcsolt állapotban induljon; addig kikapcsolva marad, amíg be nem kapcsolják. Először engedélyezze a kapcsolót (alapértelmezés szerint le van tiltva): amíg le van tiltva, semmi sem tudja visszakapcsolni a hozzáférést.",
+          "oauth_redirect_allowlist": "Csak akkor használatos, ha a hitelesítési mód a titkos webhook URL. Amikor egy kliens bejelentkezik az OAuth-tal, a HA-MCP a bejelentkezést csak az ezen a listán szereplő visszahívási (callback) URL-re küldi vissza; minden mást elutasít egy oldallal, amely elmagyarázza, kuidas azt hozzá kell adni. Minden visszahívást pontosan úgy adjon meg, ahogyan a kliens küldi. Egy http:// loopback visszahívás (127.0.0.1, [::1] vagy localhost) bármilyen porton illeszkedik. Azoknak a klienseknek, amelyek OAuth-bejelentkezés nélkül csatlakoznak, nincs szükségük bejegyzésre. Újraindítás nélkül lép életbe.",
+          "admin_token_replacement": "Hagyja üresen a jelenlegi hozzáférés megőrzéséhez; a szerver váltáskor újraindul. Egy rendszergazdai fiók hosszú élettartamú hozzáférési tokenje. A sajátja is megfelel: nyissa meg a profilját (a neve az oldalsáv alján), válassza a Biztonság lapot, és a Hosszú élettartamú hozzáférési tokenek alatt válassza a Token létrehozása lehetőséget. A saját tokenje az otthoni hálózatán kívülről is működik, ha az valaha kiszivárogna, és a Home Assistant a szerver módosításait az Ön nevében rögzíti. Biztonságosabb: egy kifejezetten a HA-MCP számára létrehozott fiók, amelynél be van kapcsolva a Csak helyi hozzáférés (lásd az alábbi mezőket).",
+          "admin_username": "Csak olyan fiókhoz használható, amelyet kifejezetten a HA-MCP számára hozott létre a Beállítások → Emberek → Személy hozzáadása menüpontban, úgy, hogy a Bejelentkezés engedélyezve, a Csak helyi hozzáférés és a Rendszergazda beállítások be vannak kapcsolva. Soha ne adja meg itt a saját bejelentkezési adatait: a saját fiókja használatához inkább illessze be annak a tokenjét fentebb. A HA-MCP létrehozza ennek a fióknak a tokenjét (HA-MCP Server néven), így senkinek sem kellsk bejelentkeznie vele, és a jelszó sem tárolódik. A tokenje csak a helyi hálózatáról működik, ahol a szerver fut, and a Home Assistant rögzíti a szerver módosításait ezen fiók alatt.",
+          "admin_password": "Egyszeri alkalommal kerül felhasználásra a token létrehozásához. Soha ne a saját jelszavát adja meg.",
+          "oauth_allow_any_callback": "Csak akkor használatos, ha a hitelesítési mód a titkos webhook URL. Elfogadja az OAuth-bejelentkezést bármilyen https:// visszahíváshoz, vagy http://-hez a 127.0.0.1, [::1] vagy localhost címen, a fenti lista helyett, így soha nem kell klienst hozzáadnia. Ennek ára: a Home Assistant címe ekkor egy szerkesztett bejelentkezési hivatkozást továbbít bármilyen általa megnevezett webhelynek, amelyet egy adathalász (phishing) hivatkozás arra használhat, hogy úgy tűnjön, mintha a Home Assistanttól származna. Újraindítás nélkül lép életbe."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "A HA-MCP folyamaton belüli szerver indítása nem sikerült",
+      "description": "A HA-MCP folyamaton belüli szervert nem sikerült elindítani a Home Assistanton belül:\n\n{detail}\n\nEllenőrizze a Home Assistant naplóit, majd az újbóli próbálkozáshoz töltse újra az integrációt (vagy javítsa ki a mögöttes problémát és töltse újra)."
+    },
+    "server_package_install_failed": {
+      "title": "A HA-MCP folyamaton belüli szerver csomagját nem sikerült telepíteni",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "A HA-MCP szerver újratelepítése",
+            "description": "A HA-MCP folyamaton belüli szervert nem sikerült telepíteni vagy elindítani:\n\n{detail}\n\nKüldje el a űrlapot a Home Assistant újraindításához; a szerver csomagja a szerver indulása előtt újra telepítésre kerül, azokkal a függőségekkel együtt, amelyek verziója már nem felel meg neki. Ha a fenti üzenet egy másik integrációt említ, amely megváltoztatta valamelyik csomagot, először frissítse vagy távolítsa el azt az integrációt: ellenkező esetben a Home Assistant a következő indításkor visszateszi a saját verzióját. Ha beállította a **ha-mcp package (advanced)** lehetőséget a HA-MCP Server beállításaiban, először ellenőrizze azt az értéket: egy olyan csomag újratelepítése, amelyet nem lehet telepíteni, ugyanolyan hibával hiúsul meg."
+          }
+        },
+        "abort": {
+          "entry_removed": "A HA-MCP Server bejegyzés már nem létezik.",
+          "externally_managed": "A Home Assistant a skip_pip paraméterrel indult, így nem telepít Python-csomagokat. Telepítse újra a ha-mcp csomagot a rendszer csomagkezelőjével, majd töltse újra az integrációt."
+        }
+      }
+    },
+    "component_outdated": {
+      "title": "Frissítse a HA-MCP egyéni komponenst",
+      "description": "A telepített ha-mcp szerverhez a HA-MCP Custom Component {required} vagy újabb verziója szükséges, de Ön a {installed} verzióval rendelkezik. Frissítse a komponenst a Beállítások > Rendszer > Frissítések menüpontban (a HACS-ban vagy a Home Assistant 2026.11+ Marketplace áruházában nyissa meg a HA-MCP Custom Componentet, és használja az 'Információk frissítése' (HACS) vagy a 'Frissítés' (Marketplace) lehetőséget, ha még nem jelenik meg frissítés), majd indítsa újra a Home Assistantot. A szerver közben futva marad, de néhány újabb funkció esetleg nem fog működni a komponens frissítéséig."
+    },
+    "legacy_oauth_restart": {
+      "title": "Indítsa újra a Home Assistantot a régi OAuth-beállítások alkalmazásához",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Újraindítja a Home Assistantot?",
+            "description": "Az űrlap elküldése újraindítja a Home Assistantot, és alkalmazza a régi OAuth-beállításokat.\n\nA mostani újraindításhoz kattintson a **Küldés** gombra."
+          }
+        }
+      }
+    },
+    "server_token_needed": {
+      "title": "A HA-MCP-nek rendszergazdai hozzáférési tokenre van szüksége",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Adjon meg egy rendszergazdai hozzáférési tokent",
+            "description": "A HA-MCP folyamaton belüli szerver nem rendelkezik használható Home Assistant tokennel, ezért nem fut. Előfordulhat, hogy a token hiányzik, visszavonták vagy lejárt, esetleg a fiókja már nem aktív rendszergazda. Illesszen be egy új hosszú élettartamú hozzáférési tokent, vagy adja meg egy olyan, csak helyi fiók bejelentkezési adatait, amelyet kifejezetten a HA-MCP számára hozott létre (soha ne a saját bejelentkezési adatait), és a HA-MCP létrehozza a saját tokenjét.",
+            "data": {
+              "admin_token": "Rendszergazdai hozzáférési token",
+              "admin_username": "Vagy: a kifejezetten a HA-MCP-hez készült, csak helyi fiók felhasználóneve",
+              "admin_password": "Az adott fiók jelszava"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "A Home Assistant nem ismeri fel ezt a tokent. Másolja ki a teljes tokent, vagy hozzon létre egy újat.",
+          "token_not_long_lived": "Ez egy ideiglenes bejelentkezési token, amely lejár. Helyette hozzon létre egy hosszú élettartamú hozzáférési tokent.",
+          "token_not_admin": "Ez a token olyan fiókhoz tartozik, amely nem aktív rendszergazda.",
+          "invalid_login": "Adja meg a kifejezetten a HA-MCP-hez készült, csak helyi rendszergazdai fiók felhasználónevét és jelszavát.",
+          "credentials_needed": "Adja meg egy rendszergazdai fiók felhasználónevét és jelszavát, vagy illesszen be egy hozzáférési tokent."
+        },
+        "abort": {
+          "entry_removed": "A HA-MCP Server bejegyzés már nem létezik."
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Letiltva (alapértelmezett)",
+        "ha_auth": "Home Assistant bejelentkezés",
+        "legacy": "Régi OAuth (Kliensazonosító és Titok)",
+        "none": "Titkos URL (nincs bejelentkezés)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "Titkos webhook URL",
+        "ha_auth": "Bejelentkezés a Home Assistanttal (OAuth)",
+        "legacy": "Régi OAuth (ez az integráció egy beilleszthető kliensazonosítót/titkot ad ki)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "Ezközkeresés (kompakt, alapértelmezett)",
+        "full": "Teljes katalógus",
+        "both": "Mindkettő (ügynökönként választva)"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Közvetlen hozzáférés a Home Assistant gépről: {url}",
+    "connect_local_lan": "Helyi/LAN (ha a hálózati hozzáférés „Local network”): {url}",
+    "connect_remote_url": "Távoli csatlakozási URL: {url}",
+    "connect_urls_label": "Csatlakozási URL(-ek):",
+    "connect_urls_pending": "A csatlakozási URL-ek itt jelennek meg, amint a szerver elindult.",
+    "connect_webhook_disabled": "A webhookon keresztüli távoli hozzáférés le van tiltva (csak helyi mód).",
+    "oauth_creds_pending": "A kliensazonosító és a kliensitok itt jelennek meg, amint a szerver elindult.",
+    "oauth_not_serving": "A régi (Legacy) OAuth még nem szolgálja ki ezeket – az aktiválásukhoz indítsa újra a Home Assistantot, amikor erre kéri Önt.",
+    "oauth_select_legacy_mode": "Azoknál a klienseknél, amelyek nem támogatják a modern OAuth-ot, változtassa a módot régi OAuth-ra az azonosító és a titok generálásához. Ha csatlakozási problémái adódnak a \"Bejelentkezés a Home Assistanttal\" beállítás mellett, javasoljuk, hogy váltson át a \"Titkos webhook URL\" lehetőségre a kapcsolat teszteléséhez, mielőtt a régi OAuth-ot próbálná.",
+    "panel_hint": "Nyissa meg a [HA-MCP beállítások panelt](/ha-mcp) az eszközök kezeléséhez és a szerverbeállításokhoz.",
+    "tools_module_installed": "Béta / speciális fájl- és YAML-eszközök modul (opcionális): Telepítve",
+    "tools_module_not_installed": "Béta / haladó fájl- és YAML-eszközök modul (opcionális): Nincs telepítve – nyomja meg a „Bejegyzés hozzáadása” gombot az integráció oldalán, és válassza a „HA-MCP File & YAML Tools” lehetőséget a hozzáadásához",
+    "tools_module_not_loaded": "Béta / haladó fájl- és YAML-eszközök modul (opcionális): Telepítve, but nincs betöltve – engedélyezze vagy töltse újra a „HA-MCP File & YAML Tools” bejegyzést az integráció oldalán",
+    "version_line": "{component_version} komponens - ha-mcp szerver {server_version} ({source})",
+    "server_source_paired": "telepítve ezzel a komponenskiadással",
+    "server_source_override": "pip követelmény felülbírálás",
+    "version_not_installed": "még nincs telepítve",
+    "version_unknown": "ismeretlen"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Hozzáférés"
+      }
+    }
+  }
+}

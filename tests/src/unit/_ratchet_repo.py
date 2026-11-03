@@ -9,26 +9,13 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
 
-# Inside a git hook these point every git call at the real repository.
-_GIT_HOOK_VARIABLES = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_PREFIX",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-)
+def make_ratchet_repo(tmp_path: Path, baseline_name: str) -> Path:
+    """Return an empty git repository with no exclusions and an empty baseline.
 
-
-def make_ratchet_repo(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, baseline_name: str
-) -> Path:
-    """Return an empty git repository with no exclusions and an empty baseline."""
-    for name in _GIT_HOOK_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+    Git isolation comes from ``_unit_test_env``, so call this from a test or a
+    function-scoped fixture.
+    """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / "pyproject.toml").write_text(
         "[tool.ruff]\nextend-exclude = []\n", encoding="utf-8"

@@ -97,6 +97,8 @@ echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --agents opena
 | `--ha-url` | (start container) | Use existing HA instance |
 | `--ha-token` | test token | HA long-lived access token |
 | `--branch` | (local code) | Git branch/tag for ha-mcp |
+| `--mcp-url` | (start server) | Use this running ha-mcp server (streamable HTTP); needs `--ha-url` |
+| `--dev-env` | — | Decrypted dev environment URLs file; sets `--ha-url` and `--mcp-url` |
 | `--timeout` | 300 | Timeout per phase in seconds |
 | `--base-url` | — | OpenAI-compatible API base URL (required for `openai` agent) |
 | `--api-key` | `no-key` | API key for OpenAI-compatible endpoint |
@@ -201,6 +203,17 @@ echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --branch feat/
 # Compare against master
 echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --branch master --agents gemini
 ```
+
+## Dev Environment
+
+To run on Home Assistant OS, on the embedded server or the app, or on a machine without Docker, run against a [dev environment](../../docs/dev-ha-env.md) instead of a local container. Start one, decrypt its `dev-ha-env-urls` file, and pass it to either runner:
+
+```bash
+echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --dev-env dev-ha-env-urls.txt --agents claude
+uv run python tests/uat/stories/run_story.py --all --agents claude --dev-env dev-ha-env-urls.txt
+```
+
+The agents use the environment's ha-mcp server, so `--branch` and `--mcp-env` do not apply: the server is the one the environment runs, set by its `track_ref`. Story setup and verification still run in-process against the environment's Home Assistant. The environment keeps its state between runs. Story results record the revision as `unknown` (`version: running server`), since the code under test is the environment's, not the local checkout. To compare a branch with master, start one environment on each and run the same scenarios against both, with a separate `--results-file` for each.
 
 ## Dependencies
 

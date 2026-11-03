@@ -324,7 +324,7 @@
     "backup.bulk.in_use": "{count} sauvegarde(s) sont utilisées. Réessayez une fois la capture ou la restauration active terminée.",
     "backup.bulk.unknown": "Impossible de confirmer le résultat de la suppression. Vérifiez la liste des sauvegardes avant de réessayer.",
     "filesystem.custom.title": "Chemins de fichiers personnalisés (avancé)",
-    "filesystem.custom.help": "Chemins supplémentaires (un par ligne) que les outils de fichiers peuvent <strong>lire et écrire</strong>. Les chemins relatifs à la configuration, y compris les noms de fichiers exacts tels que <code>sensor.yaml</code>, et les chemins sous <code>/share</code>, <code>/media</code>, <code>/ssl</code> et <code>/backup</code> sont pris en charge. Chaque entrée autorise ce chemin et tout ce qui se trouve en dessous. Les entrées sont comparées littéralement ; les caractères génériques tels que <code>*</code> ne sont pas pris en charge. Vous pouvez également gérer ces chemins dans Home Assistant sous Paramètres → Appareils et services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configurer ; les deux emplacements modifient le même paramètre et appliquent les modifications immédiatement.",
+    "filesystem.custom.help": "Chemins supplémentaires (un par ligne) que les outils de fichiers peuvent <strong>lire et écrire</strong>. Les chemins relatifs à la configuration, y compris les noms de fichiers exacts tels que <code>sensor.yaml</code>, ainsi que les chemins sous <code>/share</code>, <code>/media</code> et <code>/ssl</code> (en lecture seule sur HAOS et Supervised) sont pris en charge. Chaque entrée autorise ce chemin et tout ce qui s'y trouve. Les entrées sont mises en correspondance littéralement ; les caractères génériques tels que <code>*</code> ne sont pas pris en charge. Vous pouvez également gérer ces chemins dans Home Assistant sous Paramètres → Appareils et services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configurer ; les deux emplacements modifient le même paramètre et appliquent les modifications immédiatement.",
     "filesystem.custom.blocked": "Toujours bloqués : {paths}, les traversées de chemin (<code>..</code>) et les chemins absolus en dehors des volumes HAOS autorisés.",
     "filesystem.custom.enable_first": "Activez d'abord les fonctionnalités bêta et les outils de système de fichiers ci-dessus pour modifier.",
     "filesystem.custom.unavailable": "Les chemins personnalisés sont actuellement indisponibles.",
@@ -605,7 +605,7 @@
     },
     "ha_config_get_automation": {
       "title": "Obtenir l'automatisation",
-      "description": "Récupère la configuration d'une automatisation Home Assistant."
+      "description": "Obtenir la configuration enregistrée d'une automatisation Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Obtenir les événements du calendrier",

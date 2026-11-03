@@ -22,7 +22,7 @@ from urllib.request import Request, urlopen
 API_VERSION = "2022-11-28"
 DEFAULT_REPOSITORY = "homeassistant-ai/ha-mcp"
 DEFAULT_OUTPUT_DIR = Path("site/public/star-history")
-DEFAULT_START_ON = date(2026, 1, 1)
+CHART_START_ON = date(2026, 1, 1)
 WIDTH = 960
 HEIGHT = 520
 PLOT_LEFT = 82
@@ -278,8 +278,8 @@ def _line_path(coordinates: Sequence[tuple[float, float]]) -> str:
     return " ".join(commands)
 
 
-def _window_history(history: StarHistory, start_on: date) -> StarHistory:
-    points = tuple(point for point in history.points if point.day >= start_on)
+def _window_history(history: StarHistory) -> StarHistory:
+    points = tuple(point for point in history.points if point.day >= CHART_START_ON)
     if not points:
         raise ValueError("chart start date must not follow generated_on")
     return StarHistory(history.repository, history.generated_on, points)
@@ -301,14 +301,9 @@ def _header_svg(theme: Theme, history: StarHistory) -> str:
   <text x="900" y="91" fill="{theme.secondary_text}" font-size="13" text-anchor="end">{escape(history.repository)}</text>"""
 
 
-def render_svg(
-    history: StarHistory,
-    mode: str,
-    *,
-    start_on: date = DEFAULT_START_ON,
-) -> str:
+def render_svg(history: StarHistory, mode: str) -> str:
     """Render one standalone, accessible star-history SVG."""
-    history = _window_history(history, start_on)
+    history = _window_history(history)
     try:
         theme = THEMES[mode]
     except KeyError as err:
@@ -395,15 +390,6 @@ def write_charts(history: StarHistory, output_dir: Path) -> list[Path]:
     return written
 
 
-def _load_timestamps(path: Path) -> list[datetime]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list) or not all(
-        isinstance(item, str) for item in payload
-    ):
-        raise ValueError("input JSON must be an array of timestamp strings")
-    return [_parse_timestamp(item) for item in payload]
-
-
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -411,22 +397,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("GITHUB_REPOSITORY", DEFAULT_REPOSITORY),
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--input-json", type=Path)
-    parser.add_argument("--generated-on", type=date.fromisoformat)
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, today: date | None = None) -> int:
     args = _parse_args(argv)
     try:
-        if args.input_json:
-            timestamps = _load_timestamps(args.input_json)
-        else:
-            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
-            timestamps = fetch_starred_at(args.repository, token)
-        history = aggregate_daily(
-            args.repository, timestamps, generated_on=args.generated_on
-        )
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
+        timestamps = fetch_starred_at(args.repository, token)
+        history = aggregate_daily(args.repository, timestamps, generated_on=today)
         written = write_charts(history, args.output_dir)
     except (OSError, RuntimeError, ValueError) as err:
         print(f"error: {err}", file=sys.stderr)
