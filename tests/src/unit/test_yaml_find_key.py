@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -430,8 +428,9 @@ async def test_root_level_glob_lists_config_root():
     assert seen["path"] == "."
 
 
-async def test_literal_lookup_failure_keeps_the_pattern_matches():
-    """A failed literal lookup must not discard the pattern's sibling match."""
+async def test_literal_lookup_failure_drops_pattern_matches_with_a_warning():
+    """A failed bracketed lookup raises immediately; discovery turns it into a warning."""
+    from .test_yaml_read_tool import _make_tool, _read_ok
 
     def list_files(payload):
         if payload["pattern"] == "svc[[]a].yaml":
@@ -446,60 +445,12 @@ async def test_literal_lookup_failure_keeps_the_pattern_matches():
     out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
 
     assert out["success"] is True
-    assert out["count"] == 1
-    assert out["matches"][0]["file"] == "packages/svca.yaml"
-    assert out["files_searched"] == 1
+    assert out["count"] == 0
+    assert out["matches"] == []
     assert out["warnings"] == [
-        "Literal listing failed: Path not allowed. Files it would have matched "
-        "may be missing from this result."
+        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result.",
+        "packages/svc[a].yaml was not searched because its listing failed.",
     ]
-
-
-async def test_pattern_failure_does_not_claim_the_file_is_absent():
-    """A failed pattern lookup is not evidence that the pattern matched nothing."""
-    from .test_yaml_read_tool import _make_tool, _read_ok
-
-    def list_files(payload):
-        if payload["pattern"] == "svc[[]a].yaml":
-            return {"success": True, "files": []}
-        return {"success": False, "error": "Path not allowed.", "files": []}
-
-    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
-
-    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
-
-    assert out["success"] is True
-    assert out["warnings"] == [
-        "Pattern listing failed: Path not allowed. Files it would have matched "
-        "may be missing from this result."
-    ]
-
-
-async def test_named_bracketed_file_stays_strict_when_literal_listing_fails():
-    """The requested name is still the named target when its lookup fails."""
-    from .test_yaml_read_tool import _make_tool
-
-    def list_files(payload):
-        if payload["pattern"] == "svc[[]].yaml":
-            return {"success": False, "error": "Path not allowed.", "files": []}
-        return {
-            "success": True,
-            "files": [{"path": "packages/svc[].yaml", "is_dir": False}],
-        }
-
-    def read(payload):
-        return {
-            "success": True,
-            "path": payload["path"],
-            "content": "...",
-            "subtree": None,
-            "parse_error": "not valid YAML",
-        }
-
-    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
-
-    with pytest.raises(ToolError):
-        await fn(yaml_path="rest", file="packages/svc[].yaml")
 
 
 async def test_both_lookups_failing_raises():
@@ -519,16 +470,3 @@ async def test_both_lookups_failing_raises():
 
     with pytest.raises(ToolError):
         await fn(yaml_path="rest", file="packages/svc[a].yaml")
-
-
-async def test_bracketed_lookup_propagates_cancellation(monkeypatch):
-    """Cancellation is not a listing failure and must not be swallowed."""
-    from ha_mcp.tools import tools_yaml_read
-
-    async def _cancel(*args, **kwargs):
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(tools_yaml_read, "_list_files_matching", _cancel)
-
-    with pytest.raises(asyncio.CancelledError):
-        await tools_yaml_read._resolve_target_files(object(), "packages/svc[a].yaml")
