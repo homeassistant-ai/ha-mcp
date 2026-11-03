@@ -208,12 +208,35 @@ def test_failed_retry_fails_the_string_not_the_run(
     assert budget_note is crosses_deadline
 
 
+def test_each_chunk_request_is_paced_while_the_budget_lasts(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    """Unpaced chunk requests run into the engine's rate limit; while the
+    budget lasts, every answered chunk must be followed by a wait."""
+    _deadline_in(monkeypatch, 3600)
+    monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
+    monkeypatch.setattr(
+        translate_locales,
+        "_call_gemini",
+        lambda _prompt: {"messages:greeting": "Hallo", "messages:farewell": "Tschüss"},
+    )
+    items = [
+        translate_locales.WorkItem("de", "messages", "greeting", "Hello"),
+        translate_locales.WorkItem("de", "messages", "farewell", "Goodbye"),
+    ]
+    _, failures, _, _ = translate_locales._translate_locale("de", items)
+    assert failures == []
+    assert len(sleeps) == 2, "one wait after each of the two chunk requests"
+    assert all(delay > 0 for delay in sleeps), "a chunk request must be paced"
+
+
 def test_budget_spent_mid_run_keeps_the_answers_and_stops(
     monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
 ) -> None:
     """The budget can run out between two requests for the same surface; the
     strings already translated must be kept, and the run must stop with the
-    budget as its reason instead of calling the engine again."""
+    budget as its reason instead of waiting out the request pacing or calling
+    the engine again."""
     _deadline_in(monkeypatch, 3600)
     monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
     prompts: list[str] = []
@@ -235,3 +258,4 @@ def test_budget_spent_mid_run_keeps_the_answers_and_stops(
     assert results == {("messages", "greeting"): "Hallo"}
     assert failures[0] == "de: time budget exhausted — stopping this run"
     assert failed == {("messages", "farewell")}
+    assert sleeps == []

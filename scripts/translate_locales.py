@@ -806,8 +806,7 @@ def _accept_or_retry(
 ) -> None:
     """Validate one string, retrying once with the reason while the budget lasts."""
     reason = _validate(item, translated)
-    if reason is not None and _out_of_time():
-        # _call_gemini would refuse the retry; skip it and its per-string wait.
+    if reason is not None and _out_of_time():  # _call_gemini would refuse the retry
         reason += " (time budget exhausted; not retrying)"
     elif reason is not None:
         try:
@@ -909,7 +908,8 @@ def _translate_surface(
                 return True, consecutive_engine_failures
             continue
         consecutive_engine_failures = 0
-        time.sleep(_SECONDS_BETWEEN_REQUESTS)
+        if not _out_of_time():  # past the deadline the wait paces no request
+            time.sleep(_SECONDS_BETWEEN_REQUESTS)
         for sid in chunk:
             _accept_or_retry(
                 locale,
