@@ -183,6 +183,39 @@ def test_a_pin_that_is_not_a_dev_build_is_refused(
     assert not output.exists()
 
 
+def test_dev_notes_list_the_commits_since_the_previous_dev_build(
+    tmp_path: Path,
+) -> None:
+    """The publish workflows run ``main()`` with ``--dev-pin`` on a real clone."""
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init")
+    git("config", "user.name", "Release regression")
+    git("config", "user.email", "test@example.invalid")
+    git("commit", "--allow-empty", "-m", "feat: before the previous build (#1)")
+    git("tag", "v9.0.0.dev1")
+    git("commit", "--allow-empty", "-m", "fix: between the builds (#2)")
+    git("tag", "v9.0.0.dev2")
+    output = tmp_path / "notes.md"
+    argv = [
+        "--repo-dir",
+        str(tmp_path),
+        "--dev-pin",
+        "9.0.0.dev2",
+        "--out",
+        str(output),
+    ]
+    assert build.main(argv) == 0
+    notes = output.read_text(encoding="utf-8")
+    assert notes.startswith(
+        "## HA-MCP Custom Component 9.0.0 (development pre-release)\n"
+    )
+    assert "- fix: between the builds (#2)" in notes
+    assert "before the previous build" not in notes
+
+
 def test_dev_notes_list_each_merged_pull_request() -> None:
     notes = build.format_dev_release_notes(
         "9.0.0.dev3100",
