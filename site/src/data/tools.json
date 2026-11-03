@@ -4059,7 +4059,7 @@
         "file": {
           "type": "str",
           "default": "configuration.yaml",
-          "description": "Config-relative file to read. Accepts an fnmatch glob to search several files at once — 'packages/*.yaml' matches one directory level, not a nested tree."
+          "description": "Config-relative file to read. Accepts an fnmatch glob to search several files at once. When the component can load Core's config, key discovery follows packages and include directories recursively."
         },
         "include_content": {
           "type": "bool",
