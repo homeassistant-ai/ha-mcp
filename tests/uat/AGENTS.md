@@ -1,6 +1,6 @@
 # UAT Testing
 
-UAT stories always use testcontainers — a fresh HA Docker container is spun up per agent run. Never use `--ha-url` pointing at a production HA instance.
+UAT stories use testcontainers by default — a fresh HA Docker container is spun up per agent run. `--dev-env` runs them against a [dev environment](../../docs/dev-ha-env.md) instead (see the README). Never use `--ha-url` pointing at a production HA instance.
 
 When testcontainers fails with an image error, diagnose Docker first (`docker images`, `docker info`) before suggesting alternatives. The HA test image is cached locally; a "No such image" error in WSL2 is usually a Docker context mismatch, not a missing image.
 
