@@ -12,9 +12,14 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.rest_client import (
+    HomeAssistantCommandNotSent,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .backup_access import guard_snapshot_route
 from .config_entry_flow import is_component_domain, refuse_component_entry
+from .config_entry_flow_errors import ReconfigureStatus
 from .core_contract import command_payload, integration_commands
 from .helpers import extract_tool_error_message, raise_tool_error, ws_failure_code
 from .util_helpers import is_streaming_ws_command, websocket_error_message
@@ -120,7 +125,24 @@ async def send_ws_command(
             )
         )
     guard_snapshot_route(ws_command=command, ws_params=payload)
-    result = await client.send_websocket_message(message)
+    try:
+        result = await client.send_websocket_message(message)
+    except HomeAssistantCommandNotSent:
+        raise
+    except HomeAssistantConnectionError as lost:
+        # Sent, or possibly sent, with no answer back: the command may have run.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"ws_command '{command}' got no answer from Home Assistant "
+                f"({lost}); it may have been applied",
+                context={**context, "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED},
+                suggestions=[
+                    "Do not retry automatically: a retry can repeat the change. "
+                    "Check the integration's state first."
+                ],
+            )
+        )
     if not result.get("success"):
         code = ws_failure_code(result)
         raise_tool_error(

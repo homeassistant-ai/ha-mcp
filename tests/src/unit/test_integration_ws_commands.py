@@ -9,6 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandNotSent,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import integration_ws_commands as module
 from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_integrations import IntegrationTools
@@ -262,6 +266,26 @@ class TestSend:
         assert (error["code"], error["message"]) == (code, message)
         listed = "include_ws_commands" in str(error.get("suggestion"))
         assert listed is (core_code == "invalid_format")
+
+    @pytest.mark.parametrize(
+        ("raised", "unverified"),
+        [
+            (HomeAssistantConnectionError("closed while waiting"), True),
+            (HomeAssistantCommandNotSent("WebSocket not authenticated"), False),
+        ],
+    )
+    async def test_a_lost_answer_says_the_command_may_have_run(
+        self, raised: Exception, unverified: bool
+    ) -> None:
+        client = _client()
+        client.send_websocket_message = AsyncMock(side_effect=raised)
+        with pytest.raises(ToolError) as exc_info:
+            await IntegrationTools(client).ha_set_integration(
+                entry_id="e1", ws_command="knx/update_entity", ws_data={"a": 1}
+            )
+        response = json.loads(str(exc_info.value))
+        assert (response.get("status") == "applied_but_unverified") is unverified
+        assert ("may have been applied" in response["error"]["message"]) is unverified
 
     async def test_streaming_commands_are_refused(self) -> None:
         client = _client()
