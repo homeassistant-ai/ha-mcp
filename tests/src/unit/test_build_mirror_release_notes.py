@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,19 @@ build = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build)
 
 CHANGELOG_URL = "https://github.com/homeassistant-ai/ha-mcp/releases"
+
+
+@pytest.fixture
+def git(tmp_path: Path) -> Callable[..., None]:
+    """Run git in a fresh repository under ``tmp_path``."""
+
+    def run(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init")
+    run("config", "user.name", "Release regression")
+    run("config", "user.email", "test@example.invalid")
+    return run
 
 
 def test_format_release_notes_lists_subjects_as_bullets() -> None:
@@ -72,16 +86,9 @@ def test_format_release_notes_filters_noise_subjects() -> None:
 
 @pytest.mark.parametrize("component_changed", [False, True])
 def test_release_stamp_does_not_count_as_a_component_change(
-    tmp_path: Path, component_changed: bool
+    tmp_path: Path, git: Callable[..., None], component_changed: bool
 ) -> None:
     """Match the server-only release reproduced on the HAOS dev instance."""
-
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    git("init")
-    git("config", "user.name", "Release regression")
-    git("config", "user.email", "test@example.invalid")
     component = tmp_path / "custom_components" / "ha_mcp_tools"
     component.mkdir(parents=True)
     version = component / "const.py"
@@ -184,16 +191,11 @@ def test_a_pin_that_is_not_a_dev_build_is_refused(
 
 
 def test_dev_notes_list_the_commits_since_the_previous_dev_build(
-    tmp_path: Path,
+    tmp_path: Path, git: Callable[..., None]
 ) -> None:
-    """The publish workflows run ``main()`` with ``--dev-pin`` on a real clone."""
-
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    git("init")
-    git("config", "user.name", "Release regression")
-    git("config", "user.email", "test@example.invalid")
+    """Dev pre-release notes must list only the pull requests merged since the
+    previous dev build, and name the build they install. It passes the options
+    the publish workflows pass."""
     git("commit", "--allow-empty", "-m", "feat: before the previous build (#1)")
     git("tag", "v9.0.0.dev1")
     git("commit", "--allow-empty", "-m", "fix: between the builds (#2)")
@@ -204,6 +206,12 @@ def test_dev_notes_list_the_commits_since_the_previous_dev_build(
         str(tmp_path),
         "--dev-pin",
         "9.0.0.dev2",
+        "--dist",
+        "ha-mcp-test",
+        "--source",
+        "v9.0.0.dev2",
+        "--source-label",
+        "owner/repo@abc1234",
         "--out",
         str(output),
     ]
@@ -212,6 +220,8 @@ def test_dev_notes_list_the_commits_since_the_previous_dev_build(
     assert notes.startswith(
         "## HA-MCP Custom Component 9.0.0 (development pre-release)\n"
     )
+    assert "from owner/repo@abc1234," in notes
+    assert "Installs ha-mcp-test==9.0.0.dev2." in notes
     assert "- fix: between the builds (#2)" in notes
     assert "before the previous build" not in notes
 
