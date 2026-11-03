@@ -734,10 +734,10 @@ class TestHaGetOverviewReadOnlyMode:
         from types import SimpleNamespace
 
         monkeypatch.setattr(
-            "ha_mcp.tools.tools_search.get_global_settings",
-            # ha_get_overview reads enable_tool_search from the same
-            # singleton before the read-only re-read — stub both.
-            lambda: SimpleNamespace(read_only_mode=on, enable_tool_search=False),
+            "ha_mcp.tool_catalog.get_global_settings",
+            # ha_get_overview reads the catalog mode before the read-only
+            # re-read — stub both.
+            lambda: SimpleNamespace(enable_tool_search=False),
         )
         monkeypatch.setattr(
             "ha_mcp.read_only.get_global_settings",

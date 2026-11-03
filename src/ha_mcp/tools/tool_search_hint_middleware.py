@@ -1,8 +1,8 @@
 """FastMCP middleware: actionable error for stale tool-search proxy/search calls.
 
-When ``enable_tool_search`` is off, the synthetic tool-search tools —
-``ha_search_tools`` and the ``ha_call_{read,write,delete}_tool`` proxies — are
-never registered (the ``CategorizedSearchTransform`` is not installed). If a
+On a connection using the full catalog (see ``ha_mcp.tool_catalog``), the
+synthetic tool-search tools — ``ha_search_tools`` and the
+``ha_call_{read,write,delete}_tool`` proxies — do not resolve. If a
 client calls one of them anyway, FastMCP raises a bare ``NotFoundError``
 ("Unknown tool: 'ha_search_tools'") with no recovery guidance.
 
@@ -33,9 +33,9 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     MiddlewareContext,
 )
 
-from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..policy.middleware import PROXY_META_TOOLS
+from ..tool_catalog import tool_search_active
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -61,13 +61,9 @@ class ToolSearchHintMiddleware(Middleware):
             #  - require Tool Search to be off (when on, the names resolve, so a
             #    miss would be a different, real problem we must not mask).
             top_level_miss = str(exc) == f"Unknown tool: {name!r}"
-            if (
-                top_level_miss
-                and name in PROXY_META_TOOLS
-                and not get_global_settings().enable_tool_search
-            ):
+            if top_level_miss and name in PROXY_META_TOOLS and not tool_search_active():
                 logger.info(
-                    "Stale tool-search call for %r while enable_tool_search is off "
+                    "Stale tool-search call for %r on a full-catalog connection "
                     "- returning refresh-your-tool-list hint",
                     name,
                 )
@@ -76,7 +72,7 @@ class ToolSearchHintMiddleware(Middleware):
                         code=ErrorCode.RESOURCE_NOT_FOUND,
                         message=(
                             f"'{name}' only exists when Tool Search is enabled, and "
-                            "Tool Search is currently OFF on this ha-mcp server. Your "
+                            "Tool Search is currently OFF for this connection. Your "
                             "MCP client is showing a cached tool list from when Tool "
                             "Search was on. After changing any ha-mcp setting (Tool "
                             "Search, pinned/disabled tools, etc.) the client must "

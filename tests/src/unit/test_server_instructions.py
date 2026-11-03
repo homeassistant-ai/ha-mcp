@@ -122,7 +122,7 @@ class TestNotices:
     ) -> None:
         """Agents that file issues without ha_report_issue output get them
         closed; the instructions must say so with or without skills."""
-        instructions = compose_instructions(skills, settings)
+        instructions = compose_instructions(skills, settings, tool_search=False)
         assert "run ha_report_issue and put the issue_body it returns" in instructions
         if skills:
             assert instructions.startswith(skills)
@@ -134,7 +134,7 @@ class TestNotices:
         """A client started in Read Only Mode must be warned up front, without
         losing the issue-filing rule."""
         settings.read_only_mode = True
-        instructions = compose_instructions(skills, settings)
+        instructions = compose_instructions(skills, settings, tool_search=False)
         assert "## Read Only Mode" in instructions
         assert "## Filing ha-mcp issues" in instructions
 
@@ -149,7 +149,7 @@ class TestCustomInstructions:
         self, settings: MagicMock, value: str
     ) -> None:
         settings.custom_instructions = value
-        assert compose_instructions("SKILLS", settings).endswith(
+        assert compose_instructions("SKILLS", settings, tool_search=False).endswith(
             ISSUE_FILING_INSTRUCTIONS
         )
 
@@ -157,7 +157,7 @@ class TestCustomInstructions:
         self, settings: MagicMock
     ) -> None:
         settings.custom_instructions = f"  {self.TEXT}\n"
-        instructions = compose_instructions("SKILLS", settings)
+        instructions = compose_instructions("SKILLS", settings, tool_search=False)
         assert instructions.endswith(
             f"{ISSUE_FILING_INSTRUCTIONS}\n\n"
             f"## Instructions from this installation's owner\n{self.TEXT}"
@@ -167,7 +167,7 @@ class TestCustomInstructions:
         self, settings: MagicMock
     ) -> None:
         settings.custom_instructions = "First rule.\nSecond rule."
-        assert compose_instructions(None, settings).endswith(
+        assert compose_instructions(None, settings, tool_search=False).endswith(
             "First rule.\nSecond rule."
         )
 
@@ -188,6 +188,7 @@ def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
     srv.mcp = MagicMock()
     srv._user_enabled_tools = set()
     srv._user_pinned_tools = []
+    srv._instructions = {"full": "", "search": ""}
     with (
         patch("ha_mcp.server.skill_tool_hidden", return_value=hidden),
         patch("ha_mcp.transforms.CategorizedSearchTransform") as transform,

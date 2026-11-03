@@ -26,6 +26,9 @@ from ha_mcp.transforms.compact_params import compact_params
 from .test_search_pinned_results import _tool
 from .test_search_pinned_results import toolsearch_server as toolsearch_server
 
+# These tests exercise the search tools a search-mode connection gets.
+pytestmark = pytest.mark.usefixtures("tool_search_default")
+
 
 async def _typed(
     helper_type: Literal["input_boolean", "counter"],

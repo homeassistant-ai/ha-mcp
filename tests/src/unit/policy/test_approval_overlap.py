@@ -86,6 +86,7 @@ def progress_setter(
     return handler
 
 
+@pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.parametrize("route", ["direct", "write-proxy"])
 async def test_one_approval_dispatches_only_one_overlapping_static_call(
     route: str,
