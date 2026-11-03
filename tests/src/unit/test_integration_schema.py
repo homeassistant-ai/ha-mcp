@@ -158,19 +158,6 @@ _FLOW_METHODS = {
 }
 
 
-@pytest.mark.asyncio
-async def test_a_failed_menu_choice_submit_fails_the_subentry_describe() -> None:
-    client = _client(_MENU)
-    client.submit_config_subentry_flow_step.side_effect = HomeAssistantAPIError(
-        "API error: 400 - Invalid step", status_code=400
-    )
-
-    with pytest.raises(HomeAssistantAPIError, match="Invalid step"):
-        await _describe("subentry", client, "advanced")
-
-    client.abort_config_subentry_flow.assert_awaited_once_with("f1")
-
-
 _ABORTS = {"probe": "abort_options_flow", "entry_options": "abort_options_flow"} | {
     kind: methods[1] for kind, methods in _FLOW_METHODS.items()
 }

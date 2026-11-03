@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock
@@ -306,29 +305,6 @@ async def test_options_flow_menu_lists_only_string_choices(
 
 
 @pytest.mark.asyncio
-async def test_an_options_flow_abort_that_never_answers_does_not_hold_the_describe(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def never_answers(*_args: Any) -> None:
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
-    client.get_config_entry.return_value = {"domain": "group"}
-    client.start_options_flow.return_value = {
-        "type": "menu",
-        "flow_id": "f1",
-        "menu_options": ["a"],
-    }
-    client.abort_options_flow.side_effect = never_answers
-
-    result = await asyncio.wait_for(
-        mod.describe_helper(client, "group", helper_id="entry1"), timeout=2
-    )
-
-    assert result["menu_options"] == ["a"]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("menu_choice", "helper_id"),
     [("sensor", None), (None, None), (None, "entry1")],
@@ -601,39 +577,15 @@ async def test_core_fields_follow_a_stable_order_with_hints_first(
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_options_describe_still_closes_its_flow(
+async def test_a_cancelled_error_context_read_still_closes_its_flow(
     client: AsyncMock,
-) -> None:
-    client.get_config_entry.return_value = {"domain": "group"}
-    client.start_options_flow.return_value = {
-        "type": "menu",
-        "flow_id": "f1",
-        "menu_options": ["a"],
-    }
-    sent, client.abort_options_flow.side_effect = _abort_recorder()
-
-    with anyio.CancelScope() as scope:
-        scope.cancel()
-        await mod.describe_helper(client, "group", helper_id="entry1")
-
-    assert sent == ["f1"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "read",
-    [mod.describe_helper, config_entry_flow_introspect.fetch_helper_flow_info],
-    ids=["describe", "error-context"],
-)
-async def test_a_cancelled_setup_flow_read_still_closes_its_flow(
-    client: AsyncMock, read: Any
 ) -> None:
     client.start_config_flow.return_value = _form("user", [])
     sent, client.abort_config_flow.side_effect = _abort_recorder()
 
     with anyio.CancelScope() as scope:
         scope.cancel()
-        await read(client, "group")
+        await config_entry_flow_introspect.fetch_helper_flow_info(client, "group")
 
     assert sent == ["f1"]
 

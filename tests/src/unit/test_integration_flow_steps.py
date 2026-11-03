@@ -439,6 +439,8 @@ async def test_abort_reaches_the_clients_abort_through_the_tool(kwargs, abort_fn
     getattr(client, abort_fn).assert_awaited_once_with("f1")
     assert result["aborted"] is True
     client._request.assert_not_awaited()
+    client.start_config_flow.assert_not_awaited()
+    client.start_options_flow.assert_not_awaited()
     client.submit_config_flow_step.assert_not_awaited()
 
 
