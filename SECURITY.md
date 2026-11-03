@@ -169,6 +169,9 @@ hidden-entity reference and which paths were omitted. It does not name the hidde
 entity (a hidden mapping key is reported as `<hidden key>`) or reveal the omitted
 values.
 
+`ha_get_skill_guide` is never scanned: it returns only the bundled
+best-practices docs, whose examples can name an entity_id that is also hidden.
+
 One diagnostic path is deliberately outside that guarantee by default:
 `ha_report_issue` bypasses both scans while `restrict_report_issue` is false,
 even when visibility data is healthy, and its report may contain logs naming a
