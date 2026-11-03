@@ -1656,7 +1656,7 @@ class TestSetIntegrationModes:
         """Identity guards and confirmation must not be silently ignored."""
         with (
             patch(
-                "ha_mcp.tools.tools_integrations.update_config_entry_options",
+                "ha_mcp.tools.tools_integrations.run_integration_step",
                 new=AsyncMock(return_value={"success": True}),
             ) as options_mock,
             pytest.raises(ToolError) as exc_info,
@@ -1678,7 +1678,7 @@ class TestSetIntegrationModes:
         """The identity guards must not ride an unguarded options update."""
         with (
             patch(
-                "ha_mcp.tools.tools_integrations.update_config_entry_options",
+                "ha_mcp.tools.tools_integrations.run_integration_step",
                 new=AsyncMock(return_value={"success": True}),
             ) as options_mock,
             pytest.raises(ToolError) as exc_info,
@@ -1725,6 +1725,9 @@ class TestSetIntegrationModes:
         run_mock.assert_awaited_once_with(
             "abc",
             config={"host": "192.0.2.170"},
+            flow_id=None,
+            menu_choice=None,
+            abort=False,
             expected_device_id="device-1",
             expected_unique_id=None,
             expected_mac=None,
@@ -1785,6 +1788,7 @@ class TestSetIntegrationModes:
                 entry_id="abc",
                 reconfigure=True,
                 config={"host": "192.0.2.170"},
+                flow_id="flow-1",
                 confirm_token=confirm_token,
             )
 
@@ -1825,8 +1829,12 @@ class TestSetIntegrationModes:
                 ),
             ) as prepare_mock,
             patch(
-                "ha_mcp.tools.integration_reconfigure.read_reconfigure_form",
-                new=AsyncMock(return_value=({}, [])),
+                "ha_mcp.tools.integration_reconfigure.start_reconfigure_step",
+                new=AsyncMock(return_value=("flow-1", {"type": "form"})),
+            ),
+            patch(
+                "ha_mcp.tools.integration_flow_steps.open_step_answer",
+                new=AsyncMock(return_value={"success": True, "flow_id": "flow-1"}),
             ),
         ):
             preview = await ReconfigureRunner(mock_client).run(
@@ -1838,6 +1846,7 @@ class TestSetIntegrationModes:
         assert preview["success"] is True
         assert "preview" not in preview  # status is the single signal
         assert preview["status"] == ReconfigureStatus.PREVIEW
+        assert preview["flow_id"] == "flow-1"
         assert preview["confirm_token"].startswith("sha256:")
         prepare_mock.assert_awaited_once_with(
             mock_client,
@@ -1884,8 +1893,12 @@ class TestSetIntegrationModes:
                 new=AsyncMock(return_value={"success": True}),
             ) as apply_mock,
             patch(
-                "ha_mcp.tools.integration_reconfigure.read_reconfigure_form",
-                new=AsyncMock(return_value=({}, [])),
+                "ha_mcp.tools.integration_reconfigure.start_reconfigure_step",
+                new=AsyncMock(return_value=("flow-1", {"type": "form"})),
+            ),
+            patch(
+                "ha_mcp.tools.integration_flow_steps.open_step_answer",
+                new=AsyncMock(return_value={"success": True, "flow_id": "flow-1"}),
             ),
         ):
             preview = await ReconfigureRunner(mock_client).run(
@@ -1897,12 +1910,14 @@ class TestSetIntegrationModes:
                 "abc",
                 config={"host": "192.0.2.170"},
                 expected_device_id="device-1",
+                flow_id="flow-1",
                 confirm_token=preview["confirm_token"],
             )
 
         assert result == {"success": True}
         apply_mock.assert_awaited_once()
         assert apply_mock.await_args is not None
+        assert apply_mock.await_args.kwargs["flow_id"] == "flow-1"
         assert apply_mock.await_args.kwargs["prepared"] == PreparedReconfigure(
             entry_id="abc",
             entry=entry,
@@ -1918,40 +1933,74 @@ class TestSetIntegrationModes:
 
     # === Mode delegation ===
 
-    async def test_add_mode_delegates_to_create_config_entry(self, tools, mock_client):
-        sentinel = {"success": True, "entry_id": "new123", "domain": "workday"}
-        with patch(
-            "ha_mcp.tools.tools_integrations.create_config_entry",
-            new=AsyncMock(return_value=sentinel),
-        ) as create_mock:
-            result = await tools.ha_set_integration(
-                domain="workday", config={"name": "Workday"}
-            )
-        create_mock.assert_awaited_once_with(
-            mock_client, "workday", {"name": "Workday"}
-        )
-        assert result is sentinel
-
-    async def test_add_mode_defaults_config_to_empty_dict(self, tools, mock_client):
-        with patch(
-            "ha_mcp.tools.tools_integrations.create_config_entry",
-            new=AsyncMock(return_value={"success": True}),
-        ) as create_mock:
-            await tools.ha_set_integration(domain="sun")
-        create_mock.assert_awaited_once_with(mock_client, "sun", {})
-
-    async def test_options_mode_delegates_to_update_config_entry_options(
-        self, tools, mock_client
+    @pytest.mark.parametrize(
+        ("call", "expected"),
+        [
+            pytest.param(
+                {"domain": "Workday ", "config": {"name": "Workday"}},
+                {"domain": "workday", "entry_id": None, "config": {"name": "Workday"}},
+                id="add",
+            ),
+            pytest.param(
+                {"domain": "sun"},
+                {"domain": "sun", "entry_id": None, "config": None},
+                id="add-without-config",
+            ),
+            pytest.param(
+                {"domain": "knx", "flow_id": "f1", "menu_choice": "tunnel"},
+                {
+                    "domain": "knx",
+                    "entry_id": None,
+                    "flow_id": "f1",
+                    "menu_choice": "tunnel",
+                },
+                id="add-continue-menu",
+            ),
+            pytest.param(
+                {"domain": "knx", "describe": True},
+                {"domain": "knx", "entry_id": None, "describe": True},
+                id="add-describe",
+            ),
+            pytest.param(
+                {"entry_id": "abc", "config": {"scan_interval": 30}},
+                {"domain": None, "entry_id": "abc", "config": {"scan_interval": 30}},
+                id="options",
+            ),
+            pytest.param(
+                {"entry_id": "abc", "flow_id": "f1", "abort": True},
+                {"domain": None, "entry_id": "abc", "flow_id": "f1", "abort": True},
+                id="options-abort",
+            ),
+            pytest.param(
+                {"entry_id": "abc", "describe": True},
+                {"domain": None, "entry_id": "abc", "describe": True},
+                id="options-describe",
+            ),
+        ],
+    )
+    async def test_add_and_options_modes_delegate_to_run_integration_step(
+        self, tools, mock_client, call, expected
     ):
-        sentinel = {"success": True, "entry_id": "abc", "updated": True}
+        """One step per call: domain (setup) and entry_id (options) both go
+        through run_integration_step; the unset parameters stay unset."""
+        sentinel = {"success": True, "flow_id": "f1"}
         with patch(
-            "ha_mcp.tools.tools_integrations.update_config_entry_options",
+            "ha_mcp.tools.tools_integrations.run_integration_step",
             new=AsyncMock(return_value=sentinel),
-        ) as update_mock:
-            result = await tools.ha_set_integration(
-                entry_id="abc", config={"scan_interval": 30}
-            )
-        update_mock.assert_awaited_once_with(mock_client, "abc", {"scan_interval": 30})
+        ) as step_mock:
+            result = await tools.ha_set_integration(**call)
+
+        step_mock.assert_awaited_once_with(
+            mock_client,
+            **{
+                "flow_id": None,
+                "config": None,
+                "menu_choice": None,
+                "abort": False,
+                "describe": False,
+                **expected,
+            },
+        )
         assert result is sentinel
 
     async def test_enable_disable_mode_still_works(self, tools, mock_client):

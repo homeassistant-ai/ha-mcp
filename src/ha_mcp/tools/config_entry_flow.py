@@ -11,14 +11,15 @@ for every helper flow Home Assistant lists (``helper_flows.helper_flow_types``).
 The tool description tells callers to leave `otp` to the user in the HA UI,
 since its secret is a credential they enroll in an authenticator app.
 
-The same flow walkers drive every other config-entry surface, not just
-helpers: ``ha_set_integration`` creates entries for arbitrary domains through
-``create_config_entry`` and edits them through ``update_config_entry_options``;
+The same flow walkers serve other config-entry surfaces, not just helpers:
+backup restore re-applies an entry's options through
+``update_config_entry_options``, and
 ``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
-through ``set_config_subentry``. Changing a live entry's connection settings is
-a different problem — it commits in place and Home Assistant reloads afterwards
-— and lives in ``config_entry_reconfigure``, which shares this module's
-sentinel rejection and ``config_entry_flow_abort``'s flow abort.
+through ``set_config_subentry``. ``ha_set_integration`` does not walk: it
+answers one step per call (``integration_flow_steps``). Changing a live
+entry's connection settings commits in place and Home Assistant reloads
+afterwards; that verification lives in ``config_entry_reconfigure``, which
+shares this module's sentinel rejection.
 
 The step machinery those entry points drive lives in seven sibling modules.
 Each imports only modules upstream of it in these chains, so no import runs
@@ -660,8 +661,8 @@ async def update_config_entry_options(
     """Update an existing config entry via its options flow.
 
     When ``expected_domain`` is provided, verifies the entry's domain matches
-    it first (the helper path passes the helper_type; the generic
-    ``ha_set_integration`` path passes ``None`` to accept any domain). Starts
+    it first (the helper path passes the helper_type, backup restore the
+    entry's domain; ``None`` accepts any domain). Starts
     an options flow, walks the flow steps, and returns the result. ``noun``
     only affects response wording.
 

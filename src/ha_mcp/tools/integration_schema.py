@@ -1,14 +1,14 @@
-"""The setup, options and subentry flow schemas of ha_get_integration and
-ha_set_integration(describe=True).
+"""The options and subentry flow schemas of ha_get_integration, and the
+subentry form of ha_set_integration(describe=True).
 
-A schema only exists inside an open flow: the domain's config flow (or the
-entry's options or subentry flow) is started, its form described in the same
-compact shape the helper describe uses (fields, HA's help text, current
-values), and the flow aborted. A flow that opens with a menu lists its
+A schema only exists inside an open flow: the entry's options or subentry
+flow is started, its form described in the same compact shape the helper
+describe uses (fields, HA's help text, current values), and the flow
+aborted. A flow that opens with a menu lists its
 branches; ``menu_choice`` (ha_set_integration only) submits one of them, which
 runs that step in Home Assistant, and describes the form behind it. A flow
 Home Assistant aborts is reported with Core's reason text. A step without a
-form fails the call; a setup flow Core finishes names the entry it created.
+form fails the call.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import (
     harvest_secret_strings,
@@ -38,7 +37,6 @@ from .config_entry_flow_form import iter_schema_fields
 from .config_entry_flow_introspect import abort_probe_flow, menu_choices
 from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error, validate_identifier_not_empty
-from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
 
@@ -176,26 +174,6 @@ def _refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> NoReturn:
     )
 
 
-def _raise_setup_flow_finished(step: dict[str, Any]) -> NoReturn:
-    """Report a setup describe Core answered with ``create_entry``: it committed."""
-    result = step.get("result")
-    result = result if isinstance(result, dict) else {}
-    title = result.get("title", step.get("title"))
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "Home Assistant finished the setup flow and created config entry "
-            f"{result.get('entry_id')} ({title!r}) instead of showing a form "
-            "to describe",
-            suggestions=[
-                "Remove the entry with ha_remove_helpers_integrations if it is "
-                "not wanted."
-            ],
-            context={"entry_id": result.get("entry_id"), "title": title},
-        )
-    )
-
-
 def _put_payload(resp: dict[str, Any], key: str, payload: dict[str, Any]) -> None:
     """``payload`` as ``resp[key]``, its ``warnings`` moved to the response's."""
     if warnings := payload.pop("warnings", None):
@@ -233,7 +211,7 @@ async def _describe_step(
         step = await submit(step["flow_id"], {"next_step_id": menu_choice})
         chosen = {"menu_choice": menu_choice}
     elif menu_choice is not None and step.get("type") not in ("abort", "create_entry"):
-        # An abort is reported, and a finished setup flow names its entry.
+        # An abort or a finished flow is reported below, not hidden by this.
         _refuse_menu_choice(
             menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
         )
@@ -252,8 +230,6 @@ async def _describe_step(
             **chosen,
             "menu_options": menu_choices(step),
         }
-    if step_type == "create_entry" and flow.path == "config":
-        _raise_setup_flow_finished(step)
     if step_type != "form":
         progress: dict[str, Any] = {}
         if step_type == "progress":
@@ -287,8 +263,6 @@ async def fetch_options_schema(
     resp: dict[str, Any],
     *,
     populate_options: bool = True,
-    strict: bool = False,
-    menu_choice: str | None = None,
 ) -> None:
     """Describe the entry's options flow as ``resp["options_schema"]``.
 
@@ -296,9 +270,7 @@ async def fetch_options_schema(
     callers requesting both schema and options don't pay for two round-trips.
     Pass ``populate_options=False`` on the component-served path, where
     ``options`` already carry the raw persisted values and must NOT be
-    overwritten by the OptionsFlow-derived suggested-value shape. ``strict``
-    (the describe is the call's whole answer) raises a failed read instead of
-    warning.
+    overwritten by the OptionsFlow-derived suggested-value shape.
     """
     entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
     try:
@@ -309,7 +281,7 @@ async def fetch_options_schema(
             flow_id,
             flow_left_open("options", flow_id),
             resp,
-            keep_raw_errors=not strict,
+            keep_raw_errors=True,
         ):
             if flow_result.get("type") == "form" and entry is not None:
                 if populate_options:
@@ -337,15 +309,13 @@ async def fetch_options_schema(
                     client,
                     flow_result,
                     flow=FlowRef(_entry_domain(entry), "options", entry_id),
-                    menu_choice=menu_choice,
+                    menu_choice=None,
                     submit=client.submit_options_flow_step,
                 ),
             )
     except ToolError:
         raise
     except Exception as schema_err:
-        if strict:
-            raise
         logger.warning(
             f"Failed to fetch options schema for {entry_id}: "
             f"{type(schema_err).__name__}: {schema_err}",
@@ -419,54 +389,6 @@ async def fetch_config_subentry_schema(
         )
 
 
-async def fetch_config_flow_schema(
-    client: Any, domain: str, resp: dict[str, Any], *, menu_choice: str | None = None
-) -> None:
-    """Describe ``domain``'s setup (config) flow as ``resp["config_flow_schema"]``.
-
-    The flow is started, its first step (or the form behind ``menu_choice``)
-    described, and the flow aborted. A step that creates the entry raises, and
-    so does a domain Home Assistant starts no config flow for.
-    """
-    try:
-        first_step = await client.start_config_flow(domain)
-    except HomeAssistantAPIError as err:
-        # Core answers 404 "Invalid handler specified" for a domain without a
-        # config flow, and 400 when the domain's dependencies failed or its
-        # flow has no user step: the domain exists, its flow cannot start.
-        if err.status_code == 404:
-            code, suggestions = ErrorCode.RESOURCE_NOT_FOUND, None
-        elif err.status_code == 400:
-            code = ErrorCode.SERVICE_CALL_FAILED
-            suggestions = [
-                "The integration exists but its setup flow cannot start: "
-                "Core's text names the failed dependency or the missing "
-                "step. Check the Home Assistant log."
-            ]
-        else:
-            raise
-        raise_tool_error(
-            create_error_response(
-                code,
-                f"Home Assistant could not start a config flow for {domain!r} ({err})",
-                context={"domain": domain},
-                suggestions=suggestions,
-            )
-        )
-    flow_id = first_step.get("flow_id")
-    async with closing_probe_flow(
-        client.abort_config_flow, flow_id, flow_left_open("setup", flow_id), resp
-    ):
-        schema = await _describe_step(
-            client,
-            first_step,
-            flow=FlowRef(domain, "config"),
-            menu_choice=menu_choice,
-            submit=client.submit_config_flow_step,
-        )
-    _put_payload(resp, "config_flow_schema", schema)
-
-
 async def describe_flow_form(
     client: Any,
     *,
@@ -478,81 +400,35 @@ async def describe_flow_form(
     menu_choice: str | None,
     other_modes: list[str],
 ) -> dict[str, Any]:
-    """``ha_set_integration(describe=True)``: describe ``domain``'s setup form,
-    or ``entry_id``'s options form (its subentry form with ``subentry_type``),
-    with ``menu_choice`` submitted when given. The flow is aborted afterwards."""
-    subentry = subentry_type is not None or subentry_id is not None
-    if (
-        not describe
-        or (domain is None) == (entry_id is None)
-        or other_modes
-        or (domain is not None and subentry)
-    ):
+    """``ha_set_integration(describe=True, subentry_type=...)``: describe
+    ``entry_id``'s subentry form, with ``menu_choice`` submitted when given.
+    The flow is aborted afterwards."""
+    if not describe or domain is not None or entry_id is None or other_modes:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "describe=True takes domain, or entry_id (plus subentry_type, "
-                "and subentry_id for an existing subentry), and optionally "
-                "menu_choice; menu_choice, subentry_type and subentry_id apply "
-                "only with describe=True"
+                "subentry_type and subentry_id apply only with describe=True "
+                "and entry_id (subentry_id for an existing subentry), and "
+                "optionally menu_choice"
                 + (f"; drop {', '.join(other_modes)}" if other_modes else ""),
                 suggestions=[
-                    (
-                        "Example: ha_set_integration(domain='group', "
-                        "describe=True, menu_choice='light')"
-                    ),
-                    (
-                        "Example: ha_set_integration(entry_id='abc123', "
-                        "describe=True, menu_choice='advanced')"
-                    ),
+                    "Example: ha_set_integration(entry_id='abc123', "
+                    "describe=True, subentry_type='conversation')"
                 ],
             )
         )
-    if domain is not None:
-        validate_identifier_not_empty(domain, "domain")
-        resp: dict[str, Any] = {"success": True, "domain": domain.strip().lower()}
-        await fetch_config_flow_schema(
-            client, resp["domain"], resp, menu_choice=menu_choice
-        )
-        return resp
     entry_id = validate_identifier_not_empty(entry_id, "entry_id")
     # The entry names the domain whose strings hold the help text.
-    resp = {"success": True, "entry_id": entry_id}
+    resp: dict[str, Any] = {"success": True, "entry_id": entry_id}
     resp["entry"] = await client.get_config_entry(entry_id)
-    if subentry:
-        await fetch_config_subentry_schema(
-            client,
-            entry_id,
-            resp,
-            subentry_type=subentry_type,
-            subentry_id=subentry_id,
-            show_advanced_options=False,
-            menu_choice=menu_choice,
-        )
-    else:
-        refuse_ignored_entry(
-            resp["entry"], action="describe the options flow of", entry_id=entry_id
-        )
-        if resp["entry"].get("supports_options") is False:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Config entry '{entry_id}' has no options flow "
-                    "(supports_options is false), so there is no options form "
-                    "to describe.",
-                    context={
-                        "entry_id": entry_id,
-                        "domain": resp["entry"].get("domain"),
-                    },
-                )
-            )
-        await fetch_options_schema(
-            client,
-            entry_id,
-            resp,
-            populate_options=False,
-            strict=True,
-            menu_choice=menu_choice,
-        )
+    await fetch_config_subentry_schema(
+        client,
+        entry_id,
+        resp,
+        subentry_type=subentry_type,
+        subentry_id=subentry_id,
+        show_advanced_options=False,
+        menu_choice=menu_choice,
+    )
     del resp["entry"]
     return resp

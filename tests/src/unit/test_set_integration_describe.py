@@ -15,6 +15,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.tools import config_entry_flow_progress
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_integration_schema import _HOST, _MENU, _client, _error, _form
@@ -29,15 +30,19 @@ async def test_set_integration_describe_returns_the_setup_form() -> None:
     )
 
     client.start_config_flow.assert_awaited_once_with("demo")
-    client.abort_config_flow.assert_awaited_once_with("f1")
-    assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
+    # Describe opens the flow and submits nothing; the flow stays open and the
+    # response carries the flow_id that continues it.
+    client.submit_config_flow_step.assert_not_called()
+    client.abort_config_flow.assert_not_called()
+    assert resp["flow_id"] == "f1"
+    assert resp["step_id"] == "user"
+    assert resp["fields"][0]["name"] == "host"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call",
     [
-        {"domain": "demo", "menu_choice": "light"},
         {"entry_id": "e1", "subentry_type": "conversation"},
         {"entry_id": "e1", "subentry_id": "sub1"},
         {"describe": True},
@@ -48,7 +53,6 @@ async def test_set_integration_describe_returns_the_setup_form() -> None:
         {"domain": "demo", "describe": True, "log_persistence": "permanent"},
     ],
     ids=[
-        "menu-without-describe",
         "subentry-type-without-describe",
         "subentry-id-without-describe",
         "no-domain-or-entry",
@@ -69,8 +73,6 @@ async def test_set_integration_describe_takes_one_flow_and_menu_choice_only(
 
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    # log_persistence without log_level is refused before the describe.
-    assert "describe=True" in error["message"] or "log_persistence" in call
     client.start_config_flow.assert_not_called()
     client.start_options_flow.assert_not_called()
     client.start_config_subentry_flow.assert_not_called()
@@ -96,12 +98,11 @@ async def test_set_integration_describes_the_options_form_behind_a_menu() -> Non
     client.submit_options_flow_step.assert_awaited_once_with(
         "f1", {"next_step_id": "advanced"}
     )
-    client.abort_options_flow.assert_awaited_once_with("f1")
-    schema = resp["options_schema"]
-    assert schema["menu_choice"] == "advanced"
-    assert [(f["name"], f["description"]) for f in schema["fields"]] == [
-        ("host", "Host")
-    ]
+    # The flow stays open at the form behind the menu.
+    client.abort_options_flow.assert_not_called()
+    assert resp["flow_id"] == "f1"
+    assert resp["step_id"] == "advanced"
+    assert [(f["name"], f["description"]) for f in resp["fields"]] == [("host", "Host")]
     assert "entry" not in resp
 
 
@@ -232,17 +233,104 @@ async def test_set_integration_describe_whose_flow_start_fails_with_5xx() -> Non
 
 
 @pytest.mark.asyncio
-async def test_set_integration_describe_left_open_returns_the_warning() -> None:
-    client = _client(_MENU)
-    client.submit_config_flow_step.side_effect = HomeAssistantAPIError(
-        "API error: 500", status_code=500
+async def test_set_integration_describe_reads_the_setup_help_text_and_later_forms() -> (
+    None
+):
+    client = _client(
+        _form("user", _HOST, last_step=False),
+        {"component.demo.config.step.user.data_description.host": "Device IP."},
     )
-    client.abort_config_flow.side_effect = TimeoutError()
+
+    resp = await IntegrationTools(client).ha_set_integration(
+        domain="demo", describe=True
+    )
+
+    assert resp["fields"][0]["description"] == "Device IP."
+    assert resp["more_forms"] == "yes"
+    client.abort_config_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_integration_describe_lists_a_setup_menu_then_answers_it() -> None:
+    client = _client(dict(_MENU))
+
+    listed = await IntegrationTools(client).ha_set_integration(
+        domain="group", describe=True
+    )
+
+    assert listed["flow_type"] == "menu"
+    assert listed["menu_options"] == ["basic", "advanced"]
+    client.submit_config_flow_step.assert_not_called()
+
+    client.submit_config_flow_step.return_value = _form("advanced", _HOST)
+    chosen = await IntegrationTools(client).ha_set_integration(
+        domain="group", describe=True, menu_choice="advanced"
+    )
+
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "f1", {"next_step_id": "advanced"}
+    )
+    assert chosen["step_id"] == "advanced"
+    assert chosen["fields"][0]["name"] == "host"
+
+
+@pytest.mark.asyncio
+async def test_set_integration_describe_of_a_setup_flow_that_aborts_gives_cores_text() -> (
+    None
+):
+    client = _client(
+        {"type": "abort", "flow_id": "f1", "reason": "single_instance_allowed"},
+        {
+            "component.sun.config.abort.single_instance_allowed": (
+                "Already configured. Only a single configuration possible."
+            )
+        },
+    )
 
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(
-            domain="demo", describe=True, menu_choice="advanced"
-        )
+        await IntegrationTools(client).ha_set_integration(domain="sun", describe=True)
 
-    (warning,) = _error(exc_info)["warnings"]
-    assert "already_in_progress" in warning
+    body = _error(exc_info)
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["reason_text"] == (
+        "Already configured. Only a single configuration possible."
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_integration_describe_of_a_progress_step_keeps_the_flow_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
+    client = _client(
+        {
+            "type": "progress",
+            "flow_id": "f1",
+            "step_id": "discover",
+            "progress_action": "scanning",
+        },
+        {"component.demo.config.progress.scanning": "Scanning the network."},
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(domain="demo", describe=True)
+
+    body = _error(exc_info)
+    assert body["error"]["code"] == "TIMEOUT_OPERATION"
+    assert body["flow_id"] == "f1"
+    assert body["progress_action"] == "scanning"
+    assert body["progress_action_text"] == "Scanning the network."
+    client.abort_config_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_integration_describe_warns_when_the_strings_cannot_be_read() -> None:
+    client = _client(_form("user", _HOST))
+    client.send_websocket_message.side_effect = RuntimeError("ws down")
+
+    resp = await IntegrationTools(client).ha_set_integration(
+        domain="demo", describe=True
+    )
+
+    assert resp["fields"][0]["name"] == "host"
+    assert any("strings for demo could not be read" in w for w in resp["warnings"])

@@ -130,7 +130,7 @@ def reconfigure_client(
     cover. Starting from this factory means an unstubbed registry read fails
     loudly instead.
     """
-    # A menu first step: the preview lists it, checks no keys, aborts the flow.
+    # A menu first step: the first call opens the flow and returns it.
     menu = {"type": "menu", "flow_id": "flow-preview"}
     client = MagicMock(start_reconfigure_flow=AsyncMock(return_value=menu))
     client.abort_config_flow = AsyncMock()
@@ -256,7 +256,7 @@ def test_reconfigure_token_ignores_volatile_entry_state() -> None:
 
     original = _reconfigure_preflight_token(
         entry=entry,
-        target_config={"host": "192.0.2.170"},
+        flow_id="flow-1",
         expected_identity=expected_identity,
         identity=ReconfigureIdentity(),
     )
@@ -269,7 +269,7 @@ def test_reconfigure_token_ignores_volatile_entry_state() -> None:
     assert (
         _reconfigure_preflight_token(
             entry=changed_state,
-            target_config={"host": "192.0.2.170"},
+            flow_id="flow-1",
             expected_identity=expected_identity,
             identity=ReconfigureIdentity(),
         )
@@ -337,12 +337,12 @@ async def test_reconfigure_preserves_entry_and_submits_host_and_port(
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_drives_multiple_form_steps(
+async def test_reconfigure_answers_one_form_step_per_call(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """The generic walker can finish a reconfigure flow with multiple forms."""
+    """A later form comes back with its flow_id; the next call answers it."""
     client = reconfigure_client()
-    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
     client.start_reconfigure_flow = AsyncMock(
         return_value={
@@ -352,38 +352,49 @@ async def test_reconfigure_drives_multiple_form_steps(
             "data_schema": [{"name": "host", "required": True}],
         }
     )
+    port_form = {
+        "flow_id": "flow-multi",
+        "type": "form",
+        "step_id": "port",
+        "data_schema": [{"name": "port", "required": True}],
+    }
     client.submit_config_flow_step = AsyncMock(
-        side_effect=[
-            {
-                "flow_id": "flow-multi",
-                "type": "form",
-                "step_id": "port",
-                "data_schema": [{"name": "port", "required": True}],
-            },
-            {"type": "abort", "reason": "reconfigure_successful"},
-        ]
+        side_effect=[port_form, {"type": "abort", "reason": "reconfigure_successful"}]
     )
+    client._request = AsyncMock(return_value=port_form)
+
+    first = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.173"}
+    )
+
+    assert first["status"] == ReconfigureStatus.PREVIEW
+    assert first["flow_id"] == "flow-multi"
+    assert first["step_id"] == "port"
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "flow-multi", {"host": "192.0.2.173"}
+    )
+    client.abort_config_flow.assert_not_awaited()
 
     result = await reconfigure_config_entry(
-        client, "entry-123", config={"host": "192.0.2.173", "port": 8080}
+        client, "entry-123", config={"port": 8080}, flow_id="flow-multi"
     )
 
-    assert result["success"] is True
-    assert client.submit_config_flow_step.await_args_list[0].args == (
-        "flow-multi",
-        {"host": "192.0.2.173"},
-    )
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
     assert client.submit_config_flow_step.await_args_list[1].args == (
         "flow-multi",
         {"port": 8080},
     )
+    client._request.assert_awaited_once_with(
+        "GET", "/config/config_entries/flow/flow-multi"
+    )
+    client.start_reconfigure_flow.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_fails_when_success_abort_ignores_requested_values(
+async def test_reconfigure_refuses_a_key_the_form_does_not_declare(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """A successful HA abort must not hide values that the flow never consumed."""
+    """A value the step has no field for is refused before anything is sent."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(
@@ -394,10 +405,6 @@ async def test_reconfigure_fails_when_success_abort_ignores_requested_values(
             "data_schema": [{"name": "address", "required": True}],
         }
     )
-    client.submit_config_flow_step = AsyncMock(
-        return_value={"type": "abort", "reason": "reconfigure_successful"}
-    )
-    client.abort_config_flow = AsyncMock()
 
     with pytest.raises(ToolError) as exc_info:
         await reconfigure_config_entry(
@@ -405,19 +412,21 @@ async def test_reconfigure_fails_when_success_abort_ignores_requested_values(
         )
 
     payload = json.loads(str(exc_info.value))
-    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert "consum" in payload["error"]["message"].lower()
-    assert payload["status"] == "applied_but_incomplete"
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "host" in payload["error"]["message"]
+    assert payload["flow_id"] == "flow-ignored"
+    client.submit_config_flow_step.assert_not_called()
     client.abort_config_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_accepts_generic_config_and_menu_selection(
+async def test_reconfigure_answers_a_menu_with_menu_choice(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """Generic integrations can receive arbitrary fields and menu choices."""
+    """A menu step is answered with menu_choice; the form behind it comes back
+    with the flow_id and is answered by the next call."""
     client = reconfigure_client()
-    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
     client.start_reconfigure_flow = AsyncMock(
         return_value={
@@ -427,29 +436,38 @@ async def test_reconfigure_accepts_generic_config_and_menu_selection(
             "menu_options": ["network", "cloud"],
         }
     )
+    network_form = {
+        "flow_id": "flow-generic",
+        "type": "form",
+        "step_id": "network",
+        "data_schema": [{"name": "address", "required": True}],
+    }
     client.submit_config_flow_step = AsyncMock(
         side_effect=[
-            {
-                "flow_id": "flow-generic",
-                "type": "form",
-                "step_id": "network",
-                "data_schema": [{"name": "address", "required": True}],
-            },
+            network_form,
             {"type": "abort", "reason": "reconfigure_successful"},
         ]
+    )
+    client._request = AsyncMock(return_value=network_form)
+
+    first = await reconfigure_config_entry(client, "entry-123", menu_choice="network")
+
+    assert first["status"] == ReconfigureStatus.PREVIEW
+    assert first["flow_id"] == "flow-generic"
+    assert first["step_id"] == "network"
+    assert client.submit_config_flow_step.await_args_list[0].args == (
+        "flow-generic",
+        {"next_step_id": "network"},
     )
 
     result = await reconfigure_config_entry(
         client,
         "entry-123",
-        config={"next_step_id": "network", "address": "192.0.2.181"},
+        config={"address": "192.0.2.181"},
+        flow_id="flow-generic",
     )
 
-    assert result["success"] is True
-    assert client.submit_config_flow_step.await_args_list[0].args == (
-        "flow-generic",
-        {"next_step_id": "network"},
-    )
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
     assert client.submit_config_flow_step.await_args_list[1].args == (
         "flow-generic",
         {"address": "192.0.2.181"},
@@ -806,66 +824,6 @@ async def test_reconfigure_submit_timeout_is_applied_but_unverified(
     assert payload["rollback"]["manual_required"] is True
     assert "no answer" in payload["error"]["message"]
     client.abort_config_flow.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reconfigure_cancellation_aborts_pending_flow(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """Caller cancellation must not leave a pending HA reconfigure flow."""
-    client = reconfigure_client()
-    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock(
-        return_value={
-            "flow_id": "flow-cancelled",
-            "type": "form",
-            "data_schema": [{"name": "host", "required": True}],
-        }
-    )
-    client.submit_config_flow_step = AsyncMock(side_effect=asyncio.CancelledError())
-    client.abort_config_flow = AsyncMock()
-
-    with pytest.raises(asyncio.CancelledError):
-        await reconfigure_config_entry(
-            client, "entry-123", config={"host": "192.0.2.185"}
-        )
-
-    client.abort_config_flow.assert_awaited_once_with("flow-cancelled")
-
-
-@pytest.mark.asyncio
-async def test_reconfigure_step_budget_aborts_pending_flow(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """Exhausting the walker budget aborts the still-pending reconfigure flow."""
-    client = reconfigure_client()
-    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock(
-        return_value={
-            "flow_id": "flow-budget",
-            "type": "form",
-            "data_schema": [{"name": "host", "required": True}],
-        }
-    )
-    client.submit_config_flow_step = AsyncMock(
-        return_value={
-            "flow_id": "flow-budget",
-            "type": "form",
-            "step_id": "reconfigure",
-            "data_schema": [{"name": "host", "required": True}],
-        }
-    )
-    client.abort_config_flow = AsyncMock()
-
-    with pytest.raises(ToolError) as exc_info:
-        await reconfigure_config_entry(
-            client, "entry-123", config={"host": "192.0.2.184"}
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == "flow_aborted_before_apply"
-    assert payload["flow_budget_exhausted"] is True
-    client.abort_config_flow.assert_awaited_once_with("flow-budget")
 
 
 @pytest.mark.asyncio
@@ -1580,18 +1538,17 @@ async def test_reconfigure_rejects_entries_without_official_support(
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_without_token_previews_and_never_writes(
+async def test_reconfigure_without_flow_id_opens_the_flow_and_never_writes(
     reconfig_entry: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Omitting confirm_token is the preflight; it submits nothing.
-
-    The handshake is the token alone, matching ha_config_set_yaml — there is
-    no separate confirm flag. The flow is opened only to read its form.
+    """The first call opens the flow and returns its step with the token the
+    later calls need; config passed there is not submitted, and the flow stays
+    open (it is not aborted).
     """
     monkeypatch.setattr(
         "ha_mcp.tools.auto_backup.get_global_settings",
-        lambda: pytest.fail("preflight must not resolve auto-backup settings"),
+        lambda: pytest.fail("the first call must not resolve auto-backup settings"),
     )
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
@@ -1606,17 +1563,20 @@ async def test_reconfigure_without_token_previews_and_never_writes(
     assert preview["success"] is True
     assert "preview" not in preview  # status is the single signal
     assert preview["status"] == ReconfigureStatus.PREVIEW
+    assert preview["flow_id"] == "flow-preview"
     assert isinstance(preview["confirm_token"], str)
     assert preview["confirm_token"].startswith("sha256:")
+    assert any("were not submitted" in w for w in preview["warnings"])
     client.submit_config_flow_step.assert_not_called()
-    client.abort_config_flow.assert_awaited_once_with("flow-preview")
+    client.abort_config_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_reconfigure_rejects_stale_confirmation_token(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """A changed entry invalidates a previously issued preflight token."""
+    """A changed entry invalidates the token the flow's first call issued; the
+    flow stays open."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(
         side_effect=[reconfig_entry, {**reconfig_entry, "title": "changed"}]
@@ -1634,14 +1594,72 @@ async def test_reconfigure_rejects_stale_confirmation_token(
             entry_id="entry-123",
             reconfigure=True,
             config={"host": "192.0.2.171"},
+            flow_id=preview["flow_id"],
             confirm_token=preview["confirm_token"],
         )
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
+    assert payload["flow_id"] == preview["flow_id"]
     assert "preview" not in payload
     assert "preview" not in payload.get("context", {})
     client.start_reconfigure_flow.assert_awaited_once()
+    client.submit_config_flow_step.assert_not_called()
+    client.abort_config_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("confirm_token", "status"),
+    [
+        pytest.param(None, ReconfigureStatus.CONFIRMATION_REQUIRED, id="missing"),
+        # hmac.compare_digest raises TypeError on a non-ASCII str operand,
+        # which the outer handler would have re-mapped to an internal error.
+        pytest.param(
+            "sha256:café–ünïcode", ReconfigureStatus.STALE_PREFLIGHT, id="non-ascii"
+        ),
+    ],
+)
+async def test_a_reconfigure_step_needs_a_valid_token(
+    reconfig_entry: dict[str, object], confirm_token: str | None, status: str
+) -> None:
+    """Every call after the first needs the token; nothing is read or sent,
+    and a junk token lands on stale_preflight, not INTERNAL_ERROR."""
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(
+            entry_id="entry-123",
+            reconfigure=True,
+            config={"host": "192.0.2.171"},
+            flow_id="flow-open",
+            confirm_token=confirm_token,
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == status
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert payload["flow_id"] == "flow-open"
+    client.start_reconfigure_flow.assert_not_awaited()
+    client.submit_config_flow_step.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_aborting_a_reconfigure_flow_needs_no_token(
+    reconfig_entry: dict[str, object],
+) -> None:
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+
+    result = await IntegrationTools(client).ha_set_integration(
+        entry_id="entry-123", reconfigure=True, flow_id="flow-open", abort=True
+    )
+
+    assert result["success"] is True
+    assert result["aborted"] is True
+    client.abort_config_flow.assert_awaited_once_with("flow-open")
+    client.start_reconfigure_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1721,6 +1739,14 @@ async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(  # noqa: PL
     client.submit_config_flow_step = AsyncMock(
         return_value={"type": "abort", "reason": "reconfigure_successful"}
     )
+    client._request = AsyncMock(
+        return_value={
+            "flow_id": "flow-123",
+            "type": "form",
+            "step_id": "reconfigure",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
 
     try:
         tools = IntegrationTools(client)
@@ -1733,6 +1759,7 @@ async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(  # noqa: PL
             entry_id="entry-123",
             reconfigure=True,
             config={"host": "192.0.2.171"},
+            flow_id=preview["flow_id"],
             confirm_token=preview["confirm_token"],
         )
     finally:
@@ -1745,9 +1772,8 @@ async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(  # noqa: PL
     if not backup_capture_fails:
         assert "entry-123" in snapshots[0].read_text()
     assert result["status"] == "applied_and_verified"
-    # Once to read the preview's form, once to apply.
-    assert client.start_reconfigure_flow.await_count == 2
-    client.start_reconfigure_flow.assert_awaited_with("shelly", "entry-123")
+    # The first call opens the flow; the confirmed call continues it.
+    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "entry-123")
     client.submit_config_flow_step.assert_awaited()
 
 
@@ -2252,7 +2278,7 @@ async def test_reconfigure_reports_a_flow_that_never_returned_a_flow_id(
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.APPLY_FAILED
     assert "reconfigure flow" in payload["error"]["message"].lower()
-    client.submit_config_flow_step.assert_not_awaited()
+    client.submit_config_flow_step.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2286,11 +2312,20 @@ async def test_reconfigure_tool_wraps_transport_failures_for_the_client(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("step_type", ["external", "external_done"])
+@pytest.mark.parametrize(
+    ("step_type", "aborted"),
+    [
+        # An OAuth step cannot be driven: refused and its flow aborted.
+        pytest.param("external", True, id="external"),
+        pytest.param("external_done", True, id="external_done"),
+        # An unknown result type is an error that keeps the flow open.
+        pytest.param("something_new", False, id="unexpected-type"),
+    ],
+)
 async def test_reconfigure_stamps_apply_failed_on_undrivable_steps(
-    reconfig_entry: dict[str, object], step_type: str
+    reconfig_entry: dict[str, object], step_type: str, aborted: bool
 ) -> None:
-    """An OAuth step cannot be driven, and nothing was committed."""
+    """Nothing was committed: the error says so."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(
@@ -2305,29 +2340,10 @@ async def test_reconfigure_stamps_apply_failed_on_undrivable_steps(
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.APPLY_FAILED
-    client.abort_config_flow.assert_awaited_once_with("flow-undrivable")
-
-
-@pytest.mark.asyncio
-async def test_reconfigure_stamps_apply_failed_on_an_unexpected_result_type(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """A flow result type the walker does not know is a pre-commit failure."""
-    client = reconfigure_client()
-    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock(
-        return_value={"flow_id": "flow-weird", "type": "something_new"}
-    )
-    client.abort_config_flow = AsyncMock()
-
-    with pytest.raises(ToolError) as exc_info:
-        await reconfigure_config_entry(
-            client, "entry-123", config={"host": "192.0.2.13"}
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == ReconfigureStatus.APPLY_FAILED
-    client.abort_config_flow.assert_awaited_once_with("flow-weird")
+    if aborted:
+        client.abort_config_flow.assert_awaited_once_with("flow-undrivable")
+    else:
+        client.abort_config_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2482,15 +2498,10 @@ async def test_subentry_reconfigure_rejects_create_entry_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_confirm_token_is_bound_to_the_requested_config(
+async def test_confirm_token_is_bound_to_the_flow_id(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """A token issued for one target config cannot apply a different one.
-
-    Mutating the entry title proves the token tracks entry state; this pins
-    the property that actually protects the caller — the token is bound to
-    the change it previewed, so a swapped `config` cannot ride an old token.
-    """
+    """A token issued for one flow cannot answer another flow's step."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     tools = IntegrationTools(client)
@@ -2506,12 +2517,14 @@ async def test_confirm_token_is_bound_to_the_requested_config(
             entry_id="entry-123",
             reconfigure=True,
             config={"host": "192.0.2.199"},
+            flow_id="some-other-flow",
             confirm_token=preview["confirm_token"],
         )
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
     client.start_reconfigure_flow.assert_awaited_once()
+    client.submit_config_flow_step.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2561,39 +2574,13 @@ async def test_confirm_token_is_bound_to_the_supplied_identity_anchors() -> None
             reconfigure=True,
             config={"host": "192.0.2.200"},
             expected_device_id="device-anchor",
+            flow_id=preview["flow_id"],
             confirm_token=preview["confirm_token"],
         )
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
     client.start_reconfigure_flow.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_non_ascii_confirm_token_is_rejected_not_an_internal_error(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """A junk token lands on stale_preflight, not INTERNAL_ERROR.
-
-    hmac.compare_digest raises TypeError on a non-ASCII str operand, which the
-    outer handler would have re-mapped to an internal error.
-    """
-    client = reconfigure_client()
-    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock()
-
-    with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(
-            entry_id="entry-123",
-            reconfigure=True,
-            config={"host": "192.0.2.171"},
-            confirm_token="sha256:café–ünïcode",
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
-    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    client.start_reconfigure_flow.assert_not_awaited()
 
 
 # === unique_id: component installs vs add-on / Docker / PyPI installs ===
@@ -2833,11 +2820,11 @@ def test_confirm_token_binds_the_discovered_identity() -> None:
     """
     entry = {"entry_id": "e1", "domain": "shelly", "title": "Relay"}
     expected = {"device_id": None, "unique_id": None, "mac": None, "entity_ids": []}
-    target = {"host": "192.0.2.1"}
+    flow_id = "flow-1"
 
     before = _reconfigure_preflight_token(
         entry=entry,
-        target_config=target,
+        flow_id=flow_id,
         expected_identity=expected,
         identity=ReconfigureIdentity(
             device_ids=["dev-1"], entity_ids=["switch.a"], macs=["AABBCC001122"]
@@ -2845,7 +2832,7 @@ def test_confirm_token_binds_the_discovered_identity() -> None:
     )
     moved_device = _reconfigure_preflight_token(
         entry=entry,
-        target_config=target,
+        flow_id=flow_id,
         expected_identity=expected,
         identity=ReconfigureIdentity(
             device_ids=["dev-2"], entity_ids=["switch.a"], macs=["AABBCC001122"]
@@ -2853,7 +2840,7 @@ def test_confirm_token_binds_the_discovered_identity() -> None:
     )
     moved_entities = _reconfigure_preflight_token(
         entry=entry,
-        target_config=target,
+        flow_id=flow_id,
         expected_identity=expected,
         identity=ReconfigureIdentity(
             device_ids=["dev-1"], entity_ids=["switch.b"], macs=["AABBCC001122"]
@@ -2861,7 +2848,7 @@ def test_confirm_token_binds_the_discovered_identity() -> None:
     )
     moved_macs = _reconfigure_preflight_token(
         entry=entry,
-        target_config=target,
+        flow_id=flow_id,
         expected_identity=expected,
         identity=ReconfigureIdentity(
             device_ids=["dev-1"], entity_ids=["switch.a"], macs=["AABBCC334455"]
@@ -3562,34 +3549,43 @@ async def test_a_5xx_on_submit_is_applied_but_unverified(
 
 
 @pytest.mark.asyncio
-async def test_a_4xx_that_is_not_a_rejection_still_re_raises(
-    reconfig_entry: dict[str, object],
+@pytest.mark.parametrize(
+    "submit_error",
+    [
+        # A cancelled call propagates.
+        pytest.param(asyncio.CancelledError(), id="cancelled"),
+        # 4xx means HA parsed the request and answered about it, so auth,
+        # permission and unknown-flow answers must not be relabelled.
+        pytest.param(
+            HomeAssistantAPIError("API error: 404", status_code=404), id="http-404"
+        ),
+    ],
+)
+async def test_a_submit_that_does_not_commit_re_raises_and_leaves_the_flow_open(
+    reconfig_entry: dict[str, object], submit_error: BaseException
 ) -> None:
-    """4xx means HA parsed the request and answered about it, so auth,
-    permission and unknown-flow answers must not be relabelled."""
+    """Nothing was committed, so the flow stays open for the caller to
+    continue or abort with its flow_id."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(
         return_value={
-            "flow_id": "flow-404",
+            "flow_id": "flow-open",
             "type": "form",
             "data_schema": [{"name": "host", "required": True}],
         }
     )
-    client.submit_config_flow_step = AsyncMock(
-        side_effect=HomeAssistantAPIError("API error: 404", status_code=404)
-    )
+    client.submit_config_flow_step = AsyncMock(side_effect=submit_error)
     client.abort_config_flow = AsyncMock()
 
-    with pytest.raises(HomeAssistantAPIError) as exc_info:
+    with pytest.raises(type(submit_error)) as exc_info:
         await reconfigure_config_entry(
             client, "entry-123", config={"host": "192.0.2.93"}
         )
 
-    assert exc_info.value.status_code == 404
-    # And the flow IS aborted here: HA answered, so nothing was committed to
-    # leave dangling. Only the post-commit statuses suppress that abort.
-    client.abort_config_flow.assert_awaited()
+    if isinstance(submit_error, HomeAssistantAPIError):
+        assert exc_info.value.status_code == 404
+    client.abort_config_flow.assert_not_awaited()
 
 
 # === CodeRabbit 48638b49: post-commit failures must not escape the taxonomy ===

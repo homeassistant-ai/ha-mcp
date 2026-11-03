@@ -46,7 +46,8 @@ from ha_mcp.tools.config_entry_flow_walker import (
     _handle_flow_steps,
     leaves_flow_open,
 )
-from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_flow
+from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_step
+from ha_mcp.tools.integration_flow_steps import FlowTarget
 
 _PROGRESS = {
     "type": "progress",
@@ -243,7 +244,7 @@ async def test_external_steps_are_still_refused(step_type: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
+async def test_reconfigure_progress_timeout_keeps_the_flow_open_and_carries_flow_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
@@ -254,18 +255,18 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
     }
 
     with pytest.raises(ToolError) as exc_info:
-        await _run_reconfigure_flow(
+        await _run_reconfigure_step(
             client,
-            domain="demo",
-            entry_id="e1",
+            FlowTarget("reconfigure", "demo", "e1"),
+            flow_id=None,
             flow_config={"host": "h"},
-            rollback_metadata={},
+            menu_choice=None,
         )
 
     payload = json.loads(str(exc_info.value))
     assert payload["error"]["code"] == "TIMEOUT_OPERATION"
-    assert payload["status"] == ReconfigureStatus.APPLY_FAILED
-    client.abort_config_flow.assert_awaited_once_with("flow-progress")
+    assert payload["flow_id"] == "flow-progress"
+    client.abort_config_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -274,7 +275,6 @@ async def test_reconfigure_progress_timeout_is_apply_failed_and_aborts_the_flow(
     [
         pytest.param("create", "already_in_progress", id="create"),
         pytest.param("subentry", "subentry flow f1", id="subentry"),
-        pytest.param("reconfigure", "reauthentication", id="reconfigure"),
         pytest.param("options", "options flow f1", id="options"),
     ],
 )
@@ -305,7 +305,6 @@ async def test_a_failed_write_says_when_its_flow_may_still_be_open(
     write, abort = {
         "create": (_create_entry, client.abort_config_flow),
         "subentry": (_create_subentry, client.abort_config_subentry_flow),
-        "reconfigure": (_reconfigure, client.abort_config_flow),
         "options": (_update_options, client.abort_options_flow),
     }[run]
     abort.side_effect = abort_error
@@ -336,11 +335,6 @@ async def test_a_failed_write_says_when_its_flow_may_still_be_open(
             "options", "submit_options_flow_step", "abort_options_flow",
             "options flow f1", 500, id="options",
         ),
-        # Any 5xx on a reconfigure submit may follow its write: a 403 is an answer.
-        pytest.param(
-            "reconfigure", "submit_config_flow_step", "abort_config_flow",
-            "reauthentication", 403, id="reconfigure",
-        ),
     ],
 )  # fmt: skip
 @pytest.mark.parametrize("left_open", [False, True], ids=["aborted", "timeout"])
@@ -368,7 +362,6 @@ async def test_a_raw_write_error_left_open_comes_back_with_the_warning(
         "create": _create_entry,
         "subentry": _create_subentry,
         "options": _update_options,
-        "reconfigure": _reconfigure,
     }[run]
     converted = left_open and not cancelled
     raised = (
@@ -456,13 +449,14 @@ async def _create_subentry(client: AsyncMock, step: dict[str, Any]) -> Any:
 
 async def _reconfigure(client: AsyncMock, step: dict[str, Any]) -> Any:
     client.start_reconfigure_flow.return_value = step
-    return await _run_reconfigure_flow(
+    _, settled = await _run_reconfigure_step(
         client,
-        domain="demo",
-        entry_id="e1",
+        FlowTarget("reconfigure", "demo", "e1"),
+        flow_id=None,
         flow_config={},
-        rollback_metadata={},
+        menu_choice=None,
     )
+    return settled
 
 
 _FLOW_KINDS = [

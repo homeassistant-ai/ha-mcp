@@ -55,7 +55,8 @@ logger = logging.getLogger(__name__)
 # (OAuth / cloud authorization). Surfaced as structured errors instead of
 # attempted (issue #1814). A progress step is waited out, except in a snapshot
 # restore (no FlowRef), which accepts only the forms it can check.
-_UNDRIVABLE_STEP_TYPES = frozenset({"external", "external_done"}) | PROGRESS_STEP_TYPES
+EXTERNAL_STEP_TYPES = frozenset({"external", "external_done"})
+_UNDRIVABLE_STEP_TYPES = EXTERNAL_STEP_TYPES | PROGRESS_STEP_TYPES
 _RECONFIGURE_SUCCESS_REASONS = frozenset(
     {
         "reauth_successful",
@@ -102,6 +103,7 @@ async def _submit_step(
     last_menu_choice: str | None,
     current_step: dict[str, Any],
     is_reconfigure: bool = False,
+    flow_stays_open: bool = False,
 ) -> dict[str, Any]:
     try:
         return await asyncio.wait_for(submit_fn(flow_id, payload), timeout=20.0)
@@ -116,6 +118,7 @@ async def _submit_step(
                 current_step=current_step,
                 submitted=payload,
                 is_reconfigure=is_reconfigure,
+                flow_stays_open=flow_stays_open,
             )
         status = api_err.status_code or 0
         if status in _RETRYABLE_GATEWAY_STATUS or (is_reconfigure and status >= 500):
@@ -457,6 +460,26 @@ def _flow_form_payload(
     return form_data, bool(consumed_form_keys)
 
 
+def raise_reconfigure_created_entry(flow_id: str, step: dict[str, Any]) -> NoReturn:
+    """A reconfigure flow answered ``create_entry``: never its success."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Reconfigure flow created a new config entry instead of "
+            "updating the existing entry",
+            suggestions=[
+                "Inspect Home Assistant for a duplicate entry before "
+                "retrying; do not create another entry automatically."
+            ],
+            context={
+                "flow_id": flow_id,
+                "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+                "details": step,
+            },
+        )
+    )
+
+
 def _handle_flow_create_entry(
     flow_id: str,
     current_step: dict[str, Any],
@@ -471,22 +494,7 @@ def _handle_flow_create_entry(
 ) -> dict[str, Any]:
     """Finish a normal flow, but never treat create_entry as reconfigure success."""
     if is_reconfigure:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Reconfigure flow created a new config entry instead of "
-                "updating the existing entry",
-                suggestions=[
-                    "Inspect Home Assistant for a duplicate entry before "
-                    "retrying; do not create another entry automatically."
-                ],
-                context={
-                    "flow_id": flow_id,
-                    "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
-                    "details": current_step,
-                },
-            )
-        )
+        raise_reconfigure_created_entry(flow_id, current_step)
     return _finish_flow_entry(
         flow_id,
         current_step,

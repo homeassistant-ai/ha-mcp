@@ -26,6 +26,19 @@ async def _wait_for_int_option(mcp_client, entry_id: str, value: int) -> None:
     )
 
 
+async def _set_int_option(call, entry_id: str, value: int) -> None:
+    """Drive both option forms, one call each: ``options_1`` takes the value,
+    ``options_2`` keeps its current values and finishes the flow."""
+    first = await call(
+        "ha_set_integration", {"entry_id": entry_id, "config": {"int": value}}
+    )
+    if flow_id := first.get("flow_id"):
+        await call(
+            "ha_set_integration",
+            {"entry_id": entry_id, "flow_id": flow_id, "config": {}},
+        )
+
+
 @pytest.mark.convenience
 @pytest.mark.cleanup
 @pytest.mark.external_only
@@ -50,13 +63,9 @@ class TestIntegrationOptionsRestore:
                 )
             )["entry"].get("options", {})
             try:
-                await mcp.call_tool_success(
-                    "ha_set_integration", {"entry_id": entry_id, "config": {"int": 11}}
-                )
+                await _set_int_option(mcp.call_tool_success, entry_id, 11)
                 await _wait_for_int_option(mcp_client, entry_id, 11)
-                await mcp.call_tool_success(
-                    "ha_set_integration", {"entry_id": entry_id, "config": {"int": 42}}
-                )
+                await _set_int_option(mcp.call_tool_success, entry_id, 42)
                 await _wait_for_int_option(mcp_client, entry_id, 42)
 
                 # Newest first: the snapshot taken before the second edit.
@@ -78,10 +87,10 @@ class TestIntegrationOptionsRestore:
                 # report success.
                 await _wait_for_int_option(mcp_client, entry_id, 11)
             finally:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_set_integration",
-                    {"entry_id": entry_id, "config": {"int": before.get("int", 10)}},
+                await _set_int_option(
+                    lambda name, params: safe_call_tool(mcp_client, name, params),
+                    entry_id,
+                    before.get("int", 10),
                 )
                 if backup_name:
                     await safe_call_tool(

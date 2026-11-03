@@ -1,12 +1,13 @@
 """E2E: ha_set_integration(domain=..., describe=True) reads a setup form.
 
-describe=True describes the domain's config flow instead of adding it: Core
-starts it, the tool describes the first step (or the form behind
-menu_choice) and aborts it. A flow Core aborts comes back with Core's own
-reason text, read here from Core's translations the way the frontend looks
-it up (the abort's translation_domain, else the handler). With an entry_id,
-include_subentry_schema describes a config subentry flow the same way, and
-describe=True describes the entry's options or subentry form.
+describe=True starts the domain's config flow and submits nothing: the first
+step comes back open with its flow_id (the form's fields, or a menu's
+menu_options), and flow_id with menu_choice or abort=True continues or ends
+it. A flow Core aborts raises with Core's own reason text, read here from
+Core's translations the way the frontend looks it up (the abort's
+translation_domain, else the handler). With an entry_id, describe=True opens
+the entry's options flow the same way; with subentry_type it describes (and
+aborts) a config subentry flow.
 """
 
 import pytest
@@ -33,38 +34,50 @@ async def _config_strings(
 @pytest.mark.integrations
 class TestIntegrationSetupSchema:
     async def test_group_setup_menu_then_the_light_form(self, mcp_client, ha_client):
-        """A menu-first setup flow lists its branches; menu_choice opens one."""
+        """A menu-first setup flow lists its branches; menu_choice with the
+        flow_id opens one, one step per call."""
         strings = await _config_strings(ha_client, "group")
         expected_all = strings["component.group.config.step.light.data_description.all"]
 
-        async with MCPAssertions(mcp_client) as mcp:
-            menu = await mcp.call_tool_success(
-                "ha_set_integration", {"domain": "group", "describe": True}
-            )
-            light = await mcp.call_tool_success(
-                "ha_set_integration",
-                {"domain": "group", "describe": True, "menu_choice": "light"},
-            )
+        flow_id = None
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                menu = await mcp.call_tool_success(
+                    "ha_set_integration", {"domain": "group", "describe": True}
+                )
+                flow_id = menu["flow_id"]
+                light = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {"domain": "group", "flow_id": flow_id, "menu_choice": "light"},
+                )
+        finally:
+            if flow_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_set_integration",
+                    {"domain": "group", "flow_id": flow_id, "abort": True},
+                )
 
-        assert menu["config_flow_schema"]["flow_type"] == "menu"
-        assert "light" in menu["config_flow_schema"]["menu_options"]
-        schema = light["config_flow_schema"]
-        assert schema["flow_type"] == "form"
-        assert schema["menu_choice"] == "light"
-        fields = {f["name"]: f for f in schema["fields"]}
+        assert menu["flow_type"] == "menu"
+        assert "light" in menu["menu_options"]
+        assert light["flow_id"] == flow_id
+        assert light["flow_type"] == "form"
+        assert light["step_id"] == "light"
+        fields = {f["name"]: f for f in light["fields"]}
         assert "entities" in fields
         assert fields["all"]["description"] == expected_all
 
     async def test_single_instance_setup_flow_returns_cores_abort_text(
         self, mcp_client, ha_client
     ):
-        """sun is already set up in the test instance, so Core aborts its flow."""
+        """sun is already set up in the test instance, so Core aborts its flow;
+        the error carries Core's reason text."""
         async with MCPAssertions(mcp_client) as mcp:
             entries = await mcp.call_tool_success(
                 "ha_get_integration", {"domain": "sun"}
             )
             assert entries["entries"], "the test instance must have a sun entry"
-            data = await mcp.call_tool_success(
+            data = await mcp.call_tool_failure(
                 "ha_set_integration", {"domain": "sun", "describe": True}
             )
 
@@ -77,13 +90,13 @@ class TestIntegrationSetupSchema:
             f"component.{text_domain}.config.abort.{core_abort['reason']}"
         ]
 
-        schema = data["config_flow_schema"]
-        assert schema["aborted"] == core_abort["reason"]
-        assert schema["reason_text"] == expected
-        assert "fields" not in schema
+        assert data["details"]["reason"] == core_abort["reason"]
+        assert data["reason_text"] == expected
 
     async def test_an_entry_describe_reads_its_options_form(self, mcp_client):
-        """The demo entry's options flow opens with form options_1."""
+        """The demo entry's options flow opens with form options_1; the flow
+        stays open with its flow_id until aborted."""
+        flow_id = None
         async with MCPAssertions(mcp_client) as mcp:
             listed = await mcp.call_tool_success(
                 "ha_get_integration", {"domain": "demo"}
@@ -91,15 +104,26 @@ class TestIntegrationSetupSchema:
             with_options = [e for e in listed["entries"] if e.get("supports_options")]
             assert with_options, f"no demo entry with options: {listed['entries']}"
             entry = with_options[0]
-            data = await mcp.call_tool_success(
-                "ha_set_integration",
-                {"entry_id": entry["entry_id"], "describe": True},
-            )
+            try:
+                data = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {"entry_id": entry["entry_id"], "describe": True},
+                )
+                flow_id = data["flow_id"]
+            finally:
+                if flow_id:
+                    await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": entry["entry_id"],
+                            "flow_id": flow_id,
+                            "abort": True,
+                        },
+                    )
 
-        schema = data["options_schema"]
-        assert schema["flow_type"] == "form"
-        assert schema["step_id"] == "options_1"
-        assert "bool" in {f["name"] for f in schema["fields"]}
+        assert data["flow_type"] == "form"
+        assert data["step_id"] == "options_1"
+        assert "bool" in {f["name"] for f in data["fields"]}
         assert "entry" not in data
 
     async def test_unknown_domain_fails_the_describe(self, mcp_client):

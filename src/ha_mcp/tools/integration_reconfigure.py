@@ -21,17 +21,21 @@ from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
 from .config_entry_flow_errors import ReconfigureStatus
-from .config_entry_identity import (
-    ReconfigureIdentity,
-    build_reconfigure_rollback_metadata,
-)
+from .config_entry_identity import ReconfigureIdentity
 from .config_entry_reconfigure import (
     PreparedReconfigure,
     prepare_reconfigure_request,
     reconfigure_config_entry,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
-from .reconfigure_preflight import read_reconfigure_form
+from .integration_flow_steps import (
+    FlowTarget,
+    abort_step_flow,
+    read_step,
+    reconfigure_step_response,
+    settle,
+    start_reconfigure_step,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +92,11 @@ def reject_reconfigure_only_parameters(
 def _reconfigure_preflight_token(
     *,
     entry: dict[str, Any],
-    target_config: dict[str, Any],
+    flow_id: str,
     expected_identity: dict[str, Any],
     identity: ReconfigureIdentity,
 ) -> str:
-    """Bind confirmation to stable entry identity and requested values.
+    """Bind confirmation to stable entry identity and the open flow.
 
     This is an unkeyed content hash — an optimistic lock, not a cryptographic
     binding. It exists so a confirmation cannot apply against state the caller
@@ -118,7 +122,7 @@ def _reconfigure_preflight_token(
         "unique_id": identity.unique_id,
         "unique_id_known": identity.unique_id_known,
         "title": entry.get("title"),
-        "target_config": target_config,
+        "flow_id": flow_id,
         "expected_identity": expected_identity,
         # The identity the preview SHOWED the caller.
         "discovered_device_ids": identity.device_ids,
@@ -126,58 +130,6 @@ def _reconfigure_preflight_token(
         "discovered_macs": identity.macs,
     }
     return f"sha256:{compute_config_hash(payload)}"
-
-
-def _reconfigure_preview_response(
-    *,
-    entry_id: str,
-    domain: str,
-    entry: dict[str, Any],
-    target_config: dict[str, Any],
-    identity: dict[str, Any],
-    expected_identity: dict[str, Any],
-    confirm_token: str,
-    warnings: list[str],
-    reconfigure_form: dict[str, Any],
-) -> dict[str, Any]:
-    """Build the non-mutating response returned by reconfigure preflight.
-
-    ``status`` alone says this changed nothing — there is no second `preview`
-    flag saying the same thing.
-    """
-    response: dict[str, Any] = {
-        "success": True,
-        "status": ReconfigureStatus.PREVIEW,
-        "operation": "reconfigure",
-        "entry_id": entry_id,
-        "domain": domain,
-        "title": entry.get("title"),
-        # Say what was actually checked: the flow was started only to read
-        # its first step and aborted, so Home Assistant has not validated
-        # any value yet, and a menu-first flow had no form to check keys on.
-        "message": (
-            f"Checked: the entry exists, {domain} supports the official "
-            "reconfigure flow, its identity anchors match, "
-            + (
-                "no duplicate entry shares its device, and the config keys "
-                "against the first reconfigure form (reconfigure_form)."
-                if reconfigure_form.get("flow_type") == "form"
-                else "and no duplicate entry shares its device."
-            )
-            + " Home Assistant validates the values only when you confirm. "
-            "Nothing was applied."
-        ),
-        "reconfigure_form": reconfigure_form,
-        "confirm_token": confirm_token,
-        "target_config": target_config,
-        "identity": identity,
-        "expected_identity": expected_identity,
-        "supports_reconfigure": True,
-        "rollback": build_reconfigure_rollback_metadata(entry_id, domain),
-    }
-    if warnings:
-        response["warnings"] = warnings
-    return response
 
 
 class ReconfigureRunner:
@@ -199,44 +151,177 @@ class ReconfigureRunner:
         entry_id: str,
         *,
         prepared: PreparedReconfigure,
+        flow_id: str,
+        menu_choice: str | None,
     ) -> dict[str, Any]:
         """Capture the normal edit backup only after confirmation validation."""
         return await reconfigure_config_entry(
             self._client,
             entry_id,
             prepared=prepared,
+            flow_id=flow_id,
+            menu_choice=menu_choice,
         )
+
+    async def _open_step(
+        self,
+        prepared: PreparedReconfigure,
+        target: FlowTarget,
+        flow_id: str,
+        step: dict[str, Any],
+    ) -> dict[str, Any]:
+        """The step the flow is open at, as the answer. Reached without a
+        submit, so a flow found finished may still have changed the entry."""
+        if step.get("type") not in ("form", "menu"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The reconfigure flow finished without a submit from this call",
+                    suggestions=["Check the entry in Home Assistant before retrying."],
+                    context={
+                        "entry_id": prepared.entry_id,
+                        "flow_id": flow_id,
+                        "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+                        "details": step,
+                    },
+                )
+            )
+        return await reconfigure_step_response(
+            self._client, target, flow_id, step, prepared.entry, prepared.warnings
+        )
+
+    async def _start(
+        self, prepared: PreparedReconfigure, target: FlowTarget, *, answer_given: bool
+    ) -> dict[str, Any]:
+        """Open the reconfigure flow and return its first step with the token
+        every later call to this flow needs. Nothing is submitted."""
+        flow_id, step = await start_reconfigure_step(self._client, target)
+        response = await self._open_step(prepared, target, flow_id, step)
+        response["confirm_token"] = _reconfigure_preflight_token(
+            entry=prepared.entry,
+            flow_id=flow_id,
+            expected_identity=prepared.expected_identity,
+            identity=prepared.identity,
+        )
+        response["identity"] = prepared.identity.as_payload()
+        response["expected_identity"] = prepared.expected_identity
+        response["message"] = (
+            f"Checked: the entry exists, {target.domain} supports the official "
+            "reconfigure flow, its identity anchors match and no duplicate "
+            "entry shares its device. The flow is open at this step; nothing "
+            "was submitted. Answer it with flow_id, confirm_token and "
+            "config (or menu_choice), or end it with flow_id and abort=True."
+        )
+        if answer_given:
+            response.setdefault("warnings", []).append(
+                "config and menu_choice were not submitted: the first call "
+                "only opens the flow. Repeat the answer with flow_id and "
+                "confirm_token."
+            )
+        return response
+
+    @staticmethod
+    def _check_token(
+        prepared: PreparedReconfigure, flow_id: str, confirm_token: str | None
+    ) -> None:
+        """Refuse a step whose token is missing or no longer matches the
+        identity collected for this call."""
+        context: dict[str, Any] = {"entry_id": prepared.entry_id, "flow_id": flow_id}
+        # Deliberately no confirm_token in the errors: handing back the
+        # current one would let a caller apply against state it was never
+        # shown, which is what the token prevents.
+        suggestions = [
+            "End this flow with flow_id and abort=True, then start again "
+            "without flow_id for a fresh token."
+        ]
+        if confirm_token is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "A reconfigure step needs the confirm_token the flow's "
+                    "first call returned",
+                    suggestions=suggestions,
+                    context={
+                        **context,
+                        "status": ReconfigureStatus.CONFIRMATION_REQUIRED,
+                    },
+                )
+            )
+        current = _reconfigure_preflight_token(
+            entry=prepared.entry,
+            flow_id=flow_id,
+            expected_identity=prepared.expected_identity,
+            identity=prepared.identity,
+        )
+        # Compare as bytes: hmac.compare_digest raises TypeError on a
+        # non-ASCII str operand, and a caller's junk token must land on the
+        # stale-preflight rejection, not an INTERNAL_ERROR.
+        if not hmac.compare_digest(
+            confirm_token.encode("utf-8", "surrogatepass"),
+            current.encode("utf-8", "surrogatepass"),
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "The reconfigure confirmation is stale; the entry's "
+                    "identity or anchors no longer match the step this flow's "
+                    "token was issued for",
+                    suggestions=suggestions,
+                    context={**context, "status": ReconfigureStatus.STALE_PREFLIGHT},
+                )
+            )
 
     async def run(
         self,
         entry_id: str,
         *,
         config: dict[str, Any] | None = None,
+        flow_id: str | None = None,
+        menu_choice: str | None = None,
+        abort: bool = False,
         expected_device_id: str | None = None,
         expected_unique_id: str | None = None,
         expected_mac: str | None = None,
         expected_entity_ids: list[str] | None = None,
         confirm_token: str | None = None,
     ) -> dict[str, Any]:
-        """Change an existing integration's configuration safely.
+        """Change an existing integration's connection settings safely.
 
         Works only for entries whose integration implements Home Assistant's
         official ``async_step_reconfigure`` flow. Home Assistant keeps
         ownership of integration-specific validation and updates the existing
         entry in place, preserving its entry/device/entity relationships.
 
-        ``confirm_token`` alone is the handshake, matching
-        ``ha_config_set_yaml``: omitted runs the preflight, which starts the
-        reconfigure flow, reads its first form and aborts it (a flow Home
-        Assistant finishes at its start is reported as applied_but_unverified),
-        and returns a token; supplied applies. Auto-backup follows the normal
-        integration backup policy and is captured only after the token
-        validates, so a rejected confirmation leaves no snapshot behind. The
-        returned rollback metadata describes repeating the official flow with
-        operator intervention; it does not promise automatic restoration of
-        connection endpoints or credentials.
+        Without ``flow_id`` the identity checks run, the flow is opened and
+        its first step returned with a ``confirm_token``; nothing is
+        submitted. Each later call answers one step and must carry
+        ``flow_id`` and the token: the identity is collected again first, and
+        a token no longer matching it is refused. Auto-backup is captured only
+        after the token validates. The returned rollback metadata describes
+        repeating the official flow with operator intervention; it does not
+        promise automatic restoration of connection endpoints or credentials.
         """
         try:
+            if abort:
+                if flow_id is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "abort=True needs the flow_id to end",
+                            context={"entry_id": entry_id},
+                        )
+                    )
+                return await abort_step_flow(
+                    self._client, FlowTarget("reconfigure", None, entry_id), flow_id
+                )
+            if flow_id is not None and config is not None and menu_choice is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Pass menu_choice or config, not both: each answers one step",
+                        context={"entry_id": entry_id, "flow_id": flow_id},
+                    )
+                )
             expected_identity = {
                 "device_id": expected_device_id,
                 "unique_id": expected_unique_id,
@@ -249,64 +334,39 @@ class ReconfigureRunner:
                 config=config,
                 expected_identity=expected_identity,
             )
-            current_confirm_token = _reconfigure_preflight_token(
-                entry=prepared.entry,
-                target_config=prepared.flow_config,
-                expected_identity=prepared.expected_identity,
-                identity=prepared.identity,
+            target = FlowTarget(
+                "reconfigure", prepared.entry["domain"], prepared.entry_id
             )
-            if confirm_token is None:
-                form, form_warnings = await read_reconfigure_form(
-                    self._client,
-                    entry_id=prepared.entry_id,
-                    domain=prepared.entry["domain"],
-                    config=prepared.flow_config,
+            if flow_id is None:
+                return await self._start(
+                    prepared,
+                    target,
+                    answer_given=config is not None or menu_choice is not None,
                 )
-                return _reconfigure_preview_response(
-                    entry_id=prepared.entry_id,
-                    domain=prepared.entry["domain"],
-                    entry=prepared.entry,
-                    target_config=prepared.flow_config,
-                    identity=prepared.identity.as_payload(),
-                    expected_identity=prepared.expected_identity,
-                    confirm_token=current_confirm_token,
-                    warnings=[*prepared.warnings, *form_warnings],
-                    reconfigure_form=form,
+            self._check_token(prepared, flow_id, confirm_token)
+            if config is None and menu_choice is None:
+                # Read the step again: nothing is submitted, so no backup.
+                step = await read_step(self._client, target, flow_id)
+                response = await self._open_step(
+                    prepared,
+                    target,
+                    flow_id,
+                    await settle(self._client, target, flow_id, step),
                 )
-            # Compare as bytes: hmac.compare_digest raises TypeError on a
-            # non-ASCII str operand, and a caller's junk token must land on
-            # the stale-preflight rejection, not an INTERNAL_ERROR.
-            if not hmac.compare_digest(
-                confirm_token.encode("utf-8", "surrogatepass"),
-                current_confirm_token.encode("utf-8", "surrogatepass"),
-            ):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "The reconfigure confirmation is stale; the entry or "
-                        "the requested change no longer matches the preflight "
-                        "this token was issued for",
-                        suggestions=[
-                            "Repeat the call without confirm_token to see a fresh "
-                            "preflight, then confirm with the token it returns."
-                        ],
-                        # Deliberately no confirm_token here: handing back the
-                        # current one would let a caller apply against state it
-                        # was never shown, which is what the token prevents.
-                        context={
-                            "entry_id": entry_id,
-                            "status": ReconfigureStatus.STALE_PREFLIGHT,
-                        },
-                    )
+            else:
+                response = cast(
+                    dict[str, Any],
+                    await self._apply_after_confirmation(
+                        entry_id=prepared.entry_id,
+                        prepared=prepared,
+                        flow_id=flow_id,
+                        menu_choice=menu_choice,
+                    ),
                 )
-
-            return cast(
-                dict[str, Any],
-                await self._apply_after_confirmation(
-                    entry_id=prepared.entry_id,
-                    prepared=prepared,
-                ),
-            )
+            if response.get("status") == ReconfigureStatus.PREVIEW:
+                # Still open at a step: the same token continues it.
+                response["confirm_token"] = confirm_token
+            return response
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -315,6 +375,7 @@ class ReconfigureRunner:
                 e,
                 context={
                     "entry_id": entry_id,
+                    "flow_id": flow_id,
                     "config_keys": sorted(config or {}),
                 },
                 suggestions=[
@@ -330,7 +391,11 @@ class ReconfigureRunner:
         entry_id: str | None,
         domain: str | None,
         enabled: bool | None,
+        describe: bool,
         config: dict[str, Any] | None,
+        flow_id: str | None,
+        menu_choice: str | None,
+        abort: bool,
         expected_device_id: str | None,
         expected_unique_id: str | None,
         expected_mac: str | None,
@@ -342,13 +407,22 @@ class ReconfigureRunner:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Reconfigure mode requires entry_id and config; do not "
+                    "Reconfigure mode requires entry_id; do not "
                     "combine it with domain or enabled",
                     context={
                         "entry_id": entry_id,
                         "domain": domain,
                         "enabled": enabled,
                     },
+                )
+            )
+        if describe:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "reconfigure=True without flow_id already opens the flow "
+                    "and submits nothing: drop describe",
+                    context={"entry_id": entry_id},
                 )
             )
         if entry_id is None:
@@ -364,6 +438,9 @@ class ReconfigureRunner:
         return await self.run(
             entry_id,
             config=config,
+            flow_id=flow_id,
+            menu_choice=menu_choice,
+            abort=abort,
             expected_device_id=expected_device_id,
             expected_unique_id=expected_unique_id,
             expected_mac=expected_mac,

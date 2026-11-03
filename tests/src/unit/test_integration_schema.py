@@ -3,8 +3,9 @@
 A schema exists only inside an open flow: the tool opens the entry's options
 (or subentry) flow, describes its form in the same compact shape the helper
 describe uses (fields, Core's help text, current values), and aborts it. A
-flow that opens with a menu lists its branches; ``menu_choice``, which only
-ha_set_integration(describe=True) takes, describes the form behind one of them.
+flow that opens with a menu lists its branches. The form behind a branch, and
+a domain's setup form, are described by ha_set_integration(describe=True)
+(test_set_integration_describe.py).
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import config_entry_flow_introspect, integration_schema
 from ha_mcp.tools.integration_schema import (
-    fetch_config_flow_schema,
     fetch_config_subentry_schema,
     fetch_options_schema,
     redact_component_options,
@@ -131,46 +131,6 @@ async def test_menu_without_a_choice_lists_the_branches_and_points_at_menu_choic
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-@pytest.mark.asyncio
-async def test_menu_choice_describes_the_form_behind_that_branch() -> None:
-    client = _client(
-        dict(_MENU),
-        {"component.demo.options.step.advanced.data.host": "Host"},
-    )
-    client.submit_options_flow_step.return_value = _form(
-        "advanced", _HOST, last_step=True
-    )
-    resp = _resp()
-
-    await fetch_options_schema(client, "e1", resp, menu_choice="advanced")
-
-    client.submit_options_flow_step.assert_awaited_once_with(
-        "f1", {"next_step_id": "advanced"}
-    )
-    schema = resp["options_schema"]
-    assert schema["flow_type"] == "form"
-    assert schema["step_id"] == "advanced"
-    assert schema["menu_choice"] == "advanced"
-    assert [(f["name"], f["description"]) for f in schema["fields"]] == [
-        ("host", "Host")
-    ]
-    client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_a_menu_choice_core_does_not_offer_is_refused_with_its_options() -> None:
-    client = _client(dict(_MENU))
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_options_schema(client, "e1", _resp(), menu_choice="expert")
-
-    body = json.loads(str(exc_info.value))
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert body["menu_options"] == ["basic", "advanced"]
-    client.submit_options_flow_step.assert_not_called()
-    client.abort_options_flow.assert_awaited_once_with("f1")
-
-
 async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
     if kind == "probe":
         entry = {"supports_options": True, "options": {"host": "h"}}
@@ -178,11 +138,8 @@ async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
     elif kind == "entry_options":
         await fetch_entry_options_with_status(client, "e1")
     elif kind == "options":
-        # strict, as ha_set_integration(describe=True) reads it.
-        await fetch_options_schema(
-            client, "e1", _resp(), strict=True, menu_choice=menu_choice
-        )
-    elif kind == "subentry":
+        await fetch_options_schema(client, "e1", _resp())
+    else:
         await fetch_config_subentry_schema(
             client,
             "e1",
@@ -192,30 +149,25 @@ async def _describe(kind: str, client: Any, menu_choice: str | None) -> None:
             show_advanced_options=False,
             menu_choice=menu_choice,
         )
-    else:
-        await fetch_config_flow_schema(client, "demo", {}, menu_choice=menu_choice)
 
 
 _FLOW_METHODS = {
     "options": ("submit_options_flow_step", "abort_options_flow"),
     "subentry": ("submit_config_subentry_flow_step", "abort_config_subentry_flow"),
-    "setup": ("submit_config_flow_step", "abort_config_flow"),
 }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", list(_FLOW_METHODS))
-async def test_a_failed_menu_choice_submit_fails_every_describe(kind: str) -> None:
+async def test_a_failed_menu_choice_submit_fails_the_subentry_describe() -> None:
     client = _client(_MENU)
-    submit, abort = _FLOW_METHODS[kind]
-    getattr(client, submit).side_effect = HomeAssistantAPIError(
+    client.submit_config_subentry_flow_step.side_effect = HomeAssistantAPIError(
         "API error: 400 - Invalid step", status_code=400
     )
 
     with pytest.raises(HomeAssistantAPIError, match="Invalid step"):
-        await _describe(kind, client, "advanced")
+        await _describe("subentry", client, "advanced")
 
-    getattr(client, abort).assert_awaited_once_with("f1")
+    client.abort_config_subentry_flow.assert_awaited_once_with("f1")
 
 
 _ABORTS = {"probe": "abort_options_flow", "entry_options": "abort_options_flow"} | {
@@ -262,7 +214,6 @@ async def test_a_failed_describe_abort_is_a_warning_unless_the_flow_is_gone(
 _LEFT_OPEN = {
     "options": ("abort_options_flow", "the options flow f1 was closed"),
     "subentry": ("abort_config_subentry_flow", "the subentry flow f1 was closed"),
-    "setup": ("abort_config_flow", "already_in_progress"),
 }
 _ABORT_ANSWERS = [
     pytest.param(None, False, id="aborted"),
@@ -280,10 +231,8 @@ async def _described(
     kind: str, client: Any, resp: dict[str, Any], menu_choice: str | None = None
 ) -> None:
     if kind == "options":
-        await fetch_options_schema(
-            client, "e1", resp, strict=True, menu_choice=menu_choice
-        )
-    elif kind == "subentry":
+        await fetch_options_schema(client, "e1", resp)
+    else:
         await fetch_config_subentry_schema(
             client,
             "e1",
@@ -293,8 +242,6 @@ async def _described(
             show_advanced_options=False,
             menu_choice=menu_choice,
         )
-    else:
-        await fetch_config_flow_schema(client, "demo", resp, menu_choice=menu_choice)
 
 
 # How the describe ends: (first step, menu_choice, the error it raises once
@@ -309,8 +256,10 @@ _ENDINGS = {
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", list(_LEFT_OPEN))
-@pytest.mark.parametrize("ending", list(_ENDINGS))
+@pytest.mark.parametrize(
+    ("kind", "ending"),
+    [("options", "described")] + [("subentry", ending) for ending in _ENDINGS],
+)
 @pytest.mark.parametrize(("abort_error", "left_open"), _ABORT_ANSWERS)
 async def test_a_describe_says_when_its_flow_may_still_be_open(
     kind: str, ending: str, abort_error: Exception | None, left_open: bool
@@ -376,18 +325,6 @@ async def test_a_failed_options_probe_keeps_cores_message_in_the_warning() -> No
 
     assert "options_schema" not in resp
     assert any("Config entry not loaded" in w for w in resp["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_menu_choice_on_a_flow_that_opens_with_a_form_is_refused() -> None:
-    client = _client(_form("init", _HOST))
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_options_schema(client, "e1", _resp(), menu_choice="advanced")
-
-    body = json.loads(str(exc_info.value))
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    client.abort_options_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio
@@ -624,146 +561,11 @@ async def test_subentry_flow_that_aborts_at_once_returns_cores_reason_text() -> 
 # --- the setup (config) flow of a domain, read in list mode -----------------
 
 
-@pytest.mark.asyncio
-async def test_setup_form_is_described_with_help_under_config() -> None:
-    client = _client(
-        _form("user", _HOST, last_step=False),
-        {"component.demo.config.step.user.data_description.host": "Device IP."},
-    )
-    resp: dict[str, Any] = {}
-
-    await fetch_config_flow_schema(client, "demo", resp)
-
-    schema = resp["config_flow_schema"]
-    assert schema["flow_type"] == "form"
-    assert schema["fields"][0]["description"] == "Device IP."
-    assert schema["more_forms"] == "yes"
-    client.start_config_flow.assert_awaited_once_with("demo")
-    client.abort_config_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_setup_flow_that_aborts_returns_cores_reason_text() -> None:
-    client = _client(
-        {
-            "type": "abort",
-            "flow_id": "f1",
-            "reason": "single_instance_allowed",
-            "description_placeholders": None,
-        },
-        {
-            "component.sun.config.abort.single_instance_allowed": (
-                "Already configured. Only a single configuration possible."
-            )
-        },
-    )
-    resp: dict[str, Any] = {}
-
-    await fetch_config_flow_schema(client, "sun", resp)
-
-    schema = resp["config_flow_schema"]
-    assert schema["aborted"] == "single_instance_allowed"
-    assert schema["reason_text"] == (
-        "Already configured. Only a single configuration possible."
-    )
-    assert "fields" not in schema
-
-
-@pytest.mark.asyncio
-async def test_menu_choice_on_an_aborted_setup_flow_still_returns_the_reason() -> None:
-    client = _client(
-        {"type": "abort", "flow_id": "f1", "reason": "single_instance_allowed"}
-    )
-    resp: dict[str, Any] = {}
-
-    await fetch_config_flow_schema(client, "sun", resp, menu_choice="light")
-
-    assert resp["config_flow_schema"]["aborted"] == "single_instance_allowed"
-
-
-@pytest.mark.asyncio
-async def test_setup_menu_lists_branches_until_menu_choice_picks_one() -> None:
-    client = _client(dict(_MENU))
-
-    resp: dict[str, Any] = {}
-    await fetch_config_flow_schema(client, "group", resp)
-    assert resp["config_flow_schema"]["menu_options"] == ["basic", "advanced"]
-    client.submit_config_flow_step.assert_not_called()
-
-    client.submit_config_flow_step.return_value = _form("advanced", _HOST)
-    resp = {}
-    await fetch_config_flow_schema(client, "group", resp, menu_choice="advanced")
-
-    client.submit_config_flow_step.assert_awaited_once_with(
-        "f1", {"next_step_id": "advanced"}
-    )
-    assert resp["config_flow_schema"]["menu_choice"] == "advanced"
-    assert resp["config_flow_schema"]["fields"][0]["name"] == "host"
-
-
 # --- a describe step that does not stop at a form, menu or abort -----------
 
 
 def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))
-
-
-@pytest.mark.asyncio
-async def test_setup_flow_that_creates_an_entry_names_it_even_with_menu_choice() -> (
-    None
-):
-    client = _client(
-        {
-            "type": "create_entry",
-            "flow_id": "f1",
-            "result": {"entry_id": "new1", "domain": "demo", "title": "Sun"},
-        }
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_config_flow_schema(client, "demo", {}, menu_choice="x")
-
-    assert _error(exc_info)["entry_id"] == "new1"
-
-
-@pytest.mark.asyncio
-async def test_setup_flow_that_creates_an_entry_fails_and_names_the_entry() -> None:
-    client = _client(
-        {
-            "type": "create_entry",
-            "flow_id": "f1",
-            "title": "Sun",
-            "result": {"entry_id": "new1", "domain": "demo", "title": "Sun"},
-        }
-    )
-    resp: dict[str, Any] = {}
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_config_flow_schema(client, "demo", resp)
-
-    body = _error(exc_info)
-    assert "new1" in body["error"]["message"]
-    assert body["entry_id"] == "new1"
-    assert body["title"] == "Sun"
-    assert "status" not in body
-    assert "ha_remove_helpers_integrations" in body["error"]["suggestion"]
-    assert "config_flow_schema" not in resp
-
-
-@pytest.mark.asyncio
-async def test_menu_choice_whose_step_creates_an_entry_fails() -> None:
-    client = _client(dict(_MENU))
-    client.submit_config_flow_step.return_value = {
-        "type": "create_entry",
-        "flow_id": "f1",
-        "title": "Basic",
-        "result": {"entry_id": "new2", "title": "Basic"},
-    }
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_config_flow_schema(client, "group", {}, menu_choice="basic")
-
-    assert _error(exc_info)["entry_id"] == "new2"
 
 
 @pytest.mark.asyncio
@@ -788,23 +590,6 @@ _PROGRESS_STEP = {
     "step_id": "discover",
     "progress_action": "scanning",
 }
-
-
-@pytest.mark.asyncio
-async def test_setup_flow_in_progress_is_aborted_and_named_with_cores_text() -> None:
-    client = _client(
-        dict(_PROGRESS_STEP),
-        {"component.demo.config.progress.scanning": "Scanning the network."},
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await fetch_config_flow_schema(client, "demo", {})
-
-    body = _error(exc_info)
-    assert "progress" in body["error"]["message"]
-    assert body["progress_action"] == "scanning"
-    assert body["progress_action_text"] == "Scanning the network."
-    client.abort_config_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio
@@ -835,16 +620,6 @@ async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
 
     assert "'external'" in _error(exc_info)["error"]["message"]
     client.abort_config_subentry_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_setup_flow_is_aborted_when_the_describe_is_refused() -> None:
-    client = _client(_form("user", _HOST))
-
-    with pytest.raises(ToolError):
-        await fetch_config_flow_schema(client, "demo", {}, menu_choice="advanced")
-
-    client.abort_config_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio
@@ -893,26 +668,23 @@ async def test_a_failed_strings_read_is_a_warning_on_an_abort() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", ["subentry_schema", "config_flow_schema"])
-async def test_a_failed_strings_read_is_a_top_level_warning_on_every_describe(
-    key: str,
-) -> None:
+async def test_a_failed_strings_read_is_a_top_level_warning_on_the_subentry_describe() -> (
+    None
+):
     client = _client(_form("user", _HOST))
     client.send_websocket_message.side_effect = RuntimeError("ws down")
     resp = _resp()
 
-    if key == "subentry_schema":
-        await fetch_config_subentry_schema(
-            client,
-            "e1",
-            resp,
-            subentry_type="device",
-            subentry_id=None,
-            show_advanced_options=False,
-        )
-    else:
-        await fetch_config_flow_schema(client, "demo", resp)
+    await fetch_config_subentry_schema(
+        client,
+        "e1",
+        resp,
+        subentry_type="device",
+        subentry_id=None,
+        show_advanced_options=False,
+    )
 
+    key = "subentry_schema"
     assert resp[key]["fields"][0]["name"] == "host"
     assert "warnings" not in resp[key]
     assert any("strings for demo could not be read" in w for w in resp["warnings"])

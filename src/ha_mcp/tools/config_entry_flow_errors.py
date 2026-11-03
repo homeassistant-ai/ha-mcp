@@ -224,6 +224,7 @@ async def _raise_flow_api_error(
     current_step: dict[str, Any] | None,
     submitted: dict[str, Any] | None,
     is_reconfigure: bool = False,
+    flow_stays_open: bool = False,
 ) -> NoReturn:
     """Translate an HA 4xx during a flow submit into a structured ToolError.
 
@@ -237,7 +238,9 @@ async def _raise_flow_api_error(
     fallback for a schema-less step. ``is_reconfigure`` skips that fallback
     too (``helper_type`` carries the integration domain there) and makes the
     prose name the integration instead of a helper, because this path also
-    serves ``ha_set_integration(reconfigure=True)``.
+    serves ``ha_set_integration(reconfigure=True)``. ``flow_stays_open``
+    (``ha_set_integration``'s one step per call) skips the fallback as well
+    and says the rejected flow is still open.
 
     Always raises ``ToolError`` — never returns.
     """
@@ -264,7 +267,7 @@ async def _raise_flow_api_error(
         if isinstance(step_schema, list):
             current_schema = step_schema
 
-    if current_schema is not None or is_reconfigure:
+    if current_schema is not None or is_reconfigure or flow_stays_open:
         # The live step is the form HA rejected: a fresh introspection would
         # show the helper's first setup form instead, a different form in a
         # multi-step, options or reconfigure flow.
@@ -314,6 +317,11 @@ async def _raise_flow_api_error(
 
     if is_reconfigure:
         context["status"] = ReconfigureStatus.APPLY_FAILED
+    if flow_stays_open:
+        suggestions.append(
+            "The flow is still open: retry with flow_id, or end it with "
+            "flow_id and abort=True."
+        )
 
     raise_tool_error(
         create_error_response(

@@ -5,8 +5,9 @@ surface in ``config_entry_flow``: a reconfigure edits a live entry in place and
 Home Assistant reloads it afterwards, so the work here is mostly proving the
 entry still points at the same physical device once the change has committed.
 
-Depends one way on ``config_entry_flow`` (for the shared flow-abort and
-sentinel-rejection helpers), never the reverse. Identity comparison lives in
+Depends one way on ``config_entry_flow`` (for the shared sentinel rejection
+and component-entry refusal) and on ``integration_flow_steps`` (which answers
+the flow's steps), never the reverse. Identity comparison lives in
 ``config_entry_identity``; the post-commit reload observation lives in
 ``config_entry_reload_watch``.
 """
@@ -21,11 +22,9 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from .component_config_entries import fetch_domain_unique_ids
 from .config_entry_flow import _reject_redaction_sentinels, refuse_component_entry
-from .config_entry_flow_abort import abort_failed_flow, raise_if_flow_left_open
-from .config_entry_flow_errors import FlowRef, ReconfigureStatus
+from .config_entry_flow_errors import ReconfigureStatus
 from .config_entry_flow_walker import (
     POST_COMMIT_STATUSES,
-    _handle_flow_steps,
     flow_error_payload,
     leaves_flow_open,
 )
@@ -50,14 +49,15 @@ from .config_entry_reload_watch import (
 )
 from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
+from .integration_flow_steps import (
+    FlowTarget,
+    reconfigure_step_response,
+    settle,
+    start_reconfigure_step,
+    submit_step,
+)
 
 logger = logging.getLogger(__name__)
-
-FLOW_LEFT_OPEN = (
-    "Home Assistant did not confirm that the reconfigure flow this call opened "
-    "was closed. While it stays open (until it ends or Home Assistant "
-    "restarts), Home Assistant starts no reauthentication for this entry."
-)
 
 _VERIFICATION_ATTEMPTS = 5
 
@@ -365,7 +365,7 @@ async def prepare_reconfigure_request(
     ``async_step_reconfigure``, the caller's identity anchors match what the
     registries currently say, no second entry in the same domain shares the
     device, and some identity anchor exists at all. The flow is not started
-    here; the preview leg then reads its form (``reconfigure_preflight``).
+    here: ``ReconfigureRunner`` opens it, or answers its open step.
     """
     validated_entry_id = validate_identifier_not_empty(
         entry_id,
@@ -373,10 +373,10 @@ async def prepare_reconfigure_request(
         suggestions=["Use ha_get_integration() to find valid config entry IDs"],
     )
     flow_config = _build_reconfigure_flow_config(validated_entry_id, config=config)
-    # Fourth path that writes caller-supplied config into a flow, alongside
-    # create_config_entry, update_config_entry_options and set_config_subentry.
-    # Without this a caller round-tripping a redacted read would write the
-    # placeholder string over a live credential (#2157).
+    # submit_step rejects the sentinels again before it submits; this check
+    # also refuses them on the first call, which submits nothing. Without it
+    # a caller round-tripping a redacted read would write the placeholder
+    # string over a live credential (#2157).
     _reject_redaction_sentinels(flow_config)
     entry = await client.get_config_entry(validated_entry_id)
     domain = entry.get("domain")
@@ -568,65 +568,33 @@ async def _validate_reconfigure_identity_and_duplicates(
     return before_identity, cross_domain_warnings(related.cross_domain)
 
 
-async def _run_reconfigure_flow(
+async def _run_reconfigure_step(
     client: Any,
+    target: FlowTarget,
     *,
-    domain: str,
-    entry_id: str,
+    flow_id: str | None,
     flow_config: dict[str, Any],
-    rollback_metadata: dict[str, Any],
+    menu_choice: str | None,
 ) -> tuple[str, dict[str, Any]]:
-    """Start and walk the official reconfigure flow.
+    """Answer one step of the official reconfigure flow; return Core's answer.
 
-    Walks with ``keep_current_values``: a reconfigure step is pre-filled with
-    the entry's live connection settings, so a field ``flow_config`` does not
-    name is resubmitted as the step presented it rather than dropped back to a
-    schema default (issue #2254).
+    Without ``flow_id`` the flow is started and its first step answered. An
+    options-style patch: a field ``flow_config`` does not name is resubmitted
+    as the step presented it (issue #2254). A step Home Assistant rejects
+    leaves the flow open, like every other failure before a commit.
     """
-    flow_result = await client.start_reconfigure_flow(domain, entry_id)
-    flow_id = flow_result.get("flow_id")
-    if not flow_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to start the integration reconfigure flow",
-                suggestions=[
-                    "Confirm that the entry still exists and supports reconfigure",
-                ],
-                context={
-                    "entry_id": entry_id,
-                    "domain": domain,
-                    "status": ReconfigureStatus.APPLY_FAILED,
-                    "details": flow_result,
-                },
-            )
-        )
-    try:
-        result = await _handle_flow_steps(
-            client,
-            flow_id,
-            flow_result,
-            flow_config,
-            helper_type=domain,
-            is_reconfigure=True,
-            keep_current_values=True,
-            flow=FlowRef(domain, "config"),
-        )
-    except (Exception, asyncio.CancelledError) as flow_error:
-        if leaves_flow_open(flow_error):
-            _raise_post_commit_verification_error(
-                flow_error,
-                entry_id=entry_id,
-                domain=domain,
-                rollback_metadata=rollback_metadata,
-            )
-        raise_if_flow_left_open(
-            flow_error,
-            await abort_failed_flow(client.abort_config_flow, flow_id),
-            FLOW_LEFT_OPEN,
-        )
-        raise
-    return flow_id, result
+    current = None
+    if flow_id is None:
+        flow_id, current = await start_reconfigure_step(client, target)
+    step = await submit_step(
+        client,
+        target,
+        flow_id,
+        config=flow_config if menu_choice is None else None,
+        menu_choice=menu_choice,
+        current=current,
+    )
+    return flow_id, await settle(client, target, flow_id, step)
 
 
 async def _verify_reconfigure_result(
@@ -814,6 +782,68 @@ async def _observed_reload_state(
         return None
 
 
+async def _resolve_prepared(
+    client: Any,
+    entry_id: str,
+    *,
+    config: dict[str, Any] | None,
+    expected_device_id: str | None,
+    expected_unique_id: str | None,
+    expected_mac: str | None,
+    expected_entity_ids: list[str] | None,
+    prepared: PreparedReconfigure | None,
+) -> PreparedReconfigure:
+    """The request's prepared state: built here, or the caller's checked
+    against the arguments it came with."""
+    expected_identity: dict[str, Any] = {
+        "device_id": expected_device_id,
+        "unique_id": expected_unique_id,
+        "mac": expected_mac,
+        "entity_ids": list(expected_entity_ids or []),
+    }
+    if prepared is None:
+        return await prepare_reconfigure_request(
+            client,
+            entry_id,
+            config=config,
+            expected_identity=expected_identity,
+        )
+    validated_entry_id = validate_identifier_not_empty(entry_id, "entry_id")
+    if validated_entry_id != prepared.entry_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Prepared reconfigure state belongs to a different entry_id",
+                context={
+                    "entry_id": validated_entry_id,
+                    "prepared_entry_id": prepared.entry_id,
+                },
+            )
+        )
+    if config is not None and config != prepared.flow_config:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config does not match the prepared reconfigure request",
+                context={"entry_id": prepared.entry_id},
+            )
+        )
+    if (
+        expected_device_id is not None
+        or expected_unique_id is not None
+        or expected_mac is not None
+        or expected_entity_ids is not None
+    ) and expected_identity != prepared.expected_identity:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Identity anchors do not match the prepared reconfigure request",
+                context={"entry_id": prepared.entry_id},
+            )
+        )
+    return prepared
+
+
 async def reconfigure_config_entry(
     client: Any,
     entry_id: str,
@@ -824,67 +854,29 @@ async def reconfigure_config_entry(
     expected_mac: str | None = None,
     expected_entity_ids: list[str] | None = None,
     prepared: PreparedReconfigure | None = None,
+    flow_id: str | None = None,
+    menu_choice: str | None = None,
 ) -> dict[str, Any]:
-    """Reconfigure an existing integration through HA's official flow.
+    """Answer one step of an entry's official reconfigure flow.
 
     The operation is intentionally generic: integrations opt in by exposing
     ``async_step_reconfigure`` and decide how the submitted values are
     validated. The existing config entry is never deleted or recreated.
+    Without ``flow_id`` the flow is started and its first step answered.
+    When Home Assistant commits (a reconfigure or reauth success abort) the
+    entry is verified; when it shows another form or menu, that step is
+    returned with ``flow_id`` and status ``preview``.
     """
-    expected_identity: dict[str, Any] = {
-        "device_id": expected_device_id,
-        "unique_id": expected_unique_id,
-        "mac": expected_mac,
-        "entity_ids": list(expected_entity_ids or []),
-    }
-    if prepared is None:
-        prepared = await prepare_reconfigure_request(
-            client,
-            entry_id,
-            config=config,
-            expected_identity=expected_identity,
-        )
-    else:
-        validated_entry_id = validate_identifier_not_empty(entry_id, "entry_id")
-        if validated_entry_id != prepared.entry_id:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Prepared reconfigure state belongs to a different entry_id",
-                    context={
-                        "entry_id": validated_entry_id,
-                        "prepared_entry_id": prepared.entry_id,
-                    },
-                )
-            )
-        if config is not None and config != prepared.flow_config:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "config does not match the prepared reconfigure request",
-                    context={"entry_id": prepared.entry_id},
-                )
-            )
-        supplied_identity = {
-            "device_id": expected_device_id,
-            "unique_id": expected_unique_id,
-            "mac": expected_mac,
-            "entity_ids": list(expected_entity_ids or []),
-        }
-        if (
-            expected_device_id is not None
-            or expected_unique_id is not None
-            or expected_mac is not None
-            or expected_entity_ids is not None
-        ) and supplied_identity != prepared.expected_identity:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Identity anchors do not match the prepared reconfigure request",
-                    context={"entry_id": prepared.entry_id},
-                )
-            )
-
+    prepared = await _resolve_prepared(
+        client,
+        entry_id,
+        config=config,
+        expected_device_id=expected_device_id,
+        expected_unique_id=expected_unique_id,
+        expected_mac=expected_mac,
+        expected_entity_ids=expected_entity_ids,
+        prepared=prepared,
+    )
     entry_id = prepared.entry_id
     before = prepared.entry
     flow_config = prepared.flow_config
@@ -900,20 +892,35 @@ async def reconfigure_config_entry(
 
     rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain)
 
-    # Subscribe BEFORE the flow: HA queues the post-commit reload with
+    target = FlowTarget("reconfigure", domain, entry_id)
+    # Subscribe BEFORE the submit: HA queues the post-commit reload with
     # async_create_task and returns, so a read-back can land either mid-reload
     # or before it starts. Only a stream opened ahead of the commit can tell a
     # finished reload from one that has not begun.
     subscription = await _subscribe_entry_changes(client)
     observed_entry: dict[str, Any] | None = None
     try:
-        _, result = await _run_reconfigure_flow(
-            client,
-            domain=domain,
-            entry_id=entry_id,
-            flow_config=flow_config,
-            rollback_metadata=rollback_metadata,
-        )
+        try:
+            flow_id, result = await _run_reconfigure_step(
+                client,
+                target,
+                flow_id=flow_id,
+                flow_config=flow_config,
+                menu_choice=menu_choice,
+            )
+        except (Exception, asyncio.CancelledError) as flow_error:
+            if leaves_flow_open(flow_error):
+                _raise_post_commit_verification_error(
+                    flow_error,
+                    entry_id=entry_id,
+                    domain=domain,
+                    rollback_metadata=rollback_metadata,
+                )
+            raise
+        if result.get("type") != "abort":
+            return await reconfigure_step_response(
+                client, target, flow_id, result, prepared.entry, prepared.warnings
+            )
         observed_entry = await _observed_reload_state(subscription, entry_id)
     finally:
         if subscription is not None:
@@ -972,6 +979,5 @@ async def reconfigure_config_entry(
         warnings=[
             *prepared.warnings,
             *related_warnings,
-            *(result.get("warnings") or []),
         ],
     )

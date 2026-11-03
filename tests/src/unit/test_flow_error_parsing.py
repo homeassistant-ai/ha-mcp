@@ -44,7 +44,8 @@ from ha_mcp.tools.config_entry_flow_errors import (
     raise_form_errors,
 )
 from ha_mcp.tools.config_entry_flow_walker import _handle_flow_steps
-from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_flow
+from ha_mcp.tools.config_entry_reconfigure import _run_reconfigure_step
+from ha_mcp.tools.integration_flow_steps import FlowTarget
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -656,19 +657,19 @@ class TestFlowTextFromCore:
         }
 
         with pytest.raises(ToolError) as exc_info:
-            await _run_reconfigure_flow(
+            await _run_reconfigure_step(
                 client,
-                domain="shelly",
-                entry_id="e1",
+                FlowTarget("reconfigure", "shelly", "e1"),
+                flow_id=None,
                 flow_config={"host": "10.0.0.3"},
-                rollback_metadata={},
+                menu_choice=None,
             )
 
         body = _parse_tool_error(exc_info.value)
         assert body["reason_text"] == "Wrong device."
         assert body["status"] == "apply_failed"
 
-    async def test_a_reconfigure_form_back_with_errors_is_apply_failed(
+    async def test_a_reconfigure_form_back_with_errors_is_returned_and_stays_open(
         self,
     ) -> None:
         client = _strings_client({})
@@ -684,20 +685,18 @@ class TestFlowTextFromCore:
             "errors": {"base": "not_valid"},
         }
 
-        with pytest.raises(ToolError) as exc_info:
-            await _run_reconfigure_flow(
-                client,
-                domain="filesize",
-                entry_id="e1",
-                flow_config={"file_path": "/nope/x.txt"},
-                rollback_metadata={},
-            )
+        flow_id, step = await _run_reconfigure_step(
+            client,
+            FlowTarget("reconfigure", "filesize", "e1"),
+            flow_id=None,
+            flow_config={"file_path": "/nope/x.txt"},
+            menu_choice=None,
+        )
 
-        body = _parse_tool_error(exc_info.value)
-        assert body["errors"] == {"base": "not_valid"}
-        assert body["status"] == "apply_failed"
+        assert flow_id == "rc-flow"
+        assert step["errors"] == {"base": "not_valid"}
         client.submit_config_flow_step.assert_awaited_once()
-        client.abort_config_flow.assert_awaited_once_with("rc-flow")
+        client.abort_config_flow.assert_not_awaited()
 
     @pytest.mark.parametrize(
         ("subentry_id", "status"), [("s1", "apply_failed"), (None, None)]
