@@ -110,5 +110,7 @@ def endpoint_suffix(path: str, base: str) -> str:
 
 def suffixed_url(url: str, suffix: str) -> str:
     """Append ``suffix`` to the endpoint path, preserving any query string."""
+    if not suffix:
+        return url  # a configured trailing slash may be significant upstream
     parts = urlsplit(url)
     return urlunsplit(parts._replace(path=parts.path.rstrip("/") + suffix))

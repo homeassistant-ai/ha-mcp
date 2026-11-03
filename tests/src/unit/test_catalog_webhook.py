@@ -98,3 +98,15 @@ async def test_catalog_webhook_reuses_auth_gate(auth_mode, monkeypatch):
         await view.post(_request("/catalog/search"), WEBHOOK_ID, "search") is rejection
     )
     assert session.calls == []
+
+
+def test_unsuffixed_target_url_is_forwarded_unchanged(
+    readonly_webhook_modules,  # noqa: F811
+):
+    for module in readonly_webhook_modules:
+        url = "http://host/custom-mcp/?key=value"
+        assert module.suffixed_url(url, "") == url
+        assert (
+            module.suffixed_url(url, "/catalog/search")
+            == "http://host/custom-mcp/catalog/search?key=value"
+        )
