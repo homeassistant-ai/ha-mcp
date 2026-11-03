@@ -316,7 +316,8 @@ class TestSend:
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "status 'validated' without a verdict" in error["message"]
         assert error["suggestion"] == UPDATE_COMPONENT_SUGGESTION
-        (_record,) = [r for r in caplog.records if "without a verdict" in r.message]
+        (record,) = [r for r in caplog.records if "without a verdict" in r.message]
+        assert record.levelname == "WARNING"
         assert "1234" not in caplog.text
         client.send_websocket_message.assert_not_awaited()
 
