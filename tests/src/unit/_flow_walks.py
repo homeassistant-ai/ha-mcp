@@ -4,11 +4,17 @@ They keep the raw error and abort keys, and a progress step raises
 ``ValueError``; a test passes ``flow=`` itself to get Core's text or a poll.
 """
 
-from functools import partial
+from collections.abc import Awaitable
+from typing import Any
 
 from ha_mcp.tools import config_entry_flow_walker
 
-_handle_flow_steps = partial(config_entry_flow_walker._handle_flow_steps, flow=None)
-_handle_config_subentry_flow_steps = partial(
-    config_entry_flow_walker._handle_config_subentry_flow_steps, flow=None
-)
+
+def _handle_flow_steps(*args: Any, **kwargs: Any) -> Awaitable[Any]:
+    return config_entry_flow_walker._handle_flow_steps(*args, flow=None, **kwargs)
+
+
+def _handle_config_subentry_flow_steps(*args: Any, **kwargs: Any) -> Awaitable[Any]:
+    return config_entry_flow_walker._handle_config_subentry_flow_steps(
+        *args, flow=None, **kwargs
+    )
