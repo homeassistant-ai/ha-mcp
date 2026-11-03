@@ -34,8 +34,8 @@ from ha_mcp.tools.config_entry_flow import (
     set_config_subentry,
     update_config_entry_options,
 )
-from ha_mcp.tools.config_entry_flow_abort import abort_failed_flow
 from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
+from ha_mcp.tools.config_entry_flow_introspect import abort_failed_flow
 from ha_mcp.tools.config_entry_flow_progress import (
     PROGRESS_BUDGET_S,
     wait_for_progress,

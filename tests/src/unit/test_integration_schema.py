@@ -295,9 +295,6 @@ async def test_an_entry_read_closes_its_options_flow_after_an_error(
     if not raw:
         with pytest.raises(ToolError):
             await fetch_options_schema(client, "e1", resp)
-        # Only the read's own warning: the menu-less step holds no options.
-        (warning,) = resp["warnings"]
-        assert warning.startswith("options for e1 could not be read")
     else:
         await fetch_options_schema(client, "e1", resp)
         assert len(resp["warnings"]) == 1

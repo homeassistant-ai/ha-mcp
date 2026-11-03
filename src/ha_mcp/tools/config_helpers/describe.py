@@ -164,7 +164,7 @@ async def describe_form(
     or ``config_subentries.<type>``. Without a ``domain`` there is no help
     text to read.
     """
-    fields = compact_schema(step.get("schema") or step.get("data_schema") or [])
+    fields = compact_schema(step.get("data_schema") or [])
     described: dict[str, Any] = {"fields": fields, **_later_forms(step)}
     step_id = step.get("step_id")
     if step_id and domain:
@@ -226,73 +226,86 @@ async def describe_step(
     flow: FlowRef,
     menu_choice: str | None,
     submit: _Submit,
+    abort: Callable[[str], Awaitable[Any]],
     menu_note: str,
 ) -> dict[str, Any]:
-    """Describe a flow's first step, or the form behind ``menu_choice``.
+    """Describe a flow's first step, or the form behind ``menu_choice``, then
+    abort the flow, also when describing it fails.
 
-    A step that is not a form, menu or abort raises; the callers abort the flow.
+    A step that is not a form, menu or abort raises.
     """
-    chosen: dict[str, Any] = {}
-    if step.get("type") == "menu":
-        choices = menu_choices(step)
-        if menu_choice is None:
+    flow_id = step.get("flow_id")
+    try:
+        chosen: dict[str, Any] = {}
+        if step.get("type") == "menu":
+            choices = menu_choices(step)
+            if menu_choice is None:
+                return {
+                    "flow_type": "menu",
+                    "step_id": step.get("step_id"),
+                    "menu_options": choices,
+                    "note": menu_note,
+                }
+            if menu_choice not in choices:
+                refuse_menu_choice(
+                    menu_choice,
+                    "the flow's menu does not offer it",
+                    menu_options=choices,
+                )
+            step = await submit(step["flow_id"], {"next_step_id": menu_choice})
+            chosen = {"menu_choice": menu_choice}
+        elif menu_choice is not None and step.get("type") not in (
+            "abort",
+            "create_entry",
+        ):
+            # Not refused: an abort is reported below, and a finished flow
+            # gets the no-form error.
+            refuse_menu_choice(
+                menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
+            )
+        step_type = step.get("type")
+        if step_type == "abort":
+            return {
+                "flow_type": "abort",
+                **chosen,
+                "aborted": step.get("reason"),
+                **await abort_reason_text(client, flow, step),
+            }
+        if step_type == "menu":
             return {
                 "flow_type": "menu",
                 "step_id": step.get("step_id"),
-                "menu_options": choices,
-                "note": menu_note,
+                **chosen,
+                "menu_options": menu_choices(step),
             }
-        if menu_choice not in choices:
-            refuse_menu_choice(
-                menu_choice, "the flow's menu does not offer it", menu_options=choices
+        if step_type != "form":
+            progress: dict[str, Any] = {}
+            if step_type == "progress":
+                progress = {
+                    "progress_action": step.get("progress_action"),
+                    **await progress_action_text(client, flow, step),
+                }
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"The flow reached a {step_type!r} step, which has no form to "
+                    "describe; the flow is being aborted",
+                    suggestions=[
+                        "Run this flow in the Home Assistant UI "
+                        "(Settings > Devices & Services)."
+                    ],
+                    context={"step_id": step.get("step_id"), **chosen, **progress},
+                )
             )
-        step = await submit(step["flow_id"], {"next_step_id": menu_choice})
-        chosen = {"menu_choice": menu_choice}
-    elif menu_choice is not None and step.get("type") not in ("abort", "create_entry"):
-        # An abort or a finished flow is reported below, not hidden by this.
-        refuse_menu_choice(
-            menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
-        )
-    step_type = step.get("type")
-    if step_type == "abort":
         return {
-            "flow_type": "abort",
-            **chosen,
-            "aborted": step.get("reason"),
-            **await abort_reason_text(client, flow, step),
-        }
-    if step_type == "menu":
-        return {
-            "flow_type": "menu",
+            "flow_type": "form",
             "step_id": step.get("step_id"),
             **chosen,
-            "menu_options": menu_choices(step),
+            **await describe_form(client, flow.domain, flow.path, step),
         }
-    if step_type != "form":
-        progress: dict[str, Any] = {}
-        if step_type == "progress":
-            progress = {
-                "progress_action": step.get("progress_action"),
-                **await progress_action_text(client, flow, step),
-            }
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"The flow reached a {step_type!r} step, which has no form to "
-                "describe; the flow is being aborted",
-                suggestions=[
-                    "Run this flow in the Home Assistant UI "
-                    "(Settings > Devices & Services)."
-                ],
-                context={"step_id": step.get("step_id"), **chosen, **progress},
-            )
-        )
-    return {
-        "flow_type": "form",
-        "step_id": step.get("step_id"),
-        **chosen,
-        **await describe_form(client, flow.domain, flow.path, step),
-    }
+    finally:
+        if flow_id:
+            await abort_probe_flow(abort, flow_id)
 
 
 async def _describe_flow(
@@ -306,38 +319,30 @@ async def _describe_flow(
                 helper_type=helper_type,
             )
         await config_entry_of_domain(client, entry_id, helper_type)
-        flow_id: str | None = None
-        try:
-            step = await client.start_options_flow(entry_id)
-            flow_id = step.get("flow_id")
-            return {
-                "source": "options_flow",
-                **await describe_step(
-                    client,
-                    step,
-                    flow=FlowRef(helper_type, "options", entry_id),
-                    menu_choice=None,
-                    submit=client.submit_options_flow_step,
-                    menu_note="This helper's options flow opens with a menu; its "
-                    "forms are not described.",
-                ),
-            }
-        finally:
-            if flow_id:
-                await abort_probe_flow(client.abort_options_flow, flow_id)
+        return {
+            "source": "options_flow",
+            **await describe_step(
+                client,
+                await client.start_options_flow(entry_id),
+                flow=FlowRef(helper_type, "options", entry_id),
+                menu_choice=None,
+                submit=client.submit_options_flow_step,
+                abort=client.abort_options_flow,
+                menu_note="This helper's options flow opens with a menu; its "
+                "forms are not described.",
+            ),
+        }
 
-    flow_id = None
     try:
-        step = await client.start_config_flow(helper_type)
-        flow_id = step.get("flow_id")
         return {
             "source": "config_flow",
             **await describe_step(
                 client,
-                step,
+                await client.start_config_flow(helper_type),
                 flow=FlowRef(helper_type, "config"),
                 menu_choice=menu_choice,
                 submit=client.submit_config_flow_step,
+                abort=client.abort_config_flow,
                 menu_note="Pass menu_choice to describe one of these sub-types.",
             ),
         }
@@ -363,9 +368,6 @@ async def _describe_flow(
                 else ["Check the Home Assistant log for the integration's setup"],
             )
         )
-    finally:
-        if flow_id:
-            await abort_probe_flow(client.abort_config_flow, flow_id)
 
 
 async def _stored_item(

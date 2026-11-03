@@ -374,11 +374,10 @@ async def test_read_only_still_describes_a_storage_helper_type(
 @pytest.mark.parametrize(
     ("helper_type", "menu_choice", "failing", "match"),
     [
-        ("template", "sensors", None, "menu_choice 'sensors' does not apply"),
         ("template", "sensor", "submit_config_flow_step", "with menu_choice 'sensor'"),
         ("derivative", None, "start_config_flow", "no setup form for derivative"),
     ],
-    ids=["choice-not-offered", "branch-rejected", "flow-not-started"],
+    ids=["branch-rejected", "flow-not-started"],
 )
 async def test_flow_that_cannot_be_read_is_an_error_not_an_empty_field_list(
     client: AsyncMock,

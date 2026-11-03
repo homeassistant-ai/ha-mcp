@@ -20,7 +20,7 @@ from .config_entry_flow import (
     _reject_redaction_sentinels,
     _subentry_ids,
 )
-from .config_entry_flow_abort import abort_failed_flow
+from .config_entry_flow_introspect import abort_failed_flow
 from .config_entry_flow_walker import (
     _RECONFIGURE_SUCCESS_REASONS,
     _FlowType,

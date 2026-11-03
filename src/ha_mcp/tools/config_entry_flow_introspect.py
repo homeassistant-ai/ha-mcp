@@ -4,7 +4,7 @@ Starts a flow only to read its first form (or its menu, or the branch form a
 ``menu_choice`` picks) and always aborts it. Feeds the ``data_schema`` and
 ``menu_options`` attached to helper flow errors; split out of
 ``config_entry_flow_walker``, which drives flows to completion. Also holds the
-shielded flow abort, which ``config_entry_flow_abort`` builds on.
+shielded flow aborts.
 """
 
 import asyncio
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _ABORT_TIMEOUT_S = 5.0
 
 
-def _flow_gone(err: BaseException | None) -> bool:
+def _flow_gone(err: BaseException) -> bool:
     """Whether ``err`` is Core's 404 for a flow that no longer exists: it
     already finished (abort, create_entry)."""
     return getattr(err, "status_code", None) == 404
@@ -35,8 +35,8 @@ async def shielded_abort(
     *,
     failure: str,
     level: int = logging.WARNING,
-) -> Exception | None:
-    """Abort ``flow_id`` and return the abort's own error, if any.
+) -> None:
+    """Abort ``flow_id``.
 
     Shielded: a cancellation arrives through an anyio cancel scope, which
     would cancel the abort itself at its first await. A failure is logged as
@@ -53,8 +53,6 @@ async def shielded_abort(
             abort_err,
             exc_info=True,
         )
-        return abort_err
-    return None
 
 
 async def abort_probe_flow(
@@ -68,6 +66,37 @@ async def abort_probe_flow(
         failure=f"flow {flow_id} abort failed",
         level=logging.DEBUG if quiet else logging.WARNING,
     )
+
+
+async def abort_failed_flow(
+    abort: Callable[[str], Awaitable[Any]], flow_id: str, *, kind: str = "flow"
+) -> None:
+    """Abort a still-pending flow without hiding the original failure.
+    ``kind`` names the flow in the log."""
+    await shielded_abort(
+        abort, flow_id, failure=f"Failed to abort {kind} {flow_id} after error"
+    )
+
+
+async def abort_failed_flow_type_only(
+    abort: Callable[[str], Awaitable[Any]], flow_id: str, msg: str, *args: object
+) -> None:
+    """Abort a flow after a failed write.
+
+    A failure logs ``msg % (*args, error_type)`` at warning, at debug when the
+    flow is already gone: the error's type only, never its text, which may
+    echo the values the flow carried.
+    """
+    try:
+        with anyio.CancelScope(shield=True):  # see shielded_abort
+            await asyncio.wait_for(abort(flow_id), timeout=_ABORT_TIMEOUT_S)
+    except Exception as abort_err:  # noqa: BLE001
+        logger.log(
+            logging.DEBUG if _flow_gone(abort_err) else logging.WARNING,
+            msg,
+            *args,
+            type(abort_err).__name__,
+        )
 
 
 class _FlowType(StrEnum):

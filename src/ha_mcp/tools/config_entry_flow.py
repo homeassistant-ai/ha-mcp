@@ -21,14 +21,13 @@ entry's connection settings commits in place and Home Assistant reloads
 afterwards; that verification lives in ``config_entry_reconfigure``, which
 shares this module's sentinel rejection.
 
-The step machinery those entry points drive lives in seven sibling modules.
+The step machinery those entry points drive lives in six sibling modules.
 Each imports only modules upstream of it in these chains, so no import runs
-the other way: menu <- form <- walker <- abort <- here, and
+the other way: menu <- form <- walker <- here, and
 introspect <- errors <- progress <- walker.
 
-- ``config_entry_flow_abort``: aborting a failed walk's flow, shielded
 - ``config_entry_flow_introspect``: the flow-type vocabulary, the shielded
-  abort, and the read-only helper flow introspection
+  flow aborts, and the read-only helper flow introspection
 - ``config_entry_flow_errors``: Home Assistant's flow answers as structured
   errors, and the reconfigure outcome vocabulary
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
@@ -52,13 +51,13 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
-from .config_entry_flow_abort import (
-    abort_failed_flow,
-    abort_failed_flow_type_only,
-)
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
-from .config_entry_flow_introspect import shielded_abort
+from .config_entry_flow_introspect import (
+    abort_failed_flow,
+    abort_failed_flow_type_only,
+    shielded_abort,
+)
 from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
     _FlowType,

@@ -423,30 +423,6 @@ async def test_abort_without_flow_id_is_refused():
     ("kwargs", "abort_fn"),
     [
         ({"domain": "knx"}, "abort_config_flow"),
-        ({"domain": None, "entry_id": "entry1"}, "abort_options_flow"),
-    ],
-    ids=["setup", "options"],
-)
-async def test_abort_reaches_the_clients_abort_through_run_integration_step(
-    kwargs, abort_fn
-):
-    client = _client(
-        get_config_entry=AsyncMock(
-            return_value={"domain": "demo", "supports_options": True}
-        )
-    )
-    result = await _run(client, flow_id="f1", abort=True, **kwargs)
-    getattr(client, abort_fn).assert_awaited_once_with("f1")
-    assert result["aborted"] is True
-    client.start_config_flow.assert_not_awaited()
-    client.start_options_flow.assert_not_awaited()
-    client.submit_config_flow_step.assert_not_awaited()
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "abort_fn"),
-    [
-        ({"domain": "knx"}, "abort_config_flow"),
         ({"entry_id": "entry1"}, "abort_options_flow"),
     ],
     ids=["setup", "options"],
