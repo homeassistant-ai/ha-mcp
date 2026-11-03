@@ -367,14 +367,22 @@ async def test_single_entry_capsless_falls_back_to_legacy() -> None:
     assert not _ce_calls(ws)
 
 
+# unknown_command invalidates the caps cache so the next call re-probes; a
+# transient failure (timeout) is not a downgrade, so the caps stay cached.
 @pytest.mark.asyncio
-async def test_single_entry_unknown_command_falls_back_and_invalidates() -> None:
-    """unknown_command on config_entries → invalidate caps + legacy REST get."""
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
+@pytest.mark.parametrize(
+    ("exc", "caps_cached"),
+    [
+        (HomeAssistantCommandError("gone", "unknown_command"), False),
+        (HomeAssistantCommandTimeout("timeout"), True),
+    ],
+    ids=["unknown_command_invalidates", "timeout_keeps_caps"],
+)
+async def test_single_entry_command_error_falls_back(
+    exc: Exception, caps_cached: bool
+) -> None:
+    """A config_entries error falls back to the legacy REST get."""
+    ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES, cmd_exc=exc)
     client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
     get_integration = _build_get_integration(client)
 
@@ -383,29 +391,7 @@ async def test_single_entry_unknown_command_falls_back_and_invalidates() -> None
 
     assert resp["entry"]["entry_id"] == "cfg1"
     assert client.get_config_entry_calls == 1
-    # Caps dropped from the cache so the next call re-probes.
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_single_entry_command_error_falls_back_keeps_caps() -> None:
-    """A non-unknown config_entries error (timeout) falls back to the legacy REST
-    get WITHOUT invalidating the still-advertised capability."""
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, component_config_entries):
-        resp = await get_integration(entry_id="cfg1")
-
-    assert resp["entry"]["entry_id"] == "cfg1"
-    assert client.get_config_entry_calls == 1
-    # Transient failure is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
+    assert (client in component_api._CAPS_CACHE) is caps_cached
 
 
 # --- list routing --------------------------------------------------------------
@@ -521,30 +507,29 @@ async def test_fetch_caps_miss_returns_none_no_frame() -> None:
     assert not _ce_calls(ws)
 
 
+# unknown_command invalidates the caps cache; a transient failure is not a
+# downgrade, so caps stay cached. A WS-down ConnectionError is a DEVIATION from the
+# uniform taxonomy: this tool's legacy path is a pure REST read (not the shared
+# pooled WS), so ``fetch_config_entries`` catches it and returns ``None`` instead
+# of propagating.
 @pytest.mark.asyncio
-async def test_fetch_unknown_command_invalidates_caps() -> None:
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
+@pytest.mark.parametrize(
+    ("exc", "caps_cached"),
+    [
+        (HomeAssistantCommandError("gone", "unknown_command"), False),
+        (HomeAssistantCommandTimeout("timeout"), True),
+        (HomeAssistantConnectionError("ws down"), True),
+    ],
+    ids=["unknown_command_invalidates", "timeout_keeps_caps", "connection_error"],
+)
+async def test_fetch_command_error_returns_none(
+    exc: Exception, caps_cached: bool
+) -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES, cmd_exc=exc)
     client = RoutingClient()
     with patch_ws(ws, component_config_entries):
         assert await fetch_config_entries(client) is None
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_fetch_non_unknown_error_keeps_caps() -> None:
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_config_entries):
-        assert await fetch_config_entries(client) is None
-    assert client in component_api._CAPS_CACHE
+    assert (client in component_api._CAPS_CACHE) is caps_cached
 
 
 @pytest.mark.asyncio
@@ -558,27 +543,6 @@ async def test_fetch_malformed_shape_falls_back() -> None:
     client = RoutingClient()
     with patch_ws(ws, component_config_entries):
         assert await fetch_config_entries(client) is None
-
-
-@pytest.mark.asyncio
-async def test_fetch_connection_error_falls_back_to_none() -> None:
-    """A WS-down ConnectionError on the command returns None → legacy REST.
-
-    DEVIATION from the uniform taxonomy: this tool's legacy path is a pure REST
-    read (not the shared pooled WS), so ``fetch_config_entries`` catches
-    ``HomeAssistantConnectionError`` and returns ``None`` instead of propagating,
-    keeping the (still-advertised) capability cached.
-    """
-    ws = make_ws(
-        WS_CONFIG_ENTRIES,
-        info_result=_CAPS_CONFIG_ENTRIES,
-        cmd_exc=HomeAssistantConnectionError("ws down"),
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_config_entries):
-        assert await fetch_config_entries(client) is None
-    # A transient connection error is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
 
 
 @pytest.mark.asyncio

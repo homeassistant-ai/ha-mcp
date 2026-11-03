@@ -343,17 +343,17 @@ async def _never_answers(*_args: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_options_abort_that_never_answers_does_not_hold_the_describe(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("kind", ["options", "entry_options"])
+async def test_an_options_abort_that_never_answers_does_not_hold_the_read(
+    monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
     client = _client(_form("init", _HOST))
     client.abort_options_flow.side_effect = _never_answers
-    resp = _resp()
 
-    await asyncio.wait_for(fetch_options_schema(client, "e1", resp), timeout=2)
+    await asyncio.wait_for(_describe(kind, client, None), timeout=2)
 
-    assert resp["options_schema"]["flow_type"] == "form"
+    client.abort_options_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio
@@ -368,22 +368,6 @@ async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read
     await asyncio.wait_for(redact_component_options(client, "e1", entry, []), timeout=2)
 
     assert entry["options"] == {"host": "h", "api_key": REDACTED_SET}
-
-
-@pytest.mark.asyncio
-async def test_an_options_probe_abort_that_never_answers_does_not_hold_the_read(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
-    client = _client(_form("init", _HOST))
-    client.abort_options_flow.side_effect = _never_answers
-
-    options, ok = await asyncio.wait_for(
-        fetch_entry_options_with_status(client, "e1"), timeout=2
-    )
-
-    assert ok is True
-    assert set(options) == {"host"}
 
 
 @pytest.mark.asyncio
@@ -465,7 +449,20 @@ async def test_component_read_keeps_its_options_and_redacts_the_secret(
 
 
 @pytest.mark.asyncio
-async def test_options_flow_that_aborts_at_once_returns_cores_reason_text() -> None:
+@pytest.mark.parametrize(
+    ("kind", "key", "category"),
+    [
+        ("options", "component.demo.options", "options"),
+        (
+            "subentry",
+            "component.demo.config_subentries.device",
+            "config_subentries",
+        ),
+    ],
+)
+async def test_a_flow_that_aborts_at_once_returns_cores_reason_text(
+    kind: str, key: str, category: str
+) -> None:
     client = _client(
         {
             "type": "abort",
@@ -473,13 +470,13 @@ async def test_options_flow_that_aborts_at_once_returns_cores_reason_text() -> N
             "reason": "not_supported",
             "description_placeholders": {"model": "X1"},
         },
-        {"component.demo.options.abort.not_supported": "{model} has no options."},
+        {f"{key}.abort.not_supported": "{model} has no options."},
     )
     resp = _resp()
 
-    await fetch_options_schema(client, "e1", resp)
+    await _described(kind, client, resp)
 
-    schema = resp["options_schema"]
+    schema = resp[f"{kind}_schema"]
     assert schema["flow_type"] == "abort"
     assert schema["aborted"] == "not_supported"
     assert schema["reason_text"] == "X1 has no options."
@@ -488,7 +485,7 @@ async def test_options_flow_that_aborts_at_once_returns_cores_reason_text() -> N
         {
             "type": "frontend/get_translations",
             "language": "en",
-            "category": "options",
+            "category": category,
             "integration": ["demo"],
         }
     )
@@ -510,28 +507,6 @@ async def test_options_abort_reads_the_reason_under_its_translation_domain() -> 
     await fetch_options_schema(client, "e1", resp)
 
     assert resp["options_schema"]["reason_text"] == "Sign in again."
-
-
-@pytest.mark.asyncio
-async def test_subentry_flow_that_aborts_at_once_returns_cores_reason_text() -> None:
-    client = _client(
-        {"type": "abort", "flow_id": "f1", "reason": "no_models"},
-        {"component.ollama.config_subentries.conversation.abort.no_models": "None."},
-    )
-    resp = _resp("ollama")
-
-    await fetch_config_subentry_schema(
-        client,
-        "e1",
-        resp,
-        subentry_type="conversation",
-        subentry_id=None,
-        show_advanced_options=False,
-    )
-
-    schema = resp["subentry_schema"]
-    assert schema["aborted"] == "no_models"
-    assert schema["reason_text"] == "None."
 
 
 # --- the setup (config) flow of a domain, read in list mode -----------------
@@ -617,15 +592,19 @@ async def test_list_mode_include_schema_is_ignored_and_points_to_set(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_strings_read_is_a_warning_on_the_described_form() -> None:
+@pytest.mark.parametrize("kind", ["options", "subentry"])
+async def test_a_failed_strings_read_is_a_top_level_warning_on_the_described_form(
+    kind: str,
+) -> None:
     client = _client(_form("init", _HOST))
     client.send_websocket_message.side_effect = RuntimeError("ws down")
     resp = _resp()
 
-    await fetch_options_schema(client, "e1", resp)
+    await _described(kind, client, resp)
 
-    assert resp["options_schema"]["fields"][0]["name"] == "host"
-    assert "warnings" not in resp["options_schema"]
+    schema = resp[f"{kind}_schema"]
+    assert schema["fields"][0]["name"] == "host"
+    assert "warnings" not in schema
     assert any("strings for demo could not be read" in w for w in resp["warnings"])
 
 
@@ -640,29 +619,6 @@ async def test_a_failed_strings_read_is_a_warning_on_an_abort() -> None:
     schema = resp["options_schema"]
     assert schema["aborted"] == "no_options"
     assert "warnings" not in schema
-    assert any("strings for demo could not be read" in w for w in resp["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_a_failed_strings_read_is_a_top_level_warning_on_the_subentry_describe() -> (
-    None
-):
-    client = _client(_form("user", _HOST))
-    client.send_websocket_message.side_effect = RuntimeError("ws down")
-    resp = _resp()
-
-    await fetch_config_subentry_schema(
-        client,
-        "e1",
-        resp,
-        subentry_type="device",
-        subentry_id=None,
-        show_advanced_options=False,
-    )
-
-    key = "subentry_schema"
-    assert resp[key]["fields"][0]["name"] == "host"
-    assert "warnings" not in resp[key]
     assert any("strings for demo could not be read" in w for w in resp["warnings"])
 
 

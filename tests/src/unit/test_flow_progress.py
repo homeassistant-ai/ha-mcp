@@ -502,65 +502,16 @@ def test_only_a_flow_tool_error_can_leave_the_flow_open() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_wait")
-async def test_add_mode_progress_timeout_aborts_the_flow(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
-    client = _client(strings={})
-    client.start_config_flow.return_value = dict(_PROGRESS)
-
-    with pytest.raises(ToolError) as exc_info:
-        await create_config_entry(client, "demo", {})
-
-    assert json.loads(str(exc_info.value))["error"]["code"] == "TIMEOUT_OPERATION"
-    client.abort_config_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_wait")
-async def test_options_progress_timeout_aborts_the_flow(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
-    client = _options_client()
-
-    with pytest.raises(ToolError) as exc_info:
-        await update_config_entry_options(client, "e1", {})
-
-    assert json.loads(str(exc_info.value))["error"]["code"] == "TIMEOUT_OPERATION"
-    client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-def _options_client() -> AsyncMock:
-    client = _client(strings={})
-    client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
-    client.start_options_flow.return_value = dict(_PROGRESS)
-    return client
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_wait")
-async def test_add_mode_cancelled_during_the_wait_aborts_the_flow() -> None:
+@pytest.mark.parametrize("run", list(_WRITES))
+async def test_a_write_cancelled_during_the_wait_aborts_the_flow(run: str) -> None:
     client = _client(strings={})
     client._request.side_effect = asyncio.CancelledError()
-    client.start_config_flow.return_value = dict(_PROGRESS)
+    write, _, abort = _WRITES[run]
 
     with pytest.raises(asyncio.CancelledError):
-        await create_config_entry(client, "demo", {})
+        await write(client, dict(_PROGRESS))
 
-    client.abort_config_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_wait")
-async def test_options_cancelled_during_the_wait_aborts_the_flow() -> None:
-    client = _options_client()
-    client._request.side_effect = asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        await update_config_entry_options(client, "e1", {})
-
-    client.abort_options_flow.assert_awaited_once_with("f1")
+    getattr(client, abort).assert_awaited_once_with("f1")
 
 
 # A real cancellation (an MCP client's notifications/cancelled, a tool
@@ -592,25 +543,13 @@ async def _cancel_scope_at_poll(client: AsyncMock, run: Any) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_wait")
-async def test_add_mode_cancel_scope_still_sends_the_abort() -> None:
+@pytest.mark.parametrize("run", list(_WRITES))
+async def test_a_write_in_a_cancel_scope_still_sends_the_abort(run: str) -> None:
     client = _client(strings={})
-    client.start_config_flow.return_value = dict(_PROGRESS)
-    sent, client.abort_config_flow.side_effect = _abort_recorder()
+    write, _, abort = _WRITES[run]
+    sent, getattr(client, abort).side_effect = _abort_recorder()
 
-    await _cancel_scope_at_poll(client, lambda: create_config_entry(client, "demo", {}))
-
-    assert sent == ["f1"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_wait")
-async def test_options_cancel_scope_still_sends_the_abort() -> None:
-    client = _options_client()
-    sent, client.abort_options_flow.side_effect = _abort_recorder()
-
-    await _cancel_scope_at_poll(
-        client, lambda: update_config_entry_options(client, "e1", {})
-    )
+    await _cancel_scope_at_poll(client, lambda: write(client, dict(_PROGRESS)))
 
     assert sent == ["f1"]
 

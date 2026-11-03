@@ -218,15 +218,6 @@ class TestSend:
         assert "'knx/'" in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
 
-    async def test_component_entries_are_refused(self) -> None:
-        client = _client("ha_mcp_tools")
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="ha_mcp_tools/info"
-            )
-        assert "ha-mcp's own" in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
-
     @pytest.mark.parametrize("ws_data", [{"type": "call_service"}, {"id": 1}])
     async def test_ws_data_cannot_set_the_message_envelope(
         self, ws_data: dict[str, Any]
@@ -287,24 +278,25 @@ class TestSend:
         assert (response.get("status") == "applied_but_unverified") is unverified
         assert ("may have been applied" in response["error"]["message"]) is unverified
 
-    async def test_streaming_commands_are_refused(self) -> None:
-        client = _client()
+    @pytest.mark.parametrize(
+        ("domain", "command", "ws_data", "fragment"),
+        [
+            ("ha_mcp_tools", "ha_mcp_tools/info", None, "ha-mcp's own"),
+            ("knx", "knx/subscribe_telegrams", None, "one-shot"),
+            # Snapshot deletion stays with ha_manage_backup.
+            ("backup", "backup/delete", {"backup_id": "abc"}, "ha_manage_backup"),
+        ],
+        ids=["component_entry", "streaming", "snapshot_deletion"],
+    )
+    async def test_refused_commands(
+        self, domain: str, command: str, ws_data: dict[str, Any] | None, fragment: str
+    ) -> None:
+        client = _client(domain)
         with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/subscribe_telegrams"
+                entry_id="e1", ws_command=command, ws_data=ws_data
             )
-        assert "one-shot" in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_snapshot_deletion_stays_with_ha_manage_backup(self) -> None:
-        client = _client("backup")
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1",
-                ws_command="backup/delete",
-                ws_data={"backup_id": "abc"},
-            )
-        assert "ha_manage_backup" in _error(exc_info)["message"]
+        assert fragment in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.parametrize(

@@ -175,13 +175,29 @@ async def test_a_flow_that_finishes_when_it_is_opened_is_unverified(
 
 
 @pytest.mark.asyncio
-async def test_a_flow_found_finished_when_read_again_is_unverified(
-    reconfig_entry: dict[str, object],
+@pytest.mark.parametrize(
+    ("read_again", "says"),
+    [
+        pytest.param(
+            AsyncMock(return_value=_SUCCESS_ABORT), "without a submit", id="finished"
+        ),
+        # Core answers the GET by running the step again, which on a
+        # reconfigure flow may write the entry: a 5xx there is classified like
+        # a submit's.
+        pytest.param(
+            AsyncMock(side_effect=HomeAssistantAPIError("boom", status_code=500)),
+            None,
+            id="http-500",
+        ),
+    ],
+)
+async def test_reading_the_step_again_may_have_applied(
+    reconfig_entry: dict[str, object], read_again: AsyncMock, says: str | None
 ) -> None:
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(return_value=_form("host"))
-    client._request = AsyncMock(return_value=_SUCCESS_ABORT)
+    client._request = read_again
     tools = IntegrationTools(client)
 
     preview = await tools.ha_set_integration(entry_id="entry-123", reconfigure=True)
@@ -195,35 +211,8 @@ async def test_a_flow_found_finished_when_read_again_is_unverified(
 
     error = json.loads(str(exc_info.value))
     assert error["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
-    assert "without a submit" in error["error"]["message"]
-    client.submit_config_flow_step.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_a_server_error_when_the_step_is_read_again_may_have_applied(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """Core answers the GET by running the step again, which on a reconfigure
-    flow may write the entry: a 5xx there is classified like a submit's."""
-    client = reconfigure_client()
-    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
-    client.start_reconfigure_flow = AsyncMock(return_value=_form("host"))
-    client._request = AsyncMock(
-        side_effect=HomeAssistantAPIError("boom", status_code=500)
-    )
-    tools = IntegrationTools(client)
-
-    preview = await tools.ha_set_integration(entry_id="entry-123", reconfigure=True)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_set_integration(
-            entry_id="entry-123",
-            reconfigure=True,
-            flow_id=preview["flow_id"],
-            confirm_token=preview["confirm_token"],
-        )
-
-    error = json.loads(str(exc_info.value))
-    assert error["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+    if says:
+        assert says in error["error"]["message"]
     client.submit_config_flow_step.assert_not_called()
 
 

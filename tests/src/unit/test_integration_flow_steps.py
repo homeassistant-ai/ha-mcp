@@ -519,25 +519,6 @@ async def test_a_new_flow_without_config_submits_an_empty_form():
     client.submit_config_flow_step.assert_awaited_once_with("f1", {})
 
 
-async def test_describe_opens_the_flow_and_submits_nothing():
-    client = _client(
-        start_config_flow=AsyncMock(return_value=_form("user", _field("name")))
-    )
-    result = await run_integration_step(
-        client,
-        domain="local_calendar",
-        entry_id=None,
-        flow_id=None,
-        config=None,
-        menu_choice=None,
-        abort=False,
-        describe=True,
-    )
-    assert result["flow_id"] == "f1"
-    client.submit_config_flow_step.assert_not_awaited()
-    client.abort_config_flow.assert_not_awaited()
-
-
 @pytest.mark.parametrize(
     "extra", [{"config": {"name": "x"}}, {"flow_id": "f1"}, {"abort": True}]
 )

@@ -194,51 +194,22 @@ def test_ha_get_integration_takes_no_menu_choice() -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_describe_of_an_entry_without_options_starts_no_flow() -> None:
-    client = _client(_form("init", _HOST))
-    client.get_config_entry.return_value = {
-        "entry_id": "e1",
-        "domain": "sun",
-        "supports_options": False,
-    }
-
-    with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(entry_id="e1", describe=True)
-
-    body = _error(exc_info)
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert "has no options flow" in body["error"]["message"]
-    client.start_options_flow.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_set_integration_describe_whose_flow_cannot_start_is_no_missing_domain() -> (
-    None
-):
-    # Core answers 400 for failed dependencies: the domain is installed.
+@pytest.mark.parametrize(
+    ("status", "text", "code", "says"),
+    [
+        # Core answers 400 for failed dependencies: the domain is installed.
+        (400, "Failed dependencies mqtt", "SERVICE_CALL_FAILED", "mqtt"),
+        (404, "Invalid handler specified", "RESOURCE_NOT_FOUND", "Invalid handler"),
+        # Only a 400 or 404 is about the flow start; a 5xx is the tool's own error.
+        (500, "", None, None),
+    ],
+)
+async def test_set_integration_describe_whose_flow_cannot_start(
+    status: int, text: str, code: str | None, says: str | None
+) -> None:
     client = _client({})
     client.start_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 400 - Failed dependencies mqtt",
-        status_code=400,
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(
-            domain="tasmota", describe=True
-        )
-
-    error = json.loads(str(exc_info.value))["error"]
-    assert error["code"] == "SERVICE_CALL_FAILED"
-    assert "Failed dependencies mqtt" in error["message"]
-
-
-@pytest.mark.asyncio
-async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> None:
-    client = _client({})
-    client.start_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 404 - Invalid handler specified",
-        status_code=404,
-        response_data={"message": "Invalid handler specified"},
+        f"API error: {status} - {text}", status_code=status
     )
 
     with pytest.raises(ToolError) as exc_info:
@@ -247,25 +218,13 @@ async def test_set_integration_describe_of_a_domain_without_a_flow_fails() -> No
         )
 
     error = json.loads(str(exc_info.value))["error"]
-    assert error["code"] == "RESOURCE_NOT_FOUND"
-    assert "no_such_domain" in error["message"]
-    assert "Invalid handler specified" in error["message"]
-
-
-@pytest.mark.asyncio
-async def test_set_integration_describe_whose_flow_start_fails_with_5xx() -> None:
-    # Only a 400 or 404 is about the flow start; a 5xx is the tool's own error.
-    client = _client({})
-    client.start_config_flow.side_effect = HomeAssistantAPIError(
-        "API error: 500", status_code=500
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(domain="demo", describe=True)
-
-    error = json.loads(str(exc_info.value))["error"]
-    assert "could not start a config flow" not in error["message"]
-    assert "spelled correctly" in error["suggestion"]
+    if code is None:
+        assert "could not start a config flow" not in error["message"]
+        assert "spelled correctly" in error["suggestion"]
+    else:
+        assert error["code"] == code
+        assert "no_such_domain" in error["message"]
+        assert says in error["message"]
 
 
 @pytest.mark.asyncio
