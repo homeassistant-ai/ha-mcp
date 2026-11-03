@@ -530,19 +530,6 @@ class HomeAssistantSmartMCPServer:
         ``_apply_search_keyword_enrichment`` already ran, so the enriched
         catalog is what the categorized transform indexes.
         """
-        try:
-            from .transforms import CategorizedSearchTransform
-        except ImportError:
-            logger.error(
-                "CategorizedSearchTransform not available — every endpoint "
-                "serves the full tool catalog. Install fastmcp>=3.1 to fix."
-            )
-            set_search_available(False)
-            self.mcp.instructions = self._instructions["full"]
-            return
-        set_search_available(True)
-        install_catalog_instructions(self.mcp, self._instructions)
-
         # Build the always_visible list: defaults (minus tools the user
         # explicitly toggled to "enabled" in the Tools tab) + user pins.
         # The skill guide tool is part of DEFAULT_PINNED_TOOLS, and in
@@ -576,6 +563,8 @@ class HomeAssistantSmartMCPServer:
         )
 
         try:
+            from .transforms import CategorizedSearchTransform
+
             self.mcp.add_transform(
                 CategorizedSearchTransform(
                     max_results=self.settings.tool_search_max_results,
@@ -589,14 +578,24 @@ class HomeAssistantSmartMCPServer:
                     enable_code_mode=self.settings.enable_code_mode,
                 )
             )
-            logger.info(
-                "Tool search transform applied (%d pinned tools, max_results=%d, code_mode=%s)",
-                len(pinned),
-                self.settings.tool_search_max_results,
-                self.settings.enable_code_mode,
-            )
         except Exception:
-            logger.exception("Failed to apply tool search transform")
+            # Import or install failed: no endpoint can serve search, so every
+            # one serves, and describes, the full catalog.
+            logger.exception(
+                "Tool search transform unavailable; every endpoint serves the "
+                "full tool catalog"
+            )
+            set_search_available(False)
+            self.mcp.instructions = self._instructions["full"]
+            return
+        set_search_available(True)
+        install_catalog_instructions(self.mcp, self._instructions)
+        logger.info(
+            "Tool search transform applied (%d pinned tools, max_results=%d, code_mode=%s)",
+            len(pinned),
+            self.settings.tool_search_max_results,
+            self.settings.enable_code_mode,
+        )
 
     def _apply_tool_security_policies(self) -> None:
         """Register the tool security policies middleware (#966).

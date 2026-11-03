@@ -1,6 +1,7 @@
 """Each endpoint URL serves one fixed tool catalog."""
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -206,13 +207,21 @@ def test_discover_describes_the_endpoints_catalog():
             assert ("ha_search_tools" in names) == (mode == "search")
 
 
-def test_missing_search_transform_serves_the_full_catalog_everywhere(monkeypatch):
+@pytest.mark.parametrize("failure", ["import", "install"])
+def test_missing_search_transform_serves_the_full_catalog_everywhere(
+    monkeypatch, failure
+):
     """Without the transform, a search URL must not promise search tools."""
     from ha_mcp import transforms
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
     monkeypatch.setattr(tool_catalog, "_search_available", True)
-    monkeypatch.delattr(transforms, "CategorizedSearchTransform")
+    if failure == "import":
+        monkeypatch.delattr(transforms, "CategorizedSearchTransform")
+    else:
+        monkeypatch.setattr(
+            transforms, "CategorizedSearchTransform", MagicMock(side_effect=ValueError)
+        )
     get_global_settings().enable_tool_search = True
     srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
     srv.settings = get_global_settings()
@@ -241,9 +250,14 @@ def test_a_later_server_with_the_search_transform_serves_search(monkeypatch):
     srv.mcp = HttpTransportFastMCP("search")
     srv._instructions = {"full": "full text", "search": "search text"}
     srv._user_enabled_tools, srv._user_pinned_tools = set(), []
+    srv.mcp.tool(annotations={"readOnlyHint": True})(read_tool)
     srv._apply_tool_search()
     with catalog_endpoint("search"):
         assert tool_search_active()
+    app = srv.mcp.http_app(path="/mcp", stateless_http=True)
+    with TestClient(app) as client:
+        assert "ha_search_tools" in _tool_names(client, "/mcp/catalog/search")
+        assert _tool_names(client, "/mcp/catalog/full") == {"read_tool"}
 
 
 def read_tool() -> str:
