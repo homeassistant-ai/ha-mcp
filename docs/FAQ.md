@@ -925,10 +925,13 @@ camera whose view happens to include a display showing a hidden entity's state;
 if a camera can see something sensitive, hide the camera too (denylist or its
 area).
 
-`ha_get_skill_guide`, `ha_search_tools` and the developer-mode `ha_dev_*`
-tools are always **exempt**: they return bundled docs, tool schemas and server
-controls, never Home Assistant data, and their examples can name an entity_id
-you have hidden.
+`ha_get_skill_guide` and `ha_search_tools` are always **exempt**: they return
+bundled docs and tool schemas, never Home Assistant data, and their examples can
+name an entity_id you have hidden. The developer-mode `ha_dev_*` tools are
+exempt too: developer mode is a development and testing override that can
+change settings and replace the running server, and it may bypass entity
+visibility, so a stored security-policy rule naming a hidden entity_id is
+returned as written.
 
 Another surface is deliberately **exempt by default**: `ha_report_issue`.
 While `"restrict_report_issue": false`, it bypasses both visibility scans on

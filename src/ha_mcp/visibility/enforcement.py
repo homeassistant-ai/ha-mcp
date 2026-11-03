@@ -108,8 +108,8 @@ _CUSTOM_TOOL = "ha_manage_custom_tool"
 
 # Diagnostic tool deliberately outside the visibility barrier unless opted in.
 _REPORT_ISSUE_TOOL = "ha_report_issue"
-# Always outside the barrier: bundled docs, tool schemas and developer server
-# controls carry no HA data, but their examples can name a hidden id (#2949).
+# Always outside the barrier: bundled docs and tool schemas whose examples can
+# name a hidden id (#2949), and the ha_dev_* developer override by design.
 _UNGATED_TOOLS = frozenset({"ha_get_skill_guide", "ha_search_tools"})
 _UNGATED_PREFIX = "ha_dev_"
 # State reads have a shape-bounded scrub exception before the outbound scan.

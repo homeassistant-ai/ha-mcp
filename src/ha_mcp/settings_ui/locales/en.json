@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Settings UI sidecar port",
     "advanced.sidecar_pin_port.help": "0 picks a free port on first start and keeps it for later restarts; a port in the range pins a preferred port (falls back to a free one if taken).",
     "advanced.enable_dev_mode.label": "Developer mode",
-    "advanced.enable_dev_mode.help": "⚠ Registers hidden tools that can change settings and replace the running server. Development and testing only.",
+    "advanced.enable_dev_mode.help": "⚠ Registers hidden tools that can change settings and replace the running server. It also may bypass some entity visibility or other limitations. Development and testing only.",
     "advanced.dev_tools_security_policy_access.label": "Dev tools security policy access",
     "advanced.dev_tools_security_policy_access.help": "⚠ While developer mode is on, lets the developer tools rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals on your behalf — an AI agent can accept its own gated calls. Policy testing only. Takes effect without a restart.",
     "addon.secret_path.name": "Secret path override",
