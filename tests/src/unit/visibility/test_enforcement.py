@@ -587,23 +587,23 @@ class TestProxyUnwrap:
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
         assert body["entity_id"] == "sensor.hidden"
 
-    async def test_search_tool_extra_name_is_not_treated_as_dispatch(self, set_config):
-        """ha_search_tools searches a catalog; it never executes its name key."""
+    async def test_non_proxy_name_key_does_not_borrow_an_exemption(self, set_config):
+        """Only call proxies dispatch; another tool's name key is just data."""
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
         mw = make_mw(get_client=FakeClient)
 
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
-                    "ha_search_tools",
-                    {"query": "lights", "name": "ha_report_issue"},
+                    "ha_config_get_label",
+                    {"label_id": "x", "name": "ha_get_skill_guide"},
                 ),
-                _returns(text_result("catalog mentions sensor.hidden")),
+                _returns(text_result("label mentions sensor.hidden")),
             )
 
         body = _error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-        assert body["tool_name"] == "ha_search_tools"
+        assert body["tool_name"] == "ha_config_get_label"
 
     async def test_retired_inner_name_is_reported_as_current_name(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
