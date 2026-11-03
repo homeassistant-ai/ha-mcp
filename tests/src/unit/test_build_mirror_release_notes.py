@@ -21,11 +21,13 @@ CHANGELOG_URL = "https://github.com/homeassistant-ai/ha-mcp/releases"
 
 
 @pytest.fixture
-def git(tmp_path: Path) -> Callable[..., None]:
-    """Run git in a fresh repository under ``tmp_path``."""
+def git(tmp_path: Path) -> Callable[..., str]:
+    """Run git in a fresh repository under ``tmp_path``; return its output."""
 
-    def run(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    def run(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
 
     run("init")
     run("config", "user.name", "Release regression")
@@ -86,7 +88,7 @@ def test_format_release_notes_filters_noise_subjects() -> None:
 
 @pytest.mark.parametrize("component_changed", [False, True])
 def test_release_stamp_does_not_count_as_a_component_change(
-    tmp_path: Path, git: Callable[..., None], component_changed: bool
+    tmp_path: Path, git: Callable[..., str], component_changed: bool
 ) -> None:
     """Match the server-only release reproduced on the HAOS dev instance."""
     component = tmp_path / "custom_components" / "ha_mcp_tools"
@@ -191,16 +193,20 @@ def test_a_pin_that_is_not_a_dev_build_is_refused(
 
 
 def test_dev_notes_list_the_commits_since_the_previous_dev_build(
-    tmp_path: Path, git: Callable[..., None]
+    tmp_path: Path, git: Callable[..., str]
 ) -> None:
     """Dev pre-release notes must list only the pull requests merged after the
-    previous dev build up to the snapshot, and name the build they install. It
-    passes the options the publish workflows pass."""
+    previous dev build up to the snapshotted commit, and name the build they
+    install. It passes the options publish-dev passes: the triggering commit's
+    SHA as the source, before the new build has a tag. Like publish-dev, it puts
+    the previous build's tag on a stamp commit that only the tag references."""
     git("commit", "--allow-empty", "-m", "feat: before the previous build (#1)")
+    git("commit", "--allow-empty", "-m", "chore: stamp the previous build")
     git("tag", "v9.0.0.dev1")
-    git("commit", "--allow-empty", "-m", "fix: between the builds (#2)")
-    git("tag", "v9.0.0.dev2")
-    git("commit", "--allow-empty", "-m", "feat: after the build (#3)")
+    git("reset", "--hard", "HEAD~1")
+    git("commit", "--allow-empty", "-m", "fix: in the snapshot (#2)")
+    snapshot = git("rev-parse", "HEAD")
+    git("commit", "--allow-empty", "-m", "feat: after the snapshot (#3)")
     output = tmp_path / "notes.md"
     argv = [
         "--repo-dir",
@@ -210,7 +216,7 @@ def test_dev_notes_list_the_commits_since_the_previous_dev_build(
         "--dist",
         "ha-mcp-test",
         "--source",
-        "v9.0.0.dev2",
+        snapshot,
         "--source-label",
         "owner/repo@abc1234",
         "--out",
@@ -223,9 +229,9 @@ def test_dev_notes_list_the_commits_since_the_previous_dev_build(
     )
     assert "from owner/repo@abc1234," in notes
     assert "Installs ha-mcp-test==9.0.0.dev2." in notes
-    assert "- fix: between the builds (#2)" in notes
+    assert "- fix: in the snapshot (#2)" in notes
     assert "before the previous build" not in notes
-    assert "after the build" not in notes
+    assert "after the snapshot" not in notes
 
 
 def test_dev_notes_list_each_merged_pull_request() -> None:
