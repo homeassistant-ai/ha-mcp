@@ -1,5 +1,5 @@
 {
-  "custom_components/ha_mcp_tools/__init__.py": 3619,
+  "custom_components/ha_mcp_tools/__init__.py": 3618,
   "custom_components/ha_mcp_tools/embedded_server.py": 2393,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py": 1147,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py": 1314,
@@ -115,7 +115,7 @@
   "tests/src/unit/test_webhook_proxy_oauth_unified.py": 1807,
   "tests/src/unit/test_websocket_client.py": 2145,
   "tests/src/unit/test_yaml_dashboards.py": 1097,
-  "tests/src/unit/test_yaml_read_tool.py": 1122,
+  "tests/src/unit/test_yaml_read_tool.py": 1051,
   "tests/src/unit/visibility/test_enforcement.py": 1586,
   "tests/uat/run_uat.py": 1022,
   "tests/uat/stories/run_story.py": 1715
