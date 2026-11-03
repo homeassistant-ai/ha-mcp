@@ -193,13 +193,14 @@ def test_a_pin_that_is_not_a_dev_build_is_refused(
 def test_dev_notes_list_the_commits_since_the_previous_dev_build(
     tmp_path: Path, git: Callable[..., None]
 ) -> None:
-    """Dev pre-release notes must list only the pull requests merged since the
-    previous dev build, and name the build they install. It passes the options
-    the publish workflows pass."""
+    """Dev pre-release notes must list only the pull requests merged after the
+    previous dev build up to the snapshot, and name the build they install. It
+    passes the options the publish workflows pass."""
     git("commit", "--allow-empty", "-m", "feat: before the previous build (#1)")
     git("tag", "v9.0.0.dev1")
     git("commit", "--allow-empty", "-m", "fix: between the builds (#2)")
     git("tag", "v9.0.0.dev2")
+    git("commit", "--allow-empty", "-m", "feat: after the build (#3)")
     output = tmp_path / "notes.md"
     argv = [
         "--repo-dir",
@@ -224,6 +225,7 @@ def test_dev_notes_list_the_commits_since_the_previous_dev_build(
     assert "Installs ha-mcp-test==9.0.0.dev2." in notes
     assert "- fix: between the builds (#2)" in notes
     assert "before the previous build" not in notes
+    assert "after the build" not in notes
 
 
 def test_dev_notes_list_each_merged_pull_request() -> None:
