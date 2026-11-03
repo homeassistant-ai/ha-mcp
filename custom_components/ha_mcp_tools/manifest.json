@@ -4,6 +4,7 @@
     "after_dependencies": [
         "backup",
         "cloud",
+        "config",
         "energy",
         "frontend",
         "http",
