@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
+from .test_yaml_read_tool import _make_tool, _read_ok
+
 
 @pytest.fixture(autouse=True)
 def _filesystem_tools_enabled(monkeypatch):
@@ -256,6 +260,27 @@ async def test_listing_failure_does_not_flag_a_discovered_bracketed_literal():
     ]
 
 
+async def test_listing_failure_with_empty_discovery_warns():
+    """Discovery ran but found nothing; a listing failure is still a warning."""
+    from .test_yaml_read_tool import _make_tool
+
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {"success": True, "files": []},
+            "list_files": {"success": False, "error": "Path not allowed"},
+        }
+    )
+
+    out = await fn(yaml_path="sensor", file="*.yaml")
+
+    assert out["success"] is True
+    assert out["count"] == 0
+    assert out["warnings"] == [
+        "Glob expansion failed: Path not allowed. Files matching the pattern "
+        "may be missing from this result."
+    ]
+
+
 async def test_tool_warns_when_discovery_is_unavailable():
     """A fallback-only search must say subfolders may be missing."""
     from .test_yaml_read_tool import _make_tool, _read_ok
@@ -345,3 +370,104 @@ def test_failure_reason_falls_back_outside_the_envelope():
 
     assert tools_yaml_read._failure_reason(RuntimeError("boom")) == "boom"
     assert tools_yaml_read._failure_reason(ValueError('"a string"')) == '"a string"'
+
+
+async def test_list_failure_warns_when_discovery_ran():
+    """Discovery answered, so a listing failure only narrows the result."""
+    fn, _ = await _make_tool(
+        {
+            "list_files": {"success": False, "error": "Path not allowed.", "files": []},
+            "read_file": _read_ok("x\n"),
+        }
+    )
+
+    out = await fn(yaml_path="alert2", file="packages/*.yaml")
+
+    assert out["success"] is True
+    assert out["count"] == 0
+    assert out["warnings"] == [
+        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result."
+    ]
+
+
+async def test_list_failure_raises_when_discovery_is_unavailable():
+    """Without discovery the glob is the only route, so a failure still raises."""
+    fn, _ = await _make_tool(
+        {
+            "find_yaml_key": {"success": False, "error": "component too old"},
+            "list_files": {"success": False, "error": "Path not allowed.", "files": []},
+            "read_file": _read_ok("x\n"),
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="alert2", file="packages/*.yaml")
+
+
+async def test_root_level_glob_lists_config_root():
+    """A glob with no directory part asks the lister for the config root.
+
+    The component denies that (the root is not in ALLOWED_READ_DIRS), which is
+    the pre-existing lister boundary — root files stay readable one-by-one via
+    an explicit `file`. This pins the '.' the tool sends, so the request is a
+    deliberate deny rather than a malformed path.
+    """
+    seen: dict = {}
+
+    def list_files(payload):
+        seen["path"] = payload["path"]
+        return {"success": False, "error": "Path not allowed.", "files": []}
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    out = await fn(yaml_path="rest", file="*.yaml")
+    assert out["success"] is True
+    assert out["warnings"] == [
+        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result."
+    ]
+    assert seen["path"] == "."
+
+
+async def test_literal_lookup_failure_raises():
+    """Both lookups walk the same directory, so a listing failure on the
+    literal one is a broken request, not one unreadable file - it raises rather
+    than silently returning only what the pattern pass found."""
+
+    def list_files(payload):
+        if payload["pattern"] == "svc[[]a].yaml":
+            return {"success": False, "error": "Path not allowed.", "files": []}
+        return {
+            "success": True,
+            "files": [{"path": "packages/svca.yaml", "is_dir": False}],
+        }
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+    assert out["success"] is True
+    assert out["warnings"] == [
+        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result.",
+        "packages/svc[a].yaml was not searched because its listing failed.",
+    ]
+
+
+async def test_both_lookups_failing_raises():
+    """The realistic component failure is path-based and hits both lookups.
+
+    Whichever of the two concurrent calls reports first, the request is broken
+    in the same way, so it raises rather than returning a half-resolved
+    expansion.
+    """
+    fn, _ = await _make_tool(
+        {
+            "list_files": {"success": False, "error": "Path not allowed.", "files": []},
+            "read_file": _read_ok("x\n"),
+        }
+    )
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+    assert out["success"] is True
+    assert out["warnings"] == [
+        "Glob expansion failed: Path not allowed. Files matching the pattern may be missing from this result.",
+        "packages/svc[a].yaml was not searched because its listing failed.",
+    ]

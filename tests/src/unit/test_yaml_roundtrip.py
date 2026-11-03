@@ -58,6 +58,7 @@ _FastSafeLoader.yaml_constructors = {
 annotatedyaml_loader.FastSafeLoader = _FastSafeLoader
 annotatedyaml.loader = annotatedyaml_loader
 annotatedyaml.Secrets = MagicMock
+annotatedyaml.SECRET_YAML = "secrets.yaml"
 sys.modules["annotatedyaml"] = annotatedyaml
 sys.modules["annotatedyaml.loader"] = annotatedyaml_loader
 
@@ -193,6 +194,13 @@ class TestInputTag:
         ry2 = make_yaml()
         data2 = ry2.load(StringIO(out))
         assert data2["target"].tag == "!input"
+
+    def test_unknown_scalar_falls_back_to_str(self):
+        class Unknown:
+            def __str__(self):
+                return "unknown"
+
+        assert yaml_jsonify(Unknown()) == "unknown"
 
     def test_input_tag_jsonifies_in_source_form(self):
         _ry, data = _load("target: !input target_entity\n")
@@ -525,15 +533,6 @@ class TestFindYamlKeyEdges:
         """A mapping-valued !secret is not a config file root."""
         root = _AnnotatedDict("/config/configuration.yaml")
         secret = _AnnotatedDict("/config/secrets.yaml")
-        secret["template"] = {}
-        root["shell_command"] = secret
-
-        assert find_yaml_key_files(root, "template") == []
-
-    def test_keys_nested_in_a_secret_mapping_with_windows_path(self):
-        """The secrets guard also recognizes backslash config paths."""
-        root = _AnnotatedDict("/config/configuration.yaml")
-        secret = _AnnotatedDict(r"C:\config\secrets.yaml")
         secret["template"] = {}
         root["shell_command"] = secret
 

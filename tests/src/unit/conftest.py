@@ -45,6 +45,7 @@ if "annotatedyaml.loader" not in sys.modules:
     _annotatedyaml_loader.FastSafeLoader = _AnnotatedYamlLoader
     _annotatedyaml.loader = _annotatedyaml_loader
     _annotatedyaml.Secrets = MagicMock
+    _annotatedyaml.SECRET_YAML = "secrets.yaml"
     sys.modules["annotatedyaml"] = _annotatedyaml
     sys.modules["annotatedyaml.loader"] = _annotatedyaml_loader
 

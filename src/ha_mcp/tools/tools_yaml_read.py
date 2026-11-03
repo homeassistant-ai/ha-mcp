@@ -304,6 +304,7 @@ async def _resolve_all_targets(
     targets: list[tuple[str, bool]] = []
     warnings: list[str] = []
     discovered_paths: set[str] = set()
+    discovered: list[str] | None = None
     if _has_glob(file):
         discovered = await _find_yaml_key_files(client, file, yaml_path)
         if discovered is None:
@@ -321,11 +322,12 @@ async def _resolve_all_targets(
     try:
         resolved, resolver_warnings = await _resolve_target_files(client, file)
     except Exception as err:
-        if not targets:
+        if not targets and discovered is None:
             raise
+        reason = _failure_reason(err).rstrip(". ")
         resolver_warnings = [
-            f"Glob expansion failed: {_failure_reason(err)}. Files matching "
-            "the pattern may be missing from this result."
+            f"Glob expansion failed: {reason}. Files matching the pattern "
+            "may be missing from this result."
         ]
         if _names_a_file(file.rpartition("/")[2]) and file not in discovered_paths:
             resolver_warnings.append(

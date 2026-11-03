@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import threading
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from datetime import date, datetime
 from io import StringIO
 from typing import Any
 
+from annotatedyaml import SECRET_YAML
 from annotatedyaml.loader import FastSafeLoader
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarbool import ScalarBoolean
@@ -242,7 +244,7 @@ def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
         return False, None
     # secrets.yaml values are secret payloads, not config definitions; a
     # mapping-valued !secret is nested under its secret name, not a file root.
-    if re.split(r"[\\/]", root_file)[-1] == "secrets.yaml":
+    if os.path.basename(root_file) == SECRET_YAML:
         return False, None
     current = node
     for part in parts:
