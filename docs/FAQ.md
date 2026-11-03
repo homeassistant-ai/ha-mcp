@@ -925,9 +925,10 @@ camera whose view happens to include a display showing a hidden entity's state;
 if a camera can see something sensitive, hide the camera too (denylist or its
 area).
 
-`ha_get_skill_guide` is always **exempt**: it returns only the bundled
-best-practices docs, never Home Assistant data, and their examples can name an
-entity_id you have hidden.
+`ha_get_skill_guide`, `ha_search_tools` and the developer-mode `ha_dev_*`
+tools are always **exempt**: they return bundled docs, tool schemas and server
+controls, never Home Assistant data, and their examples can name an entity_id
+you have hidden.
 
 Another surface is deliberately **exempt by default**: `ha_report_issue`.
 While `"restrict_report_issue": false`, it bypasses both visibility scans on
@@ -937,7 +938,7 @@ entity_ids. This keeps the troubleshooting path available when visibility
 configuration or Home Assistant registry inputs are the problem. Set
 `"restrict_report_issue": true` to scan and refuse it like other tool reads.
 
-Except for `ha_get_skill_guide` and that default diagnostic escape hatch,
+Except for those always-exempt tools and that default diagnostic escape hatch,
 enforce mode **fails closed**:
 if the entity registry (or the config file itself) cannot be loaded, the server
 falls back to the last good read from this session — and with none available,

@@ -5,9 +5,9 @@ The visibility filter (``visibility/``) normally only declutters ``ha_search`` /
 ``"enforce": true`` in ``entity_visibility.json``), the
 :class:`VisibilityInboundEnforcement` / :class:`VisibilityOutboundEnforcement`
 middleware pair makes the hidden set unreadable across tool reads, except for
-``ha_get_skill_guide`` (bundled docs only, never gated) and the deliberately
-unrestricted-by-default ``ha_report_issue`` diagnostic escape hatch — "refuse on
-contact":
+the never-gated server tools (``ha_get_skill_guide``, ``ha_search_tools``,
+``ha_dev_*``) and the unrestricted-by-default ``ha_report_issue`` diagnostic
+escape hatch — "refuse on contact":
 
 - **Direct reads are concealed.** A call whose arguments name a hidden entity_id
   exactly is refused BEFORE the tool runs with a canonical ``ENTITY_NOT_FOUND``,
@@ -108,9 +108,10 @@ _CUSTOM_TOOL = "ha_manage_custom_tool"
 
 # Diagnostic tool deliberately outside the visibility barrier unless opted in.
 _REPORT_ISSUE_TOOL = "ha_report_issue"
-# Always outside the barrier: it serves only bundled docs, whose examples can
-# collide with a hidden entity_id (#2949).
-_SKILL_GUIDE_TOOL = "ha_get_skill_guide"
+# Always outside the barrier: bundled docs, tool schemas and developer server
+# controls carry no HA data, but their examples can name a hidden id (#2949).
+_UNGATED_TOOLS = frozenset({"ha_get_skill_guide", "ha_search_tools"})
+_UNGATED_PREFIX = "ha_dev_"
 # State reads have a shape-bounded scrub exception before the outbound scan.
 _STATE_TOOL = "ha_get_state"
 
@@ -638,7 +639,7 @@ class _VisibilityEnforcementBase(Middleware):
         emit_report_issue_diagnostic: bool = False,
     ) -> VisibilityConfig | None:
         """Return the config when enforce is active, ``None`` when passthrough."""
-        if tool_name == _SKILL_GUIDE_TOOL:
+        if tool_name in _UNGATED_TOOLS or tool_name.startswith(_UNGATED_PREFIX):
             return None
         config = await self._load_config_or_last_good(tool_name)
         # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
