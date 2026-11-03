@@ -667,10 +667,9 @@ def _prompt(
 
 def _call_gemini(prompt: str) -> dict[str, Any]:
     """One engine call. The single place a provider swap would touch."""
-    # Deadline-guarded at entry AND before every retry sleep: a worst-case
-    # call (five 180s timeouts plus backoff) runs ~20 minutes, which would
-    # otherwise blow straight through the time budget's slack and into the
-    # job timeout — the one path that loses uncommitted work.
+    # Deadline-guarded at entry AND before every retry sleep: a worst-case call
+    # (five 180s timeouts plus 200s of backoff) runs ~18 minutes, past the time
+    # budget's slack into the job timeout, the one path losing uncommitted work.
     if _out_of_time():
         raise SystemExit("time budget exhausted before the engine call")
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -805,7 +804,7 @@ def _accept_or_retry(
     surface: Section,
     queued_keys: Container[str],
 ) -> None:
-    """Validate one translated string, retrying once with the reason."""
+    """Validate one string, retrying once with the reason while the budget lasts."""
     reason = _validate(item, translated)
     if reason is not None and _out_of_time():
         # _call_gemini would refuse the retry; skip it and its per-string wait.
@@ -818,14 +817,15 @@ def _accept_or_retry(
                 "Fix that and return the corrected JSON."
             )
         except SystemExit as exc:
-            # The retry is best-effort; an engine failure here degrades to the
-            # original (rejected) answer failing validation below.
+            # Best effort: the rejected answer fails with its original reason.
             print(f"  retry call failed: {exc}", file=sys.stderr)
+            if _out_of_time():
+                reason += " (time budget exhausted; not retrying)"
         else:
             translated = retry.get(_string_id(item))
+            reason = _validate(item, translated)
         if not _out_of_time():  # past the deadline the wait paces no request
             time.sleep(_SECONDS_BETWEEN_REQUESTS)
-        reason = _validate(item, translated)
     if reason is None:
         results[(item.section, item.key)] = str(translated)
     else:

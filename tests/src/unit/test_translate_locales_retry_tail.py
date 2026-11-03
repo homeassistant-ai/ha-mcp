@@ -41,18 +41,27 @@ def _deadline_in(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
     monkeypatch.setattr(translate_locales, "_DEADLINE", _NOW + seconds)
 
 
+@pytest.mark.parametrize("failure", ["transport", "status"])
 def test_failed_attempts_wait_before_each_retry_but_not_after_the_last(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], failure: str
 ) -> None:
+    """Both retryable failures share the tail. The fifth attempt ends the call
+    even when the budget runs out during it, so the error names no budget."""
+    _deadline_in(monkeypatch, 3600)
     waits_before: list[int] = []
 
-    def unreachable(*_args: Any, **_kwargs: Any) -> Any:
+    def fails(*_args: Any, **_kwargs: Any) -> Any:
         waits_before.append(len(sleeps))
-        raise translate_locales.httpx.ConnectError("name resolution failed")
+        if len(waits_before) == 5:
+            _deadline_in(monkeypatch, -1)
+        if failure == "transport":
+            raise translate_locales.httpx.ConnectError("name resolution failed")
+        return translate_locales.httpx.Response(503, text="unavailable")
 
-    monkeypatch.setattr(translate_locales.httpx, "post", unreachable)
-    with pytest.raises(SystemExit, match="transport error"):
+    monkeypatch.setattr(translate_locales.httpx, "post", fails)
+    with pytest.raises(SystemExit) as exc_info:
         translate_locales._call_gemini("prompt")
+    assert "time budget" not in str(exc_info.value)
     assert waits_before == [0, 1, 2, 3, 4], "each retry follows one more wait"
     assert len(sleeps) == 4, "no wait after the fifth attempt"
     assert all(delay > 0 for delay in sleeps), "a retry must wait"
@@ -174,15 +183,13 @@ def test_retry_answered_after_the_deadline_skips_its_pacing_wait(
     assert sleeps == []
 
 
-@pytest.mark.parametrize(("crosses_deadline", "waits"), [(False, 1), (True, 0)])
+@pytest.mark.parametrize("crosses_deadline", [False, True])
 def test_failed_retry_fails_the_string_not_the_run(
-    monkeypatch: pytest.MonkeyPatch,
-    sleeps: list[float],
-    crosses_deadline: bool,
-    waits: int,
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], crosses_deadline: bool
 ) -> None:
     """A retry the engine fails must leave only its string failed; its wait
-    still paces the next request while the budget lasts."""
+    still paces the next request while the budget lasts. A retry that failed
+    on the spent budget says so, like a string the budget kept from a retry."""
     _deadline_in(monkeypatch, 3600)
 
     def fails(_prompt: str) -> dict[str, Any]:
@@ -191,9 +198,12 @@ def test_failed_retry_fails_the_string_not_the_run(
         raise SystemExit("Gemini API call failed: HTTP 503")
 
     monkeypatch.setattr(translate_locales, "_call_gemini", fails)
-    failed = _accept({}, [])
+    failures: list[str] = []
+    failed = _accept({}, failures)
     assert failed == {("messages", "greeting")}
-    assert len(sleeps) == waits
+    assert len(sleeps) == (0 if crosses_deadline else 1)
+    budget_note = failures[0].endswith("(time budget exhausted; not retrying)")
+    assert budget_note is crosses_deadline
 
 
 def test_budget_spent_mid_run_keeps_the_answers_and_stops(
