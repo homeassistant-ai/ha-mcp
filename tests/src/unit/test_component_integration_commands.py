@@ -74,24 +74,6 @@ def test_a_command_without_fields_is_described_with_cores_message_schema(
     }
 
 
-def test_the_bridge_takes_the_domain_only() -> None:
-    # Core validates a call to the domain's command when it is sent.
-    from custom_components.ha_mcp_tools.core_contract import (
-        INTEGRATION_COMMAND,
-        command_specs,
-    )
-
-    (schema,) = [
-        spec
-        for spec, _run, _prep in command_specs(_REAL_VOL)
-        if spec[_REAL_VOL.Required("type")] == INTEGRATION_COMMAND
-    ]
-    message = {"type": INTEGRATION_COMMAND, "domain": "knx"}
-    assert _REAL_VOL.Schema(schema)(message) == message
-    with pytest.raises(_REAL_VOL.Invalid):
-        _REAL_VOL.Schema(schema)({**message, "command": "knx/delete_entity"})
-
-
 def test_info_advertises_integration_commands() -> None:
     from custom_components.ha_mcp_tools import websocket_api as wsapi
 

@@ -17,25 +17,6 @@ from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
-# A bridge answer this server cannot read means the two versions differ.
-UPDATE_COMPONENT_SUGGESTION = (
-    "Update the ha_mcp_tools component to the version that matches this server."
-)
-
-
-class _MalformedAnswer(ValueError):
-    """The component answered a bridge command in a shape this server does not read."""
-
-
-def _answer_status(result: Any) -> str:
-    """A bridge answer's status for an error text, never its other fields."""
-    if not isinstance(result, dict):
-        return f"a {type(result).__name__}, not an object"
-    status = result.get("status")
-    if isinstance(status, str | None):
-        return f"status {status!r}"
-    return f"a {type(status).__name__} status"
-
 
 async def include_core_contract(
     client: Any, result: dict[str, Any], command: str
@@ -106,9 +87,7 @@ async def _contract_bridge(
             "unavailable",
         ):
             return result
-        raise _MalformedAnswer(
-            f"malformed ha_mcp_tools/{capability} response ({_answer_status(result)})"
-        )
+        raise ValueError(f"malformed ha_mcp_tools/{capability} response")
     except Exception as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
@@ -119,9 +98,6 @@ async def _contract_bridge(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Could not obtain {feature}: {exc}",
                 context={k: v for k, v in params.items() if k != "payload"},
-                suggestions=[UPDATE_COMPONENT_SUGGESTION]
-                if isinstance(exc, _MalformedAnswer)
-                else None,
             )
         )
         return {}  # unreachable

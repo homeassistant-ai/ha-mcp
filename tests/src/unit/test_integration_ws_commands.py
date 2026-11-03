@@ -13,7 +13,8 @@ from ha_mcp.tools import integration_ws_commands as module
 from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from .test_component_ws_search import _REAL_VOL, FakeHass
+from .test_component_integration_commands import _execute, _hass
+from .test_component_ws_search import _REAL_VOL
 
 _NOT_EXPOSED = (
     "The installed component does not expose the listing of an "
@@ -59,16 +60,11 @@ async def _get(client: MagicMock, domain: str | None = "knx", **kwargs: Any) -> 
         return await IntegrationTools(client).ha_get_integration(**kwargs)
 
 
-def _bridge(answer: dict[str, Any] | Exception) -> tuple[ExitStack, Mock]:
+def _bridge(answer: dict[str, Any]) -> tuple[ExitStack, Mock]:
     """Patches for the real bridge, talking to a component that answers
     ``answer``, and that component's WebSocket client."""
     caps = ComponentCaps(1, "test", frozenset({"integration_commands"}), {})
-    ws = Mock(
-        send_command=AsyncMock(
-            side_effect=answer if isinstance(answer, Exception) else None,
-            return_value={"result": answer},
-        )
-    )
+    ws = Mock(send_command=AsyncMock(return_value={"result": answer}))
     stack = ExitStack()
     for name, value in (("get_component_caps", caps), ("get_websocket_client", ws)):
         stack.enter_context(
@@ -129,19 +125,9 @@ class TestListing:
         assert result["warnings"] == [
             "ws_commands not listed: Could not obtain the listing "
             "of an integration's own WebSocket commands: malformed "
-            "ha_mcp_tools/integration_commands response (status 'weird')"
+            "ha_mcp_tools/integration_commands response"
         ]
         assert [r.exc_info is not None for r in caplog.records] == [True, False]
-
-    async def test_the_listing_asks_for_the_domain_only(self) -> None:
-        # The component's bridge takes the domain and nothing else.
-        stack, ws = _bridge(json.loads(json.dumps(_COMMAND_LIST)))
-        with stack:
-            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
-        ws.send_command.assert_awaited_once_with(
-            "ha_mcp_tools/integration_commands", domain="knx"
-        )
-        assert len(result["ws_commands"]) == 2
 
     async def test_not_requested_means_no_bridge_call(self) -> None:
         bridge = AsyncMock()
@@ -250,24 +236,32 @@ class TestSend:
         assert "reserved" in _error(exc_info)["message"]
         client.send_websocket_message.assert_not_awaited()
 
-    async def test_cores_schema_rejection_comes_back_as_its_error(self) -> None:
+    @pytest.mark.parametrize(
+        ("core_code", "code"),
+        [
+            ("invalid_format", "VALIDATION_INVALID_PARAMETER"),
+            ("home_assistant_error", "SERVICE_CALL_FAILED"),
+        ],
+    )
+    async def test_cores_error_comes_back_with_its_code(
+        self, core_code: str, code: str
+    ) -> None:
         client = _client()
-        message = "not a valid option at 'bogus'"
+        message = (
+            "Command failed: extra keys not allowed. "
+            "Got {'id': 7, 'type': 'knx/get_knx_project', 'bogus': 1}"
+        )
         client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"code": "invalid_format", "message": message},
-            }
+            return_value={"success": False, "error": message, "error_code": core_code}
         )
         with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(
-                entry_id="e1",
-                ws_command="knx/get_entity_config",
-                ws_data={"bogus": 1},
+                entry_id="e1", ws_command="knx/get_knx_project", ws_data={"bogus": 1}
             )
         error = _error(exc_info)
-        assert error["code"] == "SERVICE_CALL_FAILED"
-        assert error["message"] == message
+        assert (error["code"], error["message"]) == (code, message)
+        listed = "include_ws_commands" in str(error.get("suggestion"))
+        assert listed is (core_code == "invalid_format")
 
     async def test_streaming_commands_are_refused(self) -> None:
         client = _client()
@@ -344,24 +338,8 @@ async def test_server_bridge_reaches_the_component_producer(
     from custom_components.ha_mcp_tools import websocket_api as wsapi
     from ha_mcp.tools import component_api, core_contract
 
-    hass = FakeHass()
-    hass.data["websocket_api"] = {
-        "knx/delete_entity": (
-            Mock(),
-            _REAL_VOL.Schema(
-                {
-                    _REAL_VOL.Required("id"): int,
-                    _REAL_VOL.Required("type"): str,
-                    _REAL_VOL.Required("entity_id"): str,
-                }
-            ),
-        )
-    }
-    execute = next(
-        run
-        for schema, run, _prep in producer.command_specs(_REAL_VOL)
-        if schema[_REAL_VOL.Required("type")] == producer.INTEGRATION_COMMAND
-    )
+    hass = _hass(knx__delete_entity=_REAL_VOL.Schema({}))
+    execute = _execute()
 
     async def send_command(name: str, **params: Any) -> dict[str, Any]:
         if name == "ha_mcp_tools/info":

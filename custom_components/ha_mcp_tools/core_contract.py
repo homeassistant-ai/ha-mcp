@@ -49,7 +49,8 @@ def _entry_schema(command: str, entry: Any) -> Any:
 def _schema(hass: HomeAssistant, command: str) -> Any:
     if command not in COMMANDS:
         raise ValueError("Unsupported Core contract")
-    return _entry_schema(command, (hass.data.get("websocket_api") or {}).get(command))
+    entry = (hass.data.get("websocket_api") or {}).get(command)
+    return entry[1] if entry else None
 
 
 def validate_request(
@@ -146,8 +147,7 @@ def _describe(schema: Any) -> dict[str, Any]:
 def integration_commands(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     """Describe a domain's own commands with their registered request schemas.
 
-    The ``<domain>/`` prefix is this bridge's permission boundary. Core
-    validates a call to one of them when it is sent.
+    The ``<domain>/`` prefix is this bridge's permission boundary.
     """
     prefix = f"{msg['domain']}/"
     registered = hass.data.get("websocket_api") or {}

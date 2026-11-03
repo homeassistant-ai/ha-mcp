@@ -3,7 +3,7 @@
 Core registers each command with its request schema; the component's
 ``integration_commands`` bridge describes those schemas. Core validates every
 call against its schema before the handler runs, so a call is sent as given
-and Core's error comes back unchanged. Core marks no command as read-only, so
+and Core's error message and code are returned. Core marks no command as read-only, so
 sending one is a write.
 """
 
@@ -16,7 +16,7 @@ from ..errors import ErrorCode, create_error_response
 from .backup_access import guard_snapshot_route
 from .config_entry_flow import is_component_domain, refuse_component_entry
 from .core_contract import command_payload, integration_commands
-from .helpers import extract_tool_error_message, raise_tool_error
+from .helpers import extract_tool_error_message, raise_tool_error, ws_failure_code
 from .util_helpers import is_streaming_ws_command, websocket_error_message
 
 logger = logging.getLogger(__name__)
@@ -122,11 +122,15 @@ async def send_ws_command(
     guard_snapshot_route(ws_command=command, ws_params=payload)
     result = await client.send_websocket_message(message)
     if not result.get("success"):
+        code = ws_failure_code(result)
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                code,
                 websocket_error_message(result.get("error", "Operation failed")),
                 context=context,
+                suggestions=[_LIST_SUGGESTION]
+                if code is ErrorCode.VALIDATION_INVALID_PARAMETER
+                else None,
             )
         )
     return {

@@ -6,8 +6,8 @@ shopping_list entry, whose integration registers shopping_list/* commands,
 so the list cannot pass empty, and Core's own rejection of a call that does
 not match a command's schema runs against the same entry;
 ha_set_integration's refusal of a command outside the entry's prefix runs
-against the first entry that is not ha-mcp's own. Sending a KNX command needs a KNX entry and is covered by the
-unit tests.
+against the first entry that is not ha-mcp's own. Sending a KNX command
+needs a KNX entry and is covered by the unit tests.
 """
 
 import logging
@@ -70,7 +70,7 @@ async def test_cores_schema_rejection_of_ws_data_is_returned(mcp_client):
                 "ws_command": "shopping_list/items",
                 "ws_data": {"bogus": 1},
             },
-            expected_error="bogus",
+            expected_error="extra keys not allowed",
         )
 
 
