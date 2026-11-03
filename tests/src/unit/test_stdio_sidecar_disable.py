@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -94,3 +97,29 @@ def test_sidecar_shutdown_removes_its_discovery_files(data_dir: Path) -> None:
 
     assert not (data_dir / "ui.url").exists()
     assert not (data_dir / "ui.pid").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="zombies are a POSIX state")
+def test_sigkilled_sidecar_url_is_hidden_while_its_parent_runs(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreaped child stays a zombie that ``os.kill(pid, 0)`` still finds, so a
+    SIGKILLed sidecar's URL kept reaching the agent from the parent that spawned it."""
+    monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+    real_popen = subprocess.Popen
+
+    def spawn(_cmd: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+        proc = real_popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"], **kwargs
+        )
+        _publish(data_dir, proc.pid)
+        return proc
+
+    with patch("subprocess.Popen", side_effect=spawn):
+        sidecar._do_spawn()
+    os.kill(int((data_dir / "ui.pid").read_text()), signal.SIGKILL)
+
+    deadline = time.monotonic() + 5
+    while sidecar.live_sidecar_url() is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert sidecar.live_sidecar_url() is None
