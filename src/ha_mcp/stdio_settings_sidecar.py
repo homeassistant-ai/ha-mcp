@@ -959,10 +959,10 @@ def _do_spawn() -> None:
         if log_handle is not None:
             log_handle.close()
         return
+    # Reap the child on exit: a zombie still passes os.kill(pid, 0) (#2954).
+    threading.Thread(target=proc.wait, name="sidecar-reaper", daemon=True).start()
 
-    # The child writes its own pid/url file once it's bound — but log the
-    # spawn here so users grepping the parent stderr see something
-    # immediately, even before the child reports back.
+    # Log now so parent stderr shows the spawn before the child publishes.
     logger.info(
         "Spawned settings UI sidecar pid=%d (log: %s). URL written to %s once ready.",
         proc.pid,
