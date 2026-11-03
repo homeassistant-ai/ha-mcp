@@ -39,18 +39,51 @@ async def test_set_integration_describe_returns_the_setup_form() -> None:
     assert resp["fields"][0]["name"] == "host"
 
 
+_SUBENTRY_RULE = "subentry_type and subentry_id apply only with describe=True"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call",
+    ("call", "says"),
     [
-        {"entry_id": "e1", "subentry_type": "conversation"},
-        {"entry_id": "e1", "subentry_id": "sub1"},
-        {"describe": True},
-        {"domain": "demo", "describe": True, "config": {"host": "x"}},
-        {"domain": "demo", "describe": True, "entry_id": "e1"},
-        {"domain": "demo", "describe": True, "subentry_type": "conversation"},
-        {"entry_id": "e1", "describe": True, "enabled": True},
-        {"domain": "demo", "describe": True, "log_persistence": "permanent"},
+        ({"entry_id": "e1", "subentry_type": "conversation"}, _SUBENTRY_RULE),
+        ({"entry_id": "e1", "subentry_id": "sub1"}, _SUBENTRY_RULE),
+        ({"describe": True}, "Nothing to do"),
+        (
+            {"domain": "demo", "describe": True, "config": {"host": "x"}},
+            "drop config, flow_id and abort",
+        ),
+        ({"domain": "demo", "describe": True, "entry_id": "e1"}, "not both"),
+        (
+            {"domain": "demo", "describe": True, "subentry_type": "conversation"},
+            _SUBENTRY_RULE,
+        ),
+        (
+            {"entry_id": "e1", "describe": True, "enabled": True},
+            "mutually exclusive",
+        ),
+        (
+            {"domain": "demo", "describe": True, "log_persistence": "permanent"},
+            "log_persistence applies only together with log_level",
+        ),
+        (
+            {
+                "entry_id": "e1",
+                "describe": True,
+                "subentry_type": "conversation",
+                "flow_id": "f1",
+            },
+            "drop flow_id",
+        ),
+        (
+            {
+                "entry_id": "e1",
+                "describe": True,
+                "subentry_type": "conversation",
+                "config": {"host": "x"},
+            },
+            "drop config",
+        ),
     ],
     ids=[
         "subentry-type-without-describe",
@@ -61,10 +94,12 @@ async def test_set_integration_describe_returns_the_setup_form() -> None:
         "subentry-with-domain",
         "entry-with-enabled",
         "with-log-persistence",
+        "subentry-with-flow-id",
+        "subentry-with-config",
     ],
 )
 async def test_set_integration_describe_takes_one_flow_and_menu_choice_only(
-    call: dict[str, Any],
+    call: dict[str, Any], says: str
 ) -> None:
     client = _client(_form("user", _HOST))
 
@@ -73,6 +108,7 @@ async def test_set_integration_describe_takes_one_flow_and_menu_choice_only(
 
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert says in error["message"]
     client.start_config_flow.assert_not_called()
     client.start_options_flow.assert_not_called()
     client.start_config_subentry_flow.assert_not_called()

@@ -319,6 +319,10 @@ class ReconfigureRunner:
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "Pass menu_choice or config, not both: each answers one step",
+                        suggestions=[
+                            "The flow is still open: answer its step with "
+                            "flow_id, confirm_token and one of them."
+                        ],
                         context={"entry_id": entry_id, "flow_id": flow_id},
                     )
                 )

@@ -9,6 +9,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import config_entry_flow_errors, integration_flow_steps
 from ha_mcp.tools.integration_flow_steps import (
     FlowTarget,
@@ -16,6 +17,7 @@ from ha_mcp.tools.integration_flow_steps import (
     run_integration_step,
     settle,
 )
+from ha_mcp.tools.tools_integrations import IntegrationTools
 
 SETUP = FlowTarget("setup", "knx")
 OPTIONS = FlowTarget("options", "demo", "entry1")
@@ -96,6 +98,21 @@ async def _drive(client: Any, target: FlowTarget = SETUP, **kwargs: Any) -> Any:
     return await drive_flow(client, target, **args)
 
 
+async def _run(client: Any, **kwargs: Any) -> Any:
+    """``run_integration_step`` on a setup flow, the way the tool calls it."""
+    args: dict[str, Any] = {
+        "domain": "knx",
+        "entry_id": None,
+        "flow_id": None,
+        "config": None,
+        "menu_choice": None,
+        "abort": False,
+        "describe": False,
+    }
+    args.update(kwargs)
+    return await run_integration_step(client, **args)
+
+
 # --- a new flow -------------------------------------------------------------
 
 
@@ -132,12 +149,15 @@ async def test_new_flow_answers_its_menu_then_the_form_in_one_call():
 
 
 async def test_new_flow_without_config_stops_at_the_form_after_its_menu():
+    """Through run_integration_step: an omitted config is not defaulted to {}
+    when a menu_choice is given, or the form behind the menu would be sent."""
     client = _client(
+        start_config_flow=AsyncMock(return_value=MENU),
         submit_config_flow_step=AsyncMock(
             return_value=_form("routing", _field("individual_address"))
-        )
+        ),
     )
-    result = await _drive(client, start=_start(MENU), menu_choice="routing")
+    result = await _run(client, menu_choice="routing")
     client.submit_config_flow_step.assert_awaited_once_with(
         "f1", {"next_step_id": "routing"}
     )
@@ -254,9 +274,13 @@ async def test_flow_id_reads_the_step_back_then_answers_it(target, url, submit):
 
 
 async def test_flow_id_alone_reads_the_step_again_without_submitting():
+    """Through run_integration_step: flow_id alone is a read, not an empty
+    form submitted by the ``config = {}`` default of a new flow."""
     client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
-    result = await _drive(client, flow_id="f1")
+    result = await _run(client, flow_id="f1")
     assert result["step_id"] == "user"
+    client._request.assert_awaited_once_with("GET", "/config/config_entries/flow/f1")
+    client.start_config_flow.assert_not_awaited()
     client.submit_config_flow_step.assert_not_awaited()
 
 
@@ -334,6 +358,39 @@ async def test_a_wrong_kind_of_answer_is_refused_and_the_flow_stays_open(
     client.abort_config_flow.assert_not_awaited()
 
 
+@pytest.mark.parametrize("target", [SETUP, OPTIONS], ids=["setup", "options"])
+async def test_a_redaction_placeholder_in_config_is_refused_and_nothing_is_sent(target):
+    client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
+    with pytest.raises(ToolError) as exc_info:
+        await integration_flow_steps.submit_step(
+            client,
+            target,
+            "f1",
+            config={"host": REDACTED_SET},
+            menu_choice=None,
+            current=_form("user", _field("host")),
+        )
+    error = _error(exc_info)
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "redaction placeholder" in error["error"]["message"]
+    client._request.assert_not_awaited()
+    client.submit_config_flow_step.assert_not_awaited()
+    client.submit_options_flow_step.assert_not_awaited()
+
+
+async def test_a_setup_form_does_not_get_the_values_the_caller_left_out():
+    """Only options and reconfigure forms arrive filled with stored values; a
+    setup form's suggested value is a hint, not something to submit."""
+    shown = _form(
+        "user",
+        _field("host"),
+        _field("name", required=False, description={"suggested_value": "Hint"}),
+    )
+    client = _client(_request=AsyncMock(return_value=shown))
+    await _drive(client, SETUP, flow_id="f1", config={"host": "h"})
+    client.submit_config_flow_step.assert_awaited_once_with("f1", {"host": "h"})
+
+
 # --- abort --------------------------------------------------------------------
 
 
@@ -360,6 +417,62 @@ async def test_abort_without_flow_id_is_refused():
     with pytest.raises(ToolError):
         await _drive(client, abort=True)
     client.abort_config_flow.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "abort_fn"),
+    [
+        ({"domain": "knx"}, "abort_config_flow"),
+        ({"domain": None, "entry_id": "entry1"}, "abort_options_flow"),
+    ],
+    ids=["setup", "options"],
+)
+async def test_abort_reaches_the_clients_abort_through_run_integration_step(
+    kwargs, abort_fn
+):
+    client = _client(
+        get_config_entry=AsyncMock(
+            return_value={"domain": "demo", "supports_options": True}
+        )
+    )
+    result = await _run(client, flow_id="f1", abort=True, **kwargs)
+    getattr(client, abort_fn).assert_awaited_once_with("f1")
+    assert result["aborted"] is True
+    client.start_config_flow.assert_not_awaited()
+    client.start_options_flow.assert_not_awaited()
+    client.submit_config_flow_step.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "abort_fn"),
+    [
+        ({"domain": "knx"}, "abort_config_flow"),
+        ({"entry_id": "entry1"}, "abort_options_flow"),
+    ],
+    ids=["setup", "options"],
+)
+async def test_abort_reaches_the_clients_abort_through_the_tool(kwargs, abort_fn):
+    client = _client(
+        get_config_entry=AsyncMock(
+            return_value={"domain": "demo", "supports_options": True}
+        )
+    )
+    result = await IntegrationTools(client).ha_set_integration(
+        flow_id="f1", abort=True, **kwargs
+    )
+    getattr(client, abort_fn).assert_awaited_once_with("f1")
+    assert result["aborted"] is True
+    client._request.assert_not_awaited()
+    client.submit_config_flow_step.assert_not_awaited()
+
+
+async def test_a_server_error_on_re_reading_a_setup_flow_is_not_reported_as_applied():
+    client = _client(
+        _request=AsyncMock(side_effect=HomeAssistantAPIError("boom", status_code=500))
+    )
+    with pytest.raises(HomeAssistantAPIError):
+        await _drive(client, flow_id="f1")
+    client.submit_config_flow_step.assert_not_awaited()
 
 
 # --- settle -------------------------------------------------------------------

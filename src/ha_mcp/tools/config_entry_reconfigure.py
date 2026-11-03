@@ -581,7 +581,9 @@ async def _run_reconfigure_step(
     Without ``flow_id`` the flow is started and its first step answered. An
     options-style patch: a field ``flow_config`` does not name is resubmitted
     as the step presented it (issue #2254). A step Home Assistant rejects
-    leaves the flow open, like every other failure before a commit.
+    (a form with errors, a 400) leaves the flow open. An answer the caller
+    cannot act on is not a rejection: an external (browser) step is refused
+    and its flow aborted by ``settle``.
     """
     current = None
     if flow_id is None:
