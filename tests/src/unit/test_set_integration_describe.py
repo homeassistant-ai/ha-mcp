@@ -212,6 +212,7 @@ async def test_set_integration_describe_whose_flow_cannot_start(
         assert error["code"] == code
         assert "no_such_domain" in error["message"]
         assert says in error["message"]
+        assert (status == 400) == ("Home Assistant log" in json.dumps(error))
 
 
 @pytest.mark.asyncio

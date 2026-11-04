@@ -1703,8 +1703,8 @@ class IntegrationTools:
 
         Use ha_get_integration() to find entry IDs, and
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
-        options fields without opening a flow. Its supports_reconfigure field
-        tells you whether an entry qualifies for reconfigure=True, and
+        options fields. Its supports_reconfigure field tells you whether an
+        entry qualifies for reconfigure=True, and
         ha_get_integration(entry_id=..., include_ws_commands=True) lists the
         commands ws_command accepts with their schemas.
 
@@ -1744,6 +1744,12 @@ class IntegrationTools:
             _reject_reconfigure_conflicts(
                 reconfigure, reconfigure_guards, domain, enabled
             )
+            flow_args = {
+                "flow_id": flow_id,
+                "menu_choice": menu_choice,
+                "abort": abort or None,
+                "describe": describe or None,
+            }
             if ws_command is not None or ws_data is not None:
                 reject_ws_command_conflicts(
                     entry_id,
@@ -1752,11 +1758,10 @@ class IntegrationTools:
                     enabled=enabled,
                     config=config,
                     log_level=log_level,
-                    menu_choice=menu_choice,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
                     reconfigure=reconfigure or None,
-                    describe=describe or None,
+                    **flow_args,
                 )
                 return await send_ws_command(
                     self._client,
@@ -1764,12 +1769,6 @@ class IntegrationTools:
                     validate_identifier_not_empty(ws_command, "ws_command"),
                     ws_data,
                 )
-            flow_args = {
-                "flow_id": flow_id,
-                "menu_choice": menu_choice,
-                "abort": abort or None,
-                "describe": describe or None,
-            }
             if subentry_type is not None or subentry_id is not None:
                 modes = {
                     "enabled": enabled is not None,

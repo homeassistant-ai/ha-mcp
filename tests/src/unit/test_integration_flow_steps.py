@@ -175,11 +175,19 @@ async def test_a_flow_finished_at_its_start_submits_nothing(answer):
     client.submit_config_flow_step.assert_not_awaited()
 
 
-async def test_a_flow_started_without_flow_id_is_refused():
+@pytest.mark.parametrize("flow_id", [{}, {"flow_id": ""}, {"flow_id": 123}])
+async def test_a_flow_started_without_flow_id_is_refused(flow_id):
     client = _client()
     with pytest.raises(ToolError) as exc_info:
-        await _drive(client, start=_start({"type": "form", "step_id": "user"}))
+        await _drive(client, start=_start({"type": "form", **flow_id}))
     assert _error(exc_info)["error"]["code"] == "SERVICE_CALL_FAILED"
+
+
+async def test_a_new_flow_aborted_on_its_answer_is_refused():
+    aborted = {"type": "abort", "flow_id": "f1", "reason": "already_configured"}
+    client = _client(submit_config_flow_step=AsyncMock(return_value=aborted))
+    with pytest.raises(ToolError):
+        await _drive(client, config={"host": "h"})
 
 
 # --- the answer to a step ---------------------------------------------------

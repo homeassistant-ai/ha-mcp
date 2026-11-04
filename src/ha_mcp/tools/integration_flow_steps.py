@@ -406,15 +406,15 @@ async def open_step_answer(
 
 def _require_flow_id(step: dict[str, Any], target: FlowTarget) -> str:
     flow_id = step.get("flow_id")
-    if isinstance(flow_id, str) and flow_id:
-        return flow_id
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Home Assistant started the {target.kind} flow without a flow_id",
-            context={"details": step},
+    if not isinstance(flow_id, str) or not flow_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Home Assistant started the {target.kind} flow without a flow_id",
+                context={"details": step},
+            )
         )
-    )
+    return flow_id
 
 
 def _finished_response(target: FlowTarget, step: dict[str, Any]) -> dict[str, Any]:
@@ -474,47 +474,27 @@ async def drive_flow(
         step = await start()
         flow_id = _require_flow_id(step, target)
         step = await settle(client, target, flow_id, step)
-        if menu_choice is not None and step.get("type") in ("form", "menu"):
-            step = await settle(
-                client,
-                target,
-                flow_id,
-                await submit_step(
+        # menu_choice answers an opening menu first, then config the form.
+        for choice, values in ((menu_choice, None), (None, config)):
+            answered = choice is not None or values is not None
+            if answered and step.get("type") in ("form", "menu"):
+                answer = await submit_step(
                     client,
                     target,
                     flow_id,
-                    config=None,
-                    menu_choice=menu_choice,
+                    config=values,
+                    menu_choice=choice,
                     current=step,
-                ),
-            )
-        if config is not None and step.get("type") in ("form", "menu"):
-            step = await settle(
-                client,
-                target,
-                flow_id,
-                await submit_step(
-                    client,
-                    target,
-                    flow_id,
-                    config=config,
-                    menu_choice=None,
-                    current=step,
-                ),
-            )
+                )
+                step = await settle(client, target, flow_id, answer)
     elif config is None and menu_choice is None:
-        step = await settle(
-            client, target, flow_id, await read_step(client, target, flow_id)
-        )
+        answer = await read_step(client, target, flow_id)
+        step = await settle(client, target, flow_id, answer)
     else:
-        step = await settle(
-            client,
-            target,
-            flow_id,
-            await submit_step(
-                client, target, flow_id, config=config, menu_choice=menu_choice
-            ),
+        answer = await submit_step(
+            client, target, flow_id, config=config, menu_choice=menu_choice
         )
+        step = await settle(client, target, flow_id, answer)
     if step.get("type") not in ("form", "menu"):
         return _finished_response(target, step)
     return await open_step_answer(client, target, flow_id, step)
@@ -522,7 +502,7 @@ async def drive_flow(
 
 async def _start_setup_flow(client: Any, domain: str) -> dict[str, Any]:
     try:
-        return cast(dict[str, Any], await client.start_config_flow(domain))
+        step = await client.start_config_flow(domain)
     except HomeAssistantAPIError as err:
         # Core answers 404 "Invalid handler specified" for a domain without a
         # config flow, and 400 when the domain's dependencies failed or its
@@ -546,6 +526,7 @@ async def _start_setup_flow(client: Any, domain: str) -> dict[str, Any]:
                 suggestions=suggestions,
             )
         )
+    return cast(dict[str, Any], step)
 
 
 async def _options_target(client: Any, entry_id: str) -> FlowTarget:
