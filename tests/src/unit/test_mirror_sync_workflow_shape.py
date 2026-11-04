@@ -258,7 +258,7 @@ class TestMirrorSyncShape:
         on_main = json.loads(git("show", f"main:{manifest}", cwd=remote))
         tagged = json.loads(git("show", f"v99.0.0-dev.7:{manifest}", cwd=remote))
         assert on_main == json.loads((_COMPONENT / "manifest.json").read_text())
-        assert tagged["version"] == "99.0.0"
+        assert tagged["version"] == "99.0.0.dev7"
         assert "ha-mcp-dev==99.0.0.dev7" in tagged["requirements"]
 
 
