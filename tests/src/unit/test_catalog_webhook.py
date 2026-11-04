@@ -1,5 +1,6 @@
 """The webhook serves ``[/readonly]/catalog/<mode>`` like the server endpoint."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -81,23 +82,47 @@ async def test_catalog_route_shared_across_installations(
     first.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "auth_mode", [WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY]
-)
-async def test_catalog_webhook_reuses_auth_gate(auth_mode, monkeypatch):
+def _gate(auth_mode: str, *, accepts: bool) -> dict:
+    """The provider ``auth_mode`` installs, answering ``accepts`` for any bearer."""
+    if auth_mode == WEBHOOK_AUTH_HA:
+        return {
+            "resource_server": SimpleNamespace(
+                validate_request=AsyncMock(return_value=accepts)
+            )
+        }
+    if auth_mode == WEBHOOK_AUTH_LEGACY:
+        return {"oauth_provider": SimpleNamespace(validate_bearer=lambda _r: accepts)}
+    return {}
+
+
+@pytest.mark.parametrize("auth_mode", [WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY])
+async def test_catalog_webhook_rejects_a_failed_bearer_with_its_metadata(auth_mode):
+    """A catalog URL is gated like the base URL in each OAuth mode, and its 401
+    points the client at that suffix's protected-resource document."""
     from custom_components.ha_mcp_tools.readonly_webhook import CatalogWebhookView
 
     hass = _register_hass()
-    session = FakeSession(upstream=FakeUpstream(status=200))
-    _store_cfg(hass, session=session, auth_mode=auth_mode)
-    mw.register_readonly_webhook(hass, WEBHOOK_ID, mw._async_handle_webhook)
-    view = CatalogWebhookView(hass)
-    rejection = mw.web.Response(status=401)
-    monkeypatch.setattr(mw, "_check_webhook_auth", AsyncMock(return_value=rejection))
-    assert (
-        await view.post(_request("/catalog/search"), WEBHOOK_ID, "search") is rejection
-    )
-    assert session.calls == []
+    for accepts in (False, True):
+        session = FakeSession(upstream=FakeUpstream(status=200))
+        _store_cfg(
+            hass,
+            session=session,
+            auth_mode=auth_mode,
+            **_gate(auth_mode, accepts=accepts),
+        )
+        mw.register_readonly_webhook(hass, WEBHOOK_ID, mw._async_handle_webhook)
+        request = _request("/readonly/catalog/search")
+        request.headers = {"Host": "example.nabu.casa"}
+        resp = await CatalogWebhookView(hass).post(request, WEBHOOK_ID, "search")
+        if accepts:
+            assert resp.status == 200
+            assert session.calls[0]["url"].endswith("/readonly/catalog/search")
+            continue
+        assert resp.status == 401
+        assert session.calls == []
+        assert resp.headers["WWW-Authenticate"].endswith(
+            f'/api/webhook/{WEBHOOK_ID}/readonly/catalog/search"'
+        )
 
 
 def test_unsuffixed_target_url_is_forwarded_unchanged(
@@ -110,3 +135,38 @@ def test_unsuffixed_target_url_is_forwarded_unchanged(
             module.suffixed_url(url, "/catalog/search")
             == "http://host/custom-mcp/catalog/search?key=value"
         )
+
+
+def test_read_only_route_cannot_lose_read_only_to_a_suffix(
+    readonly_webhook_modules,  # noqa: F811
+):
+    """A handler called with ``read_only=True`` and a catalog suffix forwards to
+    the read-only variant: read-only fails closed rather than being dropped."""
+    for module in readonly_webhook_modules:
+        url = "http://host/mcp"
+        assert module.forward_url(url, read_only=True) == f"{url}/readonly"
+        for suffix in ("/catalog/full", "/readonly/catalog/full"):
+            assert (
+                module.forward_url(url, suffix, read_only=True)
+                == f"{url}/readonly/catalog/full"
+            )
+        assert module.forward_url(url, "/catalog/full") == f"{url}/catalog/full"
+
+
+def test_server_and_webhooks_accept_the_same_endpoint_suffixes():
+    """A suffix the webhook forwards must be one the server routes, and back:
+    the two grammars are defined separately and must not drift apart."""
+    from custom_components.ha_mcp_tools.readonly_webhook import ENDPOINT_SUFFIXES
+    from ha_mcp.http_transport import EndpointSelectors
+
+    selectors = EndpointSelectors(AsyncMock(), "/mcp")
+    candidates = {
+        *ENDPOINT_SUFFIXES,
+        *(
+            f"{prefix}/{rest}"
+            for prefix in ("", "/readonly")
+            for rest in ("catalog", "catalog/bogus", "catalog/full/x", "readonly", "x")
+        ),
+    }
+    served = {s for s in candidates if selectors._selectors(f"/mcp{s}") is not None}
+    assert served == set(ENDPOINT_SUFFIXES)

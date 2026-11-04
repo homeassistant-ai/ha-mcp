@@ -182,7 +182,7 @@ class SearchKeywordsTransform(Transform):
 
     def _enrich(self, tool: Tool) -> Tool:
         # Overrides take priority — replace the entire description
-        override = self._overrides.get(tool.name) if self._overrides else None
+        override = self._overrides.get(tool.name)
         if override is not None and tool_search_active():
             return tool.model_copy(update={"description": override})
         # Otherwise append keywords if present

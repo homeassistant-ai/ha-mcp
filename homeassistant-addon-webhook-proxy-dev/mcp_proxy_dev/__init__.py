@@ -45,8 +45,8 @@ from homeassistant.helpers.typing import ConfigType
 
 from .cloudhook import buffered_response, discovery_rejection, is_cloudhook, read_body
 from .readonly_webhook import (
+    forward_url,
     register_readonly_webhook,
-    suffixed_url,
     unregister_readonly_webhook,
 )
 
@@ -1065,8 +1065,7 @@ async def _handle_webhook(
 ) -> web.StreamResponse:
     """Forward the MCP request to the addon's endpoint for ``suffix``."""
     data = hass.data[DOMAIN]
-    suffix = suffix or ("/readonly" if read_only else "")  # older route's form
-    target_url = suffixed_url(data["target_url"], suffix)
+    target_url = forward_url(data["target_url"], suffix, read_only=read_only)
 
     # Inbound-request debug logging (opt-in). Logged BEFORE the OAuth gate so
     # the unauthenticated discovery probe (which gets a 401) is captured too —

@@ -623,7 +623,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         if tool_search_active():
             result["tool_discovery"] = {
                 "hint": (
-                    "This server uses search-based tool discovery. "
+                    "This connection uses search-based tool discovery. "
                     "Use ha_search_tools(query='...') to find tools, "
                     "ha_search_tools(tools=['<name>']) for the full input "
                     "schema of the one you will call, then "

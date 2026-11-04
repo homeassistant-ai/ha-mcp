@@ -387,7 +387,7 @@ For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`]
 
 ### Per-URL tool catalog
 
-`ENABLE_TOOL_SEARCH` still defaults to off, and it sets the catalog of the main endpoint only. When several clients share one server, give each the URL for the catalog it needs: a client with built-in tool search keeps the full list, a small-context client gets the search tools. The suffixes are fixed overrides that ignore `ENABLE_TOOL_SEARCH`:
+`ENABLE_TOOL_SEARCH` defaults to off, and it sets the catalog of the main endpoint only. When several clients share one server, give each the URL for the catalog it needs: a client with built-in tool search keeps the full list, a small-context client gets the search tools. The suffixes are fixed overrides that ignore `ENABLE_TOOL_SEARCH`:
 
 ```text
 Main endpoint (follows ENABLE_TOOL_SEARCH):  https://example.com/private_your_secret
@@ -396,7 +396,7 @@ Always the search tools:                     https://example.com/private_your_se
 Read-only, search tools:                     https://example.com/private_your_secret/readonly/catalog/search
 ```
 
-Each URL keeps its catalog for the life of the connection, so a client picks its catalog only by the URL it is given. Reconnect the client after changing its URL so it refreshes its tool list. Home Assistant webhook URLs accept the same suffixes, alone or after `/readonly`: `https://your-ha.example/api/webhook/<webhook-id>/catalog/search`. This requires the updated embedded integration or Webhook Proxy dev app (add-on), together with the updated MCP server. Stdio runs one client per server process, so set `ENABLE_TOOL_SEARCH` in that client's server environment instead.
+Each URL keeps its catalog for the life of the connection, so a client picks its catalog only by the URL it is given. Reconnect the client after changing its URL so it refreshes its tool list. Home Assistant webhook URLs accept the same suffixes, alone or after `/readonly`: `https://your-ha.example/api/webhook/<webhook-id>/catalog/search`. This needs an embedded integration or Webhook Proxy app (add-on) release that serves them, with a matching MCP server; an older one returns 404 for a suffixed URL. Stdio runs one client per server process, so set `ENABLE_TOOL_SEARCH` in that client's server environment instead.
 
 ---
 

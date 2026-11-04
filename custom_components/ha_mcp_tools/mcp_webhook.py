@@ -79,8 +79,8 @@ from .oauth_redirect_allowlist import effective_allowlist
 from .readonly_webhook import (
     ENDPOINT_SUFFIXES,
     endpoint_suffix,
+    forward_url,
     register_readonly_webhook,
-    suffixed_url,
     unregister_readonly_webhook,
 )
 
@@ -641,8 +641,7 @@ async def _async_handle_webhook(
     if auth_response is not None:
         return auth_response
 
-    suffix = suffix or ("/readonly" if read_only else "")  # older route's form
-    target_url = suffixed_url(cfg["target_url"], suffix)
+    target_url = forward_url(cfg["target_url"], suffix, read_only=read_only)
     session: aiohttp.ClientSession = cfg["session"]
 
     # A cloudhook (#2696) arrives as ``MockRequest``: no ``read()``, no transport,

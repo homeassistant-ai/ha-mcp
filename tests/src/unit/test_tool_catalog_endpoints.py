@@ -287,3 +287,15 @@ async def test_full_catalog_connection_keeps_its_tools_and_descriptions():
 
 async def _missing(name, *, version=None):
     return None
+
+
+@pytest.mark.parametrize("mode", ["full", "search"])
+def test_bug_reports_show_the_connection_catalog(mode):
+    """A report filed from a suffixed URL names the catalog the agent actually
+    had, which ENABLE_TOOL_SEARCH alone does not tell."""
+    from ha_mcp.tools.bug_report_config import collect_config_toggles
+
+    with catalog_endpoint(mode):
+        toggles = collect_config_toggles(get_global_settings())
+    assert toggles["enable_tool_search"] is False
+    assert toggles["connection_catalog"] == mode

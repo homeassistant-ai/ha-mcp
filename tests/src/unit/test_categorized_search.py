@@ -1252,7 +1252,7 @@ class TestSearchKeywordsTransform:
 class TestApplySearchKeywordEnrichment:
     """Tests for the always-on keyword enrichment hook on the server class."""
 
-    def _make_server_stub(self, *, enable_tool_search: bool) -> MagicMock:
+    def _make_server_stub(self) -> MagicMock:
         """Minimal stub exposing only the attributes the method touches."""
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -1261,29 +1261,26 @@ class TestApplySearchKeywordEnrichment:
         stub._SEARCH_DESCRIPTION_OVERRIDES = (
             HomeAssistantSmartMCPServer._SEARCH_DESCRIPTION_OVERRIDES
         )
-        stub.settings = MagicMock(enable_tool_search=enable_tool_search)
         stub.mcp = MagicMock()
         return stub
 
-    def test_applies_keywords_when_tool_search_disabled(self):
-        """Keywords go on even when ENABLE_TOOL_SEARCH is false (#940);
-        overrides are installed too, applied per search-mode connection."""
+    def test_applies_keywords_whatever_the_catalog(self):
+        """Keywords go on every server, full catalog included (#940)."""
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        stub = self._make_server_stub(enable_tool_search=False)
+        stub = self._make_server_stub()
         HomeAssistantSmartMCPServer._apply_search_keyword_enrichment(stub)
 
         stub.mcp.add_transform.assert_called_once()
         transform = stub.mcp.add_transform.call_args.args[0]
         assert isinstance(transform, SearchKeywordsTransform)
         assert transform._keywords == stub._SEARCH_KEYWORDS
-        assert transform._overrides == stub._SEARCH_DESCRIPTION_OVERRIDES
 
     def test_transform_failure_is_logged_not_raised(self, caplog):
         """Enrichment failures must not break server startup."""
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        stub = self._make_server_stub(enable_tool_search=False)
+        stub = self._make_server_stub()
         stub.mcp.add_transform.side_effect = RuntimeError("boom")
         with caplog.at_level("ERROR"):
             HomeAssistantSmartMCPServer._apply_search_keyword_enrichment(stub)

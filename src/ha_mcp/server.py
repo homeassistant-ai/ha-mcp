@@ -211,7 +211,7 @@ class HomeAssistantSmartMCPServer:
 
         # Enrich tool descriptions with BM25 keyword boosts. Runs
         # unconditionally so Claude's native deferred-tool search
-        # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
+        # (claude.ai) benefits on full-catalog connections too.
         # Must come before _apply_tool_search so CategorizedSearchTransform
         # indexes the enriched descriptions.
         self._apply_search_keyword_enrichment()
@@ -243,7 +243,7 @@ class HomeAssistantSmartMCPServer:
         self.mcp.add_middleware(ValidationErrorMiddleware())
 
         # Replace the opaque "Unknown tool" FastMCP raises when a client calls
-        # ha_search_tools / the ha_call_* proxies while Tool Search is off
+        # ha_search_tools / the ha_call_* proxies on a full-catalog connection
         # (stale client tool-list cache) with an actionable refresh hint.
         from .tools.tool_search_hint_middleware import ToolSearchHintMiddleware
 
@@ -336,7 +336,7 @@ class HomeAssistantSmartMCPServer:
     def _build_skills_instructions(self) -> str | None:
         """The skills section of the instructions, or None without skills."""
         return build_skills_instructions(
-            self._get_skills_dir(), self.settings, skill_tool_hidden(self.settings)
+            self._get_skills_dir(), skill_tool_hidden(self.settings)
         )
 
     _parse_skill_frontmatter = staticmethod(parse_skill_frontmatter)

@@ -114,3 +114,14 @@ def suffixed_url(url: str, suffix: str) -> str:
         return url  # a configured trailing slash may be significant upstream
     parts = urlsplit(url)
     return urlunsplit(parts._replace(path=parts.path.rstrip("/") + suffix))
+
+
+def forward_url(url: str, suffix: str = "", *, read_only: bool = False) -> str:
+    """The upstream URL for a webhook request on ``suffix``.
+
+    The ``/readonly`` route calls handlers with ``read_only=True`` rather than a
+    suffix. Read-only always wins, so a caller passing both cannot drop it.
+    """
+    if read_only and not suffix.startswith("/readonly"):
+        suffix = "/readonly" + suffix
+    return suffixed_url(url, suffix)

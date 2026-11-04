@@ -116,9 +116,7 @@ def skill_block(skill_name: str, description: str) -> str:
     return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
 
-def build_skills_instructions(
-    skills_dir: Path | None, settings: Settings, tool_hidden: bool
-) -> str | None:
+def build_skills_instructions(skills_dir: Path | None, tool_hidden: bool) -> str | None:
     """Build the skills section from each bundled SKILL.md's frontmatter.
 
     The description field is authored for LLM consumption and included
