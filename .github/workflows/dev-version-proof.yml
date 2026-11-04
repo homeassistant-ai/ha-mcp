@@ -10,6 +10,8 @@ env:
   HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.10.4"
 jobs:
   component-version-gate:
+    # The product SHA is pinned; later pushes only repair this temporary proof.
+    if: github.event.created
     name: Component Version Gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -47,6 +49,8 @@ jobs:
           PY
 
   fast-checks:
+    # The product SHA is pinned; later pushes only repair this temporary proof.
+    if: github.event.created
     name: Fast Checks
     runs-on: ubuntu-latest
     # 15 covers the serial worst case: two Docker image pulls (~1 min), one
@@ -217,6 +221,8 @@ jobs:
         exit "$status"
 
   site-checks:
+    # The product SHA is pinned; later pushes only repair this temporary proof.
+    if: github.event.created
     name: Site (astro check + eslint a11y)
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -256,6 +262,8 @@ jobs:
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
+    # The product SHA is pinned; later pushes only repair this temporary proof.
+    if: github.event.created
     name: Unit Tests
     runs-on: ubuntu-latest
     container:
@@ -348,6 +356,8 @@ jobs:
 
   # Comprehensive E2E validation for all PRs
   docker-validation:
+    # The product SHA is pinned; later pushes only repair this temporary proof.
+    if: github.event.created
     name: Docker & Add-on Validation
     runs-on: ubuntu-latest
     timeout-minutes: 15

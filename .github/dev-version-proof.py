@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory() as temporary:
         "tests/src/unit/test_caller_token_auth.py::TestGetCallerTokenManifestVersion::test_bootstrap_version_remains_parseable_by_old_servers",
         "tests/src/unit/test_embedded_setup.py::TestComponentCompat::test_satisfied_component_clears_issue",
     ]
-    run("uv", "run", "pytest", *selected, "-q", "--tb=short")
+    run("uv", "run", "pytest", *selected, "-q", "--maxfail=0", "--tb=short")
     reverted = [
         "scripts/dev_version.sh", "scripts/stamp_component_version.py",
         "custom_components/ha_mcp_tools/__init__.py",
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory() as temporary:
     try:
         git(ROOT, "restore", f"--source={BASE}", "--", *reverted)
         failed = subprocess.run(
-            ["uv", "run", "pytest", *selected, "-q", "--tb=short", f"--junitxml={report}"],
+            ["uv", "run", "pytest", *selected, "-q", "--maxfail=0", "--tb=short", f"--junitxml={report}"],
             cwd=ROOT, text=True, check=False,
         )
         assert failed.returncode == 1, f"Expected assertion failures, got {failed.returncode}"
