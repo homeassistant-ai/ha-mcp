@@ -15,6 +15,7 @@ from key_value.aio.protocols import AsyncKeyValue
 
 from ha_mcp._vendor.fastmcp.dependencies import Dependency
 from ha_mcp._vendor.fastmcp.server.auth.auth import MultiAuth
+from ha_mcp._vendor.fastmcp.server.auth.identity_assertion import IdentityAssertion
 from ha_mcp._vendor.fastmcp.server.auth.oauth_proxy import OAuthProxy
 from ha_mcp._vendor.fastmcp.server.auth.providers.jwt import JWTVerifier
 from ha_mcp._vendor.fastmcp.utilities.auth import decode_jwt_payload, parse_scopes
@@ -123,6 +124,7 @@ class AzureProvider(OAuthProxy):
         extra_authorize_params: dict[str, str] | None = None,
         http_client: httpx2.AsyncClient | None = None,
         enable_cimd: bool = True,
+        identity_assertion: IdentityAssertion | None = None,
     ) -> None:
         """Initialize Azure OAuth provider.
 
@@ -199,6 +201,8 @@ class AzureProvider(OAuthProxy):
                 refresh gracefully (e.g. `mcp-remote`). See `OAuthProxy` for details.
             token_expiry_threshold_seconds: Number of seconds before actual expiry to
                 treat a token as expired, refreshing early to avoid races. Defaults to 0.
+            identity_assertion: Optional SEP-990 ID-JAG configuration for
+                identity-bound token exchange. Disabled by default.
         """
         # Parse scopes if provided as string
         parsed_required_scopes = parse_scopes(required_scopes)
@@ -295,6 +299,7 @@ class AzureProvider(OAuthProxy):
             extra_authorize_params=extra_authorize_params,
             valid_scopes=parsed_required_scopes,
             enable_cimd=enable_cimd,
+            identity_assertion=identity_assertion,
         )
 
         authority_info = ""
