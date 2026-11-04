@@ -302,6 +302,52 @@ def test_a_shortened_deadline_is_shown_and_announced_without_taking_focus(
     assert _probe(result, "expiry-live") == "polite"
 
 
+def test_every_shortened_deadline_is_announced(settings_script: str) -> None:
+    """Two approvals can share a tool name and be cut to the same deadline, one
+    poll apart, so the second announcement has identical text. Cut in one poll,
+    both have to be read out rather than one standing in for the other."""
+    first_cut = "2026-11-04T11:01:00Z"
+    second_cut = "2026-11-04T11:00:30Z"
+    result = _run(
+        settings_script,
+        _fetches(
+            {
+                "responses": [
+                    _queue(_entry("tok-1"), _entry("tok-2")),
+                    _queue(_entry("tok-1", expires_at=first_cut), _entry("tok-2")),
+                    _queue(
+                        _entry("tok-1", expires_at=first_cut),
+                        _entry("tok-2", expires_at=first_cut),
+                    ),
+                    _queue(
+                        _entry("tok-1", expires_at=second_cut),
+                        _entry("tok-2", expires_at=second_cut),
+                    ),
+                ]
+            }
+        ),
+        """
+          await window.policyLoadPending();
+          let writes = 0;
+          const observer = new MutationObserver((records) => { writes += records.length; });
+          observer.observe(region, {childList: true, characterData: true, subtree: true});
+          await window.policyLoadPending();
+          await window.policyLoadPending();
+          list.dataset.writesForIdenticalText = String(writes);
+          await window.policyLoadPending();
+          list.dataset.bothAnnounced = region.textContent;
+          observer.disconnect();
+        """,
+    )
+
+    expiry = _MESSAGES["policies.pending.expires"].replace("{time}", second_cut)
+    assert _probe(result, "writes-for-identical-text") == "2"
+    assert (
+        _probe(result, "both-announced")
+        == f"ha_call_service: {expiry} ha_call_service: {expiry}"
+    )
+
+
 def test_cards_return_after_an_outage_with_the_same_queue(
     settings_script: str,
 ) -> None:

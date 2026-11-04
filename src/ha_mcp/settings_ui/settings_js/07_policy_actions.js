@@ -362,7 +362,7 @@ async function policyLoadPending() {
       expiries[i].textContent = text;
       changed.push(p.tool_name + ': ' + text);
     });
-    if (changed.length) policyAnnouncePending(changed.join(' '));
+    if (changed.length) policyAnnouncePending(changed.join(' '), {repeat: true});
     return;
   }
   list.dataset.pendingTokens = tokens;
