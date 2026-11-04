@@ -271,6 +271,13 @@ async function policyClearPin() {
   await policyRefreshPinStatus();
 }
 
+// The list holds either approval cards or one status message; only a message
+// belongs in the dashed, centred empty-state box.
+function policyShowPendingMessage(list, message, {emphasis = true} = {}) {
+  list.classList.add('backup-empty');
+  list.innerHTML = emphasis ? '<em>' + escapeHtml(message) + '</em>' : escapeHtml(message);
+}
+
 async function policyLoadPending() {
   const list = document.getElementById('policy-pending-list');
   let resp;
@@ -279,11 +286,11 @@ async function policyLoadPending() {
   } catch (e) {
     // Surface the failure inline — silent return leaves the pending
     // list visibly frozen with no signal that polling broke.
-    list.innerHTML = '<em style="color:var(--text-secondary)">' + escapeHtml(t(
+    policyShowPendingMessage(list, t(
       'policies.pending.offline',
       {message: e.message},
       'Lost contact with server (' + e.message + '). Retrying.'
-    )) + '</em>';
+    ));
     return;
   }
   if (resp.status === 503) {
@@ -293,11 +300,11 @@ async function policyLoadPending() {
     // the server's 503 message rather than misleadingly claiming the
     // user disabled the feature.
     if (policyState.enabledKnown && !policyState.enabled) {
-      list.innerHTML = '<em>' + escapeHtml(t(
+      policyShowPendingMessage(list, t(
         'policies.pending.disabled',
         {},
         'Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the App (add-on) to enable gating.'
-      )) + '</em>';
+      ));
     } else {
       // Feature is on (or unknown) but the queue isn't reachable —
       // sidecar mode, startup ImportError, or transient outage.
@@ -310,7 +317,7 @@ async function policyLoadPending() {
         const body = await resp.json();
         if (body && body.error) msg = body.error;
       } catch (_e) { /* keep default */ }
-      list.innerHTML = '<em>' + escapeHtml(msg) + '</em>';
+      policyShowPendingMessage(list, msg);
     }
     return;
   }
@@ -318,16 +325,21 @@ async function policyLoadPending() {
   const data = await resp.json();
   const pending = data.pending || [];
   if (pending.length === 0) {
-    list.textContent = t('policies.pending.empty', {}, 'No pending approvals.');
+    policyShowPendingMessage(
+      list,
+      t('policies.pending.empty', {}, 'No pending approvals.'),
+      {emphasis: false}
+    );
     return;
   }
+  list.classList.remove('backup-empty');
   list.innerHTML = pending.map(p => (
-    '<div data-pending-token="' + escapeHtml(p.token) + '" style="border:1px solid var(--border); padding:10px; margin:6px 0; border-radius:8px; background:var(--surface)">' +
+    '<div class="policy-pending-card" data-pending-token="' + escapeHtml(p.token) + '">' +
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
-    '<pre style="white-space:pre-wrap; background:var(--bg); padding:8px; margin:6px 0; border-radius:6px; font-size:0.8rem">' +
+    '<pre class="policy-pending-args">' +
     escapeHtml(JSON.stringify(p.args, null, 2)) + '</pre>' +
-    '<small style="color:var(--text-secondary)">' + escapeHtml(t('policies.pending.expires', {time: p.expires_at}, 'Expires: ' + p.expires_at)) + '</small><br>' +
-    '<div style="margin-top:8px; display:flex; gap:8px">' +
+    '<div class="policy-pending-expires">' + escapeHtml(t('policies.pending.expires', {time: p.expires_at}, 'Expires: ' + p.expires_at)) + '</div>' +
+    '<div class="policy-pending-actions">' +
     '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">' + escapeHtml(t('actions.approve', {}, 'Approve')) + '</button>' +
     '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">' + escapeHtml(t('actions.deny', {}, 'Deny')) + '</button>' +
     '</div></div>'
