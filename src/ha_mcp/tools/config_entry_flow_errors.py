@@ -108,6 +108,8 @@ class ReconfigureStatus(StrEnum):
     APPLY_FAILED = "apply_failed"
     #: Committed, but the flow never consumed every supplied value.
     APPLIED_BUT_INCOMPLETE = "applied_but_incomplete"
+    #: Committed, and the entry reloaded cleanly.
+    APPLIED_AND_VERIFIED = "applied_and_verified"
     #: Maybe committed: the answer was lost.
     APPLIED_BUT_UNVERIFIED = "applied_but_unverified"
 
@@ -349,6 +351,7 @@ async def raise_form_errors(
     current_step: dict[str, Any],
     *,
     is_reconfigure: bool = False,
+    flow_stays_open: bool = False,
 ) -> NoReturn:
     """Raise for a form HA returned with ``errors``, with Core's text for each
     and the form's ``fields`` in the describe shape."""
@@ -370,11 +373,17 @@ async def raise_form_errors(
             context["warnings"] = warnings
         if texts:
             context["error_text"] = texts
+    suggestions = ["Fix the field errors and retry with corrected values"]
+    if flow_stays_open:
+        suggestions.append(
+            "The flow is still open: retry with flow_id, or end it with "
+            "flow_id and abort=True."
+        )
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             "Form validation failed",
-            suggestions=["Fix the field errors and retry with corrected values"],
+            suggestions=suggestions,
             context=context,
         )
     )

@@ -162,8 +162,8 @@ def _reject_set_integration_mode_conflicts(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "Nothing to do — provide 'domain' to add an "
-                "integration, or 'entry_id' with 'enabled' "
-                "(enable/disable) or 'config' (update options)",
+                "integration, or 'entry_id' (its options flow, or with "
+                "'enabled' to enable/disable it)",
                 suggestions=[
                     "Use ha_get_integration() to find valid config entry IDs",
                 ],
@@ -381,12 +381,12 @@ class IntegrationTools:
                 "form as options_schema.fields: each field's type, current value "
                 "and Home Assistant's help text. A flow that opens with a menu "
                 "lists menu_options instead (ha_set_integration(entry_id=..., "
-                "describe=True, menu_choice=...) describes one), and a flow Home "
+                "menu_choice=...) opens one), and a flow Home "
                 "Assistant aborts gives aborted, plus reason_text when Home "
                 "Assistant has a string for the reason. Only applies "
                 "when supports_options=true. The flow is started, described "
-                "and aborted. For an integration's setup form, use ha_set_integration(domain=..., "
-                "describe=True).",
+                "and aborted. For an integration's setup form, use "
+                "ha_set_integration(domain=...).",
                 default=False,
             ),
         ] = False,
@@ -589,14 +589,14 @@ class IntegrationTools:
 
         WHEN NOT TO USE:
         - Changing an entry, or describing a setup form or a form behind a
-          menu: use ha_set_integration (describe=True for a form).
+          menu: use ha_set_integration (without config it returns the form).
 
         EXAMPLES:
         - List / search: ha_get_integration(query="zigbee")
         - Get an entry with its editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
         - Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
         - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
-        - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; ha_set_integration(entry_id="abc123", describe=True, menu_choice="<option>") describes that form
+        - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; ha_set_integration(entry_id="abc123", menu_choice="<option>") opens that form
         - List template entries with their options: ha_get_integration(domain="template")
         - Only service integrations: ha_get_integration(integration_type="service")
         - An entry's panel commands: ha_get_integration(entry_id="abc123", include_ws_commands=True)
@@ -720,7 +720,7 @@ class IntegrationTools:
                 result.setdefault("warnings", []).append(
                     "include_schema was ignored: it describes an entry's "
                     "options flow and needs entry_id. For an integration's "
-                    "setup form, use ha_set_integration(domain=..., describe=True)"
+                    "setup form, use ha_set_integration(domain=...)"
                 )
             return result
 
@@ -1414,17 +1414,16 @@ class IntegrationTools:
         domain_resolver=resolve_config_entry_backup_domain,
         # A ws_command changes the integration's own storage, not the entry
         # the snapshot holds.
-        # A call that submits nothing (describe, a re-read, an abort, opening
-        # a reconfigure flow) changes nothing to snapshot.
+        # A call that submits nothing (opening a flow, a re-read, an abort)
+        # changes nothing to snapshot.
         skip_fn=lambda kwargs: (
-            bool(kwargs.get("describe"))
-            or bool(kwargs.get("abort"))
+            bool(kwargs.get("abort"))
             or kwargs.get("log_level") is not None
             or kwargs.get("ws_command") is not None
             or (
-                (kwargs.get("flow_id") is not None or bool(kwargs.get("reconfigure")))
-                and kwargs.get("config") is None
+                kwargs.get("config") is None
                 and kwargs.get("menu_choice") is None
+                and kwargs.get("enabled") is None
             )
         ),
     )
@@ -1563,19 +1562,6 @@ class IntegrationTools:
                 ),
             ),
         ] = None,
-        describe: Annotated[
-            bool,
-            Field(
-                default=False,
-                description=(
-                    "Open the flow and return its first step without "
-                    "submitting a form: with domain the setup flow, with "
-                    "entry_id the options flow. The flow stays open; continue "
-                    "it with flow_id. With subentry_type the subentry form is "
-                    "described as subentry_schema and its flow aborted."
-                ),
-            ),
-        ] = False,
         menu_choice: Annotated[
             str | None,
             Field(
@@ -1593,8 +1579,9 @@ class IntegrationTools:
             Field(
                 default=None,
                 description=(
-                    "With describe=True and entry_id: the integration-defined "
-                    "subentry type whose flow to describe."
+                    "With entry_id: the integration-defined subentry type "
+                    "whose form to describe as subentry_schema; the flow is "
+                    "aborted afterwards."
                 ),
             ),
         ] = None,
@@ -1603,8 +1590,8 @@ class IntegrationTools:
             Field(
                 default=None,
                 description=(
-                    "With describe=True, entry_id and subentry_type: the "
-                    "existing subentry whose reconfigure form to describe."
+                    "With entry_id and subentry_type: the existing subentry "
+                    "whose reconfigure form to describe."
                 ),
             ),
         ] = None,
@@ -1615,7 +1602,8 @@ class IntegrationTools:
                 description=(
                     "Continue an open flow: the flow_id a previous call "
                     "returned, with the same domain or entry_id (and "
-                    "reconfigure=True for a reconfigure flow). With config or "
+                    "reconfigure=True for a reconfigure flow), until ha-mcp "
+                    "restarts. With config or "
                     "menu_choice it answers the step; alone it returns the "
                     "step again."
                 ),
@@ -1627,7 +1615,8 @@ class IntegrationTools:
                 default=False,
                 description=(
                     "With flow_id: end the open flow without saving. A flow "
-                    "Home Assistant no longer has counts as ended."
+                    "Home Assistant no longer has, or one ha-mcp did not open "
+                    "(or opened before it restarted), is an error."
                 ),
             ),
         ] = False,
@@ -1663,8 +1652,9 @@ class IntegrationTools:
         - Enable/disable: entry_id + enabled.
         - Add integration: domain (+ menu_choice, + config) — runs the
           domain's config flow one step per call, as the HA UI does.
-        - Update options: entry_id + config — the entry's options flow (what
-          the "Configure" button does in the HA UI), one step per call.
+        - Update options: entry_id (+ menu_choice, + config) — the entry's
+          options flow (what the "Configure" button does in the HA UI), one
+          step per call.
         - Reconfigure: entry_id + reconfigure=True — connection settings
           such as host, port, credentials, one step per call. Each call
           except an abort first checks the entry's identity; the first call
@@ -1682,10 +1672,10 @@ class IntegrationTools:
         flow_id; a menu with menu_options. Answer with flow_id and config (a
         form) or menu_choice (a menu); flow_id alone returns the step again,
         and flow_id with abort=True ends the flow. Without flow_id a new flow
-        starts and its first form gets config ({} when omitted);
-        describe=True starts it without submitting. A rejected form comes
-        back with errors and error_text (Core's text), and the flow stays
-        open to correct it. A flow stays open until Home Assistant finishes
+        starts: its first form gets config, and without config the call
+        returns that first step. A form Home Assistant rejects is an error
+        with errors and error_text (Core's text), and the flow stays open to
+        correct it. A flow stays open until Home Assistant finishes
         it or you abort it; while a setup flow is open, Home Assistant
         refuses another one for the same device as already_in_progress.
 
@@ -1694,7 +1684,7 @@ class IntegrationTools:
           ha_config_set_helper. `otp` is the user's to set up in the HA UI: its
           secret is a credential enrolled in an authenticator app; do not create it.
         - Config subentries: use
-          ha_config_set_helper(helper_type='config_subentry'); describe=True
+          ha_config_set_helper(helper_type='config_subentry'); subentry_type
           here only describes their form.
         - Removing an entry: use ha_remove_helpers_integrations.
         - ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA
@@ -1719,13 +1709,16 @@ class IntegrationTools:
         change may be saved, so check it before retrying. An aborted flow
         returns Core's own text next to the key (reason_text). Reconfigure
         edits the settings a live integration connects with: a wrong host or
-        credential takes it offline, and there is no automatic rollback.
+        credential takes it offline, and there is no automatic rollback. A
+        finished reconfigure waits for the reload Home Assistant runs and
+        reports the entry's state as entry_state: status applied_and_verified
+        once it is loaded, applied_but_unverified otherwise.
 
         EXAMPLES:
         - Add: ha_set_integration(domain="local_calendar", config={"calendar_name": "Chores"})
         - Add in two steps: ha_set_integration(domain="knx", config={"connection_type": "routing"}) returns the routing form and flow_id, then ha_set_integration(domain="knx", flow_id="...", config={})
         - Answer a menu: ha_set_integration(domain="...", flow_id="...", menu_choice="<one of menu_options>")
-        - See the setup form first: ha_set_integration(domain="workday", describe=True)
+        - See the setup form first: ha_set_integration(domain="workday")
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
         - Reconfigure: ha_set_integration(entry_id="abc123", reconfigure=True), then ha_set_integration(entry_id="abc123", reconfigure=True, flow_id="...", config={"host": "10.0.0.5"})
         - Cancel a flow: ha_set_integration(domain="knx", flow_id="...", abort=True)
@@ -1748,7 +1741,6 @@ class IntegrationTools:
                 "flow_id": flow_id,
                 "menu_choice": menu_choice,
                 "abort": abort or None,
-                "describe": describe or None,
             }
             if ws_command is not None or ws_data is not None:
                 reject_ws_command_conflicts(
@@ -1780,7 +1772,6 @@ class IntegrationTools:
                 }
                 return await describe_flow_form(
                     self._client,
-                    describe=describe,
                     domain=domain,
                     entry_id=entry_id,
                     subentry_type=subentry_type,
@@ -1810,7 +1801,6 @@ class IntegrationTools:
                     config=config,
                     menu_choice=menu_choice,
                     abort=abort,
-                    describe=describe,
                     expected_identity={
                         "device_id": expected_device_id,
                         "unique_id": expected_unique_id,
@@ -1844,7 +1834,6 @@ class IntegrationTools:
                     config=config,
                     menu_choice=menu_choice,
                     abort=abort,
-                    describe=describe,
                 )
 
             # Empty/whitespace entry_id would surface as a misleading HA
@@ -1860,28 +1849,16 @@ class IntegrationTools:
             if enabled is not None:
                 return await set_entry_enabled(self._client, entry_id, enabled)
 
-            if config is not None or any(flow_args.values()):
-                # Options mode: one step of the entry's options flow.
-                return await run_integration_step(
-                    self._client,
-                    domain=None,
-                    entry_id=entry_id,
-                    flow_id=flow_id,
-                    config=config,
-                    menu_choice=menu_choice,
-                    abort=abort,
-                    describe=describe,
-                )
-
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Nothing to do — pass 'enabled' to enable/disable the "
-                    "entry, or 'config' to update its options",
-                    context={"entry_id": entry_id},
-                )
+            # Options mode: one step of the entry's options flow.
+            return await run_integration_step(
+                self._client,
+                domain=None,
+                entry_id=entry_id,
+                flow_id=flow_id,
+                config=config,
+                menu_choice=menu_choice,
+                abort=abort,
             )
-            return None  # unreachable: raise_tool_error raises
 
         except ToolError:
             raise

@@ -263,8 +263,8 @@ class TestIntegrationManagement:
         """filesize rejects a path that does not exist with ``not_valid``.
 
         Core's filesize flow re-shows its form with ``errors={"base":
-        "not_valid"}``; the caller gets that form back (flow still open) with
-        the text the HA UI shows for the key, read here from Core.
+        "not_valid"}``; the call fails with the text the HA UI shows for the
+        key, read here from Core, and the flow stays open to correct it.
         """
         translations = await ha_client.send_websocket_message(
             {
@@ -281,9 +281,10 @@ class TestIntegrationManagement:
         flow_id = None
         async with MCPAssertions(mcp_client) as mcp:
             try:
-                data = await mcp.call_tool_success(
+                data = await mcp.call_tool_failure(
                     "ha_set_integration",
                     {"domain": "filesize", "config": {"file_path": "/nonexistent"}},
+                    expected_error="Form validation failed",
                 )
                 flow_id = data.get("flow_id")
             finally:
@@ -293,9 +294,6 @@ class TestIntegrationManagement:
                         {"domain": "filesize", "flow_id": flow_id, "abort": True},
                     )
 
-        # The rejected form is returned, not raised, and the flow stays open
-        # for a corrected answer.
-        assert data["flow_type"] == "form", data
         assert data["errors"] == {"base": "not_valid"}, data
         assert data["error_text"] == {"base": expected}, data
         assert flow_id, data
@@ -584,6 +582,9 @@ class TestIntegrationManagement:
                 )
 
                 assert result.get("reason") == "reconfigure_successful", result
+                # The reload Home Assistant runs after the reconfigure was seen.
+                assert result["status"] == "applied_and_verified", result
+                assert result["entry_state"] == "loaded", result
                 changed = await mcp.call_tool_success(
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
                 )

@@ -1,4 +1,4 @@
-"""ha_set_integration(describe=True): setup, options and subentry forms (#2632)."""
+"""ha_set_integration without an answer: setup, options and subentry forms (#2632)."""
 
 from __future__ import annotations
 
@@ -17,15 +17,13 @@ from .test_integration_schema import _HOST, _MENU, _client, _error, _form
 
 
 @pytest.mark.asyncio
-async def test_set_integration_describe_returns_the_setup_form() -> None:
+async def test_set_integration_returns_the_setup_form() -> None:
     client = _client(
         _form("user", _HOST, last_step=False),
         {"component.demo.config.step.user.data_description.host": "Device IP."},
     )
 
-    resp = await IntegrationTools(client).ha_set_integration(
-        domain="Demo ", describe=True
-    )
+    resp = await IntegrationTools(client).ha_set_integration(domain="Demo ")
 
     client.start_config_flow.assert_awaited_once_with("demo")
     # Nothing is submitted; the flow stays open and flow_id continues it.
@@ -38,54 +36,26 @@ async def test_set_integration_describe_returns_the_setup_form() -> None:
     assert resp["more_forms"] == "yes"
 
 
-_SUBENTRY_RULE = "subentry_type and subentry_id apply only with describe=True"
+_SUBENTRY_RULE = "subentry_type and subentry_id apply only with entry_id"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("call", "says"),
     [
-        ({"entry_id": "e1", "subentry_type": "conversation"}, _SUBENTRY_RULE),
-        ({"entry_id": "e1", "subentry_id": "sub1"}, _SUBENTRY_RULE),
-        ({"describe": True}, "Nothing to do"),
+        ({"domain": "demo", "entry_id": "e1"}, "not both"),
+        ({"domain": "demo", "subentry_type": "conversation"}, _SUBENTRY_RULE),
         (
-            {"domain": "demo", "describe": True, "config": {"host": "x"}},
-            "drop config, flow_id and abort",
-        ),
-        ({"domain": "demo", "describe": True, "entry_id": "e1"}, "not both"),
-        (
-            {"domain": "demo", "describe": True, "subentry_type": "conversation"},
-            _SUBENTRY_RULE,
-        ),
-        (
-            {"entry_id": "e1", "describe": True, "enabled": True},
-            "mutually exclusive",
-        ),
-        (
-            {"domain": "demo", "describe": True, "log_persistence": "permanent"},
-            "log_persistence applies only together with log_level",
-        ),
-        (
-            {
-                "entry_id": "e1",
-                "describe": True,
-                "subentry_type": "conversation",
-                "flow_id": "f1",
-            },
+            {"entry_id": "e1", "subentry_type": "conversation", "flow_id": "f1"},
             "drop flow_id",
         ),
         (
-            {
-                "entry_id": "e1",
-                "describe": True,
-                "subentry_type": "conversation",
-                "config": {"host": "x"},
-            },
+            {"entry_id": "e1", "subentry_type": "conversation", "config": {"h": 1}},
             "drop config",
         ),
     ],
 )
-async def test_set_integration_describe_takes_one_flow_and_menu_choice_only(
+async def test_set_integration_subentry_form_takes_menu_choice_only(
     call: dict[str, Any], says: str
 ) -> None:
     client = _client(_form("user", _HOST))
@@ -115,7 +85,7 @@ async def test_set_integration_describes_the_options_form_behind_a_menu() -> Non
     client.submit_options_flow_step.return_value = _form("advanced", _HOST)
 
     resp = await IntegrationTools(client).ha_set_integration(
-        entry_id="e1", describe=True, menu_choice="advanced"
+        entry_id="e1", menu_choice="advanced"
     )
 
     client.submit_options_flow_step.assert_awaited_once_with(
@@ -136,7 +106,6 @@ async def test_set_integration_describes_the_subentry_form_behind_a_menu() -> No
 
     resp = await IntegrationTools(client).ha_set_integration(
         entry_id="e1",
-        describe=True,
         subentry_type="conversation",
         subentry_id="sub1",
         menu_choice="advanced",
@@ -154,25 +123,25 @@ async def test_set_integration_describes_the_subentry_form_behind_a_menu() -> No
 
 
 @pytest.mark.asyncio
-async def test_set_integration_options_describe_refuses_an_ignored_entry() -> None:
+async def test_set_integration_options_form_refuses_an_ignored_entry() -> None:
     client = _entry_client(dict(_MENU), source="ignore")
 
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(entry_id="e1", describe=True)
+        await IntegrationTools(client).ha_set_integration(entry_id="e1")
 
     assert "ignored" in _error(exc_info)["error"]["message"]
     client.start_options_flow.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_set_integration_options_describe_fails_when_the_flow_does() -> None:
+async def test_set_integration_options_form_fails_when_the_flow_does() -> None:
     client = _entry_client({})
     client.start_options_flow.side_effect = HomeAssistantAPIError(
         "API error: 400 - flow failed", status_code=400
     )
 
     with pytest.raises(ToolError):
-        await IntegrationTools(client).ha_set_integration(entry_id="e1", describe=True)
+        await IntegrationTools(client).ha_set_integration(entry_id="e1")
 
 
 def test_ha_get_integration_takes_no_menu_choice() -> None:
@@ -191,7 +160,7 @@ def test_ha_get_integration_takes_no_menu_choice() -> None:
         (500, "", None, None),
     ],
 )
-async def test_set_integration_describe_whose_flow_cannot_start(
+async def test_set_integration_whose_flow_cannot_start(
     status: int, text: str, code: str | None, says: str | None
 ) -> None:
     client = _client({})
@@ -200,9 +169,7 @@ async def test_set_integration_describe_whose_flow_cannot_start(
     )
 
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(
-            domain="no_such_domain", describe=True
-        )
+        await IntegrationTools(client).ha_set_integration(domain="no_such_domain")
 
     error = json.loads(str(exc_info.value))["error"]
     if code is None:
@@ -216,12 +183,10 @@ async def test_set_integration_describe_whose_flow_cannot_start(
 
 
 @pytest.mark.asyncio
-async def test_set_integration_describe_lists_a_setup_menu_then_answers_it() -> None:
+async def test_set_integration_lists_a_setup_menu_then_answers_it() -> None:
     client = _client(dict(_MENU))
 
-    listed = await IntegrationTools(client).ha_set_integration(
-        domain="group", describe=True
-    )
+    listed = await IntegrationTools(client).ha_set_integration(domain="group")
 
     assert listed["flow_type"] == "menu"
     assert listed["menu_options"] == ["basic", "advanced"]
@@ -229,7 +194,7 @@ async def test_set_integration_describe_lists_a_setup_menu_then_answers_it() -> 
 
     client.submit_config_flow_step.return_value = _form("advanced", _HOST)
     chosen = await IntegrationTools(client).ha_set_integration(
-        domain="group", describe=True, menu_choice="advanced"
+        domain="group", menu_choice="advanced"
     )
 
     client.submit_config_flow_step.assert_awaited_once_with(
@@ -240,9 +205,7 @@ async def test_set_integration_describe_lists_a_setup_menu_then_answers_it() -> 
 
 
 @pytest.mark.asyncio
-async def test_set_integration_describe_of_a_setup_flow_that_aborts_gives_cores_text() -> (
-    None
-):
+async def test_set_integration_of_a_setup_flow_that_aborts_gives_cores_text() -> None:
     client = _client(
         {"type": "abort", "flow_id": "f1", "reason": "single_instance_allowed"},
         {
@@ -253,7 +216,7 @@ async def test_set_integration_describe_of_a_setup_flow_that_aborts_gives_cores_
     )
 
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(domain="sun", describe=True)
+        await IntegrationTools(client).ha_set_integration(domain="sun")
 
     body = _error(exc_info)
     assert body["error"]["code"] == "SERVICE_CALL_FAILED"
@@ -263,7 +226,7 @@ async def test_set_integration_describe_of_a_setup_flow_that_aborts_gives_cores_
 
 
 @pytest.mark.asyncio
-async def test_set_integration_describe_of_a_progress_step_keeps_the_flow_open(
+async def test_set_integration_of_a_progress_step_keeps_the_flow_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
@@ -278,7 +241,7 @@ async def test_set_integration_describe_of_a_progress_step_keeps_the_flow_open(
     )
 
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(client).ha_set_integration(domain="demo", describe=True)
+        await IntegrationTools(client).ha_set_integration(domain="demo")
 
     body = _error(exc_info)
     assert body["error"]["code"] == "TIMEOUT_OPERATION"
@@ -289,13 +252,11 @@ async def test_set_integration_describe_of_a_progress_step_keeps_the_flow_open(
 
 
 @pytest.mark.asyncio
-async def test_set_integration_describe_warns_when_the_strings_cannot_be_read() -> None:
+async def test_set_integration_warns_when_the_strings_cannot_be_read() -> None:
     client = _client(_form("user", _HOST))
     client.send_websocket_message.side_effect = RuntimeError("ws down")
 
-    resp = await IntegrationTools(client).ha_set_integration(
-        domain="demo", describe=True
-    )
+    resp = await IntegrationTools(client).ha_set_integration(domain="demo")
 
     assert resp["fields"][0]["name"] == "host"
     assert any("strings for demo could not be read" in w for w in resp["warnings"])

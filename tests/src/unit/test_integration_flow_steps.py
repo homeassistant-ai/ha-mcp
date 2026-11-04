@@ -86,7 +86,15 @@ def _start(step: dict[str, Any]) -> AsyncMock:
     return AsyncMock(return_value=step)
 
 
-async def _drive(client: Any, target: FlowTarget = SETUP, **kwargs: Any) -> Any:
+async def _drive(
+    client: Any, target: FlowTarget = SETUP, *, opened: bool = True, **kwargs: Any
+) -> Any:
+    """``drive_flow``; a ``flow_id`` counts as opened for ``target`` unless
+    ``opened`` is false or the test recorded it otherwise."""
+    if opened and isinstance(kwargs.get("flow_id"), str):
+        integration_flow_steps._opened_flows.setdefault(
+            kwargs["flow_id"], target.anchor
+        )
     args: dict[str, Any] = {
         "flow_id": None,
         "config": None,
@@ -107,9 +115,15 @@ async def _run(client: Any, **kwargs: Any) -> Any:
         "config": None,
         "menu_choice": None,
         "abort": False,
-        "describe": False,
     }
     args.update(kwargs)
+    if isinstance(args["flow_id"], str):
+        anchor = (
+            ("setup", args["domain"])
+            if args["domain"]
+            else ("options", args["entry_id"])
+        )
+        integration_flow_steps._opened_flows.setdefault(args["flow_id"], anchor)
     return await run_integration_step(client, **args)
 
 
@@ -193,18 +207,39 @@ async def test_a_new_flow_aborted_on_its_answer_is_refused():
 # --- the answer to a step ---------------------------------------------------
 
 
-async def test_a_form_returned_with_errors_keeps_the_flow_open():
+async def test_a_rejected_form_is_an_error_and_keeps_the_flow_open():
     shown = _form("routing", _field("individual_address"), errors={"base": "no_router"})
+    client = _client(submit_config_flow_step=AsyncMock(return_value=shown))
+    with pytest.raises(ToolError) as exc_info:
+        await _drive(
+            client,
+            start=_start(_form("routing", _field("individual_address"))),
+            config={"individual_address": "0.0.240"},
+        )
+    error = _error(exc_info)
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["flow_id"] == "f1"
+    assert error["errors"] == {"base": "no_router"}
+    assert error["error_text"] == {"base": "text of no_router"}
+    assert "The flow is still open" in " ".join(error["error"]["suggestions"])
+    client.abort_config_flow.assert_not_awaited()
+
+
+async def test_a_form_shown_first_with_advisory_errors_is_a_step():
+    """KNX's routing form opens with no_router_discovered after
+    connection_type: a new step with errors, not the submitted one shown again."""
+    shown = _form(
+        "routing", _field("individual_address"), errors={"base": "no_router_discovered"}
+    )
     client = _client(submit_config_flow_step=AsyncMock(return_value=shown))
     result = await _drive(
         client,
-        start=_start(_form("routing", _field("individual_address"))),
-        config={"individual_address": "0.0.240"},
+        start=_start(_form("connection_type", _field("connection_type"))),
+        config={"connection_type": "routing"},
     )
     assert result["success"] is True
-    assert result["flow_id"] == "f1"
-    assert result["errors"] == {"base": "no_router"}
-    assert result["error_text"] == {"base": "text of no_router"}
+    assert result["step_id"] == "routing"
+    assert result["errors"] == {"base": "no_router_discovered"}
     client.abort_config_flow.assert_not_awaited()
 
 
@@ -283,26 +318,49 @@ async def test_flow_id_alone_reads_the_step_again_without_submitting():
 
 
 @pytest.mark.parametrize(
-    ("target", "handler"),
-    [(SETUP, "zha"), (OPTIONS, "entry9"), (RECONFIGURE, "shelly")],
+    ("target", "opened_with"),
+    [
+        (SETUP, None),
+        (SETUP, ("setup", "zha")),
+        (SETUP, ("reconfigure", "entry2")),
+        (OPTIONS, ("options", "entry9")),
+        (RECONFIGURE, None),
+        (RECONFIGURE, ("reconfigure", "entry9")),
+        (RECONFIGURE, ("setup", "filesize")),
+    ],
+    ids=[
+        "setup-unknown",
+        "other-integration",
+        "reconfigure-as-setup",
+        "other-entry",
+        "reconfigure-unknown",
+        "other-entrys-reconfigure",
+        "setup-as-reconfigure",
+    ],
 )
-async def test_a_flow_of_another_integration_or_entry_is_refused(target, handler):
-    step = _form("user", _field("host"), handler=handler)
-    client = _client(_request=AsyncMock(return_value=step))
+@pytest.mark.parametrize("call", [{"config": {"host": "h"}}, {"abort": True}])
+async def test_a_flow_not_opened_for_the_calls_anchor_is_refused(
+    opened_flows, target, opened_with, call
+):
+    """A flow_id continues or ends only with the kind and anchor this server
+    opened it with: not another integration's or entry's flow, not a
+    reconfigure flow as a setup flow, and not one it did not open (the UI's,
+    or one from before an ha-mcp restart)."""
+    if opened_with is not None:
+        opened_flows["f1"] = opened_with
+    client = _client()
     with pytest.raises(ToolError) as exc_info:
-        await integration_flow_steps.submit_step(
-            client, target, "f1", config={"host": "h"}, menu_choice=None
-        )
-    error = _error(exc_info)
-    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert handler in error["error"]["message"]
+        await _drive(client, target, opened=False, flow_id="f1", **call)
+    assert "flow ha-mcp opened for this call" in _error(exc_info)["error"]["message"]
+    client._request.assert_not_awaited()
     client.submit_config_flow_step.assert_not_awaited()
     client.submit_options_flow_step.assert_not_awaited()
+    client.abort_config_flow.assert_not_awaited()
+    client.abort_options_flow.assert_not_awaited()
 
 
 async def test_a_flow_of_the_calls_own_anchor_is_answered():
-    step = _form("user", _field("host"), handler="entry1")
-    client = _client(_request=AsyncMock(return_value=step))
+    client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
     await _drive(client, OPTIONS, flow_id="f1", config={"host": "h"})
     client.submit_options_flow_step.assert_awaited_once_with("f1", {"host": "h"})
 
@@ -391,15 +449,24 @@ async def test_a_setup_form_does_not_get_the_values_the_caller_left_out():
 # --- abort --------------------------------------------------------------------
 
 
-async def test_abort_of_a_flow_already_gone_succeeds():
-    client = _client(
-        abort_config_flow=AsyncMock(
-            side_effect=HomeAssistantAPIError("gone", status_code=404)
-        )
+async def test_a_failed_abort_keeps_the_flow_bound_and_a_gone_one_is_not_open(
+    opened_flows,
+):
+    opened_flows["f1"] = RECONFIGURE.anchor
+    client = _client()
+    client.abort_config_flow.side_effect = HomeAssistantAPIError(
+        "boom", status_code=500
     )
-    result = await _drive(client, flow_id="f1", abort=True)
-    assert result["success"] is True
-    assert result["aborted"] is False
+    with pytest.raises(HomeAssistantAPIError):
+        await _drive(client, RECONFIGURE, flow_id="f1", abort=True)
+    assert opened_flows == {"f1": RECONFIGURE.anchor}
+    client.abort_config_flow.side_effect = HomeAssistantAPIError(
+        "gone", status_code=404
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await _drive(client, RECONFIGURE, flow_id="f1", abort=True)
+    assert _error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+    client._request.assert_not_awaited()
 
 
 async def test_abort_without_flow_id_is_refused():
@@ -410,24 +477,28 @@ async def test_abort_without_flow_id_is_refused():
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "abort_fn"),
+    ("kwargs", "abort_fn", "anchor"),
     [
-        ({"domain": "knx"}, "abort_config_flow"),
-        ({"entry_id": "entry1"}, "abort_options_flow"),
+        ({"domain": "knx"}, "abort_config_flow", ("setup", "knx")),
+        ({"entry_id": "entry1"}, "abort_options_flow", ("options", "entry1")),
     ],
     ids=["setup", "options"],
 )
-async def test_abort_reaches_the_clients_abort_through_the_tool(kwargs, abort_fn):
+async def test_abort_reaches_the_clients_abort_through_the_tool(
+    opened_flows, kwargs, abort_fn, anchor
+):
+    opened_flows["f1"] = anchor
     client = _client(
         get_config_entry=AsyncMock(
             return_value={"domain": "demo", "supports_options": True}
-        )
+        ),
     )
     result = await IntegrationTools(client).ha_set_integration(
         flow_id="f1", abort=True, **kwargs
     )
     getattr(client, abort_fn).assert_awaited_once_with("f1")
     assert result["aborted"] is True
+    assert opened_flows == {}
     client._request.assert_not_awaited()
     client.start_config_flow.assert_not_awaited()
     client.start_options_flow.assert_not_awaited()
@@ -494,20 +565,12 @@ async def test_an_unknown_step_type_is_unexpected():
 # --- run_integration_step ------------------------------------------------------
 
 
-async def test_a_new_flow_without_config_submits_an_empty_form():
+async def test_a_new_flow_without_config_returns_its_first_step():
     client = _client(start_config_flow=AsyncMock(return_value=_form("user")))
-    await _run(client, domain="local_calendar")
-    client.submit_config_flow_step.assert_awaited_once_with("f1", {})
-
-
-@pytest.mark.parametrize(
-    "extra", [{"config": {"name": "x"}}, {"flow_id": "f1"}, {"abort": True}]
-)
-async def test_describe_with_an_answer_is_refused(extra):
-    client = _client()
-    with pytest.raises(ToolError):
-        await _run(client, domain="local_calendar", describe=True, **extra)
-    client.start_config_flow.assert_not_awaited()
+    result = await _run(client, domain="local_calendar")
+    client.submit_config_flow_step.assert_not_awaited()
+    assert result["flow_id"] == "f1"
+    assert result["step_id"] == "user"
 
 
 async def test_an_entry_without_options_is_refused():
@@ -531,11 +594,12 @@ async def test_an_entry_without_options_is_refused():
         ({"config": {"string": "BAT"}}, 1),
         ({"flow_id": "f1", "config": {"string": "BAT"}}, 1),
         ({"flow_id": "f1", "menu_choice": "advanced"}, 1),
-        ({"describe": True}, 0),
+        ({}, 0),
         ({"flow_id": "f1"}, 0),
         ({"flow_id": "f1", "abort": True}, 0),
         ({"flow_id": "f1", "abort": True, "config": {"string": "BAT"}}, 0),
         ({"reconfigure": True}, 0),
+        ({"subentry_type": "device", "menu_choice": "save_changes"}, 1),
         ({"reconfigure": True, "flow_id": "f1", "config": {"host": "h"}}, 1),
     ],
 )
@@ -562,6 +626,11 @@ async def test_only_a_call_that_submits_captures_a_backup(
     monkeypatch.setattr(
         tools_integrations,
         "run_integration_step",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        tools_integrations,
+        "describe_flow_form",
         AsyncMock(return_value={"success": True}),
     )
     client = _client(get_config_entry=AsyncMock(return_value={"domain": "demo"}))

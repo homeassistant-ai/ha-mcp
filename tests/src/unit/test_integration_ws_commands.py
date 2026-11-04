@@ -278,7 +278,6 @@ class TestSend:
                 "ha_manage_backup",
             ),
             ("knx", {"ws_command": "knx/x", "config": {"a": 1}}, "takes no config"),
-            ("knx", {"ws_command": "knx/x", "describe": True}, "takes no describe"),
             ("knx", {"ws_command": "knx/x", "flow_id": "f1"}, "takes no flow_id"),
             ("knx", {"ws_command": "knx/x", "abort": True}, "takes no abort"),
             ("knx", {"ws_data": {"a": 1}}, "needs ws_command"),

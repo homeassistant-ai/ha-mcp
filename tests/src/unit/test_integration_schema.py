@@ -1,7 +1,7 @@
 """ha_get_integration's options and subentry flow schemas (#2632).
 
 The tool opens the flow, describes its form (or lists a menu's branches) and
-aborts it. Branch and setup forms: test_set_integration_describe.py.
+aborts it. Branch and setup forms: test_set_integration_forms.py.
 """
 
 from __future__ import annotations
@@ -124,7 +124,8 @@ async def test_menu_without_a_choice_lists_the_branches_and_points_at_menu_choic
     schema = resp["options_schema"]
     assert schema["flow_type"] == "menu"
     assert schema["menu_options"] == ["basic", "advanced"]
-    assert "menu_choice to ha_set_integration(" in schema["note"]
+    assert "menu_choice to ha_set_integration" in schema["note"]
+    assert "describe=" not in schema["note"]
     client.submit_options_flow_step.assert_not_called()
     client.abort_options_flow.assert_awaited_once_with("f1")
 
@@ -534,7 +535,8 @@ async def test_list_mode_include_schema_is_ignored_and_points_to_set(
     resp = await tools.ha_get_integration(domain=domain, include_schema=True)
 
     client.start_config_flow.assert_not_called()
-    assert any("describe=True" in w for w in resp["warnings"])
+    assert any("ha_set_integration(domain=" in w for w in resp["warnings"])
+    assert not any("describe=" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio

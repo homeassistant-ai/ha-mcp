@@ -640,7 +640,7 @@ class TestFlowTextFromCore:
         assert body["reason_text"] == "Wrong device."
         assert body["status"] == "apply_failed"
 
-    async def test_a_reconfigure_form_back_with_errors_is_returned_and_stays_open(
+    async def test_a_reconfigure_form_back_with_errors_is_refused_and_stays_open(
         self,
     ) -> None:
         client = _strings_client({})
@@ -656,18 +656,21 @@ class TestFlowTextFromCore:
             "errors": {"base": "not_valid"},
         }
 
-        step = await drive_flow(
-            client,
-            FlowTarget("reconfigure", "filesize", "e1"),
-            flow_id=None,
-            config={"file_path": "/nope/x.txt"},
-            menu_choice=None,
-            abort=False,
-            start=lambda: client.start_reconfigure_flow("filesize", "e1"),
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await drive_flow(
+                client,
+                FlowTarget("reconfigure", "filesize", "e1"),
+                flow_id=None,
+                config={"file_path": "/nope/x.txt"},
+                menu_choice=None,
+                abort=False,
+                start=lambda: client.start_reconfigure_flow("filesize", "e1"),
+            )
 
-        assert step["flow_id"] == "rc-flow"
-        assert step["errors"] == {"base": "not_valid"}
+        body = json.loads(str(exc_info.value))
+        assert body["flow_id"] == "rc-flow"
+        assert body["errors"] == {"base": "not_valid"}
+        assert body["status"] == "apply_failed"
         client.submit_config_flow_step.assert_awaited_once()
         client.abort_config_flow.assert_not_awaited()
 

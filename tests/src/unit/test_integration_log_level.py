@@ -66,7 +66,6 @@ async def test_entry_id_resolves_to_its_domain() -> None:
         {"domain": "zha", "flow_id": "f1"},
         {"domain": "zha", "menu_choice": "advanced"},
         {"domain": "zha", "abort": True},
-        {"domain": "zha", "describe": True},
         {"entry_id": "abc123", "enabled": False},
         {"entry_id": "abc123", "reconfigure": True},
         {"domain": "zha", "expected_mac": "aa:bb:cc:dd:ee:ff"},

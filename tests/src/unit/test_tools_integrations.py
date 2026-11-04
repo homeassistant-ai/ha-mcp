@@ -1640,11 +1640,6 @@ class TestSetIntegrationModes:
     async def test_no_arguments_rejected(self, tools):
         await self._assert_invalid(tools.ha_set_integration(), "Nothing to do")
 
-    async def test_entry_id_alone_rejected(self, tools):
-        await self._assert_invalid(
-            tools.ha_set_integration(entry_id="abc"), "Nothing to do"
-        )
-
     @pytest.mark.parametrize(
         ("name", "value"),
         [("expected_device_id", "device-1"), ("expected_unique_id", "unique-1")],
@@ -1704,9 +1699,9 @@ class TestSetIntegrationModes:
                 id="add-continue-menu",
             ),
             pytest.param(
-                {"domain": "knx", "describe": True},
-                {"domain": "knx", "entry_id": None, "describe": True},
-                id="add-describe",
+                {"domain": "knx"},
+                {"domain": "knx", "entry_id": None},
+                id="add-first-step",
             ),
             pytest.param(
                 {"entry_id": "abc", "config": {"scan_interval": 30}},
@@ -1719,9 +1714,9 @@ class TestSetIntegrationModes:
                 id="options-abort",
             ),
             pytest.param(
-                {"entry_id": "abc", "describe": True},
-                {"domain": None, "entry_id": "abc", "describe": True},
-                id="options-describe",
+                {"entry_id": "abc"},
+                {"domain": None, "entry_id": "abc"},
+                id="options-first-step",
             ),
             pytest.param(
                 {
@@ -1750,7 +1745,6 @@ class TestSetIntegrationModes:
                     "flow_id": "f1",
                     "menu_choice": "advanced",
                     "abort": True,
-                    "describe": True,
                     "expected_device_id": "device-1",
                     "expected_unique_id": "uid",
                     "expected_mac": "AA:BB",
@@ -1762,7 +1756,6 @@ class TestSetIntegrationModes:
                     "flow_id": "f1",
                     "menu_choice": "advanced",
                     "abort": True,
-                    "describe": True,
                     "expected_identity": {
                         "device_id": "device-1",
                         "unique_id": "uid",
@@ -1793,7 +1786,6 @@ class TestSetIntegrationModes:
                 "config": None,
                 "menu_choice": None,
                 "abort": False,
-                "describe": False,
                 **expected,
             },
         )

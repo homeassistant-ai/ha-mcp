@@ -1,5 +1,5 @@
 """The options and subentry flow schemas of ha_get_integration, and the
-subentry form of ha_set_integration(describe=True).
+subentry form of ha_set_integration(subentry_type=...).
 
 A schema only exists inside an open flow: the entry's options or subentry
 flow is started, its form described in the same compact shape the helper
@@ -34,9 +34,7 @@ from .helpers import raise_tool_error, validate_identifier_not_empty
 
 logger = logging.getLogger(__name__)
 
-_MENU_NOTE = (
-    "Pass one as menu_choice to ha_set_integration(describe=True) to describe its form."
-)
+_MENU_NOTE = "Pass one as menu_choice to ha_set_integration to see its form."
 
 
 def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -282,7 +280,6 @@ async def fetch_config_subentry_schema(
 async def describe_flow_form(
     client: Any,
     *,
-    describe: bool,
     domain: str | None,
     entry_id: str | None,
     subentry_type: str | None,
@@ -290,20 +287,20 @@ async def describe_flow_form(
     menu_choice: str | None,
     other_modes: list[str],
 ) -> dict[str, Any]:
-    """``ha_set_integration(describe=True, subentry_type=...)``: describe
+    """``ha_set_integration(subentry_type=...)``: describe
     ``entry_id``'s subentry form, with ``menu_choice`` submitted when given.
     The flow is aborted afterwards."""
-    if not describe or domain is not None or entry_id is None or other_modes:
+    if domain is not None or entry_id is None or other_modes:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "subentry_type and subentry_id apply only with describe=True "
-                "and entry_id (subentry_id for an existing subentry), and "
-                "optionally menu_choice"
+                "subentry_type and subentry_id apply only with entry_id "
+                "(subentry_id for an existing subentry), and optionally "
+                "menu_choice"
                 + (f"; drop {', '.join(other_modes)}" if other_modes else ""),
                 suggestions=[
                     "Example: ha_set_integration(entry_id='abc123', "
-                    "describe=True, subentry_type='conversation')"
+                    "subentry_type='conversation')"
                 ],
             )
         )

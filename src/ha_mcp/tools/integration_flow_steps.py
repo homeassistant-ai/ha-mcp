@@ -16,6 +16,7 @@ flow with the reconfigure source), whose identity anchors are checked by
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
@@ -28,6 +29,7 @@ from .config_entry_flow_errors import (
     ReconfigureStatus,
     _flow_texts,
     raise_flow_abort,
+    raise_form_errors,
 )
 from .config_entry_flow_form import (
     _RESERVED_CONFIG_KEYS,
@@ -39,16 +41,25 @@ from .config_entry_flow_progress import PROGRESS_STEP_TYPES
 from .config_entry_flow_walker import (
     _RECONFIGURE_SUCCESS_REASONS,
     EXTERNAL_STEP_TYPES,
+    _rejected_on_submit,
     _submit_step,
     _wait_for_progress,
     raise_reconfigure_created_entry,
 )
 from .config_entry_identity import check_reconfigure_identity
+from .config_entry_reload_watch import watch_entry_reload
 from .config_helpers.describe import compact_schema, describe_form
 from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
+
+# Flows this server opened, flow_id -> FlowTarget.anchor. Home Assistant
+# reports neither a user flow's nor a reconfigure flow's source over REST or
+# WebSocket, so this binds each flow without the custom component: a flow_id
+# continues or ends only with the kind and anchor it was opened with.
+# An ha-mcp restart empties it.
+_opened_flows: dict[str, tuple[str, str | None]] = {}
 
 
 @dataclass(frozen=True)
@@ -67,6 +78,10 @@ class FlowTarget:
             "options" if self.kind == "options" else "config",
             self.entry_id,
         )
+
+    @property
+    def anchor(self) -> tuple[str, str | None]:
+        return (self.kind, self.entry_id or self.domain)
 
     @property
     def edits_existing(self) -> bool:
@@ -93,29 +108,39 @@ def _raise_flow_not_open(target: FlowTarget, flow_id: str) -> NoReturn:
         create_error_response(
             ErrorCode.RESOURCE_NOT_FOUND,
             f"No open {target.kind} flow {flow_id!r}: Home Assistant finished "
-            "or aborted it, it belongs to another flow manager, or Home "
-            "Assistant restarted",
-            suggestions=[
-                "Start the flow again without flow_id. A flow_id from domain "
-                "continues only with domain, one from entry_id only with "
-                "entry_id (plus reconfigure=True for a reconfigure flow)."
-            ],
+            "or aborted it, or restarted",
+            suggestions=["Start the flow again without flow_id."],
             context={"flow_id": flow_id, "flow_kind": target.kind},
         )
     )
 
 
-async def read_step(client: Any, target: FlowTarget, flow_id: str) -> dict[str, Any]:
-    """GET the flow's current step. Core answers it by running the step again
-    without input, so a lost answer is classified like a submit's.
+def _require_opened(target: FlowTarget, flow_id: str) -> None:
+    """Refuse a flow this server did not open with the call's kind and anchor,
+    so a flow_id cannot carry one call's checks over to another flow."""
+    if _opened_flows.get(flow_id) != target.anchor:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Flow {flow_id!r} is not a {target.kind} flow ha-mcp opened "
+                "for this call: a flow continues or ends only with the domain "
+                "or entry_id (and reconfigure=True) it was opened with. "
+                "Nothing was sent to the flow",
+                suggestions=[
+                    "Start the flow again without flow_id; an ha-mcp restart "
+                    "forgets the flows it opened. A flow left open ends when "
+                    "Home Assistant restarts."
+                ],
+                context={"flow_id": flow_id, "flow_kind": target.kind},
+            )
+        )
 
-    The step's ``handler`` must be the call's anchor (the domain of a setup or
-    reconfigure flow, the entry_id of an options flow), so a flow_id cannot
-    carry one call's checks over to another integration's flow. A reconfigure
-    flow of another entry in the same domain passes: Home Assistant reports
-    no flow's entry (``config_entries/flow/progress`` leaves reconfigure flows
-    out), so nothing here can tell.
-    """
+
+async def read_step(client: Any, target: FlowTarget, flow_id: str) -> dict[str, Any]:
+    """GET the step of a flow this server opened for the call's anchor. Core
+    answers it by running the step again without input, so a lost answer is
+    classified like a submit's."""
+    _require_opened(target, flow_id)
     try:
         step = await _submit_step(
             lambda _flow_id, _payload: client._request("GET", target.url(flow_id)),
@@ -132,20 +157,6 @@ async def read_step(client: Any, target: FlowTarget, flow_id: str) -> dict[str, 
         if err.status_code == 404:
             _raise_flow_not_open(target, flow_id)
         raise
-    handler = step.get("handler")
-    expected = target.entry_id if target.kind == "options" else target.domain
-    if handler is not None and handler != expected:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Flow {flow_id!r} belongs to {handler!r}, not {expected!r}. "
-                "Nothing was submitted",
-                suggestions=[
-                    "Continue a flow with the domain or entry_id that started it."
-                ],
-                context={"flow_id": flow_id, "flow_kind": target.kind},
-            )
-        )
     return step
 
 
@@ -240,8 +251,8 @@ async def submit_step(
     """Answer the step the flow is at and return Core's next answer, raw.
 
     ``current`` is the step when the caller already holds it (just started);
-    otherwise it is read back. Core keeps the flow open when it rejects the
-    input (a form with ``errors``, or a 400).
+    otherwise it is read back. Input Core rejects (the form back with
+    ``errors``, or a 400) raises; the flow stays open to correct it.
     """
     if config is not None:
         _reject_redaction_sentinels(config)
@@ -256,7 +267,7 @@ async def submit_step(
         payload = _menu_payload(current, menu_choice, flow_id)
     else:
         payload = _form_payload(target, current, config or {}, flow_id)
-    return await _submit_step(
+    answer = await _submit_step(
         target.submit_fn(client),
         flow_id,
         payload,
@@ -267,23 +278,28 @@ async def submit_step(
         is_reconfigure=target.kind == "reconfigure",
         flow_stays_open=True,
     )
+    if _rejected_on_submit(answer, current if menu_choice is None else None):
+        await raise_form_errors(
+            client,
+            target.ref,
+            flow_id,
+            answer,
+            is_reconfigure=target.kind == "reconfigure",
+            flow_stays_open=True,
+        )
+    return answer
 
 
 async def abort_step_flow(
     client: Any, target: FlowTarget, flow_id: str
 ) -> dict[str, Any]:
-    """End the flow. One Home Assistant no longer has counts as ended."""
+    """End the flow."""
     try:
         await target.abort_fn(client)(flow_id)
     except HomeAssistantAPIError as err:
-        if err.status_code != 404:
-            raise
-        return {
-            "success": True,
-            "flow_id": flow_id,
-            "aborted": False,
-            "message": "The flow was no longer open.",
-        }
+        if err.status_code == 404:
+            _raise_flow_not_open(target, flow_id)
+        raise
     return {
         "success": True,
         "flow_id": flow_id,
@@ -334,8 +350,9 @@ async def settle(
         step_type == "abort" and step.get("reason") in _RECONFIGURE_SUCCESS_REASONS
     )
     if entry_updated and not is_reconfigure:
-        # A reauth or reconfigure flow continued with domain: Core changed an
-        # existing entry, which no check of this call covered.
+        # A setup flow ended by updating an existing entry
+        # (async_update_reload_and_abort answers reauth_successful outside a
+        # reconfigure): Core changed an entry no check of this call covered.
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -469,10 +486,14 @@ async def drive_flow(
     if abort:
         if flow_id is None:
             _refuse("abort=True needs the flow_id to end", flow_id=None)
-        return await abort_step_flow(client, target, flow_id)
+        _require_opened(target, flow_id)
+        aborted = await abort_step_flow(client, target, flow_id)
+        _opened_flows.pop(flow_id, None)
+        return aborted
     if flow_id is None:
         step = await start()
         flow_id = _require_flow_id(step, target)
+        _opened_flows[flow_id] = target.anchor
         step = await settle(client, target, flow_id, step)
         # menu_choice answers an opening menu first, then config the form.
         for choice, values in ((menu_choice, None), (None, config)):
@@ -496,6 +517,7 @@ async def drive_flow(
         )
         step = await settle(client, target, flow_id, answer)
     if step.get("type") not in ("form", "menu"):
+        _opened_flows.pop(flow_id, None)
         return _finished_response(target, step)
     return await open_step_answer(client, target, flow_id, step)
 
@@ -560,22 +582,15 @@ async def run_integration_step(
     config: dict[str, Any] | None,
     menu_choice: str | None,
     abort: bool,
-    describe: bool,
     expected_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """``ha_set_integration`` on a setup (``domain``), options (``entry_id``)
     or reconfigure (``entry_id`` with ``expected_identity``) flow.
-    ``describe`` opens the flow without submitting a form; otherwise a new
-    setup or options flow's first form gets ``config`` (``{}`` when omitted).
-    A new reconfigure flow without ``config`` returns its first step, and
-    every reconfigure call except an abort checks the identity anchors first."""
-    if describe and (flow_id is not None or config is not None or abort):
-        _refuse(
-            "describe=True opens a flow and submits no form: drop config, "
-            "flow_id and abort",
-            flow_id=flow_id,
-        )
+    A new flow without ``config`` or ``menu_choice`` returns its first step,
+    and every reconfigure call except an abort checks the identity anchors
+    first."""
     warnings: list[str] = []
+    watch: Any = contextlib.nullcontext()
     if expected_identity is not None:
         entry_id = validate_identifier_not_empty(entry_id, "entry_id")
         entry: dict[str, Any] = {}
@@ -584,6 +599,12 @@ async def run_integration_step(
                 client, entry_id, expected_identity
             )
         target = FlowTarget("reconfigure", entry.get("domain"), entry_id)
+        if not abort and (
+            flow_id is not None or config is not None or menu_choice is not None
+        ):
+            # Subscribed before the submit: Core queues the reload and
+            # returns, so only a stream opened first sees it settle.
+            watch = watch_entry_reload(client, entry_id)
 
         async def start() -> dict[str, Any]:
             return cast(
@@ -605,23 +626,25 @@ async def run_integration_step(
         async def start() -> dict[str, Any]:
             return cast(dict[str, Any], await client.start_options_flow(entry_id))
 
-    if (
-        target.kind != "reconfigure"
-        and flow_id is None
-        and not describe
-        and config is None
-        and menu_choice is None
-    ):
-        config = {}
-    response = await drive_flow(
-        client,
-        target,
-        flow_id=flow_id,
-        config=config,
-        menu_choice=menu_choice,
-        abort=abort,
-        start=start,
-    )
+    async with watch as settled:
+        response = await drive_flow(
+            client,
+            target,
+            flow_id=flow_id,
+            config=config,
+            menu_choice=menu_choice,
+            abort=abort,
+            start=start,
+        )
+        if settled is not None and "reason" in response:  # the flow finished
+            reloaded = await settled()
+            state = reloaded.get("state") if reloaded else None
+            response["status"] = (
+                ReconfigureStatus.APPLIED_AND_VERIFIED
+                if state == "loaded"
+                else ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+            )
+            response["entry_state"] = state
     if warnings:
         response.setdefault("warnings", []).extend(warnings)
     return response

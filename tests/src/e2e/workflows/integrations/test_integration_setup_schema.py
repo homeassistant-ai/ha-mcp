@@ -1,12 +1,12 @@
-"""E2E: ha_set_integration(domain=..., describe=True) reads a setup form.
+"""E2E: ha_set_integration(domain=...) without config reads a setup form.
 
-describe=True starts the domain's config flow and submits nothing: the first
-step comes back open with its flow_id (the form's fields, or a menu's
-menu_options), and flow_id with menu_choice or abort=True continues or ends
-it. A flow Core aborts raises with Core's own reason text, read here from
-Core's translations the way the frontend looks it up (the abort's
-translation_domain, else the handler). With an entry_id, describe=True opens
-the entry's options flow the same way; with subentry_type it describes (and
+A new flow without config starts the domain's config flow and submits
+nothing: the first step comes back open with its flow_id (the form's fields,
+or a menu's menu_options), and flow_id with menu_choice or abort=True
+continues or ends it. A flow Core aborts raises with Core's own reason text,
+read here from Core's translations the way the frontend looks it up (the
+abort's translation_domain, else the handler). An entry_id alone opens the
+entry's options flow the same way; with subentry_type it describes (and
 aborts) a config subentry flow.
 """
 
@@ -43,7 +43,7 @@ class TestIntegrationSetupSchema:
         try:
             async with MCPAssertions(mcp_client) as mcp:
                 menu = await mcp.call_tool_success(
-                    "ha_set_integration", {"domain": "group", "describe": True}
+                    "ha_set_integration", {"domain": "group"}
                 )
                 flow_id = menu["flow_id"]
                 light = await mcp.call_tool_success(
@@ -77,9 +77,7 @@ class TestIntegrationSetupSchema:
                 "ha_get_integration", {"domain": "sun"}
             )
             assert entries["entries"], "the test instance must have a sun entry"
-            data = await mcp.call_tool_failure(
-                "ha_set_integration", {"domain": "sun", "describe": True}
-            )
+            data = await mcp.call_tool_failure("ha_set_integration", {"domain": "sun"})
 
         # Core's own abort for the same request names where its text lives.
         core_abort = await ha_client.start_config_flow("sun")
@@ -93,7 +91,7 @@ class TestIntegrationSetupSchema:
         assert data["details"]["reason"] == core_abort["reason"]
         assert data["reason_text"] == expected
 
-    async def test_an_entry_describe_reads_its_options_form(self, mcp_client):
+    async def test_an_entry_alone_reads_its_options_form(self, mcp_client):
         """The demo entry's options flow opens with form options_1; the flow
         stays open with its flow_id until aborted."""
         flow_id = None
@@ -107,7 +105,7 @@ class TestIntegrationSetupSchema:
             try:
                 data = await mcp.call_tool_success(
                     "ha_set_integration",
-                    {"entry_id": entry["entry_id"], "describe": True},
+                    {"entry_id": entry["entry_id"]},
                 )
                 flow_id = data["flow_id"]
             finally:
@@ -126,12 +124,12 @@ class TestIntegrationSetupSchema:
         assert "bool" in {f["name"] for f in data["fields"]}
         assert "entry" not in data
 
-    async def test_unknown_domain_fails_the_describe(self, mcp_client):
+    async def test_unknown_domain_fails_the_setup_form(self, mcp_client):
         """A domain Core has no config flow for has no setup form to describe."""
         async with MCPAssertions(mcp_client) as mcp:
             await mcp.call_tool_failure(
                 "ha_set_integration",
-                {"domain": "no_such_integration_xyz", "describe": True},
+                {"domain": "no_such_integration_xyz"},
                 expected_error="no_such_integration_xyz",
             )
 
@@ -183,7 +181,6 @@ class TestIntegrationSetupSchema:
                     "ha_set_integration",
                     {
                         "entry_id": entry_id,
-                        "describe": True,
                         "subentry_type": "plane",
                         "subentry_id": planes[0]["subentry_id"],
                     },
@@ -203,7 +200,7 @@ class TestIntegrationSetupSchema:
         assert edit_schema["flow_type"] == "form"
         assert edit_schema["step_id"] == "reconfigure"
         assert edit_schema["fields"]
-        # ha_set_integration(describe=True) reads the same form.
+        # ha_set_integration(subentry_type=...) reads the same form.
         described = described_plane["subentry_schema"]
         assert (described["flow_type"], described["step_id"]) == ("form", "reconfigure")
         assert [f["name"] for f in described["fields"]] == [

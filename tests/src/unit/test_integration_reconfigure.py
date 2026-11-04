@@ -1,6 +1,7 @@
 """Tests for generic config-entry reconfiguration."""
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -13,7 +14,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import config_entry_identity
+from ha_mcp.tools import config_entry_identity, integration_flow_steps
 from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
 from ha_mcp.tools.config_entry_flow import set_config_subentry
 from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
@@ -27,6 +28,25 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 
 FORM_SCHEMA = [{"name": "host", "required": True}]
 ABORT_OK = {"type": "abort", "reason": "reconfigure_successful"}
+
+
+def _watch(reloaded: dict[str, Any] | None) -> Any:
+    """A ``watch_entry_reload`` whose stream shows ``reloaded`` settling."""
+
+    @contextlib.asynccontextmanager
+    async def watch(_client: Any, _entry_id: str) -> Any:
+        async def settled() -> dict[str, Any] | None:
+            return reloaded
+
+        yield settled
+
+    return watch
+
+
+@pytest.fixture(autouse=True)
+def _no_entry_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No WebSocket here: the reload after a reconfigure is not observed."""
+    monkeypatch.setattr(integration_flow_steps, "watch_entry_reload", _watch(None))
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +126,6 @@ async def reconfigure_config_entry(
         config=config,
         menu_choice=None,
         abort=False,
-        describe=False,
         expected_identity={
             "device_id": expected_device_id,
             "unique_id": expected_unique_id,
@@ -141,6 +160,70 @@ def reconfig_entry() -> dict[str, object]:
         "unique_id": "AA:BB:CC:DD:EE:FF",
         "supports_reconfigure": True,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reloaded", "status"),
+    [
+        ({"state": "loaded"}, "applied_and_verified"),
+        ({"state": "setup_retry"}, "applied_but_unverified"),
+        (None, "applied_but_unverified"),
+    ],
+)
+@pytest.mark.parametrize(
+    "call",
+    [{"config": {"host": "192.0.2.10"}}, {"flow_id": "flow-1"}],
+    ids=["submit", "re-read"],
+)
+async def test_a_finished_reconfigure_reports_the_state_after_the_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_flows: dict[str, Any],
+    reconfig_entry: dict[str, object],
+    reloaded: dict[str, Any] | None,
+    status: str,
+    call: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(integration_flow_steps, "watch_entry_reload", _watch(reloaded))
+    # A re-read finishes a flow whose progress step ended between calls.
+    opened_flows["flow-1"] = ("reconfigure", "entry-123")
+    client = open_client(reconfig_entry)
+    client._request = AsyncMock(return_value=ABORT_OK)
+    result = await IntegrationTools(client).ha_set_integration(
+        entry_id="entry-123", reconfigure=True, **call
+    )
+    assert result["status"] == status
+    assert result["entry_state"] == (reloaded or {}).get("state")
+
+
+@pytest.mark.asyncio
+async def test_a_reconfigure_answered_with_another_form_reports_no_state(
+    monkeypatch: pytest.MonkeyPatch, reconfig_entry: dict[str, object]
+) -> None:
+    """Only a finished flow waits for the reload: a second form applied nothing."""
+    settled = AsyncMock(return_value={"state": "loaded"})
+
+    @contextlib.asynccontextmanager
+    async def watch(_client: Any, _entry_id: str) -> Any:
+        yield settled
+
+    monkeypatch.setattr(integration_flow_steps, "watch_entry_reload", watch)
+    client = open_client(reconfig_entry)
+    client.submit_config_flow_step = AsyncMock(
+        return_value={
+            "flow_id": "flow-1",
+            "type": "form",
+            "step_id": "second",
+            "data_schema": FORM_SCHEMA,
+        }
+    )
+    result = await IntegrationTools(client).ha_set_integration(
+        entry_id="entry-123", reconfigure=True, config={"host": "192.0.2.10"}
+    )
+    assert result["step_id"] == "second"
+    assert "status" not in result
+    assert "entry_state" not in result
+    settled.assert_not_awaited()
 
 
 def shelly(entry_id: str = "offline-entry", **extra: Any) -> dict[str, Any]:
@@ -806,7 +889,9 @@ async def test_each_reconfigure_step_checks_the_identity_again(
     reconfig_entry: dict[str, object],
 ) -> None:
     """Every call that may submit re-reads the entry's identity first; an abort
-    does not, so a flow whose entry is gone can still be ended."""
+    does not, so a flow whose entry is gone can still be ended. A finished flow
+    is forgotten, so it is neither continued nor ended; the test opens the flow
+    again before the identity-free abort."""
     form = {
         "flow_id": "flow-multi",
         "type": "form",
@@ -834,6 +919,13 @@ async def test_each_reconfigure_step_checks_the_identity_again(
         "flow-multi", {"host": "192.0.2.10"}
     )
 
+    with pytest.raises(ToolError):
+        await tools.ha_set_integration(
+            entry_id="entry-123", reconfigure=True, flow_id="flow-multi", abort=True
+        )
+    client.abort_config_flow.assert_not_awaited()
+
+    await tools.ha_set_integration(entry_id="entry-123", reconfigure=True)
     client.get_config_entry.side_effect = HomeAssistantConnectionError("gone")
     await tools.ha_set_integration(
         entry_id="entry-123", reconfigure=True, flow_id="flow-multi", abort=True

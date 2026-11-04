@@ -87,6 +87,8 @@ class TestIntegrationOptionsRestore:
                 # report success.
                 await _wait_for_int_option(mcp_client, entry_id, 11)
             finally:
+                # Demo's options flow merges into the stored options, so an
+                # absent int cannot be put back; 10 is its form default for one.
                 await _set_int_option(
                     lambda name, params: safe_call_tool(mcp_client, name, params),
                     entry_id,
