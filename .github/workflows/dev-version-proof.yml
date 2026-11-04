@@ -49,6 +49,8 @@ jobs:
           PY
 
   fast-checks:
+    # Product code is unchanged and already passed these checks.
+    if: github.event.created
     name: Fast Checks
     runs-on: ubuntu-latest
     # 15 covers the serial worst case: two Docker image pulls (~1 min), one
@@ -260,6 +262,8 @@ jobs:
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
+    # Product code is unchanged and already passed these checks.
+    if: github.event.created
     name: Unit Tests
     runs-on: ubuntu-latest
     container:

@@ -1,6 +1,8 @@
 """Temporary runner-only proof; this file is not part of the proposed PR."""
 
 import os
+import re
+import sys
 from pathlib import Path
 import shutil
 import subprocess
@@ -60,6 +62,68 @@ with tempfile.TemporaryDirectory() as temporary:
         assert git(repo, "status", "--porcelain") == ""
         assert git(repo, "rev-parse", "HEAD") == before
         assert git(repo, "tag", "--list") == "v9.1.0"
+
+    # Reuse one history across releases, including the real tag-only stamp
+    # commits and the app version commits that are pushed back to master.
+    repo = Path(temporary) / "maintenance"
+    sequence = []
+    for index, (message, stable_next, dev_base) in enumerate([
+        (None, "9.1.0", "9.1.1"),
+        ("docs: follow-up one", "9.1.0", "9.1.1"),
+        ("chore: follow-up two", "9.1.0", "9.1.1"),
+        ("fix: first repair", "9.1.1", "9.1.1"),
+        ("fix: second repair", "9.1.1", "9.1.1"),
+        ("feat: first feature", "9.2.0", "9.2.0"),
+        ("feat: second feature", "9.2.0", "9.2.0"),
+        ("feat: new protocol\n\nBREAKING CHANGE: replace protocol", "10.0.0", "10.0.0"),
+        ("feat: another protocol\n\nBREAKING CHANGE: replace another protocol", "10.0.0", "10.0.0"),
+    ]):
+        if message:
+            git(repo, "commit", "-qm", message, "--allow-empty")
+        git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+        master_head = git(repo, "rev-parse", "HEAD")
+        stable = run(
+            "uvx", "--quiet", "--from", "python-semantic-release==10.7.0",
+            "semantic-release", "--noop", "version", "--print",
+            cwd=repo, capture_output=True,
+        ).stdout.strip().splitlines()[-1]
+        assert stable == stable_next, (message, stable, stable_next)
+        expected = f"{dev_base}.dev{2 + index * 2}"
+        for event in ["push", "workflow_dispatch"]:
+            actual = run(
+                "bash", str(ROOT / "scripts/dev_version.sh"), cwd=repo,
+                env={**os.environ, "GITHUB_EVENT_NAME": event}, capture_output=True,
+            ).stdout.strip()
+            assert actual == expected, (event, message, actual, expected)
+        assert git(repo, "rev-parse", "HEAD") == master_head
+        assert git(repo, "status", "--porcelain") == ""
+        sequence.append(actual)
+        print(f"consecutive build {index + 1}: {actual}; stable would be {stable}", flush=True)
+
+        git(repo, "checkout", "--detach", "-q")
+        run(
+            sys.executable, str(ROOT / "scripts/stamp_component_version.py"),
+            "--component-dir", str(repo / "custom_components/ha_mcp_tools"),
+            "--version", dev_base, "--pin", actual, "--dist", "ha-mcp-dev",
+            capture_output=True,
+        )
+        git(repo, "commit", "-qam", f"chore(internal): stamp the component for dev build {actual} [skip ci]")
+        git(repo, "tag", f"v{actual}")
+        git(repo, "checkout", "-q", "master")
+        assert git(repo, "rev-parse", "HEAD") == master_head
+        app_config = repo / "homeassistant-addon-dev/config.yaml"
+        app_config.parent.mkdir(exist_ok=True)
+        app_config.write_text(re.sub(
+            r'^version: .*$', f'version: "{actual}"',
+            (ROOT / "homeassistant-addon-dev/config.yaml").read_text(), flags=re.MULTILINE,
+        ))
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", f"chore(addon): publish dev addon version {actual} [skip ci]")
+        assert git(repo, "show", "HEAD:pyproject.toml") == git(repo, "show", "v9.1.0:pyproject.toml")
+        plain_tags = [tag for tag in git(repo, "tag", "--list").splitlines() if ".dev" not in tag]
+        assert plain_tags == ["v9.1.0"], plain_tags
+
+    print("Repeated-release history passed: " + " -> ".join(sequence), flush=True)
 
     selected = [
         "tests/src/unit/test_mirror_sync_workflow_shape.py::TestDevVersionScript::test_dev_builds_sort_after_stable_and_count_the_selected_commit",
