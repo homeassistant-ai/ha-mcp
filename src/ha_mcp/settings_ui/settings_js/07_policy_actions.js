@@ -272,18 +272,20 @@ async function policyClearPin() {
 }
 
 // The list holds either approval cards or one status message; only a message
-// belongs in the dashed, centred empty-state box.
+// belongs in the dashed, centred empty-state box. Also announces the message.
 function policyShowPendingMessage(list, message, {emphasis = true, isError = false} = {}) {
+  delete list.dataset.pendingTokens;
   list.classList.add('backup-empty');
   list.innerHTML = emphasis ? '<em>' + escapeHtml(message) + '</em>' : escapeHtml(message);
-  policyAnnouncePending(message, isError);
+  policyAnnouncePending(message, {isError});
 }
 
-// Polling re-renders the list every 3s, so only a changed message is written
-// here: a rewrite would make a screen reader repeat an unchanged outage.
-function policyAnnouncePending(message, isError = false) {
+// The list is polled, so only a changed message is written here: a rewrite
+// would make a screen reader repeat an unchanged outage. `repeat` is for a
+// caller that knows the news is new although the text is the same.
+function policyAnnouncePending(message, {isError = false, repeat = false} = {}) {
   const region = document.getElementById('policy-pending-announcement');
-  if (region.textContent === message) return;
+  if (!repeat && region.textContent === message) return;
   setStatusAlert(region, isError);
   region.textContent = message;
 }
@@ -342,12 +344,17 @@ async function policyLoadPending() {
     );
     return;
   }
+  // Rebuilding unchanged cards would drop keyboard focus from Approve/Deny on
+  // every poll and reset a screen reader's cursor.
+  const tokens = JSON.stringify(pending.map(p => p.token));
+  if (list.dataset.pendingTokens === tokens) return;
+  list.dataset.pendingTokens = tokens;
   list.classList.remove('backup-empty');
   policyAnnouncePending(t(
     'policies.pending.announcement',
     {count: pending.length},
     'Pending approvals: ' + pending.length
-  ));
+  ), {repeat: true});
   list.innerHTML = pending.map(p => (
     '<div class="policy-pending-card" data-pending-token="' + escapeHtml(p.token) + '">' +
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
@@ -359,8 +366,8 @@ async function policyLoadPending() {
     '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">' + escapeHtml(t('actions.deny', {}, 'Deny')) + '</button>' +
     '</div></div>'
   )).join('');
-  // Re-bind decision buttons each render (no event delegation needed —
-  // pending list is small and re-rendered on every poll).
+  // Bind decision buttons each render (no event delegation needed — the
+  // pending list is small and rebuilt whenever the queue changes).
   list.querySelectorAll('button[data-policy-token]').forEach(btn => {
     btn.addEventListener('click', () =>
       policyDecide(btn.dataset.policyToken, btn.dataset.policyAction)

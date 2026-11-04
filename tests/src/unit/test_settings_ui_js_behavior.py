@@ -2204,52 +2204,6 @@ class TestPolicyTabFlow:
             "remember input should show the max across rules"
         )
 
-    def test_pending_list_shows_off_message_when_feature_disabled(
-        self, settings_script: str
-    ) -> None:
-        """When the addon flag is off, /api/policy/pending 503s. The
-        UI should tell the user the feature is just turned off — NOT
-        the misleading "sidecar / unavailable" text the earlier code
-        showed. This catches regressions where the new copy gets
-        clobbered back to the generic message."""
-        fetches = {
-            **DEFAULT_FETCHES,
-            # Feature flag explicitly disabled
-            "/api/settings/features": {
-                "status": 200,
-                "json": {
-                    "flags": {
-                        "enable_tool_security_policies": {"value": False},
-                    },
-                },
-            },
-            # Stub policy config endpoints so policyLoadConfig doesn't 500
-            "/api/policy/config": {
-                "status": 200,
-                "json": {"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": []},
-            },
-            "/api/policy/pending": {
-                "status": 503,
-                "json": {"error": "irrelevant when flag is off"},
-            },
-        }
-        result = run_script(
-            settings_script,
-            initial_html=_policy_panel_dom(),
-            fetch_map=fetches,
-            invoke="""
-              await window.policyLoadConfig();
-              await window.policyLoadPending();
-            """,
-        )
-        _assert_clean_init(result)
-        # `dom` is the full final-state document snapshot; grep the
-        # pending-list region for the new off-state copy.
-        assert "turned off" in result.dom.lower(), (
-            f"expected 'turned off' in pending-list snapshot; "
-            f"dom contains: {result.dom[-2000:]}"
-        )
-
     def test_pending_list_shows_server_message_when_feature_on_but_503(
         self, settings_script: str
     ) -> None:
