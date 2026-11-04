@@ -38,6 +38,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
 
+from .component_version import compatibility_version
 from .const import (
     ALLOWED_READ_DIRS,
     ALLOWED_VOLUME_ROOTS,
@@ -3146,10 +3147,8 @@ def _build_get_caller_token_handler(
                     "completed setup. Reload the ha_mcp_tools integration."
                 ),
             }
-        # Report the manifest version so ha-mcp can enforce a minimum
-        # compatible component version. The integration loader reads
-        # ``manifest.json`` once at startup; ``async_get_integration``
-        # is cheap and avoids hard-coding the version twice.
+        # Keep the bootstrap version numeric for older external servers;
+        # the manifest retains the full dev build for Home Assistant's UI.
         # Pathological-but-belt-and-suspenders: a corrupted manifest
         # would otherwise surface as HA's generic handler error rather
         # than the actionable structured response shape this service
@@ -3160,7 +3159,7 @@ def _build_get_caller_token_handler(
                 # Reads as None rather than raising; an unreadable version and
                 # an absent one deserve the same answer.
                 raise ValueError("the manifest carries no version")
-            version = str(integration.version)
+            version = compatibility_version(str(integration.version))
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not read ha_mcp_tools manifest version for "

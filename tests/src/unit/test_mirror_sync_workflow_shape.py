@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 import yaml
+from packaging.version import Version
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOWS = _REPO_ROOT / ".github" / "workflows"
@@ -413,11 +414,28 @@ class TestDevVersionScript:
         ).read_text(encoding="utf-8")
 
     @pytest.mark.parametrize(
-        ("event", "expected"),
-        [("push", "9.0.0.dev2"), ("workflow_dispatch", "9.0.0.dev3")],
+        ("event", "count"),
+        [("push", 2), ("workflow_dispatch", 3)],
     )
-    def test_counts_the_built_commit_on_push(
-        self, tmp_path: Path, event: str, expected: str
+    @pytest.mark.parametrize(
+        ("released", "next_version", "base"),
+        [
+            (None, "9.0.0", "9.0.0"),
+            ("9.1.0", "9.1.0", "9.1.1"),  # chores after a stable release
+            ("9.1.9", "9.1.9", "9.1.10"),
+            ("9.1.0", "9.1.1", "9.1.1"),  # fix
+            ("9.1.0", "9.2.0", "9.2.0"),  # feat
+            ("9.1.0", "10.0.0", "10.0.0"),  # breaking change
+        ],
+    )
+    def test_dev_builds_sort_after_stable_and_count_the_selected_commit(
+        self,
+        tmp_path: Path,
+        event: str,
+        count: int,
+        released: str | None,
+        next_version: str,
+        base: str,
     ) -> None:
         # A push build whose checkout finds master already advanced must not
         # take the next push's number: PyPI keeps the first upload, so the
@@ -426,7 +444,7 @@ class TestDevVersionScript:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         fake_uvx = bin_dir / "uvx"
-        fake_uvx.write_text("#!/bin/sh\necho 9.0.0\n")
+        fake_uvx.write_text(f"#!/bin/sh\necho {next_version}\n")
         fake_uvx.chmod(0o755)
 
         def git(*args: str) -> None:
@@ -450,6 +468,10 @@ class TestDevVersionScript:
             )
         git("update-ref", "refs/remotes/origin/master", "HEAD")
         git("reset", "-q", "--hard", "HEAD~1")
+        if released is not None:
+            git("tag", f"v{released}", "HEAD~1")
+        # A previous dev tag must not be mistaken for a stable release.
+        git("tag", f"v{base}.dev1", "HEAD~1")
 
         result = subprocess.run(
             ["bash", str(_DEV_VERSION)],
@@ -461,7 +483,10 @@ class TestDevVersionScript:
         )
 
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == expected
+        actual = result.stdout.strip()
+        assert actual == f"{base}.dev{count}"
+        if released is not None:
+            assert Version(released) < Version(actual) < Version(base)
 
     def test_a_dispatch_from_another_branch_uses_masters_next_release(
         self, tmp_path: Path
@@ -493,6 +518,7 @@ class TestDevVersionScript:
             git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
                 "--allow-empty", "-m", str(n))  # fmt: skip
         git("update-ref", "refs/remotes/origin/master", "HEAD")
+        git("tag", "v9.0.0", "HEAD~1")
         git("checkout", "-q", "-b", "feature")
 
         result = subprocess.run(
@@ -508,7 +534,7 @@ class TestDevVersionScript:
         )
 
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "9.0.0.dev3"
+        assert result.stdout.strip() == "9.0.1.dev3"
         assert git("branch", "--list", "master-dev-version-*") == ""
         assert len(git("worktree", "list").splitlines()) == 1
 
@@ -556,12 +582,23 @@ def _stamp(
 
 
 class TestStampComponentVersion:
+    def test_stable_mirror_stamp_preserves_the_released_component(
+        self, component: Path
+    ) -> None:
+        before = {p.name: p.read_bytes() for p in component.iterdir()}
+        version = json.loads(before["manifest.json"])["version"]
+
+        result = _stamp(component, version, version)
+
+        assert result.returncode == 0, result.stderr
+        assert {p.name: p.read_bytes() for p in component.iterdir()} == before
+
     def test_stamps_a_dev_pre_release(self, component: Path) -> None:
         result = _stamp(component, "9.0.0", "9.0.0.dev2901", dist="ha-mcp-dev")
 
         assert result.returncode == 0, result.stderr
         manifest = json.loads((component / "manifest.json").read_text())
-        assert manifest["version"] == "9.0.0"
+        assert manifest["version"] == "9.0.0.dev2901"
         # One server requirement: two would install both distributions over
         # the same ha_mcp package.
         assert [r for r in manifest["requirements"] if r.startswith("ha-mcp")] == [
@@ -577,6 +614,31 @@ class TestStampComponentVersion:
         assert result.returncode == 0, result.stderr
         manifest = json.loads((component / "manifest.json").read_text())
         assert "ha-mcp-dev==9.0.0.dev2" in manifest["requirements"]
+        assert manifest["version"] == "9.0.0.dev2"
+
+    def test_stable_stamp_restores_plain_version_and_distribution(
+        self, component: Path
+    ) -> None:
+        _stamp(component, "9.0.0", "9.0.0.dev1", dist="ha-mcp-dev")
+
+        result = _stamp(component, "9.0.0", "9.0.0")
+
+        assert result.returncode == 0, result.stderr
+        manifest = json.loads((component / "manifest.json").read_text())
+        assert manifest["version"] == "9.0.0"
+        assert [r for r in manifest["requirements"] if r.startswith("ha-mcp")] == [
+            "ha-mcp==9.0.0"
+        ]
+        assert 'COMPONENT_VERSION = "9.0.0"' in (component / "const.py").read_text()
+
+    def test_rejects_a_pin_for_another_component_release(self, component: Path) -> None:
+        before = (component / "manifest.json").read_bytes()
+
+        result = _stamp(component, "9.1.0", "9.2.0.dev1", dist="ha-mcp-dev")
+
+        assert result.returncode == 1
+        assert "must match" in result.stderr
+        assert (component / "manifest.json").read_bytes() == before
 
     def test_keeps_the_other_requirements(self, component: Path) -> None:
         before = json.loads((component / "manifest.json").read_text())["requirements"]

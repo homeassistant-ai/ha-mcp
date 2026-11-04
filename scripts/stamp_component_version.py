@@ -7,10 +7,10 @@ changes nothing and guards against a commit that missed them. A development
 pre-release is cut from a master snapshot, so the mirror sync stamps the
 snapshot with:
 
-- ``--version``: the plain next-release number (``9.0.0``). Released servers
-  parse the component version segment by segment as integers, so a component
-  must never report a dev suffix; the suffix lives in the pre-release tag.
-- ``--pin``: the development build this pre-release runs (``9.0.0.dev2901``).
+- ``--version``: the plain compatibility number (``9.0.0``) in ``const.py``.
+  Released servers parse compatibility versions segment by segment as integers.
+- ``--pin``: the build this pre-release runs (``9.0.0.dev2901``), also written
+  to the manifest's version so Home Assistant displays the installed build.
 - ``--dist``: the distribution that build is published as. Publish Dev Channel
   uploads development builds as ``ha-mcp-dev``, so a pre-release pins
   ``ha-mcp-dev==9.0.0.dev2901``; a stable release keeps ``ha-mcp``.
@@ -56,6 +56,8 @@ def stamp(component_dir: Path, version: str, pin: str, dist: str = "ha-mcp") -> 
         raise ValueError(f"component version must be X.Y.Z, got {version!r}")
     if not _PIN_VERSION.match(pin):
         raise ValueError(f"pin must be X.Y.Z or X.Y.Z.devN, got {pin!r}")
+    if pin.split(".dev", 1)[0] != version:
+        raise ValueError("pin release must match the component compatibility version")
     if dist not in SERVER_DISTS:
         raise ValueError(f"dist must be one of {SERVER_DISTS}, got {dist!r}")
 
@@ -71,7 +73,7 @@ def stamp(component_dir: Path, version: str, pin: str, dist: str = "ha-mcp") -> 
     manifest["requirements"] = [
         f"{dist}=={pin}" if _is_server_requirement(r) else r for r in requirements
     ]
-    manifest["version"] = version
+    manifest["version"] = pin
     manifest_path.write_text(json.dumps(manifest, indent=4) + "\n", encoding="utf-8")
 
     const_path = component_dir / "const.py"

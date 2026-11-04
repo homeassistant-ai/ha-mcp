@@ -21,6 +21,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from packaging.version import Version
 
 from ._embedded_stubs import install
 
@@ -904,14 +905,18 @@ class TestComponentCompat:
         assert kwargs["is_fixable"] is False
         esetup.ir.async_delete_issue.assert_not_called()
 
-    async def test_satisfied_component_clears_issue(self, monkeypatch):
+    @pytest.mark.parametrize("installed", ["0.14.0", "0.14.0.dev3360"])
+    async def test_satisfied_component_clears_issue(self, monkeypatch, installed):
         hass = _make_async_hass()
         entry = _make_entry()
-        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.11.0")
+        # The lightweight HA stub ignores prerelease ordering; use a real
+        # comparator so .devN below its release would reproduce the false repair.
+        monkeypatch.setattr(esetup, "AwesomeVersion", Version)
+        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.14.0")
         monkeypatch.setattr(
             esetup,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
+            AsyncMock(return_value=SimpleNamespace(version=installed)),
         )
 
         await esetup._async_check_component_compat(hass, entry)

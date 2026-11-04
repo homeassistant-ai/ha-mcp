@@ -44,10 +44,13 @@ async def _register() -> None:
     )
 
 
-async def test_the_device_reports_the_installed_release(monkeypatch, created) -> None:
-    _manifest(monkeypatch, AsyncMock(return_value=SimpleNamespace(version="9.1.0")))
+@pytest.mark.parametrize("version", ["9.1.0", "9.1.1.dev3360"])
+async def test_the_device_reports_the_installed_release(
+    monkeypatch, created, version
+) -> None:
+    _manifest(monkeypatch, AsyncMock(return_value=SimpleNamespace(version=version)))
     await _register()
-    assert created[0]["sw_version"] == "9.1.0"
+    assert created[0]["sw_version"] == version
 
 
 @pytest.mark.parametrize(

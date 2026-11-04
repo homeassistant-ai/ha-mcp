@@ -17,11 +17,11 @@ import re
 
 DOMAIN = "ha_mcp_tools"
 
-# Component version: the server version this release shares, stamped together
-# with ``manifest.json``'s ``version`` and its ``ha-mcp`` pin by semantic-release
-# (``version_variables`` in pyproject.toml). ``ha_mcp_tools/info`` reports it so
-# the server can display/debug the running component build. Capability
-# negotiation — not this version — gates each WS command (see
+# Plain compatibility version, stamped with the manifest and server pin by
+# semantic-release (``version_variables`` in pyproject.toml). Dev tags keep
+# this plain but stamp the manifest with the full build for Home Assistant's
+# UI. ``ha_mcp_tools/info`` retains the plain version for older consumers.
+# Capability negotiation gates each WS command (see
 # ``websocket_api.constants.CAPABILITIES``).
 COMPONENT_VERSION = "9.1.0"
 

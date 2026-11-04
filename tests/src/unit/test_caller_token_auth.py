@@ -186,7 +186,7 @@ class TestUnauthorizedResponse:
 
 
 class TestManifestVersionCoupling:
-    """The shipped component's manifest version must satisfy the server's
+    """The shipped component's compatibility version must satisfy the server's
     own ``MIN_COMPONENT_VERSION`` floor.
 
     If the manifest ever falls behind the floor, a freshly-updated
@@ -202,7 +202,7 @@ class TestManifestVersionCoupling:
 
         manifest_path = Path(component.__file__).parent / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return manifest["version"]
+        return component.compatibility_version(manifest["version"])
 
     def test_manifest_version_meets_minimum(self):
         manifest_version = self._manifest_version()
@@ -216,17 +216,11 @@ class TestManifestVersionCoupling:
 
 
 class TestGetCallerTokenManifestVersion:
-    """The bootstrap response reports the component's manifest version.
+    """Bootstrap reports a plain compatibility version even for dev manifests.
 
-    A manifest without a version reads as ``None`` from the loader rather than
-    raising, so ``str()`` would put the literal "None" in the response and the
-    server's version gate would compare against it. The component's own
-    unreadable-manifest path is the right answer, and only an explicit guard
-    routes it there.
-
-    Unreachable in production — core's loader refuses to set up a custom
-    integration whose manifest carries no version — which is exactly why a
-    test is the only thing keeping the branch honest.
+    A missing manifest version reads as None rather than raising. Core normally
+    refuses to load that integration; this test keeps the defensive error path
+    honest instead of letting the literal "None" reach the server's gate.
     """
 
     @staticmethod
@@ -255,14 +249,17 @@ class TestGetCallerTokenManifestVersion:
         assert "token" not in response
 
     @pytest.mark.asyncio
-    async def test_readable_manifest_reports_its_version(self, monkeypatch):
+    @pytest.mark.parametrize("installed", ["1.2.4", "1.2.4.dev3360"])
+    async def test_bootstrap_version_remains_parseable_by_old_servers(
+        self, monkeypatch, installed
+    ):
         import custom_components.ha_mcp_tools as component
 
         monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(version=installed)),
         )
         handler = _build_get_caller_token_handler(self._hass_with_token())
 

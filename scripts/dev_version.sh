@@ -3,9 +3,9 @@
 # <next release>.dev<commit count>, e.g. 9.0.0.dev2901.
 #
 # <next release> is what semantic-release would cut from the commits since the
-# last stable tag, so a dev build sorts between the release it follows and the
-# one it previews, and the HACS pre-release component (which reports the plain
-# <next release>) satisfies a MIN_COMPONENT_VERSION floor raised for that
+# last stable tag, or the next patch when no releasable commits have landed.
+# A dev build sorts between the release it follows and the one it previews,
+# and its component satisfies a MIN_COMPONENT_VERSION floor raised for that
 # release. The commit count makes every surface (PyPI, Docker, the dev app and
 # the HACS pre-release) report the same number for the same commit.
 #
@@ -60,5 +60,13 @@ if ! [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "dev_version.sh: semantic-release printed '${next}', not a version" >&2
   cat "$psr_log" >&2
   exit 1
+fi
+# --print returns the already-released version when only chores/docs followed
+# it. Appending .devN would sort BELOW that stable release, so HACS would offer
+# a downgrade as an update. Reserve the next patch for dev builds in this case;
+# leave semantic-release's patch/minor/major decisions and stable flow alone.
+if git show-ref --verify --quiet "refs/tags/v${next}"; then
+  patch=${next##*.}
+  next="${next%.*}.$((10#$patch + 1))"
 fi
 echo "${next}.dev$(git rev-list --count "$ref")"

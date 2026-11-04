@@ -811,17 +811,17 @@ class TestInfo:
         assert wsapi._do_info()["tools_services"] is None
 
     def test_manifest_version_parity(self):
-        """A bump that touches manifest.json but not COMPONENT_VERSION (or the
-        reverse) makes ``ha_mcp_tools/info`` report a version HACS did not
-        install. That both equal the server version is the Component Version
-        Gate's job in pr.yml (docs/agents/custom-component.md, Version cycle).
+        """The manifest and WS compatibility version share the release number.
+
+        Dev manifests additionally identify the build; WS retains the plain
+        number for older servers (docs/agents/custom-component.md).
         """
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION
+        assert manifest["version"].split(".dev", 1)[0] == COMPONENT_VERSION
 
 
 # =============================================================================

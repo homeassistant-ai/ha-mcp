@@ -26,6 +26,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.loader import async_get_integration
 
+from .component_version import compatibility_version
 from .const import (
     BIND_HOST_ALL,
     DATA_DCR_SIGNING_KEY,
@@ -620,7 +621,7 @@ async def _async_check_component_compat(
         return
 
     try:
-        outdated = AwesomeVersion(own) < AwesomeVersion(required)
+        outdated = AwesomeVersion(compatibility_version(own)) < AwesomeVersion(required)
     except AwesomeVersionException as err:
         # Incomparable version strategies only; real bugs propagate.
         _LOGGER.debug("HA-MCP component-compat version compare failed: %s", err)

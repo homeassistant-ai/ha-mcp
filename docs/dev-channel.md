@@ -24,6 +24,17 @@ Want to test the latest changes before the biweekly stable release? The dev chan
 
 `:latest` only ever tracks stable, never dev.
 
+Dev builds share one version across PyPI, Docker, the Home Assistant dev app,
+and both HACS repositories: `<next release>.dev<commit count>`. The base follows
+semantic-release's patch, minor, or major decision. If only maintenance commits
+have landed since stable, dev builds use the next patch instead: after `9.1.0`,
+for example, `9.1.1.dev3360` sorts above `9.1.0` and below `9.1.1`. This does
+not force a stable release or change the stable release schedule.
+
+For HACS prereleases, Home Assistant's integration page and devices show the
+full dev version. The component's compatibility handshake keeps the plain
+release number for older external servers.
+
 ## Installation Methods
 
 ### uvx (Recommended)

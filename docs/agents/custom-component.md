@@ -9,7 +9,8 @@ must hold in both update directions.
 
 The component shares the server's version and pins the server build it runs
 (#2427). `manifest.json`'s `version`, its `ha-mcp==` requirement and
-`COMPONENT_VERSION` in `const.py` always equal `pyproject.toml`'s version.
+`COMPONENT_VERSION` in `const.py` equal `pyproject.toml`'s version on master
+and stable releases.
 Never edit them by hand: semantic-release stamps all four in each release
 commit (`version_variables` in `pyproject.toml`), and the PR **Component
 Version Gate** fails a pull request that moves any of them.
@@ -23,12 +24,12 @@ receives the same releases (#2763). Releases follow from that:
   sync snapshots the release tag's component and tags the mirror `vX.Y.Z`
   once PyPI serves `ha-mcp==X.Y.Z`. A server-only release is therefore also a
   component release.
-- **Development:** **Publish Dev Channel** stamps the component with the next
-  release number and its `ha-mcp-dev` build on a commit only its
+- **Development:** **Publish Dev Channel** stamps the component manifest with
+  the full `ha-mcp-dev` build version on a commit only its
   `v<next>.dev<N>` pre-release tag references, so master keeps its stable
   pin. After it, the mirror sync stamps the
-  snapshot of the commit it built with the next release number (what
-  semantic-release would cut) and pins the exact build it uploaded,
+  snapshot of the commit it built with that same full version and pins the
+  exact build it uploaded,
   `ha-mcp-dev==<next>.dev<N>` (the version `scripts/dev_version.sh` gave
   that run, handed over as its `dev-version` artifact), and tags it
   `v<next>-dev.<N>` as a HACS pre-release once PyPI serves that build. As
@@ -38,9 +39,17 @@ receives the same releases (#2763). Releases follow from that:
   repository's 30 newest releases and installs the default branch when none
   of them is stable (#2881).
 
-The component never reports a dev suffix: released servers parse the version
-segment by segment as integers, so the suffix lives only in the pre-release tag
-and the pin.
+The dev base is what semantic-release would cut, or the next patch if it
+returns an already-released version after only maintenance commits. This
+keeps dev builds above the preceding stable release without changing stable
+release decisions. PyPI, Docker, and the dev app use the same script.
+
+The manifest, Home Assistant integration page, options form, and devices show
+the full dev version. `COMPONENT_VERSION` and the `get_caller_token` bootstrap
+response retain the plain release number: older servers parse it segment by
+segment as integers. The embedded compatibility check also strips the dev
+suffix, so a paired dev build satisfies its release's `MIN_COMPONENT_VERSION`
+floor. Keep this distinction when changing either the stamper or version gates.
 
 When a change adds a component service or argument that the server depends
 on, raise `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py`,
@@ -49,9 +58,9 @@ in the same PR, to the release that will carry it: the number
 next release from `master` on any branch, so count the PR's own commit type:
 a `feat:` on a `master` that only has fixes pending raises the minor).
 
-Every development pre-release cut while that release is pending reports the
-same plain number, so the floor cannot tell a pre-release that has the new
-service from an earlier one that lacks it. Only an external server (app,
+Every development pre-release cut while that release is pending uses the
+same plain compatibility number, so the floor cannot tell a pre-release with
+the new service from an earlier one that lacks it. Only an external server (app,
 Docker, pip) is affected; the in-process server runs the build its component
 release pins. This gap is accepted: pre-release users update the component
 from HACS.
