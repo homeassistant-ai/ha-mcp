@@ -274,7 +274,7 @@ async function policyClearPin() {
 // The list holds either approval cards or one status message; only a message
 // belongs in the dashed, centred empty-state box. Also announces the message.
 function policyShowPendingMessage(list, message, {emphasis = true, isError = false} = {}) {
-  delete list.dataset.pendingTokens;
+  delete list.dataset.pendingShown;
   list.classList.add('backup-empty');
   list.innerHTML = emphasis ? '<em>' + escapeHtml(message) + '</em>' : escapeHtml(message);
   policyAnnouncePending(message, {isError});
@@ -346,9 +346,11 @@ async function policyLoadPending() {
   }
   // Rebuilding unchanged cards would drop keyboard focus from Approve/Deny on
   // every poll and reset a screen reader's cursor.
-  const tokens = JSON.stringify(pending.map(p => p.token));
-  if (list.dataset.pendingTokens === tokens) return;
-  list.dataset.pendingTokens = tokens;
+  // expires_at is part of the check because a deadline can be cut under an
+  // unchanged token.
+  const shown = JSON.stringify(pending.map(p => [p.token, p.expires_at]));
+  if (list.dataset.pendingShown === shown) return;
+  list.dataset.pendingShown = shown;
   list.classList.remove('backup-empty');
   policyAnnouncePending(t(
     'policies.pending.announcement',

@@ -263,6 +263,36 @@ def test_a_replaced_approval_is_announced_though_the_count_is_unchanged(
     assert _probe(result, "rendered-token") == "tok-2"
 
 
+def test_a_shortened_deadline_replaces_the_expiry_on_the_card(
+    settings_script: str,
+) -> None:
+    """A dynamic-target approval can have its deadline cut after it is queued,
+    with the token unchanged. Keeping the old card would promise the person
+    deciding more time than the approval has left."""
+    shortened = "2026-11-04T11:01:00Z"
+    result = _run(
+        settings_script,
+        _fetches(
+            {
+                "responses": [
+                    _queue(_entry()),
+                    _queue(_entry(expires_at=shortened)),
+                ]
+            }
+        ),
+        """
+          await window.policyLoadPending();
+          await window.policyLoadPending();
+          list.dataset.shownExpiry =
+            list.querySelector('.policy-pending-expires').textContent;
+        """,
+    )
+
+    assert _probe(result, "shown-expiry") == _MESSAGES[
+        "policies.pending.expires"
+    ].replace("{time}", shortened)
+
+
 def test_cards_return_after_an_outage_with_the_same_queue(
     settings_script: str,
 ) -> None:
