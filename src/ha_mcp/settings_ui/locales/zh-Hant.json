@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "設定 UI sidecar 連接埠",
     "advanced.sidecar_pin_port.help": "0 會在首次啟動時挑選一個可用連接埠並保留給後續重新啟動使用；範圍內的連接埠會釘選偏好的連接埠（若已被佔用則會改用可用連接埠）。",
     "advanced.enable_dev_mode.label": "開發者模式",
-    "advanced.enable_dev_mode.help": "⚠ 註冊可變更設定並取代執行中伺服器的隱藏工具。僅限開發與測試使用。",
+    "advanced.enable_dev_mode.help": "⚠ 註冊可變更設定並取代執行中伺服器的隱藏工具。它也可能會繞過某些實體可見性或其他限制。僅限開發與測試使用。",
     "advanced.dev_tools_security_policy_access.label": "開發者工具安全性策略存取權",
     "advanced.dev_tools_security_policy_access.help": "⚠ 當開發者模式開啟時，允許開發者工具重寫工具安全性策略、新增或移除每個工具的批准閘道，以及代表您批准或拒絕待處理的批准——AI 代理程式可以接受其自己的受閘道保護的呼叫。僅限策略測試。無需重新啟動即可生效。",
     "addon.secret_path.name": "密鑰路徑覆寫",

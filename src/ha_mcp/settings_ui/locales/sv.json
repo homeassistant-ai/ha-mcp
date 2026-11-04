@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Inställnings-UI sidovagnsport",
     "advanced.sidecar_pin_port.help": "0 väljer en ledig port vid första start och behåller den för senare omstarter; en port i intervallet låser fast en föredragen port (återgår till en ledig om den är upptagen).",
     "advanced.enable_dev_mode.label": "Utvecklarläge",
-    "advanced.enable_dev_mode.help": "⚠ Registrerar dolda verktyg som kan ändra inställningar och ersätta den körande servern. Endast för utveckling och testning.",
+    "advanced.enable_dev_mode.help": "⚠ Registrerar dolda verktyg som kan ändra inställningar och ersätta den körande servern. Det kan också kringgå vissa begränsningar för entitetssynlighet eller annat. Endast för utveckling och testning.",
     "advanced.dev_tools_security_policy_access.label": "Åtkomst till säkerhetspolicy för utvecklarverktyg",
     "advanced.dev_tools_security_policy_access.help": "⚠ När utvecklarläget är aktiverat låter det utvecklarverktygen skriva om verktygens säkerhetspolicyer, lägga till eller ta bort godkännandegrindar per verktyg, och godkänna eller neka väntande godkännanden å dina vägnar – en AI-agent kan acceptera sina egna grindade anrop. Endast för policytestning. Träder i kraft utan omstart.",
     "addon.secret_path.name": "Åsidosättning av hemlig sökväg",

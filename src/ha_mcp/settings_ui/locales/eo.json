@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Flankveturila pordo de Agorda UI",
     "advanced.sidecar_pin_port.help": "0 elektas liberan pordon ĉe unua komenco kaj konservas ĝin por postaj restartigoj; pordo en la intervalo pinglas preferatan pordon (falas al libera se okupata).",
     "advanced.enable_dev_mode.label": "Disvolva reĝimo",
-    "advanced.enable_dev_mode.help": "⚠ Registras kaŝitajn ilojn kiuj povas ŝanĝi agordojn kaj anstataŭigi la rulantan servilon. Nur por disvolvo kaj testado.",
+    "advanced.enable_dev_mode.help": "⚠ Registras kaŝitajn ilojn kiuj povas ŝanĝi agordojn kaj anstataŭigi la rulumantan servilon. Ĝi ankaŭ eble preterpasas iujn vidindecajn aŭ aliajn limigojn de entoj. Nur por evoluigo kaj testado.",
     "advanced.dev_tools_security_policy_access.label": "Aliro al sekureca politiko de disvolvaj iloj",
     "advanced.dev_tools_security_policy_access.help": "⚠ Dum la disvolva reĝimo estas ŝaltita, permesas al la disvolvaj iloj reverki ilajn sekurecajn politikojn, aldoni aŭ forigi aprobo-pordojn por ĉiu ilo, kaj aprobi aŭ nei atendajn aprobojn je via nomo — AI-agento povas akcepti siajn proprajn porditajn vokojn. Nur por testado de politikoj. Efektiviĝas sen restartigo.",
     "addon.secret_path.name": "Anstataŭigo de sekreta vojo",

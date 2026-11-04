@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Port sidecar interfejsu ustawień",
     "advanced.sidecar_pin_port.help": "Wartość 0 wybiera wolny port przy pierwszym uruchomieniu i zachowuje go na kolejne restarty; port z podanego zakresu przypisuje preferowany port (w razie zajętości następuje powrót do wolnego portu).",
     "advanced.enable_dev_mode.label": "Tryb dewelopera",
-    "advanced.enable_dev_mode.help": "⚠ Rejestruje ukryte narzędzia, które mogą zmieniać ustawienia i zastępować działający serwer. Wyłącznie do celów programistycznych i testowych.",
+    "advanced.enable_dev_mode.help": "⚠ Rejestruje ukryte narzędzia, które mogą zmieniać ustawienia i zastępować działający serwer. Może również omijać niektóre ograniczenia widoczności encji lub inne ograniczenia. Wyłącznie do celów programistycznych i testowych.",
     "advanced.dev_tools_security_policy_access.label": "Dostęp do zasad bezpieczeństwa narzędzi deweloperskich",
     "advanced.dev_tools_security_policy_access.help": "⚠ Gdy tryb dewelopera jest włączony, umożliwia narzędziom deweloperskim przepisywanie zasad bezpieczeństwa narzędzi, dodawanie lub usuwanie bramek zatwierdzających dla poszczególnych narzędzi oraz zatwierdzanie lub odrzucanie oczekujących zatwierdzeń w Twoim imieniu — agent AI może akceptować własne wywołania z bramkami. Tylko do testowania zasad. Wchodzi w życie bez ponownego uruchomienia.",
     "addon.secret_path.name": "Nadpisanie tajnej ścieżki",

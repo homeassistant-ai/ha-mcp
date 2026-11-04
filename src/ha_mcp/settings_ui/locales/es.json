@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Puerto del sidecar de la interfaz de ajustes",
     "advanced.sidecar_pin_port.help": "0 selecciona un puerto libre en el primer inicio y lo mantiene para posteriores reinicios; un puerto dentro del rango fija un puerto preferido (recurre a uno libre si está ocupado).",
     "advanced.enable_dev_mode.label": "Modo de desarrollo",
-    "advanced.enable_dev_mode.help": "⚠ Registra herramientas ocultas que pueden cambiar la configuración y reemplazar el servidor en ejecución. Solo para desarrollo y pruebas.",
+    "advanced.enable_dev_mode.help": "⚠ Registra herramientas ocultas que pueden cambiar la configuración y reemplazar el servidor en ejecución. También puede omitir algunas limitaciones de visibilidad de entidades u otras. Solo para desarrollo y pruebas.",
     "advanced.dev_tools_security_policy_access.label": "Acceso de las herramientas de desarrollo a las políticas de seguridad",
     "advanced.dev_tools_security_policy_access.help": "⚠ Mientras el modo de desarrollador esté activado, permite que las herramientas de desarrollo reescriban las políticas de seguridad de las herramientas, añadan o eliminen puertas de aprobación por herramienta y aprueben o denieguen aprobaciones pendientes en tu nombre; un agente de IA puede aceptar sus propias llamadas restringidas. Solo para pruebas de políticas. Se aplica sin reiniciar.",
     "addon.secret_path.name": "Ruta secreta personalizada",
