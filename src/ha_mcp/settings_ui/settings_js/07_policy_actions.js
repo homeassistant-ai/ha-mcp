@@ -343,7 +343,11 @@ async function policyLoadPending() {
     return;
   }
   list.classList.remove('backup-empty');
-  policyAnnouncePending('');
+  policyAnnouncePending(t(
+    'policies.pending.announcement',
+    {count: pending.length},
+    'Pending approvals: ' + pending.length
+  ));
   list.innerHTML = pending.map(p => (
     '<div class="policy-pending-card" data-pending-token="' + escapeHtml(p.token) + '">' +
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +

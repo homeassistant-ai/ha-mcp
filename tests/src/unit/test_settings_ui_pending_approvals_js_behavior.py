@@ -158,4 +158,4 @@ def test_status_changes_are_announced_once_with_failures_assertive(
     assert _probe(result, "empty-role") == "status"
     assert _probe(result, "empty-live") == "polite"
     assert _probe(result, "empty-text") == "No pending approvals."
-    assert _probe(result, "text-with-cards") == ""
+    assert _probe(result, "text-with-cards") == "Pending approvals: 1"
