@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
+          ref: 755bf3e5973ce1244c7501419f9da430bca3f3c0
       - name: Component version and server pin match the server version
         run: |
           python3 - <<'PY'
@@ -63,7 +63,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
+        ref: 755bf3e5973ce1244c7501419f9da430bca3f3c0
 
     - name: Docs Size Check
       run: |
@@ -231,7 +231,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
+        ref: 755bf3e5973ce1244c7501419f9da430bca3f3c0
 
     - name: Setup Node
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -293,7 +293,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
+        ref: 755bf3e5973ce1244c7501419f9da430bca3f3c0
         submodules: true
 
     - name: Set up Node.js
@@ -362,7 +362,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
+        ref: 755bf3e5973ce1244c7501419f9da430bca3f3c0
         submodules: true
 
     - name: Set up Docker Buildx
