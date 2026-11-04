@@ -811,17 +811,15 @@ class TestInfo:
         assert wsapi._do_info()["tools_services"] is None
 
     def test_manifest_version_parity(self):
-        """The manifest and WS compatibility version share the release number.
-
-        Dev manifests additionally identify the build; WS retains the plain
-        number for older servers (docs/agents/custom-component.md).
-        """
+        """Manifest and WS share the release; only the manifest adds a dev build."""
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"].split(".dev", 1)[0] == COMPONENT_VERSION
+        base, separator, build = manifest["version"].partition(".dev")
+        assert base == COMPONENT_VERSION
+        assert not separator or build.isdecimal()
 
 
 # =============================================================================
