@@ -350,14 +350,19 @@ async function policyLoadPending() {
   }
   // Rebuilding unchanged cards would drop keyboard focus from Approve/Deny on
   // every poll and reset a screen reader's cursor. A deadline can still be cut
-  // under an unchanged token, so that text is updated in place.
+  // under an unchanged token, so that text is updated in place and announced:
+  // with focus held on a button, nothing else tells a screen reader.
   const tokens = JSON.stringify(pending.map(p => p.token));
   if (list.dataset.pendingTokens === tokens) {
     const expiries = list.querySelectorAll('.policy-pending-expires');
+    const changed = [];
     pending.forEach((p, i) => {
       const text = policyPendingExpiry(p);
-      if (expiries[i].textContent !== text) expiries[i].textContent = text;
+      if (expiries[i].textContent === text) return;
+      expiries[i].textContent = text;
+      changed.push(p.tool_name + ': ' + text);
     });
+    if (changed.length) policyAnnouncePending(changed.join(' '));
     return;
   }
   list.dataset.pendingTokens = tokens;

@@ -263,13 +263,14 @@ def test_a_replaced_approval_is_announced_though_the_count_is_unchanged(
     assert _probe(result, "rendered-token") == "tok-2"
 
 
-def test_a_shortened_deadline_updates_the_card_without_taking_focus(
+def test_a_shortened_deadline_is_shown_and_announced_without_taking_focus(
     settings_script: str,
 ) -> None:
     """A dynamic-target approval can have its deadline cut after it is queued,
     with the token unchanged. Keeping the old text would promise the person
     deciding more time than the approval has left, and rebuilding the card
-    would take the button from under them just as time runs short."""
+    would take the button from under them just as time runs short. With focus
+    held on that button, only an announcement tells a screen-reader user."""
     shortened = "2026-11-04T11:01:00Z"
     result = _run(
         settings_script,
@@ -289,13 +290,16 @@ def test_a_shortened_deadline_updates_the_card_without_taking_focus(
           list.dataset.shownExpiry =
             list.querySelector('.policy-pending-expires').textContent;
           list.dataset.focusKept = String(document.activeElement === button);
+          list.dataset.announcedExpiry = region.textContent;
+          list.dataset.expiryLive = region.getAttribute('aria-live');
         """,
     )
 
-    assert _probe(result, "shown-expiry") == _MESSAGES[
-        "policies.pending.expires"
-    ].replace("{time}", shortened)
+    expiry = _MESSAGES["policies.pending.expires"].replace("{time}", shortened)
+    assert _probe(result, "shown-expiry") == expiry
     assert _probe(result, "focus-kept") == "true"
+    assert _probe(result, "announced-expiry") == f"ha_call_service: {expiry}"
+    assert _probe(result, "expiry-live") == "polite"
 
 
 def test_cards_return_after_an_outage_with_the_same_queue(
