@@ -263,12 +263,13 @@ def test_a_replaced_approval_is_announced_though_the_count_is_unchanged(
     assert _probe(result, "rendered-token") == "tok-2"
 
 
-def test_a_shortened_deadline_replaces_the_expiry_on_the_card(
+def test_a_shortened_deadline_updates_the_card_without_taking_focus(
     settings_script: str,
 ) -> None:
     """A dynamic-target approval can have its deadline cut after it is queued,
-    with the token unchanged. Keeping the old card would promise the person
-    deciding more time than the approval has left."""
+    with the token unchanged. Keeping the old text would promise the person
+    deciding more time than the approval has left, and rebuilding the card
+    would take the button from under them just as time runs short."""
     shortened = "2026-11-04T11:01:00Z"
     result = _run(
         settings_script,
@@ -282,15 +283,19 @@ def test_a_shortened_deadline_replaces_the_expiry_on_the_card(
         ),
         """
           await window.policyLoadPending();
+          const button = list.querySelector('[data-policy-action="deny"]');
+          button.focus();
           await window.policyLoadPending();
           list.dataset.shownExpiry =
             list.querySelector('.policy-pending-expires').textContent;
+          list.dataset.focusKept = String(document.activeElement === button);
         """,
     )
 
     assert _probe(result, "shown-expiry") == _MESSAGES[
         "policies.pending.expires"
     ].replace("{time}", shortened)
+    assert _probe(result, "focus-kept") == "true"
 
 
 def test_cards_return_after_an_outage_with_the_same_queue(

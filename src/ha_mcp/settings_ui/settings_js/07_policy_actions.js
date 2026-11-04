@@ -274,7 +274,7 @@ async function policyClearPin() {
 // The list holds either approval cards or one status message; only a message
 // belongs in the dashed, centred empty-state box. Also announces the message.
 function policyShowPendingMessage(list, message, {emphasis = true, isError = false} = {}) {
-  delete list.dataset.pendingShown;
+  delete list.dataset.pendingTokens;
   list.classList.add('backup-empty');
   list.innerHTML = emphasis ? '<em>' + escapeHtml(message) + '</em>' : escapeHtml(message);
   policyAnnouncePending(message, {isError});
@@ -288,6 +288,10 @@ function policyAnnouncePending(message, {isError = false, repeat = false} = {}) 
   if (!repeat && region.textContent === message) return;
   setStatusAlert(region, isError);
   region.textContent = message;
+}
+
+function policyPendingExpiry(entry) {
+  return t('policies.pending.expires', {time: entry.expires_at}, 'Expires: ' + entry.expires_at);
 }
 
 async function policyLoadPending() {
@@ -345,12 +349,18 @@ async function policyLoadPending() {
     return;
   }
   // Rebuilding unchanged cards would drop keyboard focus from Approve/Deny on
-  // every poll and reset a screen reader's cursor.
-  // expires_at is part of the check because a deadline can be cut under an
-  // unchanged token.
-  const shown = JSON.stringify(pending.map(p => [p.token, p.expires_at]));
-  if (list.dataset.pendingShown === shown) return;
-  list.dataset.pendingShown = shown;
+  // every poll and reset a screen reader's cursor. A deadline can still be cut
+  // under an unchanged token, so that text is updated in place.
+  const tokens = JSON.stringify(pending.map(p => p.token));
+  if (list.dataset.pendingTokens === tokens) {
+    const expiries = list.querySelectorAll('.policy-pending-expires');
+    pending.forEach((p, i) => {
+      const text = policyPendingExpiry(p);
+      if (expiries[i].textContent !== text) expiries[i].textContent = text;
+    });
+    return;
+  }
+  list.dataset.pendingTokens = tokens;
   list.classList.remove('backup-empty');
   policyAnnouncePending(t(
     'policies.pending.announcement',
@@ -362,7 +372,7 @@ async function policyLoadPending() {
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
     '<pre class="policy-pending-args">' +
     escapeHtml(JSON.stringify(p.args, null, 2)) + '</pre>' +
-    '<div class="policy-pending-expires">' + escapeHtml(t('policies.pending.expires', {time: p.expires_at}, 'Expires: ' + p.expires_at)) + '</div>' +
+    '<div class="policy-pending-expires">' + escapeHtml(policyPendingExpiry(p)) + '</div>' +
     '<div class="policy-pending-actions">' +
     '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">' + escapeHtml(t('actions.approve', {}, 'Approve')) + '</button>' +
     '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">' + escapeHtml(t('actions.deny', {}, 'Deny')) + '</button>' +
