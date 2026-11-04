@@ -1413,18 +1413,12 @@ class IntegrationTools:
         id_param="entry_id",
         domain_resolver=resolve_config_entry_backup_domain,
         # A ws_command changes the integration's own storage, not the entry
-        # the snapshot holds.
-        # A call that submits nothing (opening a flow, a re-read, an abort)
-        # changes nothing to snapshot.
+        # the snapshot holds. Any other flow call can save, since Core runs
+        # the step when a flow opens and on a re-read; an abort cannot.
         skip_fn=lambda kwargs: (
             bool(kwargs.get("abort"))
             or kwargs.get("log_level") is not None
             or kwargs.get("ws_command") is not None
-            or (
-                kwargs.get("config") is None
-                and kwargs.get("menu_choice") is None
-                and kwargs.get("enabled") is None
-            )
         ),
     )
     @log_tool_usage

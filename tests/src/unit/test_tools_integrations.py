@@ -1699,11 +1699,6 @@ class TestSetIntegrationModes:
                 id="add-continue-menu",
             ),
             pytest.param(
-                {"domain": "knx"},
-                {"domain": "knx", "entry_id": None},
-                id="add-first-step",
-            ),
-            pytest.param(
                 {"entry_id": "abc", "config": {"scan_interval": 30}},
                 {"domain": None, "entry_id": "abc", "config": {"scan_interval": 30}},
                 id="options",

@@ -256,14 +256,14 @@ async def submit_step(
     """
     if config is not None:
         _reject_redaction_sentinels(config)
-    if current is None:
-        current = await read_step(client, target, flow_id)
-    if menu_choice is not None:
-        if config is not None:
+        if menu_choice is not None:
             _refuse(
                 "Pass menu_choice or config, not both: each answers one step",
                 flow_id=flow_id,
             )
+    if current is None:
+        current = await read_step(client, target, flow_id)
+    if menu_choice is not None:
         payload = _menu_payload(current, menu_choice, flow_id)
     else:
         payload = _form_payload(target, current, config or {}, flow_id)

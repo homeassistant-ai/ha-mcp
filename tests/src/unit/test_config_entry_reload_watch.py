@@ -435,9 +435,12 @@ async def test_watch_entry_reload_never_raises_and_always_unsubscribes(
     observe.assert_awaited_once_with(queue, "e1")
     ws.release_subscription.assert_awaited_once_with(7)
 
-    with pytest.raises(ValueError):
+    async def failed_submit() -> None:
         async with watch_entry_reload(MagicMock(), "e1"):
             raise ValueError("the submit failed")
+
+    with pytest.raises(ValueError):
+        await failed_submit()
     assert ws.release_subscription.await_count == 2
 
 

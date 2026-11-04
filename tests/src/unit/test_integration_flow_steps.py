@@ -412,6 +412,8 @@ async def test_a_wrong_kind_of_answer_is_refused_and_the_flow_stays_open(
     assert "abort=True" in error["error"]["suggestion"]
     client.submit_config_flow_step.assert_not_awaited()
     client.abort_config_flow.assert_not_awaited()
+    if says == "not both":  # refused before the GET, which re-runs the step
+        client._request.assert_not_awaited()
 
 
 @pytest.mark.parametrize("target", [SETUP, OPTIONS], ids=["setup", "options"])
@@ -594,16 +596,17 @@ async def test_an_entry_without_options_is_refused():
         ({"config": {"string": "BAT"}}, 1),
         ({"flow_id": "f1", "config": {"string": "BAT"}}, 1),
         ({"flow_id": "f1", "menu_choice": "advanced"}, 1),
-        ({}, 0),
-        ({"flow_id": "f1"}, 0),
+        ({}, 1),
+        ({"flow_id": "f1"}, 1),
         ({"flow_id": "f1", "abort": True}, 0),
         ({"flow_id": "f1", "abort": True, "config": {"string": "BAT"}}, 0),
-        ({"reconfigure": True}, 0),
+        ({"reconfigure": True}, 1),
         ({"subentry_type": "device", "menu_choice": "save_changes"}, 1),
         ({"reconfigure": True, "flow_id": "f1", "config": {"host": "h"}}, 1),
+        ({"log_level": "DEBUG"}, 0),
     ],
 )
-async def test_only_a_call_that_submits_captures_a_backup(
+async def test_every_flow_call_but_an_abort_captures_a_backup(
     monkeypatch: pytest.MonkeyPatch, args: dict[str, Any], captures: int
 ):
     from ha_mcp.tools import auto_backup, tools_integrations
@@ -623,11 +626,10 @@ async def test_only_a_call_that_submits_captures_a_backup(
 
     monkeypatch.setattr(auto_backup, "get_global_settings", _Settings)
     monkeypatch.setattr(auto_backup, "get_backup_manager", lambda _c, _s: _Mgr())
-    monkeypatch.setattr(
-        tools_integrations,
-        "run_integration_step",
-        AsyncMock(return_value={"success": True}),
-    )
+    for name in ("run_integration_step", "set_log_level"):
+        monkeypatch.setattr(
+            tools_integrations, name, AsyncMock(return_value={"success": True})
+        )
     monkeypatch.setattr(
         tools_integrations,
         "describe_flow_form",
