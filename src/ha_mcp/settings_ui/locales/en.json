@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "denied",
     "policies.pending.invalid_token": "This approval token is no longer valid (already consumed or expired).",
     "policies.pending.action_failed": "Approval action failed: {detail}",
+    "policies.pending.announcement": "Pending approvals: {count}",
     "visibility.errors.reach_server": "Could not reach the server: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json appears corrupt; edit or delete it in the server's data directory)",
     "visibility.errors.load_detail": "Failed to load visibility config: {detail}",
