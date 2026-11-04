@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          ref: 88a6758bf6654ae14309ffb97abd73ab1d62c2df
+          ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
       - name: Component version and server pin match the server version
         run: |
           python3 - <<'PY'
@@ -49,8 +49,6 @@ jobs:
           PY
 
   fast-checks:
-    # The product SHA is pinned; later pushes only repair this temporary proof.
-    if: github.event.created
     name: Fast Checks
     runs-on: ubuntu-latest
     # 15 covers the serial worst case: two Docker image pulls (~1 min), one
@@ -65,7 +63,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 88a6758bf6654ae14309ffb97abd73ab1d62c2df
+        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
 
     - name: Docs Size Check
       run: |
@@ -233,7 +231,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 88a6758bf6654ae14309ffb97abd73ab1d62c2df
+        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
 
     - name: Setup Node
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -262,8 +260,6 @@ jobs:
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
-    # The product SHA is pinned; later pushes only repair this temporary proof.
-    if: github.event.created
     name: Unit Tests
     runs-on: ubuntu-latest
     container:
@@ -297,7 +293,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 88a6758bf6654ae14309ffb97abd73ab1d62c2df
+        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
         submodules: true
 
     - name: Set up Node.js
@@ -318,7 +314,7 @@ jobs:
       run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
-      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+      run: uv run pytest tests/src/unit/ -n auto --maxfail=0 --tb=short -v
 
     - name: Run BAT runner tests
       # The tests of the UAT/BAT tooling need no Docker and no model.
@@ -366,7 +362,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
-        ref: 88a6758bf6654ae14309ffb97abd73ab1d62c2df
+        ref: 3437f19c7f8f86619ea0cf007098bff03750a0f5
         submodules: true
 
     - name: Set up Docker Buildx

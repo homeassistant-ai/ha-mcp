@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path.cwd()
 BASE = "12ffbe26"
-PRODUCT = "88a6758bf6654ae14309ffb97abd73ab1d62c2df"
+PRODUCT = "3437f19c7f8f86619ea0cf007098bff03750a0f5"
 
 
 def run(*args, cwd=ROOT, **kwargs):
