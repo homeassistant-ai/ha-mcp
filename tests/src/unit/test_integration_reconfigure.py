@@ -155,13 +155,21 @@ def shelly(entry_id: str = "offline-entry", **extra: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_reconfigure_allows_offline_entry_with_registry_identity() -> None:
-    """A setup_retry entry can be changed without contacting the physical device."""
+    """A setup_retry entry can be changed without contacting the physical device;
+    an entry of another integration on the same device is reported, not refused."""
     client = open_client(
         shelly(),
         entity_rows=[entity_row("offline-entry", "device-a1", "switch.demo_relay")],
         device_rows=[
-            {"id": "device-a1", "connections": [["mac", "AA:BB:CC:00:11:22"]]}
+            {
+                "id": "device-a1",
+                "config_entries": ["offline-entry", "zha-entry"],
+                "connections": [["mac", "AA:BB:CC:00:11:22"]],
+            }
         ],
+    )
+    client.list_config_entries.return_value.append(
+        {"entry_id": "zha-entry", "domain": "zha"}
     )
 
     result = await reconfigure_config_entry(
@@ -175,6 +183,8 @@ async def test_reconfigure_allows_offline_entry_with_registry_identity() -> None
 
     assert result["success"] is True
     assert result["reason"] == "reconfigure_successful"
+    assert (result["entry_id"], result["domain"]) == ("offline-entry", "shelly")
+    assert "zha (zha-entry)" in result["warnings"][0]
     client.submit_config_flow_step.assert_awaited_once_with(
         "flow-1", {"host": "192.0.2.170"}
     )
@@ -359,6 +369,16 @@ async def test_related_entries_unresolvable_domain_fails_closed(
             id="unique_id",
         ),
         pytest.param({"expected_mac": "11:22:33:44:55:66"}, "expected MAC", id="mac"),
+        pytest.param(
+            {"expected_device_id": "device-kitchen"},
+            "expected device_id",
+            id="device_id",
+        ),
+        pytest.param(
+            {"expected_entity_ids": ["switch.x", "switch.y"]},
+            "expected entity_ids",
+            id="entity_ids",
+        ),
     ],
 )
 async def test_reconfigure_rejects_expected_identity_mismatch_before_flow(
@@ -481,33 +501,6 @@ async def test_reconfigure_rejects_malformed_registry_data(
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_reads_mac_from_device_identifiers(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """Expected MAC validation also accepts device-registry identifiers."""
-    client = open_client(
-        reconfig_entry,
-        entity_rows=[entity_row("entry-123", "device-living-room")],
-        device_rows=[
-            {
-                "id": "device-living-room",
-                "connections": [],
-                "identifiers": [["shelly", "AA:BB:CC:DD:EE:FF"]],
-            }
-        ],
-    )
-
-    result = await reconfigure_config_entry(
-        client,
-        "entry-123",
-        config={"host": "192.0.2.187"},
-        expected_mac="AA:BB:CC:DD:EE:FF",
-    )
-
-    assert result["success"] is True
-
-
-@pytest.mark.asyncio
 async def test_reconfigure_seeds_device_identity_without_entities() -> None:
     """A device linked directly to an entry remains an identity anchor without entities."""
     client = open_client(
@@ -530,24 +523,6 @@ async def test_reconfigure_seeds_device_identity_without_entities() -> None:
     )
 
     assert result["success"] is True
-
-
-@pytest.mark.asyncio
-async def test_reconfigure_create_entry_is_applied_but_unverified(
-    reconfig_entry: dict[str, object],
-) -> None:
-    """A reconfigure flow must reject create_entry instead of reporting success."""
-    client = open_client(reconfig_entry)
-    client.submit_config_flow_step = AsyncMock(
-        return_value={"type": "create_entry", "result": {"entry_id": "new-entry"}}
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await reconfigure_config_entry(
-            client, "entry-123", config={"host": "192.0.2.189"}
-        )
-
-    assert json.loads(str(exc_info.value))["status"] == "applied_but_unverified"
 
 
 @pytest.mark.asyncio
@@ -637,7 +612,7 @@ async def test_subentry_reconfigure_cancellation_aborts_pending_flow() -> None:
 async def test_reconfigure_reports_a_flow_that_never_returned_a_flow_id(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """HA answering start_reconfigure_flow without a flow_id is apply_failed."""
+    """HA answering start_reconfigure_flow without a flow_id submits nothing."""
     client = open_client(reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(return_value={"type": "abort"})
 
@@ -726,6 +701,10 @@ async def test_reconfigure_stamps_apply_failed_on_undrivable_steps(
             False,
             id="upnp_excluded",
         ),
+        # A MAC-shaped device identifier counts, whatever its type.
+        pytest.param(
+            "shelly", "AA:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE:FF", True, id="identifier"
+        ),
     ],
 )
 async def test_expected_mac_accepts_hardware_connection_types_only(
@@ -735,19 +714,20 @@ async def test_expected_mac_accepts_hardware_connection_types_only(
     should_match: bool,
 ) -> None:
     """expected_mac matches MAC/IEEE/Zigbee connections; a upnp UUID is not a hardware address."""
-    entry = shelly("mac-entry", state="loaded")
+    device: dict[str, Any] = {
+        "id": "device-mac",
+        "config_entries": ["mac-entry"],
+        "connections": [],
+        # A malformed row must be skipped rather than crash the read.
+        "identifiers": [["shelly"], "not-a-pair", None],
+    }
+    device["identifiers" if connection_type == "shelly" else "connections"].append(
+        [connection_type, connection_value]
+    )
     client = open_client(
-        entry,
+        shelly("mac-entry", state="loaded"),
         entity_rows=[entity_row("mac-entry", "device-mac")],
-        device_rows=[
-            {
-                "id": "device-mac",
-                "config_entries": ["mac-entry"],
-                "connections": [[connection_type, connection_value]],
-                # A malformed row must be skipped rather than crash the read.
-                "identifiers": [["shelly"], "not-a-pair", None],
-            }
-        ],
+        device_rows=[device],
     )
 
     if should_match:
@@ -825,7 +805,8 @@ async def test_expected_unique_id_is_rejected_without_the_component(
 async def test_each_reconfigure_step_checks_the_identity_again(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """Every call that may submit re-reads the entry's identity first."""
+    """Every call that may submit re-reads the entry's identity first; an abort
+    does not, so a flow whose entry is gone can still be ended."""
     form = {
         "flow_id": "flow-multi",
         "type": "form",
@@ -848,6 +829,13 @@ async def test_each_reconfigure_step_checks_the_identity_again(
     assert opened["step_id"] == "host"
     assert done["message"] == "shelly integration reconfigured"
     assert client.get_config_entry.await_count == 2
+    client.start_reconfigure_flow.assert_awaited_once()
     client.submit_config_flow_step.assert_awaited_once_with(
         "flow-multi", {"host": "192.0.2.10"}
     )
+
+    client.get_config_entry.side_effect = HomeAssistantConnectionError("gone")
+    await tools.ha_set_integration(
+        entry_id="entry-123", reconfigure=True, flow_id="flow-multi", abort=True
+    )
+    client.abort_config_flow.assert_awaited_once_with("flow-multi")

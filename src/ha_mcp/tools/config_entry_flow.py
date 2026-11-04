@@ -16,10 +16,7 @@ backup restore re-applies an entry's options through
 ``update_config_entry_options``, and
 ``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
 through ``set_config_subentry``. ``ha_set_integration`` does not walk: it
-answers one step per call (``integration_flow_steps``). Changing a live
-entry's connection settings commits in place and Home Assistant reloads
-afterwards; that verification lives in ``config_entry_reconfigure``, which
-shares this module's sentinel rejection.
+answers one step per call (``integration_flow_steps``).
 
 The step machinery those entry points drive lives in six sibling modules.
 Each imports only modules upstream of it in these chains, so no import runs

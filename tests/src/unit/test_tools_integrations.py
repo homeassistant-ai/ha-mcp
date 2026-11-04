@@ -1645,30 +1645,12 @@ class TestSetIntegrationModes:
             tools.ha_set_integration(entry_id="abc"), "Nothing to do"
         )
 
-    async def test_reconfigure_only_parameters_are_rejected_in_options_mode(
-        self, tools
-    ):
-        """Identity guards and confirmation must not be silently ignored."""
-        with (
-            patch(
-                "ha_mcp.tools.tools_integrations.run_integration_step",
-                new=AsyncMock(return_value={"success": True}),
-            ) as options_mock,
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await tools.ha_set_integration(
-                entry_id="abc",
-                config={"scan_interval": 30},
-                expected_device_id="device-1",
-            )
-
-        err = json.loads(str(exc_info.value))
-        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "reconfigure" in err["error"]["message"].lower()
-        options_mock.assert_not_awaited()
-
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [("expected_device_id", "device-1"), ("expected_unique_id", "unique-1")],
+    )
     async def test_reconfigure_only_parameters_rejected_outside_reconfigure_mode(
-        self, tools
+        self, tools, name, value
     ):
         """The identity guards must not ride an unguarded options update."""
         with (
@@ -1679,15 +1661,13 @@ class TestSetIntegrationModes:
             pytest.raises(ToolError) as exc_info,
         ):
             await tools.ha_set_integration(
-                entry_id="abc",
-                config={"scan_interval": 30},
-                expected_unique_id="unique-1",
+                entry_id="abc", config={"scan_interval": 30}, **{name: value}
             )
 
         err = json.loads(str(exc_info.value))
         assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "reconfigure" in err["error"]["message"].lower()
-        assert err["rejected_parameters"] == ["expected_unique_id"]
+        assert err["rejected_parameters"] == [name]
         options_mock.assert_not_awaited()
 
     async def test_set_integration_has_explicit_safety_annotations(self, tools):
@@ -1762,6 +1742,35 @@ class TestSetIntegrationModes:
                     },
                 },
                 id="reconfigure",
+            ),
+            pytest.param(
+                {
+                    "entry_id": "abc",
+                    "reconfigure": True,
+                    "flow_id": "f1",
+                    "menu_choice": "advanced",
+                    "abort": True,
+                    "describe": True,
+                    "expected_device_id": "device-1",
+                    "expected_unique_id": "uid",
+                    "expected_mac": "AA:BB",
+                    "expected_entity_ids": ["switch.x"],
+                },
+                {
+                    "domain": None,
+                    "entry_id": "abc",
+                    "flow_id": "f1",
+                    "menu_choice": "advanced",
+                    "abort": True,
+                    "describe": True,
+                    "expected_identity": {
+                        "device_id": "device-1",
+                        "unique_id": "uid",
+                        "mac": "AA:BB",
+                        "entity_ids": ["switch.x"],
+                    },
+                },
+                id="reconfigure-every-argument",
             ),
         ],
     )

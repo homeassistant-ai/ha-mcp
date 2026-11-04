@@ -527,6 +527,8 @@ async def test_an_entry_without_options_is_refused():
         ({"flow_id": "f1"}, 0),
         ({"flow_id": "f1", "abort": True}, 0),
         ({"flow_id": "f1", "abort": True, "config": {"string": "BAT"}}, 0),
+        ({"reconfigure": True}, 0),
+        ({"reconfigure": True, "flow_id": "f1", "config": {"host": "h"}}, 1),
     ],
 )
 async def test_only_a_call_that_submits_captures_a_backup(

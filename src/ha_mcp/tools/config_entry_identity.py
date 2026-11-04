@@ -1,11 +1,12 @@
 """Config-entry identity: what a reconfigure must not silently change.
 
-A reconfigure edits connection settings in place, so the check that it still
-points at the same physical thing is the whole safety story. This module owns
-reading that identity from the registries (and, for ``unique_id``, from the
-ha_mcp_tools component, since Home Assistant's own API never exposes it),
-classifying entries related through a shared device, and comparing it with
-the caller's anchors before a reconfigure step is answered.
+A reconfigure edits connection settings in place, so before each call that
+may answer the entry's reconfigure flow (``integration_flow_steps``) the
+caller's identity anchors are checked against what the registries say now.
+This module reads that identity from the registries (and, for ``unique_id``,
+from the ha_mcp_tools component, since Home Assistant's own API never exposes
+it), classifies entries related through a shared device, and compares both
+with the anchors.
 
 Every read here raises rather than producing a half-filled identity: an empty
 list means "the entry has none", never "we could not tell".
@@ -22,19 +23,19 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
-from .component_config_entries import (
-    fetch_config_entry_unique_id,
-)
+from .component_config_entries import fetch_config_entry_unique_id
 from .component_devices import fetch_device_list_via_component
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
+from .config_entry_flow import refuse_component_entry
 from .helpers import raise_tool_error
+from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ReconfigureIdentity:
-    """Registry identity of one config entry, read before and after a flow.
+    """Registry identity of one config entry, read before each flow step.
 
     Every field is a real registry read: a registry that cannot be read raises
     rather than producing a half-filled instance, so an empty list means "the
@@ -52,10 +53,6 @@ class ReconfigureIdentity:
     entity_ids: list[str] = field(default_factory=list)
     macs: list[str] = field(default_factory=list)
     related_entry_ids: list[str] = field(default_factory=list)
-
-    def as_payload(self) -> dict[str, Any]:
-        """Render for an error context or a tool response."""
-        return asdict(self)
 
 
 # Domains whose entries Home Assistant deliberately attaches to another
@@ -147,9 +144,7 @@ async def _device_registry_rows(client: Any, entry_id: str) -> list[dict[str, An
 
 
 async def _collect_reconfigure_identity(
-    client: Any,
-    entry: dict[str, Any],
-    entry_id: str,
+    client: Any, entry_id: str
 ) -> ReconfigureIdentity:
     """Collect registry identity without requiring the physical device online."""
     entity_rows = await _entry_entity_rows(client, entry_id)
@@ -215,7 +210,6 @@ async def _classify_related_entries(
     *,
     entry_id: str,
     domain: str,
-    entries: list[dict[str, Any]] | None = None,
 ) -> RelatedEntries:
     """Split the entries sharing this entry's device into blocking and auxiliary.
 
@@ -232,15 +226,12 @@ async def _classify_related_entries(
 
     Returns the classification rather than writing it back through
     ``identity``, so nothing mutates an argument the signature calls an input.
-    ``entries`` lets a caller that already read the config-entry list pass it
-    in rather than paying for a second list-all.
     """
     related_entry_ids = set(identity.related_entry_ids) - {entry_id}
     if not related_entry_ids:
         return RelatedEntries()
 
-    if entries is None:
-        entries = await _validated_config_entry_rows(client, entry_id)
+    entries = await _validated_config_entry_rows(client, entry_id)
     entries_by_id = {
         item.get("entry_id"): item
         for item in entries
@@ -328,22 +319,6 @@ async def _registry_rows(
     return result
 
 
-def _has_reconfigure_identity_anchor(
-    identity: ReconfigureIdentity, expected_identity: dict[str, Any]
-) -> bool:
-    """Return whether preflight has stable or caller-supplied identity evidence."""
-    return bool(
-        (identity.unique_id if identity.unique_id_known else None)
-        or identity.device_ids
-        or identity.entity_ids
-        or identity.macs
-        or expected_identity.get("device_id")
-        or expected_identity.get("unique_id")
-        or expected_identity.get("mac")
-        or expected_identity.get("entity_ids")
-    )
-
-
 def _raise_identity_mismatch(
     entry_id: str,
     message: str,
@@ -355,7 +330,7 @@ def _raise_identity_mismatch(
     context: dict[str, Any] = {
         "entry_id": entry_id,
         "expected_identity": expected,
-        "before_identity": before.as_payload(),
+        "before_identity": asdict(before),
     }
     raise_tool_error(
         create_error_response(
@@ -368,3 +343,151 @@ def _raise_identity_mismatch(
             context=context,
         )
     )
+
+
+async def check_reconfigure_identity(
+    client: Any, entry_id: str, expected_identity: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """The entry and its cross-domain warnings, once it may be reconfigured.
+
+    Read-only: the entry exists, it implements ``async_step_reconfigure``, the
+    caller's identity anchors match what the registries currently say, no
+    second entry in the same domain shares the device, and some identity
+    anchor exists at all.
+    """
+    entry = await client.get_config_entry(entry_id)
+    domain = entry.get("domain")
+    if not isinstance(domain, str) or not domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_UNEXPECTED,
+                "Home Assistant returned a config entry without a valid domain",
+                context={"entry_id": entry_id, "entry": entry},
+            )
+        )
+    refuse_component_entry(domain, action="reconfigure", entry_id=entry_id)
+    refuse_ignored_entry(entry, action="reconfigure", entry_id=entry_id)
+    if not entry.get("supports_reconfigure", False):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Integration '{domain}' does not support the official reconfigure flow",
+                suggestions=[
+                    "Use ha_get_integration(entry_id=...) to inspect the entry; "
+                    "only integrations implementing async_step_reconfigure can be changed this way.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "supports_reconfigure": False,
+                },
+            )
+        )
+
+    identity = await _collect_reconfigure_identity(client, entry_id)
+    _check_identity_anchors(entry_id, identity, expected_identity)
+    related = await _classify_related_entries(
+        client, identity, entry_id=entry_id, domain=domain
+    )
+    if related.blocking:
+        _raise_identity_mismatch(
+            entry_id,
+            "A second config entry in the same domain shares this entry's "
+            "registered device",
+            before=identity,
+            expected=expected_identity,
+        )
+    # Every anchor the caller passed matched a non-empty registry value above,
+    # so only the registries themselves can still be empty here.
+    if not (
+        identity.unique_id
+        or identity.device_ids
+        or identity.entity_ids
+        or identity.macs
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Cannot safely reconfigure an entry without an identity anchor",
+                suggestions=[
+                    "Provide expected_device_id, expected_mac or "
+                    "expected_entity_ids, or choose an entry with stable "
+                    "registry identity. (expected_unique_id needs the "
+                    "ha_mcp_tools custom component: Home Assistant does not "
+                    "expose a config entry's unique_id.)"
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "available_identity": {
+                        "unique_id": identity.unique_id,
+                        "device_ids": identity.device_ids,
+                        "entity_ids": identity.entity_ids,
+                        "macs": identity.macs,
+                    },
+                    "expected_identity": expected_identity,
+                },
+            )
+        )
+    return entry, cross_domain_warnings(related.cross_domain)
+
+
+def _check_identity_anchors(
+    entry_id: str, identity: ReconfigureIdentity, expected_identity: dict[str, Any]
+) -> None:
+    """Raise unless every anchor the caller passed matches the registries."""
+    if expected_identity.get("unique_id") is not None and not identity.unique_id_known:
+        # Not a mismatch — nothing could read the value. Home Assistant omits
+        # unique_id from every config-entry endpoint, so only the ha_mcp_tools
+        # custom component can supply it. Say that, rather than letting the
+        # generic "registries report none" below imply the entry has none.
+        _raise_identity_mismatch(
+            entry_id,
+            "Cannot verify expected_unique_id: Home Assistant does not expose a "
+            "config entry's unique_id, and the ha_mcp_tools custom component "
+            "(which does) is not installed or is too old. Anchor on "
+            "expected_device_id, expected_mac or expected_entity_ids instead, "
+            "or install/update the component.",
+            before=identity,
+            expected=expected_identity,
+        )
+    checks = (
+        (expected_identity.get("device_id"), identity.device_ids, "device_id"),
+        (
+            expected_identity.get("unique_id"),
+            [identity.unique_id] if identity.unique_id is not None else [],
+            "unique_id",
+        ),
+        (expected_identity.get("mac"), identity.macs, "MAC"),
+        (
+            expected_identity.get("entity_ids") or None,
+            identity.entity_ids,
+            "entity_ids",
+        ),
+    )
+    for expected, available, key in checks:
+        if expected is None:
+            continue
+        if not available:
+            _raise_identity_mismatch(
+                entry_id,
+                f"Cannot compare expected {key}: the registries report none for "
+                "this entry",
+                before=identity,
+                expected=expected_identity,
+            )
+        if key == "MAC":
+            matched = _normalise_identity_value(expected) in {
+                _normalise_identity_value(value) for value in available
+            }
+        elif key == "entity_ids":
+            matched = set(expected) == set(available)
+        else:
+            matched = expected in set(available)
+        if not matched:
+            _raise_identity_mismatch(
+                entry_id,
+                f"The entry does not match expected {key} before reconfigure",
+                before=identity,
+                expected=expected_identity,
+            )

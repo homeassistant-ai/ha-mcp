@@ -480,17 +480,6 @@ class TestIntegrationManagement:
     RECONFIGURE_PATH_A = "/config/www/filesize_e2e_a.txt"
     RECONFIGURE_PATH_B = "/config/www/filesize_e2e_b.txt"
 
-    async def test_reconfigure_target_advertises_supports_reconfigure(self, mcp_client):
-        """ha_get_integration exposes the discovery signal for reconfigure mode."""
-        async with MCPAssertions(mcp_client) as mcp:
-            data = await mcp.call_tool_success(
-                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
-            )
-
-        entry = data.get("entry", data)
-        assert entry.get("domain") == "filesize", entry
-        assert entry.get("supports_reconfigure") is True, entry
-
     async def test_reconfigure_without_config_opens_the_flow_and_submits_nothing(
         self, mcp_client, ha_client
     ):
@@ -542,6 +531,8 @@ class TestIntegrationManagement:
 
         before_entry = before.get("entry", before)
         after_entry = after.get("entry", after)
+        # ha_get_integration's discovery signal for reconfigure mode.
+        assert before_entry.get("supports_reconfigure") is True, before_entry
         stable_fields = (
             "entry_id",
             "domain",

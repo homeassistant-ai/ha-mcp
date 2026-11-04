@@ -14,7 +14,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.config_entry_flow import update_config_entry_options
-from ha_mcp.tools.config_entry_reconfigure import check_reconfigure_identity
+from ha_mcp.tools.config_entry_identity import check_reconfigure_identity
 from ha_mcp.tools.ignored_entries import normalize_ignored_entry
 
 _FLAGS = {"supports_options": True, "supports_reconfigure": True}

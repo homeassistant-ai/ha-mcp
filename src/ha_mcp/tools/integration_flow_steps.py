@@ -11,7 +11,7 @@ Which flow manager a ``flow_id`` belongs to follows from the anchors:
 ``domain`` is the setup flow, ``entry_id`` the options flow, and
 ``entry_id`` with ``reconfigure=True`` the entry's reconfigure flow (a config
 flow with the reconfigure source), whose identity anchors are checked by
-``config_entry_reconfigure`` before every call that may submit.
+``check_reconfigure_identity`` before every call that may submit.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from .config_entry_flow_walker import (
     _wait_for_progress,
     raise_reconfigure_created_entry,
 )
-from .config_entry_reconfigure import check_reconfigure_identity
+from .config_entry_identity import check_reconfigure_identity
 from .config_helpers.describe import compact_schema, describe_form
 from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
@@ -111,7 +111,10 @@ async def read_step(client: Any, target: FlowTarget, flow_id: str) -> dict[str, 
 
     The step's ``handler`` must be the call's anchor (the domain of a setup or
     reconfigure flow, the entry_id of an options flow), so a flow_id cannot
-    carry one call's checks over to another integration's or entry's flow.
+    carry one call's checks over to another integration's flow. A reconfigure
+    flow of another entry in the same domain passes: Home Assistant reports
+    no flow's entry (``config_entries/flow/progress`` leaves reconfigure flows
+    out), so nothing here can tell.
     """
     try:
         step = await _submit_step(

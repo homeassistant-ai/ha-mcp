@@ -64,10 +64,6 @@ from .helpers import (
 from .ignored_entries import normalize_ignored_entry
 from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_flow_steps import run_integration_step
-from .integration_reconfigure import (
-    refuse_reconfigure_conflicts,
-    reject_reconfigure_only_parameters,
-)
 from .integration_schema import (
     describe_flow_form,
     fetch_config_subentry_schema,
@@ -280,6 +276,36 @@ def _reject_log_persistence_without_level(
                     "Example: ha_set_integration(domain='zha', "
                     "log_level='DEBUG', log_persistence='permanent')"
                 ],
+            )
+        )
+
+
+def _reject_reconfigure_conflicts(
+    reconfigure: bool, guards: dict[str, Any], domain: str | None, enabled: bool | None
+) -> None:
+    """Only reconfigure takes the identity guards, and it takes no domain or enabled."""
+    if reconfigure and (domain is not None or enabled is not None):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Reconfigure mode requires entry_id; do not "
+                "combine it with domain or enabled",
+                context={"domain": domain, "enabled": enabled},
+            )
+        )
+    rejected = sorted(name for name, value in guards.items() if value is not None)
+    if rejected and not reconfigure:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "These parameters require reconfigure=True and were rejected: "
+                + ", ".join(rejected),
+                suggestions=[
+                    "Pass reconfigure=True to use the identity safeguards of the "
+                    "official reconfigure flow."
+                ],
+                # Not "ignored": the call was rejected and nothing ran.
+                context={"rejected_parameters": rejected},
             )
         )
 
@@ -1388,15 +1414,15 @@ class IntegrationTools:
         domain_resolver=resolve_config_entry_backup_domain,
         # A ws_command changes the integration's own storage, not the entry
         # the snapshot holds.
-        # A call that submits nothing (describe, a re-read, an abort) changes
-        # nothing to snapshot.
+        # A call that submits nothing (describe, a re-read, an abort, opening
+        # a reconfigure flow) changes nothing to snapshot.
         skip_fn=lambda kwargs: (
             bool(kwargs.get("describe"))
             or bool(kwargs.get("abort"))
             or kwargs.get("log_level") is not None
             or kwargs.get("ws_command") is not None
             or (
-                kwargs.get("flow_id") is not None
+                (kwargs.get("flow_id") is not None or bool(kwargs.get("reconfigure")))
                 and kwargs.get("config") is None
                 and kwargs.get("menu_choice") is None
             )
@@ -1455,9 +1481,12 @@ class IntegrationTools:
                 description=(
                     "Use the existing config entry's official reconfigure flow "
                     "(its connection settings) instead of its options flow. "
-                    "Every call checks the entry's identity first. Without "
-                    "flow_id and config this opens the flow and returns its "
-                    "first step; nothing is submitted."
+                    "Every call except an abort checks the entry's identity "
+                    "first. Without flow_id and config this opens the flow and "
+                    "returns its first step; nothing is submitted. Continue "
+                    "with the flow_id this entry's call returned: Home "
+                    "Assistant does not say which entry a reconfigure flow "
+                    "edits."
                 ),
             ),
         ] = False,
@@ -1638,8 +1667,8 @@ class IntegrationTools:
           the "Configure" button does in the HA UI), one step per call.
         - Reconfigure: entry_id + reconfigure=True — connection settings
           such as host, port, credentials, one step per call. Each call
-          first checks the entry's identity; the first call without config
-          returns the flow's first step.
+          except an abort first checks the entry's identity; the first call
+          without config returns the flow's first step.
         - Log level: log_level + domain (or entry_id) — sets how much the
           integration logs; read it back with ha_get_integration's log_level.
         - Integration command: entry_id + ws_command (+ ws_data) — what the
@@ -1712,8 +1741,10 @@ class IntegrationTools:
         }
         try:
             _reject_log_persistence_without_level(log_persistence, log_level)
+            _reject_reconfigure_conflicts(
+                reconfigure, reconfigure_guards, domain, enabled
+            )
             if ws_command is not None or ws_data is not None:
-                reject_reconfigure_only_parameters(**reconfigure_guards)
                 reject_ws_command_conflicts(
                     entry_id,
                     ws_command,
@@ -1740,7 +1771,6 @@ class IntegrationTools:
                 "describe": describe or None,
             }
             if subentry_type is not None or subentry_id is not None:
-                reject_reconfigure_only_parameters(**reconfigure_guards)
                 modes = {
                     "enabled": enabled is not None,
                     "config": config is not None,
@@ -1760,7 +1790,6 @@ class IntegrationTools:
                     other_modes=[name for name, given in modes.items() if given],
                 )
             if log_level is not None:
-                reject_reconfigure_only_parameters(**reconfigure_guards)
                 return await set_log_level(
                     self._client,
                     entry_id,
@@ -1777,7 +1806,7 @@ class IntegrationTools:
                 return await run_integration_step(
                     self._client,
                     domain=None,
-                    entry_id=refuse_reconfigure_conflicts(entry_id, domain, enabled),
+                    entry_id=entry_id,
                     flow_id=flow_id,
                     config=config,
                     menu_choice=menu_choice,
@@ -1790,8 +1819,6 @@ class IntegrationTools:
                         "entity_ids": list(expected_entity_ids or []),
                     },
                 )
-
-            reject_reconfigure_only_parameters(**reconfigure_guards)
 
             _reject_set_integration_mode_conflicts(
                 entry_id,
