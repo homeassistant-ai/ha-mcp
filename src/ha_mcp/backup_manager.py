@@ -2351,7 +2351,7 @@ async def _find_calendar_event(
             params={"start": start.isoformat(), "end": end.isoformat()},
         )
     except HomeAssistantError as err:
-        # Only treat 404 (calendar entity not present) as "skip silently".
+        # Only treat 404 (calendar integration not loaded) as "skip silently".
         # Auth/transport/server errors deserve a WARNING so an operator
         # can spot a misconfigured calendar integration; matches the
         # ``status_code == 404`` narrowing the automation/script/scene
@@ -2383,12 +2383,13 @@ def _recurrence_id_window(
     return None
 
 
-async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
-    # entity_id is "<calendar.entity>::<event_uid>[::<recurrence_id>]"
-    cal, _, rest = entity_id.partition("::")
-    uid, _, recurrence_id = rest.partition("::")
-    if not cal or not uid:
-        return None
+async def _locate_calendar_event(
+    client: Any, cal: str, uid: str, wanted: str | None
+) -> Any:
+    """The ``uid`` event (occurrence ``wanted``) on ``cal``; None if no window has it.
+
+    Out-of-window events and cancelled ones Local Calendar hides also read as None.
+    """
     # Configurable lookahead window. Default 7 days catches typical edits;
     # set HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS to widen for far-future
     # events or narrow to skip noise. Bounded so a typo can't query
@@ -2403,7 +2404,6 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
         days = 7
     days = max(1, min(365, days))
     now = datetime.now(UTC)
-    wanted = recurrence_id or None
     # A recurrence_id names the occurrence's own date, so an occurrence far
     # outside the windows below is still found in one request.
     around = _recurrence_id_window(wanted)
@@ -2420,8 +2420,8 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
         # The configured window is the cheap common case, not the contract: a
         # write targets an event by uid, and an event being edited or deleted
         # can sit in the past or well beyond the lookahead. Missing it would
-        # silently skip the snapshot and leave the prior values unrecoverable,
-        # so sweep once more over a wide window before concluding it is gone.
+        # silently skip the snapshot, or make a restore re-create an event that
+        # still exists, so sweep once more over a wide window.
         found = await _find_calendar_event(
             client,
             cal,
@@ -2430,6 +2430,17 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
             now - timedelta(days=_CALENDAR_WIDE_LOOKBACK_DAYS),
             now + timedelta(days=_CALENDAR_WIDE_LOOKAHEAD_DAYS),
         )
+    return found
+
+
+async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
+    # entity_id is "<calendar.entity>::<event_uid>[::<recurrence_id>]"
+    cal, _, rest = entity_id.partition("::")
+    uid, _, recurrence_id = rest.partition("::")
+    if not cal or not uid:
+        return None
+    wanted = recurrence_id or None
+    found = await _locate_calendar_event(client, cal, uid, wanted)
     if found is None:
         return None
     if wanted is None and found.get("rrule"):
@@ -2467,22 +2478,6 @@ def _calendar_bound(value: Any) -> tuple[str, bool] | None:
     if isinstance(value, str) and value:
         return value, len(value) == 10
     return None
-
-
-# HA reports a missing event as a plain ``failed`` command error whose message
-# comes from the integration (Local Calendar surfaces ical's "No existing item
-# with uid/recurrence_id: ..."), so absence has to be read off the message.
-_CALENDAR_EVENT_ABSENT_MARKERS = ("no existing item", "not found", "does not exist")
-
-
-def _calendar_update_cannot_apply(err: HomeAssistantCommandError) -> bool:
-    """Whether ``err`` proves the in-place update never touched the event."""
-    if getattr(err, "code", None) == "not_supported":
-        # The calendar advertises no UPDATE_EVENT, so it cannot ever accept
-        # the update and re-creating is the only restore available.
-        return True
-    message = str(err).lower()
-    return any(marker in message for marker in _CALENDAR_EVENT_ABSENT_MARKERS)
 
 
 async def _recreate_calendar_event(
@@ -2543,9 +2538,7 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
         return await _recreate_calendar_event(client, cal, event, start, end)
 
     # An edited event still exists under its uid, so put the captured values
-    # back in place instead of creating a second copy. Only a snapshot of a
-    # DELETED event (or a calendar without UPDATE_EVENT) falls through to
-    # re-creation.
+    # back in place instead of creating a second copy.
     message: dict[str, Any] = {
         "type": "calendar/event/update",
         "entity_id": cal,
@@ -2557,26 +2550,30 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     try:
         return await _ws_send(client, message)
     except HomeAssistantCommandError as err:
-        if not _calendar_update_cannot_apply(err):
-            # A transport drop, a timeout or an unclassified command failure
-            # leaves it unknown whether HA applied the update; re-creating
-            # then leaves a duplicate behind. Only a failure that PROVES the
-            # update never landed falls through. Connection errors and
-            # timeouts are separate types, so they never reach here at all.
+        unsupported = err.code == "not_supported"
+        # Re-create only when the event is gone or the calendar has no
+        # UPDATE_EVENT. Local Calendar reports a missing event as a plain
+        # ``failed`` with generic text, so look the uid up; other codes cannot
+        # mean a deleted event. A failing lookup propagates.
+        if not unsupported and (
+            err.code != "failed"
+            or await _locate_calendar_event(client, cal, uid, recurrence_id) is not None
+        ):
             raise
         if recurrence_id:
-            # The occurrence is gone — deleted from the series, or the series
-            # moved and this recurrence_id no longer names one of its dates.
-            # ``create_event`` could only add a detached event next to the
-            # series, which is not the occurrence being restored, so say so
-            # instead of inventing one.
+            # The occurrence is gone (deleted from the series, or the series
+            # moved and this recurrence_id no longer names one of its dates),
+            # or the calendar cannot update it. ``create_event`` could only add
+            # a detached event next to the series, which is not the occurrence
+            # being restored, so say so instead of inventing one.
+            cause = "cannot be updated" if unsupported else "no longer exists"
             raise HomeAssistantError(
-                f"Occurrence {recurrence_id} of event {uid} no longer exists on "
-                f"{cal}, and an occurrence cannot be re-created into its series"
+                f"Occurrence {recurrence_id} of event {uid} {cause} on {cal}, "
+                "and an occurrence cannot be re-created into its series"
             ) from err
         logger.info(
             "Restoring calendar event %s on %s in place is not possible (%s); "
-            "re-creating it instead",
+            "re-creating it under a new uid instead",
             uid,
             cal,
             err,
