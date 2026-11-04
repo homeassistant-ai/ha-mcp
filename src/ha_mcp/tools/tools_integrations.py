@@ -1575,7 +1575,8 @@ class IntegrationTools:
                 description=(
                     "With entry_id: the integration-defined subentry type "
                     "whose form to describe as subentry_schema; the flow is "
-                    "aborted afterwards."
+                    "aborted afterwards, unless a menu_choice finished it "
+                    "(flow_type create_entry: saved)."
                 ),
             ),
         ] = None,
@@ -1679,7 +1680,8 @@ class IntegrationTools:
           secret is a credential enrolled in an authenticator app; do not create it.
         - Config subentries: use
           ha_config_set_helper(helper_type='config_subentry'); subentry_type
-          here only describes their form.
+          here describes their form; a menu_choice that finishes the flow
+          saves the subentry.
         - Removing an entry: use ha_remove_helpers_integrations.
         - ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA
           UI, or (server settings, developer mode on) ha_dev_manage_settings /

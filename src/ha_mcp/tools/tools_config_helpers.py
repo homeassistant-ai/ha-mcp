@@ -133,7 +133,8 @@ class HelperConfigTools:
             Field(
                 description=(
                     "describe only: sub-type of a menu-based helper "
-                    "(template, group), e.g. 'sensor'."
+                    "(template, group), e.g. 'sensor'. A choice that finishes "
+                    "the flow saves the helper: flow_type create_entry."
                 )
             ),
         ] = None,

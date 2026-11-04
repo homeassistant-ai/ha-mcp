@@ -8,7 +8,8 @@ aborted. A flow that opens with a menu lists its
 branches; ``menu_choice`` (ha_set_integration only) submits one of them, which
 runs that step in Home Assistant, and describes the form behind it. A flow
 Home Assistant aborts is reported with Core's reason text. A step without a
-form fails the call.
+form fails the call, unless a ``menu_choice`` finished the flow: Home
+Assistant saved it, reported as ``create_entry``.
 """
 
 from __future__ import annotations
@@ -289,7 +290,7 @@ async def describe_flow_form(
 ) -> dict[str, Any]:
     """``ha_set_integration(subentry_type=...)``: describe
     ``entry_id``'s subentry form, with ``menu_choice`` submitted when given.
-    The flow is aborted afterwards."""
+    The flow is aborted afterwards, unless a ``menu_choice`` finished it."""
     if domain is not None or entry_id is None or other_modes:
         raise_tool_error(
             create_error_response(

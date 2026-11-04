@@ -232,6 +232,25 @@ async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
 
 
 @pytest.mark.asyncio
+async def test_a_menu_choice_that_finishes_the_helper_flow_is_reported_as_saved(
+    client: AsyncMock,
+) -> None:
+    client.start_config_flow.return_value = _menu(["sensor"])
+    client.submit_config_flow_step.return_value = {
+        "type": "create_entry",
+        "flow_id": "f1",
+        "title": "Hall",
+    }
+
+    result = await mod.describe_helper(client, "template", menu_choice="sensor")
+
+    assert result["flow_type"] == "create_entry"
+    assert result["menu_choice"] == "sensor"
+    assert result["title"] == "Hall"
+    assert "fields" not in result
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("last_step", "more_forms"),
     [(False, "yes"), (None, "depends_on_answers"), (True, None)],

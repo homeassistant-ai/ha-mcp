@@ -219,6 +219,18 @@ def refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> NoReturn:
     )
 
 
+async def _progress_context(
+    client: Any, flow: FlowRef, step: dict[str, Any]
+) -> dict[str, Any]:
+    """A progress step's ``progress_action`` and its text; else nothing."""
+    if step.get("type") != "progress":
+        return {}
+    return {
+        "progress_action": step.get("progress_action"),
+        **await progress_action_text(client, flow, step),
+    }
+
+
 async def describe_step(
     client: Any,
     step: dict[str, Any],
@@ -232,7 +244,8 @@ async def describe_step(
     """Describe a flow's first step, or the form behind ``menu_choice``, then
     abort the flow, also when describing it fails.
 
-    A step that is not a form, menu or abort raises.
+    A step that is not a form, menu or abort raises, except a
+    ``create_entry`` reached through ``menu_choice``, which is reported.
     """
     flow_id = step.get("flow_id")
     try:
@@ -278,13 +291,11 @@ async def describe_step(
                 **chosen,
                 "menu_options": menu_choices(step),
             }
+        if step_type == "create_entry" and chosen:
+            # Core saved what the menu choice selected.
+            return {"flow_type": "create_entry", **chosen, "title": step.get("title")}
         if step_type != "form":
-            progress: dict[str, Any] = {}
-            if step_type == "progress":
-                progress = {
-                    "progress_action": step.get("progress_action"),
-                    **await progress_action_text(client, flow, step),
-                }
+            progress = await _progress_context(client, flow, step)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

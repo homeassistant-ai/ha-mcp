@@ -391,6 +391,27 @@ async def test_subentry_menu_choice_submits_to_the_subentry_flow() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_menu_choice_that_finishes_the_flow_is_reported_as_saved() -> None:
+    client = _client(dict(_MENU))
+    client.submit_config_subentry_flow_step.return_value = {
+        "type": "create_entry",
+        "flow_id": "f1",
+        "title": "Kitchen",
+    }
+    resp = _resp("mqtt")
+
+    await _subentry(client, resp, subentry_type="device", menu_choice="advanced")
+
+    assert resp["subentry_schema"] == {
+        "subentry_type": "device",
+        "subentry_id": None,
+        "flow_type": "create_entry",
+        "menu_choice": "advanced",
+        "title": "Kitchen",
+    }
+
+
+@pytest.mark.asyncio
 async def test_component_read_keeps_its_options_and_redacts_the_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -502,13 +523,17 @@ _PROGRESS_STEP = {
 
 @pytest.mark.asyncio
 async def test_options_flow_in_progress_is_aborted_and_reported() -> None:
-    client = _client(dict(_PROGRESS_STEP))
+    client = _client(
+        dict(_PROGRESS_STEP),
+        {"component.demo.options.progress.scanning": "Scanning 3 hubs."},
+    )
     resp = _resp()
 
     with pytest.raises(ToolError) as exc_info:
         await fetch_options_schema(client, "e1", resp)
 
     assert _error(exc_info)["progress_action"] == "scanning"
+    assert _error(exc_info)["progress_action_text"] == "Scanning 3 hubs."
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
@@ -520,6 +545,7 @@ async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
         await _subentry(client, _resp("ollama"))
 
     assert "'external'" in _error(exc_info)["error"]["message"]
+    assert "progress_action" not in _error(exc_info)
     client.abort_config_subentry_flow.assert_awaited_once_with("f1")
 
 
