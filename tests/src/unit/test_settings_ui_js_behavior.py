@@ -1263,7 +1263,7 @@ def _policy_panel_dom() -> str:
     elements when we exercise them directly.
     """
     extras = """
-      <div id="policy-pending-list" class="backup-empty"></div>
+      <div id="policy-pending-list" class="backup-empty"></div><div id="policy-pending-announcement"></div>
       <div id="policy-load-error" style="display:none"></div>
       <h3 id="policy-rules-title"></h3>
       <div id="policy-rules-empty" style="display:none"></div>

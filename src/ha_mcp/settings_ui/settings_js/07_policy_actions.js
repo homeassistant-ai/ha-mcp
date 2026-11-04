@@ -273,9 +273,19 @@ async function policyClearPin() {
 
 // The list holds either approval cards or one status message; only a message
 // belongs in the dashed, centred empty-state box.
-function policyShowPendingMessage(list, message, {emphasis = true} = {}) {
+function policyShowPendingMessage(list, message, {emphasis = true, isError = false} = {}) {
   list.classList.add('backup-empty');
   list.innerHTML = emphasis ? '<em>' + escapeHtml(message) + '</em>' : escapeHtml(message);
+  policyAnnouncePending(message, isError);
+}
+
+// Polling re-renders the list every 3s, so only a changed message is written
+// here: a rewrite would make a screen reader repeat an unchanged outage.
+function policyAnnouncePending(message, isError = false) {
+  const region = document.getElementById('policy-pending-announcement');
+  if (region.textContent === message) return;
+  setStatusAlert(region, isError);
+  region.textContent = message;
 }
 
 async function policyLoadPending() {
@@ -290,7 +300,7 @@ async function policyLoadPending() {
       'policies.pending.offline',
       {message: e.message},
       'Lost contact with server (' + e.message + '). Retrying.'
-    ));
+    ), {isError: true});
     return;
   }
   if (resp.status === 503) {
@@ -317,7 +327,7 @@ async function policyLoadPending() {
         const body = await resp.json();
         if (body && body.error) msg = body.error;
       } catch (_e) { /* keep default */ }
-      policyShowPendingMessage(list, msg);
+      policyShowPendingMessage(list, msg, {isError: true});
     }
     return;
   }
@@ -333,6 +343,7 @@ async function policyLoadPending() {
     return;
   }
   list.classList.remove('backup-empty');
+  policyAnnouncePending('');
   list.innerHTML = pending.map(p => (
     '<div class="policy-pending-card" data-pending-token="' + escapeHtml(p.token) + '">' +
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +

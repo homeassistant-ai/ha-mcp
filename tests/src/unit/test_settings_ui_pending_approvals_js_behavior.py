@@ -78,6 +78,7 @@ def test_pending_cards_leave_the_centered_empty_state_box(
           );
           await window.policyLoadPending();
           list.dataset.classAfterCards = list.className;
+          list.dataset.textAfterCards = list.textContent;
         """,
     )
     _assert_clean_init(result)
@@ -85,4 +86,76 @@ def test_pending_cards_leave_the_centered_empty_state_box(
     assert _probe(result, "card-count") == "1"
     assert "backup-empty" not in (_probe(result, "class-with-cards") or "")
     assert "backup-empty" in (_probe(result, "class-after-cards") or "")
-    assert expected_text in result.dom
+    assert expected_text in (_probe(result, "text-after-cards") or "")
+
+
+def test_status_changes_are_announced_once_with_failures_assertive(
+    settings_script: str,
+) -> None:
+    """The list re-renders on a 3s poll and is not itself a live region, so the
+    announcement has to be written once per change: rewriting it on every poll
+    would make a screen reader repeat an unchanged outage."""
+    outage = {"status": 503, "json": {"error": "queue down"}}
+    fetches = {
+        **DEFAULT_FETCHES,
+        "/api/settings/features": {
+            "status": 200,
+            "json": {"flags": {"enable_tool_security_policies": {"value": True}}},
+        },
+        "/api/policy/pending": {
+            "responses": [
+                outage,
+                outage,
+                {"status": 200, "json": {"pending": []}},
+                {
+                    "status": 200,
+                    "json": {
+                        "pending": [
+                            {
+                                "token": "tok-1",
+                                "tool_name": "ha_call_service",
+                                "args": {},
+                                "expires_at": "2026-11-04T12:00:00Z",
+                            }
+                        ]
+                    },
+                },
+            ]
+        },
+    }
+    result = run_script(
+        settings_script,
+        initial_html=_policy_panel_dom(),
+        fetch_map=fetches,
+        invoke="""
+          const region = document.getElementById('policy-pending-announcement');
+          const list = document.getElementById('policy-pending-list');
+          await window.policyLoadConfig();
+          let writes = 0;
+          const observer = new MutationObserver((records) => { writes += records.length; });
+          observer.observe(region, {childList: true, characterData: true, subtree: true});
+          await window.policyLoadPending();
+          await window.policyLoadPending();
+          list.dataset.outageWrites = String(writes);
+          list.dataset.outageRole = region.getAttribute('role');
+          list.dataset.outageLive = region.getAttribute('aria-live');
+          list.dataset.outageText = region.textContent;
+          await window.policyLoadPending();
+          list.dataset.emptyRole = region.getAttribute('role');
+          list.dataset.emptyLive = region.getAttribute('aria-live');
+          list.dataset.emptyText = region.textContent;
+          await window.policyLoadPending();
+          list.dataset.textWithCards = region.textContent;
+          observer.disconnect();
+        """,
+    )
+    _assert_clean_init(result)
+
+    assert _probe(result, "outage-writes") == "1"
+    assert _probe(result, "outage-role") == "alert"
+    assert _probe(result, "outage-live") == "assertive"
+    assert _probe(result, "outage-text") == "queue down"
+    assert _probe(result, "empty-role") == "status"
+    assert _probe(result, "empty-live") == "polite"
+    assert _probe(result, "empty-text") == "No pending approvals."
+    assert _probe(result, "text-with-cards") == ""
