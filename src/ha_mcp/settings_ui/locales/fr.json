@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Port du sidecar de l'interface des paramètres",
     "advanced.sidecar_pin_port.help": "0 choisit un port libre au premier démarrage et le conserve pour les redémarrages ultérieurs ; un port dans la plage épingle un port préféré (revient à un port libre s'il est pris).",
     "advanced.enable_dev_mode.label": "Mode développeur",
-    "advanced.enable_dev_mode.help": "⚠ Enregistre des outils cachés qui peuvent modifier les paramètres et remplacer le serveur en cours d'exécution. Développement et test uniquement.",
+    "advanced.enable_dev_mode.help": "⚠ Enregistre des outils masqués qui peuvent modifier les paramètres et remplacer le serveur en cours d'exécution. Cela peut également contourner certaines limitations de visibilité des entités ou d'autres restrictions. Développement et test uniquement.",
     "advanced.dev_tools_security_policy_access.label": "Accès aux politiques de sécurité des outils de développement",
     "advanced.dev_tools_security_policy_access.help": "⚠ Tant que le mode développeur est activé, permet aux outils de développement de réécrire les politiques de sécurité des outils, d'ajouter ou de supprimer des portes d'approbation par outil, et d'approuver ou de refuser les approbations en attente en votre nom — un agent IA peut accepter ses propres appels contrôlés. Test des politiques uniquement. Prend effet sans redémarrage.",
     "addon.secret_path.name": "Remplacement du chemin secret",

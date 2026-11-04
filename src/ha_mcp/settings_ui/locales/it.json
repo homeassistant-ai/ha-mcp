@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Porta del sidecar dell'interfaccia delle impostazioni",
     "advanced.sidecar_pin_port.help": "0 sceglie una porta libera al primo avvio e la mantiene per i riavvii successivi; una porta nell'intervallo fissa una porta preferita (passa a una libera se occupata).",
     "advanced.enable_dev_mode.label": "Modalità sviluppatore",
-    "advanced.enable_dev_mode.help": "⚠ Registra strumenti nascosti in grado di modificare le impostazioni e sostituire il server in esecuzione. Solo per sviluppo e test.",
+    "advanced.enable_dev_mode.help": "⚠ Registra strumenti nascosti che possono modificare le impostazioni e sostituire il server in esecuzione. Inoltre, potrebbe aggirare alcune limitazioni di visibilità delle entità o di altro tipo. Solo per sviluppo e test.",
     "advanced.dev_tools_security_policy_access.label": "Accesso alle politiche di sicurezza degli strumenti per sviluppatori",
     "advanced.dev_tools_security_policy_access.help": "⚠ Mentre la modalità sviluppatore è attiva, consente agli strumenti per sviluppatori di riscrivere le politiche di sicurezza degli strumenti, aggiungere o rimuovere gate di approvazione per strumento e approvare o negare approvazioni in sospeso per tuo conto — un agente IA può accettare le proprie chiamate con gate. Solo per il test delle politiche. Ha effetto senza riavvio.",
     "addon.secret_path.name": "Percorso segreto personalizzato",

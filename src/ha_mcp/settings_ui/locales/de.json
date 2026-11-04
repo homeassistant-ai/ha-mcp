@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Einstellungs-UI-Sidecar-Port",
     "advanced.sidecar_pin_port.help": "0 wählt beim ersten Start einen freien Port und behält ihn für spätere Neustarts bei; ein Port im Bereich fixiert einen bevorzugten Port (weicht auf einen freien aus, falls dieser belegt ist).",
     "advanced.enable_dev_mode.label": "Entwicklermodus",
-    "advanced.enable_dev_mode.help": "⚠ Registriert versteckte Tools, die Einstellungen ändern und den laufenden Server ersetzen können. Nur für Entwicklung und Tests.",
+    "advanced.enable_dev_mode.help": "⚠ Registriert versteckte Tools, die Einstellungen ändern und den laufenden Server ersetzen können. Es kann außerdem einige Entitätssichtbarkeiten oder andere Einschränkungen umgehen. Nur für Entwicklung und Tests.",
     "advanced.dev_tools_security_policy_access.label": "Zugriff der Entwicklertools auf Sicherheitsrichtlinien",
     "advanced.dev_tools_security_policy_access.help": "⚠ Solange der Entwicklermodus aktiviert ist, können die Entwicklertools Tool-Sicherheitsrichtlinien umschreiben, Genehmigungstore pro Tool hinzufügen oder entfernen und ausstehende Genehmigungen in deinem Namen genehmigen oder ablehnen – ein KI-Agent kann seine eigenen gesperrten Aufrufe akzeptieren. Nur zum Testen von Richtlinien. Tritt ohne Neustart in Kraft.",
     "addon.secret_path.name": "Secret-Pfad Override",

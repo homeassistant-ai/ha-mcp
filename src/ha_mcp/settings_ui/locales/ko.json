@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "설정 UI 사이드카 포트",
     "advanced.sidecar_pin_port.help": "0은 첫 시작 시 빈 포트를 선택하고 이후 재시작 시 유지합니다. 범위 내의 포트는 선호하는 포트를 고정합니다(사용 중인 경우 빈 포트로 대체됨).",
     "advanced.enable_dev_mode.label": "개발자 모드",
-    "advanced.enable_dev_mode.help": "⚠ 설정을 변경하고 실행 중인 서버를 교체할 수 있는 숨겨진 도구를 등록합니다. 개발 및 테스트 전용입니다.",
+    "advanced.enable_dev_mode.help": "⚠ 설정을 변경하고 실행 중인 서버를 교체할 수 있는 숨겨진 도구를 등록합니다. 또한 일부 엔티티 가시성이나 기타 제한을 우회할 수 있습니다. 개발 및 테스트 용도로만 사용하세요.",
     "advanced.dev_tools_security_policy_access.label": "개발자 도구의 보안 정책 접근",
     "advanced.dev_tools_security_policy_access.help": "⚠ 개발자 모드가 켜져 있는 동안, 개발자 도구가 도구 보안 정책을 다시 쓰고 도구별 승인 게이트를 추가하거나 제거하며 대기 중인 승인을 사용자 대신 승인하거나 거부할 수 있게 합니다. AI 에이전트가 자기 자신의 게이팅된 호출을 승인할 수 있다는 뜻입니다. 정책 테스트 용도로만 사용하세요. 다시 시작하지 않아도 적용됩니다.",
     "addon.secret_path.name": "비밀 경로 재정의",

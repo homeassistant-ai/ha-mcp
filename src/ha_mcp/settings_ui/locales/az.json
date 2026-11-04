@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Parametrlər interfeysinin köməkçi proses portu",
     "advanced.sidecar_pin_port.help": "0 ilk işə salınmada boş port seçir və sonrakı yenidən başlatmalar üçün onu saxlayır; aralıqdakı port üstünlük verilən portu sabitləyir (tutulubsa boş olanına keçir).",
     "advanced.enable_dev_mode.label": "Proqramçı rejimi",
-    "advanced.enable_dev_mode.help": "⚠ Parametrləri dəyişdirə və işləyən serveri əvəz edə bilən gizli alətləri qeydiyyatdan keçirir. Yalnız inkişaf və sınaq üçün.",
+    "advanced.enable_dev_mode.help": "⚠ Parametrləri dəyişə və işləyən serveri əvəz edə bilən gizli alətləri qeydiyyatdan keçirir. O, həmçinin bəzi obyektin görünməliyini və ya digər məhdudiyyətləri yan keçə bilər. Yalnız inkişaf və sınaq məqsədləri üçündür.",
     "advanced.dev_tools_security_policy_access.label": "Proqramçı alətlərinin təhlükəsizlik siyasətlərinə girişi",
     "advanced.dev_tools_security_policy_access.help": "⚠ Proqramçı rejimi aktiv olduqda proqramçı alətlərinə alətlərin təhlükəsizlik siyasətlərini yenidən yazmağa, ayrı-ayrı alətlər üçün təsdiq tələbləri əlavə etməyə və ya onları çıxarmağa, gözləyən təsdiq sorğularını sizin adınızdan təsdiqləməyə və ya rədd etməyə imkan verir — AI agenti öz təsdiq tələb edən çağırışlarını qəbul edə bilər. Yalnız siyasətlərin sınağı üçün. Yenidən başlatmadan qüvvəyə minir.",
     "addon.secret_path.name": "Gizli yolun əvəzlənməsi",
