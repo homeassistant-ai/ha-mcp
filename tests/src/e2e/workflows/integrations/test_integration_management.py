@@ -223,40 +223,6 @@ class TestIntegrationManagement:
                 {"target": entry_id, "confirm": True},
             )
 
-    async def test_adding_a_single_instance_integration_again_says_why_in_cores_words(
-        self, mcp_client, ha_client
-    ):
-        """A second ``sun`` aborts; the error carries Core's text for the reason.
-
-        ``sun`` is set up in the test state and allows one entry. Core's own
-        abort for the same request names the reason and the integration whose
-        strings hold its text (``translation_domain``); the caller gets that
-        text, the one the HA UI shows.
-        """
-        core_abort = await ha_client.start_config_flow("sun")
-        assert core_abort["type"] == "abort", core_abort
-        text_domain = core_abort.get("translation_domain") or "sun"
-        translations = await ha_client.send_websocket_message(
-            {
-                "type": "frontend/get_translations",
-                "language": "en",
-                "category": "config",
-                "integration": [text_domain],
-            }
-        )
-        expected = translations["result"]["resources"][
-            f"component.{text_domain}.config.abort.{core_abort['reason']}"
-        ]
-
-        async with MCPAssertions(mcp_client) as mcp:
-            data = await mcp.call_tool_failure(
-                "ha_set_integration",
-                {"domain": "sun", "config": {}},
-                expected_error=core_abort["reason"],
-            )
-
-        assert data["reason_text"] == expected, data
-
     async def test_a_rejected_setup_form_says_why_in_cores_words(
         self, mcp_client, ha_client
     ):

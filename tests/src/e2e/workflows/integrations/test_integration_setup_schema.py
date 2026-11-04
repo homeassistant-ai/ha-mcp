@@ -77,7 +77,9 @@ class TestIntegrationSetupSchema:
                 "ha_get_integration", {"domain": "sun"}
             )
             assert entries["entries"], "the test instance must have a sun entry"
-            data = await mcp.call_tool_failure("ha_set_integration", {"domain": "sun"})
+            data = await mcp.call_tool_failure(
+                "ha_set_integration", {"domain": "sun"}, expected_error="Flow aborted"
+            )
 
         # Core's own abort for the same request names where its text lives.
         core_abort = await ha_client.start_config_flow("sun")
