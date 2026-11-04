@@ -360,11 +360,13 @@ def test_agent_supplied_approval_fields_stay_inert_text(
 def test_page_ships_a_polite_region_and_the_centered_empty_list() -> None:
     """The JSDOM fixture hand-writes these elements, so only this sees the
     markup a browser receives: without the live-region attributes the first
-    message is lost, and without the class the empty list starts unstyled."""
+    message is lost, without the hiding class every announcement shows on the
+    page, and without its class the empty list starts unstyled."""
     region = re.search(r'<div id="policy-pending-announcement"[^>]*>', _SETTINGS_HTML)
     empty_list = re.search(r'<div id="policy-pending-list"[^>]*>', _SETTINGS_HTML)
 
     assert region is not None
+    assert 'class="visually-hidden"' in region.group(0)
     assert 'role="status"' in region.group(0)
     assert 'aria-live="polite"' in region.group(0)
     assert empty_list is not None
