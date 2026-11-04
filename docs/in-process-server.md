@@ -342,8 +342,8 @@ default, because a service call with `entity_id: all` (an automation or an
 agent turning off every switch, for example) reaches every enabled switch. To
 use it, enable it on the device page; Home Assistant reloads the entry about 30
 seconds later, which restarts a running server once. Turning the switch off
-closes every way into the server at once: the webhook and its `/readonly` alias
-(including the Nabu Casa path), the direct port, and the conversation-agent LLM
+closes every way into the server at once: the webhook and its `/readonly` and
+`/catalog/<mode>` aliases (including the Nabu Casa path), the direct port, and the conversation-agent LLM
 API. The sidebar panel stays in the sidebar but shows that the server is not
 running until access is on again. Turning it on starts the server again, which
 takes as long as a normal start; credentials and connect URLs stay the same. If

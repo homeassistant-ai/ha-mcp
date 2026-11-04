@@ -7225,7 +7225,7 @@ def _oauth_view_calls(hass):
     return [
         call
         for call in hass.http.register_view.call_args_list
-        if call.args[0].url != "/api/webhook/{webhook_id}/readonly"
+        if not call.args[0].url.startswith("/api/webhook/{webhook_id}/")
     ]
 
 
@@ -7300,7 +7300,7 @@ class TestReadOnlyWebhook:
             }
         }
         mod.register_readonly_webhook(hass, "mcp_test", mod._handle_webhook)
-        view = hass.http.register_view.call_args.args[0]
+        view = hass.http.register_view.call_args_list[0].args[0]
         request = MagicMock()
         request.headers = {}
         request.read = AsyncMock(return_value=b"")
@@ -7316,7 +7316,7 @@ class TestReadOnlyWebhook:
         hass.data = {}
         existing = AsyncMock()
         mod.register_readonly_webhook(hass, "mcp_existing", existing)
-        view = hass.http.register_view.call_args.args[0]
+        view = hass.http.register_view.call_args_list[0].args[0]
         session = MagicMock()
         session.close = AsyncMock()
         config = {

@@ -79,8 +79,8 @@ _saved_tools: dict[str, dict[str, str]] = {}
 
 # Tools that sandbox code must not call. Includes ``ha_manage_custom_tool``
 # itself (prevents recursive self-invocation) plus the four synthetics that
-# the categorized-search transform exposes when ``ENABLE_TOOL_SEARCH=true``
-# (``ha_search_tools``, ``ha_call_{read,write,delete}_tool``). Without those
+# a search-catalog connection exposes (main URL with ``ENABLE_TOOL_SEARCH``,
+# or ``/catalog/search``): ``ha_search_tools``, ``ha_call_*_tool``. Without those
 # four entries, sandbox code could "launder" a recursive call as
 # ``call_tool("ha_call_write_tool", {"name": "ha_manage_custom_tool", ...})``
 # — the proxy would then dispatch the underlying tool and the in-sandbox

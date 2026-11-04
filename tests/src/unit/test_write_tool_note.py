@@ -78,6 +78,7 @@ async def test_get_tool_path_matches_list_path() -> None:
     assert await WriteToolNoteTransform().get_tool("nope", call_next_missing) is None
 
 
+@pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.asyncio
 async def test_tool_search_catalog_carries_the_note_on_write_paths() -> None:
     """With tool search on, the note reaches every path a write can take.

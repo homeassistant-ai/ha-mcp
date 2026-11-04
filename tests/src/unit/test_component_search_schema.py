@@ -185,6 +185,7 @@ async def test_capability_cache_is_shared_per_ha_client(
     old_ws.send_command.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.parametrize("categorized", [False, True])
 async def test_wire_catalog_and_calls_preserve_legacy_arguments(
     categorized: bool, probe: AsyncMock
@@ -230,6 +231,7 @@ async def test_wire_catalog_and_calls_preserve_legacy_arguments(
             assert proxied.data == arguments
 
 
+@pytest.mark.usefixtures("tool_search_default")
 async def test_search_and_get_schema_share_transformed_catalog(
     probe: AsyncMock, search_tool: Tool
 ) -> None:

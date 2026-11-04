@@ -22,6 +22,9 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.config import _reset_global_settings
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
+# These tests exercise the search tools a search-mode connection gets.
+pytestmark = pytest.mark.usefixtures("tool_search_default")
+
 
 def _tool(name: str, description: str) -> Tool:
     async def noop() -> str:

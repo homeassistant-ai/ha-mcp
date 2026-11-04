@@ -1071,8 +1071,8 @@ class TestRegisterWebhook:
         assert cfg["resource_server"] is None
         assert cfg["oauth_provider"] is None
         # 6 discovery views + 3 unified OAuth views (authorize/token/revoke)
-        # + 1 DCR view.
-        assert hass.http.register_view.call_count == 11
+        # + 1 DCR view + the read-only and catalog webhook aliases.
+        assert hass.http.register_view.call_count == 12
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_none_ha_auth_none_switch_reuses_bound_views(self, monkeypatch):
@@ -1089,7 +1089,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 12
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
         await mw.async_unregister_webhook(hass)
 
@@ -1102,7 +1102,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 12
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_HA
         await mw.async_unregister_webhook(hass)
 
@@ -1114,7 +1114,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 12
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_ha_auth_registers_resource_server_and_views(self, monkeypatch):
@@ -1135,8 +1135,8 @@ class TestRegisterWebhook:
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["resource_server"], mw.ResourceServer)
         # Six discovery + three unified OAuth (authorize/token/revoke) + one
-        # DCR view were bound.
-        assert hass.http.register_view.call_count == 11
+        # DCR view + the two webhook aliases were bound.
+        assert hass.http.register_view.call_count == 12
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
 
     async def test_ha_auth_isolates_cimd_fetches_from_forwarding(self, monkeypatch):
@@ -1192,7 +1192,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 12
         await mw.async_unregister_webhook(hass)
 
         # Second enable in the same HA session: no new bindings, no raise.
@@ -1203,7 +1203,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 12
         assert isinstance(
             hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
         )
@@ -1264,8 +1264,8 @@ class TestRegisterWebhook:
         assert isinstance(cfg["oauth_provider"], LegacyOAuthProvider)
         assert cfg["resource_server"] is None
         # 6 discovery + 3 unified scoped (authorize/token/revoke) + 2 root
-        # legacy views.
-        assert hass.http.register_view.call_count == 12
+        # legacy views + the read-only and catalog webhook aliases.
+        assert hass.http.register_view.call_count == 13
         assert hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
         assert restart_needed is False
 
@@ -1303,9 +1303,9 @@ class TestRegisterWebhook:
         assert fake_session.closed is False
         assert restart_needed is False
         assert hass.data[OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy"
-        # Only metadata + the three unified scoped views bind; root remains
-        # add-on-owned.
-        assert hass.http.register_view.call_count == 10
+        # Only metadata + the three unified scoped views bind (plus the two
+        # webhook aliases); root remains add-on-owned.
+        assert hass.http.register_view.call_count == 11
         assert any(
             record.levelname == "WARNING"
             and record.name == mw.__name__
@@ -1598,8 +1598,8 @@ async def test_readonly_webhook_route_shared_across_installations(
     first, second = AsyncMock(), AsyncMock()
     embedded.register_readonly_webhook(hass, "embedded", first)
     proxy.register_readonly_webhook(hass, "proxy", second)
-    hass.http.register_view.assert_called_once()
-    view = hass.http.register_view.call_args.args[0]
+    assert hass.http.register_view.call_count == 2
+    view = hass.http.register_view.call_args_list[0].args[0]
     request = make_request()
     await view.post(request, "embedded")
     await view.get(request, "proxy")
@@ -1610,6 +1610,6 @@ async def test_readonly_webhook_route_shared_across_installations(
     await view.post(request, "proxy")
     assert second.await_count == 2
     assert (
-        proxy.readonly_url("http://localhost/private/?key=value")
+        proxy.suffixed_url("http://localhost/private/?key=value", "/readonly")
         == "http://localhost/private/readonly?key=value"
     )

@@ -6,6 +6,7 @@ from typing import Any
 from ..config import Settings
 from ..settings_ui import _persistence
 from ..settings_ui._tools_meta import ignored_disabled_tools, tool_config_warnings
+from ..tool_catalog import current_catalog_mode
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,8 @@ def collect_config_toggles(settings: Settings) -> dict[str, Any]:
         isinstance(custom, str) and custom.strip()
     )
 
+    # The catalog this connection serves; its URL can override enable_tool_search.
+    toggles["connection_catalog"] = current_catalog_mode()
     toggles.update(_tool_config_diagnostics(settings))
     return toggles
 

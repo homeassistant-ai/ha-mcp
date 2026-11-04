@@ -150,6 +150,19 @@ class TestHaGetOverviewFieldsProjection:
         return self.registered_tools["ha_get_overview"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["full", "search"])
+    async def test_tool_discovery_hint_follows_the_connection_catalog(
+        self, overview_tool, mode
+    ):
+        """Only a search connection is told to discover tools with
+        ha_search_tools; a full-catalog connection has no such tool."""
+        from ha_mcp.tool_catalog import catalog_endpoint
+
+        with catalog_endpoint(mode):
+            result = await overview_tool()
+        assert ("tool_discovery" in result) is (mode == "search")
+
+    @pytest.mark.asyncio
     async def test_fields_none_returns_full_response(self, overview_tool):
         """fields=None (default) returns the full response — no projection."""
         result = await overview_tool()
@@ -734,10 +747,10 @@ class TestHaGetOverviewReadOnlyMode:
         from types import SimpleNamespace
 
         monkeypatch.setattr(
-            "ha_mcp.tools.tools_search.get_global_settings",
-            # ha_get_overview reads enable_tool_search from the same
-            # singleton before the read-only re-read — stub both.
-            lambda: SimpleNamespace(read_only_mode=on, enable_tool_search=False),
+            "ha_mcp.tool_catalog.get_global_settings",
+            # ha_get_overview reads the catalog mode before the read-only
+            # re-read — stub both.
+            lambda: SimpleNamespace(enable_tool_search=False),
         )
         monkeypatch.setattr(
             "ha_mcp.read_only.get_global_settings",

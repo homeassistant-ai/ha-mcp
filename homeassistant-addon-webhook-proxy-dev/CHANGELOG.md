@@ -9,6 +9,13 @@ history from before the fork.
 -->
 
 
+## v3.0.5.dev4 (2026-11-03)
+
+- The webhook also serves `/catalog/full` and `/catalog/search`, alone or
+  after `/readonly` (`/readonly/catalog/search`), forwarding each to the
+  server app's matching endpoint so a client can be given a fixed tool
+  catalog. Needs a server app that serves those endpoints.
+
 ## v3.0.5.dev3 (2026-11-02)
 
 - `ha_auth` sign-in works when Home Assistant serves HTTPS itself: token and

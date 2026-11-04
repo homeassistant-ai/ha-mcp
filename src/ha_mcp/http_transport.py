@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from threading import Lock
 from time import monotonic
@@ -19,6 +19,7 @@ from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.server.http import StarletteWithLifespan
 
 from .config import get_global_settings
+from .tool_catalog import CATALOG_MODES, CatalogMode
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class HttpTransportFastMCP(FastMCP):
     """
 
     def http_app(self, *args: Any, **kwargs: Any) -> StarletteWithLifespan:
-        """Build the app with a readonly alias and optional transport experiments."""
+        """Build the app with endpoint selectors and optional transport experiments."""
         settings = get_global_settings()
         if settings.http_json_response:
             # FastMCP accepts json_response as its third positional argument.
@@ -114,38 +115,60 @@ class HttpTransportFastMCP(FastMCP):
                 kwargs["middleware"] = middleware
         app = super().http_app(*args, **kwargs)
         if app.state.transport_type == "streamable-http":
-            app.add_middleware(ReadOnlyEndpoint, path=app.state.path)
+            app.add_middleware(EndpointSelectors, path=app.state.path)
         return app
 
 
-class ReadOnlyEndpoint:
-    """Route the exact /readonly alias through the same authenticated MCP app.
+class EndpointSelectors:
+    """Route connection-selecting suffixes through the same authenticated MCP app.
 
-    This selects read-only behavior for a configured client connection; the
-    credential still works at the normal endpoint. Settings and other HTTP
-    routes are not aliased.
+    ``/readonly`` restricts the connection to reads; ``/catalog/full`` and
+    ``/catalog/search`` fix its tool catalog. A connection may use both,
+    read-only first (``/readonly/catalog/search``). The credential
+    still works at the normal endpoint. Settings and other HTTP routes are
+    not aliased.
     """
 
     def __init__(self, app: ASGIApp, path: str) -> None:
         self.app = app
         self.path = path
-        self.readonly_path = f"{path.rstrip('/')}/readonly"
+        self.base = path.rstrip("/")
+
+    def _selectors(self, route_path: str) -> tuple[bool, CatalogMode | None] | None:
+        """``(read_only, catalog_mode)`` for a selector suffix, else None."""
+        if not route_path.startswith(self.base + "/"):
+            return None
+        parts = route_path[len(self.base) + 1 :].split("/")
+        read_only = parts[:1] == ["readonly"]
+        if read_only:
+            parts = parts[1:]
+        if not parts:
+            return (True, None) if read_only else None
+        if len(parts) == 2 and parts[0] == "catalog" and parts[1] in CATALOG_MODES:
+            return read_only, parts[1]
+        return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] != "http"
-            or _get_route_path(scope).rstrip("/") != self.readonly_path
-        ):
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-
         from .read_only import read_only_request
+        from .tool_catalog import catalog_endpoint
 
         route_path = _get_route_path(scope)
+        selected = self._selectors(route_path.rstrip("/"))
+        if selected is None:
+            await self.app(scope, receive, send)
+            return
+        read_only, mode = selected
         prefix = scope["path"][: -len(route_path)]
         path = prefix + self.path
         scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
-        with read_only_request():
+        with ExitStack() as stack:
+            if read_only:
+                stack.enter_context(read_only_request())
+            if mode is not None:
+                stack.enter_context(catalog_endpoint(mode))
             await self.app(scope, receive, send)
 
 

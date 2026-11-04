@@ -1,7 +1,7 @@
 """The instructions the server sends in the MCP initialize response.
 
 Sections, in order: the bundled best-practice skills with how to read them
-(plus the tool-search note when that mode is on), the Read Only Mode
+(plus the tool-search note for connections in search mode), the Read Only Mode
 warning, the issue-filing rule, and the installation owner's
 ``custom_instructions``. The skills header and access fallbacks are
 defined here; the notices come from ``server_tool_text``.
@@ -116,9 +116,7 @@ def skill_block(skill_name: str, description: str) -> str:
     return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
 
-def build_skills_instructions(
-    skills_dir: Path | None, settings: Settings, tool_hidden: bool
-) -> str | None:
+def build_skills_instructions(skills_dir: Path | None, tool_hidden: bool) -> str | None:
     """Build the skills section from each bundled SKILL.md's frontmatter.
 
     The description field is authored for LLM consumption and included
@@ -134,22 +132,27 @@ def build_skills_instructions(
         _RESOURCE_ACCESS + _LOCAL_SKILLS_FALLBACK if tool_hidden else _SKILL_TOOL_ACCESS
     )
     header = _SKILLS_HEADER.format(access_method=access_method)
-    instructions = header + "\n".join(
+    return header + "\n".join(
         skill_block(name, frontmatter["description"])
         for name, _dir, frontmatter in skills
     )
 
-    if settings.enable_tool_search:
-        instructions += TOOL_DISCOVERY_INSTRUCTIONS.format(
-            pinned=", ".join(DEFAULT_PINNED_TOOLS)
-        )
 
-    return instructions
+def compose_instructions(
+    skills: str | None, settings: Settings, *, tool_search: bool
+) -> str:
+    """Join the skills section with the startup notices and the owner's text.
 
-
-def compose_instructions(skills: str | None, settings: Settings) -> str:
-    """Join the skills section with the startup notices and the owner's text."""
-    sections = [skills] if skills else []
+    ``tool_search`` is the connection's catalog mode, so one server sends
+    the discovery note only to the connections that get the search tools.
+    """
+    discovery = (
+        TOOL_DISCOVERY_INSTRUCTIONS.format(pinned=", ".join(DEFAULT_PINNED_TOOLS))
+        if tool_search
+        else ""
+    )
+    lead = (skills or "") + discovery
+    sections = [lead.lstrip("\n")] if lead else []
     # Surface Read Only Mode in the startup instructions so clients
     # that show server instructions warn the model up front. Startup
     # state only — live flips are covered by the structured
