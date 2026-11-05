@@ -1339,6 +1339,15 @@ class WebSocketManager:
         )
         return ws_url, ws_token, key
 
+    def pool_key(
+        self,
+        url: str | None = None,
+        token: str | None = None,
+        verify_ssl: bool | None = None,
+    ) -> str:
+        """The key the pool keeps these credentials' connection under."""
+        return self._pool_key(url, token, verify_ssl)[2]
+
     def pooled_client(
         self,
         url: str | None = None,
@@ -1350,7 +1359,7 @@ class WebSocketManager:
         It may be disconnected: ``get_client`` replaces such a client only on
         its next call. None when the pool holds none for them.
         """
-        return self._clients.get(self._pool_key(url, token, verify_ssl)[2])
+        return self._clients.get(self.pool_key(url, token, verify_ssl))
 
     @staticmethod
     def _effective_verify_ssl(verify_ssl: bool | None) -> bool:

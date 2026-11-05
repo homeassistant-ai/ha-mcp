@@ -466,6 +466,33 @@ async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None
     assert ws.send_command.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_alternating_oauth_users_each_probe_once(monkeypatch) -> None:
+    """The OAuth proxy is one client whose token changes per request; each
+    user's connection is its own, so switching users does not re-probe."""
+    connections = {"alice": _make_ws(info_result=_INFO_OK)}
+    connections["bob"] = _make_ws(info_result=_INFO_OK)
+    for ws in connections.values():
+        ws.is_connected = True
+    monkeypatch.setattr(
+        component_api.websocket_manager,
+        "pooled_client",
+        lambda **credentials: connections[credentials["token"]],
+    )
+    proxy = _client()
+
+    async def connect(*, url: str, token: str, verify_ssl: Any) -> Any:
+        return connections[token]
+
+    with patch.object(component_api, "get_websocket_client", connect):
+        for user in ("alice", "bob", "alice", "bob", "alice"):
+            proxy.token = user
+            assert isinstance(await get_component_caps(proxy), ComponentCaps)
+
+    probes = sum(ws.send_command.await_count for ws in connections.values())
+    assert probes == 2
+
+
 def test_component_supports() -> None:
     caps = ComponentCaps(
         schema_version=1,

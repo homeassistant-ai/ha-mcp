@@ -152,11 +152,15 @@ _NEGATIVE_CACHE_TS: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDicti
 _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
     weakref.WeakKeyDictionary()
 )
-# The pooled WS connection a positive entry was probed over. A Core restart
-# closes it and the pool replaces it; the component on the far side may then be
-# another version (an app keeps running while the component updates through the
-# Marketplace and Core restarts), so the entry is re-probed rather than kept.
-_PROBED_OVER: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+# The pooled WS connections a positive entry was probed over, by pool key: the
+# OAuth proxy is one client whose token changes per request, so each user's
+# connection is tracked on its own. A Core restart closes them and the pool
+# replaces them; the component on the far side may then be another version (an
+# app keeps running while the component updates through the Marketplace and
+# Core restarts), so the entry is re-probed rather than kept.
+_PROBED_OVER: weakref.WeakKeyDictionary[Any, dict[str, Any]] = (
+    weakref.WeakKeyDictionary()
+)
 # Preserve failed discovery separately so write callers can refuse a downgrade
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
@@ -211,6 +215,20 @@ def _get_caps_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
+def _pool_credentials(client: Any) -> dict[str, Any]:
+    return {
+        "url": client.base_url,
+        "token": client.token,
+        "verify_ssl": getattr(client, "verify_ssl", None),
+    }
+
+
+def _record_probed_connection(client: Any, ws: Any) -> None:
+    """Remember ``ws`` as the connection probed for this client's credentials."""
+    key = websocket_manager.pool_key(**_pool_credentials(client))
+    _PROBED_OVER.setdefault(client, {})[key] = ws
+
+
 def _probed_connection_current(client: Any) -> bool:
     """False once the connection a positive entry came from closed or was replaced.
 
@@ -218,15 +236,15 @@ def _probed_connection_current(client: Any) -> bool:
     cleared it) says nothing about the component, so the entry holds until a
     connection exists to compare.
     """
-    probed = _PROBED_OVER.get(client)
-    if probed is None:
+    connections = _PROBED_OVER.get(client)
+    if not connections:
         return True
-    current = websocket_manager.pooled_client(
-        url=client.base_url,
-        token=client.token,
-        verify_ssl=getattr(client, "verify_ssl", None),
-    )
-    return current is None or (current is probed and bool(current.is_connected))
+    credentials = _pool_credentials(client)
+    current = websocket_manager.pooled_client(**credentials)
+    if current is None:
+        return True
+    probed = connections.get(websocket_manager.pool_key(**credentials))
+    return current is probed and bool(current.is_connected)
 
 
 def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
@@ -455,7 +473,7 @@ async def get_component_caps(
             )
             caps = None
         _store_caps(client, caps)
-        _PROBED_OVER[client] = ws
+        _record_probed_connection(client, ws)
         result = response.get("result") if isinstance(response, dict) else None
         if (
             not isinstance(response, dict)
