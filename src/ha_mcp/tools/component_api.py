@@ -157,6 +157,9 @@ _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
 # another version (an app keeps running while the component updates through the
 # Marketplace and Core restarts), so the entry is re-probed rather than kept.
 _PROBED_OVER: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+# Recorded in place of a connection when a re-probe failed but kept the caps
+# that worked: the next check re-probes even if the pool is empty by then.
+_CONNECTION_LOST = object()
 # Preserve failed discovery separately so write callers can refuse a downgrade
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
@@ -227,11 +230,14 @@ def _probed_connection_current(client: Any) -> bool:
 
     Reads the pool without connecting. An empty pool slot (a loop change
     cleared it) says nothing about the component, so the entry holds until a
-    connection exists to compare.
+    connection exists to compare, unless a failed re-probe marked the
+    connection lost.
     """
     probed = _PROBED_OVER.get(client)
     if probed is None:
         return True
+    if probed is _CONNECTION_LOST:
+        return False
     current = websocket_manager.pooled_client(
         url=client.base_url,
         token=client.token,
@@ -373,6 +379,7 @@ def _after_failed_probe(
         _store_caps(client, None)
         return _checked_caps(client, None, strict, cause=exc)
     if working is not None:
+        _PROBED_OVER[client] = _CONNECTION_LOST
         return working
     if isinstance(exc, HomeAssistantCommandError):
         message = f"{INFO_COMMAND} failed: {exc}"

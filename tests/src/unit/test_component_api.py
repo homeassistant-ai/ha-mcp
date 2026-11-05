@@ -487,16 +487,18 @@ async def test_a_failed_reprobe_keeps_the_working_caps(monkeypatch) -> None:
     down = AsyncMock(side_effect=HomeAssistantConnectionError("Core restarting"))
     with patch.object(component_api, "get_websocket_client", down):
         during = await get_component_caps(client, strict=True)
+    # The failed connect took the dead connection out of the pool; nothing
+    # has opened a new one yet when the next caller asks.
+    del pool["tok"]
 
-    back_ws = _make_ws(info_result=_INFO_OK)
+    upgraded = {**_INFO_OK, "capabilities": ["search", "automation_config"]}
+    back_ws = _make_ws(info_result=upgraded)
     back_ws.is_connected = True
-    pool["tok"] = back_ws
     with _patch_ws(back_ws):
         after = await get_component_caps(client, strict=True)
 
     assert during is working
-    assert isinstance(after, ComponentCaps)
-    assert back_ws.send_command.await_count == 1
+    assert component_supports(after, "automation_config")
 
 
 class _OAuthProxy:
