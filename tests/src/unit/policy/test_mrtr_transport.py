@@ -42,6 +42,7 @@ def server(monkeypatch: pytest.MonkeyPatch) -> ApprovalServer:
     return mcp, queue, executed, middleware
 
 
+@pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.anyio
 @pytest.mark.parametrize("proxy", [False, True])
 async def test_wire_continuation_is_bound_and_single_use(

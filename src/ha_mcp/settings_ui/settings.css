@@ -734,10 +734,17 @@
   #panel-tool-security-policies > h2 {
     font-size: 1.125rem; font-weight: 500; margin-bottom: 8px;
   }
-  .policy-rule-card {
+  .policy-rule-card, .policy-pending-card {
     background: var(--surface); border: var(--card-border); border-radius: 12px;
     padding: 14px 16px; margin: 8px 0;
   }
+  .policy-pending-card strong { font-size: 0.9375rem; font-weight: 500; }
+  .policy-pending-args {
+    white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg);
+    padding: 8px; margin: 6px 0; border-radius: 6px; font-size: 0.8rem;
+  }
+  .policy-pending-expires { font-size: 0.75rem; color: var(--text-secondary); }
+  .policy-pending-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .policy-rule-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .policy-rule-header strong { font-size: 0.9375rem; font-weight: 500; }
   .policy-rule-remove {

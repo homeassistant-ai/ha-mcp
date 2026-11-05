@@ -350,8 +350,9 @@ choice keep the webhook on in `none` mode with LAN binding.
 
 Discovery never publishes the webhook id, in any of the three modes. The entry
 serves protected-resource metadata only at
-`/.well-known/oauth-protected-resource/api/webhook/<id>` and its `/readonly`
-variant. Both require the caller to already hold the id, and the webhook's
+`/.well-known/oauth-protected-resource/api/webhook/<id>` and its endpoint-suffix
+variants (`/readonly`, `/catalog/full`, `/catalog/search`, and both catalogs
+after `/readonly`). All of them require the caller to already hold the id, and the webhook's
 401 challenge points to its matching document rather than a fixed, guessable
 path. Switching from `ha_auth` or
 `legacy` back to the secret-URL posture therefore does not promote a published
@@ -406,7 +407,8 @@ In the app's `ha_auth` mode the Home Assistant login is the credential, not
 the webhook URL. The URL without a Bearer gets a 401, and that 401 points at
 the RFC 9728 protected-resource document served under the webhook's own path
 (`/.well-known/oauth-protected-resource/api/webhook/<id>`). The dev flavor also
-serves its `/readonly` variant. These metadata paths require the caller to
+serves its endpoint-suffix variants (`/readonly`, `/catalog/<mode>` and
+`/readonly/catalog/<mode>`). These metadata paths require the caller to
 already hold the id. Discovery therefore never publishes the webhook id in
 any mode, which is what lets the default posture with OAuth disabled keep
 treating that URL as the sole credential.

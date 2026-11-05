@@ -8,6 +8,7 @@ import pytest
 
 from . import test_webhook_proxy as proxy
 from .test_webhook_proxy import _webhook_proxy_variant  # noqa: F401
+from .test_webhook_proxy_catalog import catalog_webhook_supported
 
 
 class TestUnauthorizedResponseShape:
@@ -46,14 +47,16 @@ class TestUnauthorizedResponseShape:
                 in ww
             )
 
-    @pytest.mark.parametrize("suffix", ["", "/readonly"])
+    @pytest.mark.parametrize(
+        "suffix", ["", "/readonly", "/catalog/full", "/readonly/catalog/search"]
+    )
     async def test_readonly_resource_identity(
         self, setup: tuple[Any, Any], suffix: str
     ) -> None:
         oauth, provider = setup
         view = oauth.WellKnownProtectedResourceView(provider)
-        if proxy.CURRENT["key"] == "stable" and not getattr(view, "extra_urls", []):
-            pytest.skip("readonly metadata has not been promoted to this flavor")
+        if "catalog" in suffix and not catalog_webhook_supported():
+            pytest.skip(f"{suffix} metadata has not been promoted to this flavor")
         path = f"/api/webhook/{provider.webhook_id}{suffix}"
         metadata_path = f"/.well-known/oauth-protected-resource{path}"
         assert metadata_path in [view.url, *getattr(view, "extra_urls", [])]

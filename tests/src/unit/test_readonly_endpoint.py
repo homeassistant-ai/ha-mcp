@@ -162,6 +162,7 @@ def test_overlapping_requests_keep_their_own_readonly_mode():
 def test_readonly_proxy_catalog_and_nested_calls():
     from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
+    get_global_settings().enable_tool_search = True
     mcp, writes = _server()
     mcp.add_transform(CategorizedSearchTransform())
     with TestClient(mcp.http_app(path="/mcp", stateless_http=True)) as client:

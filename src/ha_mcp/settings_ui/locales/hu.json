@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Beállítások felület sidecar portja",
     "advanced.sidecar_pin_port.help": "A 0 szabad portot választ az első indításkor, és megőrzi a későbbi újraindításokhoz; egy adott tartománybeli port rögzít egy előnyben részesített portot (ha foglalt, szabadra vált vissza).",
     "advanced.enable_dev_mode.label": "Fejlesztői mód",
-    "advanced.enable_dev_mode.help": "⚠ Olyan rejtett eszközöket regisztrál, amelyek módosíthatják a beállításokat és lecserélhetik a futó szervert. Csak fejlesztési és tesztelési céllal.",
+    "advanced.enable_dev_mode.help": "⚠ Olyan rejtett eszközöket regisztrál, amelyek módosíthatják a beállításokat és lecserélhetik a futó szervert. Emellett megkerülhet bizonyos entitásláthatósági vagy egyéb korlátozásokat. Csak fejlesztési és tesztelési célra.",
     "advanced.dev_tools_security_policy_access.label": "Fejlesztői eszközök biztonsági házirendjének elérése",
     "advanced.dev_tools_security_policy_access.help": "⚠ Amikor a fejlesztői mód be van van kapcsolva, lehetővé teszi a fejlesztői eszközök számára az eszközök biztonsági házirendjeinek átírását, eszközönkénti jóváhagyási korlátok hozzáadását vagy eltávolítását, valamint a függőben lévő jóváhagyások jóváhagyását vagy elutasítását az Ön nevében – egy AI-ügynök elfogadhatja a saját korlátozott hívásait. Csak házirendek tesztelésére. Újraindítás nélkül érvénybe lép.",
     "addon.secret_path.name": "Titkos útvonal felülbírálása",

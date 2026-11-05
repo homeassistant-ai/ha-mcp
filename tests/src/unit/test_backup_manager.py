@@ -69,7 +69,7 @@ class _StubClient:
 
 
 class _CalendarRestClient(_StubClient):
-    """Stub exposing the REST ``_request`` the calendar fetcher reads through.
+    """Stub exposing the REST ``_request`` the calendar lookup reads through.
 
     ``events`` may be a list (every window answers the same) or a list of
     per-call responses, which lets a test distinguish the configured window
@@ -411,20 +411,20 @@ class TestFetcherIdResolution:
         # A miss sweeps a second, wider window before giving up.
         assert len(client.calls) == 2
 
+    @pytest.mark.parametrize("rid", ["20360615T090000", "20360615"])
     async def test_fetch_calendar_event_queries_around_the_recurrence_id(
-        self,
+        self, rid: str
     ) -> None:
         # An occurrence far outside every now-relative window must still be
-        # captured; its recurrence_id names the date, so one request finds it.
+        # captured; its recurrence_id names the date (an all-day series gives
+        # a bare date), so one request finds it.
         target = {
             "uid": "evt-1",
             "summary": "Decade out",
-            "recurrence_id": "20360615T090000",
+            "recurrence_id": rid,
         }
         client = _CalendarRestClient([target])
-        got = await bm._fetch_calendar_event(
-            client, "calendar.fam::evt-1::20360615T090000"
-        )
+        got = await bm._fetch_calendar_event(client, f"calendar.fam::evt-1::{rid}")
         assert got == {"calendar_entity_id": "calendar.fam", **target}
         assert len(client.calls) == 1
         assert client.calls[0][1]["start"].startswith("2036-06-14")
@@ -538,15 +538,15 @@ class TestFetcherIdResolution:
     async def test_restore_calendar_event_recreates_when_update_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Snapshot of a DELETED event (or a calendar without UPDATE_EVENT):
-        # the in-place attempt fails, so the event is re-created, and an
-        # all-day snapshot must go back as date-only fields.
+        # Snapshot of a DELETED event: the in-place attempt fails, the uid is
+        # no longer on the calendar, so the event is re-created, and an
+        # all-day snapshot must go back as date-only fields. The message is
+        # Local Calendar's generic one, which does not say the event is gone.
         posted: list[tuple[str, Any]] = []
 
         async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
             raise HomeAssistantCommandError(
-                "Command failed: Error while updating event: No existing item "
-                "with uid/recurrence_id: evt-1/None"
+                "Command failed: An error occurred while updating the event", "failed"
             )
 
         async def fake_post(_client: Any, path: str, payload: Any) -> Any:
@@ -556,7 +556,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(bm, "_ws_send", failing_ws)
         monkeypatch.setattr(bm, "_rest_post", fake_post)
         await bm._restore_calendar_event(
-            _StubClient(),
+            _CalendarRestClient([{"uid": "other"}]),
             "calendar.fam::evt-1",
             {
                 "calendar_entity_id": "calendar.fam",
@@ -635,7 +635,7 @@ class TestFetcherIdResolution:
         # create_event would only add a detached event beside it.
         async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
             raise HomeAssistantCommandError(
-                "Command failed: No existing item with uid/recurrence_id"
+                "Command failed: An error occurred while updating the event", "failed"
             )
 
         async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
@@ -645,7 +645,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(bm, "_rest_post", fail_post)
         with pytest.raises(HomeAssistantError, match="no longer exists"):
             await bm._restore_calendar_event(
-                _StubClient(),
+                _CalendarRestClient([{"uid": "evt-1", "recurrence_id": "x"}]),
                 "calendar.fam::evt-1::20260615T090000",
                 {
                     "calendar_entity_id": "calendar.fam",
@@ -666,18 +666,18 @@ class TestFetcherIdResolution:
             ),
             pytest.param(HomeAssistantCommandTimeout("Command timeout"), id="timeout"),
             pytest.param(
-                HomeAssistantCommandError("Command failed: Invalid rrule"),
-                id="other_command_failure",
+                HomeAssistantCommandError("Command failed: Invalid rrule", "failed"),
+                id="command_failure_on_existing_event",
             ),
         ],
     )
     async def test_restore_calendar_event_does_not_recreate_on_ambiguous_error(
         self, error: BaseException, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Only a failure PROVING the update never landed may re-create; a
-        # dropped connection, a timeout or an unclassified command failure
-        # could each have applied it, and re-creating would duplicate the
-        # event instead of restoring it.
+        # A dropped connection or a timeout could have applied the update,
+        # and a command failure on an event that still exists leaves it in
+        # place: re-creating would duplicate the event instead of restoring
+        # it.
         async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
             raise error
 
@@ -688,7 +688,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(bm, "_rest_post", fail_post)
         with pytest.raises(type(error)):
             await bm._restore_calendar_event(
-                _StubClient(),
+                _CalendarRestClient([{"uid": "evt-1"}]),
                 "calendar.fam::evt-1",
                 {
                     "calendar_entity_id": "calendar.fam",
@@ -719,7 +719,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(bm, "_ws_send", failing_ws)
         monkeypatch.setattr(bm, "_rest_post", fake_post)
         await bm._restore_calendar_event(
-            _StubClient(),
+            _CalendarRestClient([{"uid": "evt-1"}]),
             "calendar.fam::evt-1",
             {
                 "calendar_entity_id": "calendar.fam",

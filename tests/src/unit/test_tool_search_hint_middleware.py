@@ -1,8 +1,8 @@
 """Unit tests for ToolSearchHintMiddleware.
 
 Covers the stale-tool-list scenario: a client (e.g. a ChatGPT connector)
-calls ha_search_tools / the ha_call_* proxies from a cached catalog while the
-live server has Tool Search off, so the names no longer resolve.
+calls ha_search_tools / the ha_call_* proxies on a full-catalog connection,
+where the names do not resolve.
 """
 
 import json
@@ -12,16 +12,14 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
+from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.tools.tool_search_hint_middleware import ToolSearchHintMiddleware
+from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
 
-def _make_mcp() -> FastMCP:
-    """A bare server with only the hint middleware and one real tool.
-
-    The tool-search transform is deliberately NOT installed, so the synthetic
-    names (ha_search_tools / ha_call_*) are unresolved — mirroring the live
-    Tool-Search-off server that a stale client keeps calling.
-    """
+def _make_mcp(*, search_transform: bool = True) -> FastMCP:
+    """A server with the hint middleware, one real tool and, by default, the
+    search transform as the production server installs it."""
     mcp = FastMCP("test")
     mcp.add_middleware(ToolSearchHintMiddleware())
 
@@ -29,14 +27,9 @@ def _make_mcp() -> FastMCP:
     async def ha_real_tool(x: int) -> dict:
         return {"x": x}
 
+    if search_transform:
+        mcp.add_transform(CategorizedSearchTransform())
     return mcp
-
-
-def _patch_tool_search(monkeypatch, *, enabled: bool) -> None:
-    monkeypatch.setattr(
-        "ha_mcp.tools.tool_search_hint_middleware.get_global_settings",
-        lambda: SimpleNamespace(enable_tool_search=enabled),
-    )
 
 
 @pytest.mark.asyncio
@@ -49,81 +42,77 @@ def _patch_tool_search(monkeypatch, *, enabled: bool) -> None:
         "ha_call_delete_tool",
     ],
 )
-async def test_stale_synthetic_tool_returns_refresh_hint(monkeypatch, name):
-    """Calling a synthetic tool-search tool while Tool Search is off yields a
-    structured 'stale tool list — reconnect/refresh' ToolError, not the bare
-    FastMCP NotFoundError."""
-    _patch_tool_search(monkeypatch, enabled=False)
+@pytest.mark.usefixtures("tool_search_default")
+async def test_full_catalog_url_returns_refresh_hint_when_search_is_default(name):
+    """With search as the main endpoint's default, a synthetic tool called on
+    ``/catalog/full`` (through the real transform) yields a structured hint
+    naming the connection's catalog, not the bare NotFoundError."""
     mcp = _make_mcp()
 
-    with pytest.raises(ToolError) as exc_info:
+    with catalog_endpoint("full"), pytest.raises(ToolError) as exc_info:
         await mcp.call_tool(name, {"query": "x"})
 
     body = json.loads(str(exc_info.value))
     assert body["success"] is False
     assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
     msg = body["error"]["message"]
-    assert "Tool Search" in msg
-    assert ("reconnect" in msg.lower()) or ("refresh" in msg.lower())
+    assert "this connection serves the full catalog" in msg
+    assert "/catalog/search" in msg
     # the counter-intuitive insight users most need: a server restart won't help
     assert "does not refresh" in msg.lower()
-    # the actionable recovery guidance is the whole point of the change
+    assert "app (add-on)" in msg
     suggestions = body["error"]["suggestions"]
     assert len(suggestions) == 2
-    assert any(
-        ("reconnect" in s.lower()) or ("refresh" in s.lower()) for s in suggestions
-    )
+    assert any("refresh" in s.lower() for s in suggestions)
     # context fields are spread at the top level by create_error_response
     assert body["tool_name"] == name
-    assert body["enable_tool_search"] is False
+    assert body["catalog"] == "full"
+    assert "enable_tool_search" not in body
 
 
 @pytest.mark.asyncio
-async def test_unknown_non_synthetic_tool_still_raises_notfound(monkeypatch):
+async def test_unknown_non_synthetic_tool_still_raises_notfound():
     """A genuinely unknown tool that is NOT a synthetic name keeps the original
     NotFoundError — the middleware must not mask real typos/renames."""
-    _patch_tool_search(monkeypatch, enabled=False)
     mcp = _make_mcp()
 
-    with pytest.raises(NotFoundError):
+    with catalog_endpoint("full"), pytest.raises(NotFoundError):
         await mcp.call_tool("ha_definitely_not_a_tool", {})
 
 
 @pytest.mark.asyncio
-async def test_synthetic_name_not_masked_when_tool_search_on(monkeypatch):
-    """If Tool Search is ON, a NotFoundError for a synthetic name signals a
+async def test_synthetic_name_not_masked_on_a_search_connection():
+    """On a search connection, a NotFoundError for a synthetic name signals a
     real problem (the transform should have registered it) and must propagate
     unchanged rather than be mislabelled as a stale-cache hint."""
-    _patch_tool_search(monkeypatch, enabled=True)
-    mcp = _make_mcp()  # transform not installed, so the name is missing
+    mcp = _make_mcp(search_transform=False)  # so the name is missing
 
-    with pytest.raises(NotFoundError):
+    with catalog_endpoint("search"), pytest.raises(NotFoundError):
         await mcp.call_tool("ha_search_tools", {"query": "x"})
 
 
 @pytest.mark.asyncio
-async def test_deep_notfound_with_other_name_not_rewritten(monkeypatch):
+async def test_deep_notfound_with_other_name_not_rewritten():
     """A NotFoundError whose message names a DIFFERENT tool (e.g. one bubbling
     up from inside an executing proxy) is not a top-level miss for the called
     name, so it must propagate unchanged rather than be relabeled stale-cache —
-    even when the called name is synthetic and Tool Search is off."""
-    _patch_tool_search(monkeypatch, enabled=False)
+    even when the called name is synthetic and the catalog is full."""
     mw = ToolSearchHintMiddleware()
     context = SimpleNamespace(message=SimpleNamespace(name="ha_search_tools"))
 
     async def call_next(_ctx):
         raise NotFoundError("Unknown tool: 'some_inner_tool'")
 
-    with pytest.raises(NotFoundError) as exc_info:
+    with catalog_endpoint("full"), pytest.raises(NotFoundError) as exc_info:
         await mw.on_call_tool(context, call_next)
     assert "some_inner_tool" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_real_tool_passes_through(monkeypatch):
+async def test_real_tool_passes_through():
     """A normal, registered tool is unaffected by the middleware."""
-    _patch_tool_search(monkeypatch, enabled=False)
     mcp = _make_mcp()
 
-    result = await mcp.call_tool("ha_real_tool", {"x": 5})
+    with catalog_endpoint("full"):
+        result = await mcp.call_tool("ha_real_tool", {"x": 5})
     assert result.structured_content == {"x": 5}

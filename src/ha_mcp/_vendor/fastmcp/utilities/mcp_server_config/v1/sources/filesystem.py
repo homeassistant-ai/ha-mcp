@@ -16,7 +16,7 @@ logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
 class FileSystemSource(Source):
     """Source for local Python files."""
 
-    type: Literal["filesystem"] = "filesystem"
+    type: Literal["filesystem"] = "filesystem"  # ty:ignore[invalid-mutable-override]
 
     path: str = Field(description="Path to Python file containing the server")
     entrypoint: str | None = Field(

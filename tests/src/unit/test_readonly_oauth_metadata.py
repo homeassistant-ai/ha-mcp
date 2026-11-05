@@ -16,10 +16,12 @@ from .test_mcp_webhook import (
     mw,
 )
 
+SUFFIXES = ["", "/readonly", "/catalog/full", "/readonly/catalog/search"]
+
 
 class TestReadonlyDiscovery:
     @pytest.mark.parametrize("webhook_id", [WEBHOOK_ID, "readonly"])
-    @pytest.mark.parametrize("suffix", ["", "/readonly"])
+    @pytest.mark.parametrize("suffix", SUFFIXES)
     @pytest.mark.parametrize(
         "mode", [WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY, WEBHOOK_AUTH_NONE]
     )
@@ -49,7 +51,7 @@ class TestReadonlyDiscovery:
         hass.data.clear()
         assert (await view.get(request, webhook_id=webhook_id)).status == 404
 
-    @pytest.mark.parametrize("suffix", ["", "/readonly"])
+    @pytest.mark.parametrize("suffix", [*SUFFIXES, "/catalog/bogus"])
     @pytest.mark.parametrize("mode", [WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY])
     async def test_readonly_discovery_identity_in_auth_challenge(
         self, suffix: str, mode: str
@@ -63,5 +65,6 @@ class TestReadonlyDiscovery:
         assert response.status == 401
         assert response.headers["WWW-Authenticate"] == (
             'Bearer realm="HA-MCP", resource_metadata="https://abc.ui.nabu.casa'
-            f'/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}{suffix}"'
+            "/.well-known/oauth-protected-resource/api/webhook/"
+            f'{WEBHOOK_ID}{suffix if suffix in SUFFIXES else ""}"'
         )

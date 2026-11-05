@@ -216,6 +216,7 @@ async def test_existing_registration_observes_live_backup_controls(
         assert (await _direct(backup_world, scope="snapshot", action="list"))["success"]
 
 
+@pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.parametrize(
     ("control", "action", "proxy"),
     [

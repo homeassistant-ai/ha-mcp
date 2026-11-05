@@ -11,6 +11,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import Client as MCPClient
 from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp.config import get_global_settings
 from ha_mcp.transforms import CategorizedSearchTransform
 
 AGENT_SCRIPT = Path(__file__).resolve().parent / "openai_agent.py"
@@ -50,8 +51,11 @@ class TestSearchResultsInTrace:
     model that picked the wrong one."""
 
     @pytest.fixture
-    def search_server(self) -> FastMCP:
+    def search_server(self, monkeypatch: pytest.MonkeyPatch) -> FastMCP:
         """Two tools behind the real search transform, no Home Assistant."""
+        # The transform serves search tools only where the endpoint selects
+        # search; this main endpoint does when ENABLE_TOOL_SEARCH is on.
+        monkeypatch.setattr(get_global_settings(), "enable_tool_search", True)
         mcp = FastMCP("search-trace")
 
         @mcp.tool(annotations={"readOnlyHint": True})

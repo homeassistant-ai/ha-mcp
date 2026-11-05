@@ -77,7 +77,9 @@ from .oauth_legacy import (
 )
 from .oauth_redirect_allowlist import effective_allowlist
 from .readonly_webhook import (
-    readonly_url,
+    ENDPOINT_SUFFIXES,
+    endpoint_suffix,
+    forward_url,
     register_readonly_webhook,
     unregister_readonly_webhook,
 )
@@ -472,7 +474,7 @@ class _WellKnownProtectedResourceView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; liveness is resolved per request."""
         self._hass = hass
-        self.extra_urls = [f"{self.url}/readonly"]
+        self.extra_urls = [f"{self.url}{suffix}" for suffix in ENDPOINT_SUFFIXES]
 
     async def get(self, request: web.Request, webhook_id: str) -> web.Response:
         """Serve the document only for the CURRENT entry's webhook id."""
@@ -480,8 +482,9 @@ class _WellKnownProtectedResourceView(HomeAssistantView):
         if active_id is None or webhook_id != active_id:
             return _json_not_found()
         document = _protected_resource_document(active_id, _build_base_url(request))
-        if request.path == f"{self.url.format(webhook_id=webhook_id)}/readonly":
-            document["resource"] += "/readonly"
+        document["resource"] += endpoint_suffix(
+            request.path, self.url.format(webhook_id=webhook_id)
+        )
         return web.json_response(document)
 
 
@@ -578,8 +581,9 @@ def _build_unauthorized_response(
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
     )
-    if getattr(request, "path", "") == f"/api/webhook/{webhook_id}/readonly":
-        metadata_url += "/readonly"
+    metadata_url += endpoint_suffix(
+        getattr(request, "path", ""), f"/api/webhook/{webhook_id}"
+    )
     return web.Response(
         status=401,
         text="Unauthorized",
@@ -625,8 +629,9 @@ async def _async_handle_webhook(
     request: web.Request,
     *,
     read_only: bool = False,
+    suffix: str = "",
 ) -> web.StreamResponse:
-    """Forward an MCP request to the loopback server and stream the reply back."""
+    """Forward an MCP request to the loopback server's endpoint for ``suffix``."""
     domain_data = hass.data.get(DOMAIN)
     cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
     if not isinstance(cfg, dict):
@@ -636,9 +641,7 @@ async def _async_handle_webhook(
     if auth_response is not None:
         return auth_response
 
-    target_url: str = (
-        readonly_url(cfg["target_url"]) if read_only else cfg["target_url"]
-    )
+    target_url = forward_url(cfg["target_url"], suffix, read_only=read_only)
     session: aiohttp.ClientSession = cfg["session"]
 
     # A cloudhook (#2696) arrives as ``MockRequest``: no ``read()``, no transport,

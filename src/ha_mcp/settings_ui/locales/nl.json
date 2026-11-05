@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Instellingen UI sidecar-poort",
     "advanced.sidecar_pin_port.help": "0 kiest een vrije poort bij de eerste start en behoudt deze voor latere herstarts; een poort in het bereik zet een voorkeurspoort vast (valt terug op een vrije poort als deze bezet is).",
     "advanced.enable_dev_mode.label": "Ontwikkelaarsmodus",
-    "advanced.enable_dev_mode.help": "⚠ Registreert verborgen tools die instellingen kunnen wijzigen en de draaiende server kunnen vervangen. Alleen voor ontwikkeling en testen.",
+    "advanced.enable_dev_mode.help": "⚠ Registreert verborgen tools die instellingen kunnen wijzigen en de actieve server kunnen vervangen. Het kan ook sommige entiteitszichtbaarheid of andere beperkingen omzeilen. Alleen voor ontwikkeling en testen.",
     "advanced.dev_tools_security_policy_access.label": "Toegang tot beveiligingsbeleid ontwikkelaarstools",
     "advanced.dev_tools_security_policy_access.help": "⚠ Terwijl de ontwikkelaarsmodus is ingeschakeld, laten de ontwikkelaarstools het beveiligingsbeleid van tools herschrijven, per-tool goedkeuringspoorten toevoegen of verwijderen, en openstaande goedkeuringen namens jou goedkeuren of weigeren — een AI-agent kan zijn eigen afgeschermde oproepen accepteren. Alleen voor beleidstesten. Wordt van kracht zonder herstart.",
     "addon.secret_path.name": "Overschrijving van geheim pad",

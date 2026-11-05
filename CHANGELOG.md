@@ -3,6 +3,202 @@
 <!-- version list -->
 
 
+## v9.1.0 (2026-11-04)
+
+### Added
+
+- Fixed tool catalog per endpoint URL (/catalog/full, /catalog/search)
+  ([#2953](https://github.com/homeassistant-ai/ha-mcp/pull/2953))
+- **component**: Add Marketplace integration categories
+  ([#2958](https://github.com/homeassistant-ai/ha-mcp/pull/2958))
+- Report event listener counts from ha_call_event (#2632)
+  ([#2923](https://github.com/homeassistant-ai/ha-mcp/pull/2923))
+- **resources**: Patch inline dashboard resources with search/replace edits
+  ([#2928](https://github.com/homeassistant-ai/ha-mcp/pull/2928))
+- **i18n**: Add the Hungarian (hu) locale
+  ([#2931](https://github.com/homeassistant-ai/ha-mcp/pull/2931))
+- Run the automation tools on Home Assistant's own validation and storage
+  ([#2924](https://github.com/homeassistant-ai/ha-mcp/pull/2924))
+- IPv6 for the app and the in-process server's Local network, local network only
+  ([#2917](https://github.com/homeassistant-ai/ha-mcp/pull/2917))
+- Hand todo item writes to Core's todo services and restore todo backups
+  ([#2896](https://github.com/homeassistant-ai/ha-mcp/pull/2896))
+- Support WPE Screenshot Engine discovery
+  ([#2853](https://github.com/homeassistant-ai/ha-mcp/pull/2853))
+
+### Changed
+
+- Recommend mcp-remote as the Claude Desktop bridge and split the setup wizard into modules
+  ([#2921](https://github.com/homeassistant-ai/ha-mcp/pull/2921))
+- Exempt tests/ from the type-hint rule
+  ([#2922](https://github.com/homeassistant-ai/ha-mcp/pull/2922))
+
+### Fixed
+
+- Exempt server-text tools from entity visibility enforce mode
+  ([#2957](https://github.com/homeassistant-ai/ha-mcp/pull/2957))
+- Retire the stdio settings sidecar when disabled and stop surfacing a stale settings_url
+  ([#2956](https://github.com/homeassistant-ai/ha-mcp/pull/2956))
+- Preserve !input tags in YAML reads (#2632)
+  ([#2926](https://github.com/homeassistant-ai/ha-mcp/pull/2926))
+- Ha_auth sign-in fails with 503 when Home Assistant serves TLS itself
+  ([#2952](https://github.com/homeassistant-ai/ha-mcp/pull/2952))
+- Cite trigger subsections instead of #trigger-types in BP warnings
+  ([#2935](https://github.com/homeassistant-ai/ha-mcp/pull/2935))
+- Take the dashboard tools' remaining fields, codes and themes from Home Assistant
+  ([#2934](https://github.com/homeassistant-ai/ha-mcp/pull/2934))
+- **i18n**: Apply native-speaker review to two Hungarian component strings
+  ([#2933](https://github.com/homeassistant-ai/ha-mcp/pull/2933))
+- **component**: Stop offering /backup as a file-tools volume root
+  ([#2908](https://github.com/homeassistant-ai/ha-mcp/pull/2908))
+- Raise HomeAssistantCommandNotSent when no WebSocket client was obtained
+  ([#2914](https://github.com/homeassistant-ai/ha-mcp/pull/2914))
+- Return wrapped tools' warnings at the top level, not under data
+  ([#2911](https://github.com/homeassistant-ai/ha-mcp/pull/2911))
+- Redact quoted IPs, plex.direct dashed IPs, .lan/.ts.net hosts, Graph calendar IDs and the instance's own addresses in issue reports
+  ([#2916](https://github.com/homeassistant-ai/ha-mcp/pull/2916))
+- Refuse credential and user-management WebSocket commands in the raw escape hatches
+  ([#2850](https://github.com/homeassistant-ai/ha-mcp/pull/2850))
+- Create the usage log owner-only
+  ([#2851](https://github.com/homeassistant-ai/ha-mcp/pull/2851))
+- Allow one-ended string trims in python_transform and list every allowed method
+  ([#2913](https://github.com/homeassistant-ai/ha-mcp/pull/2913))
+- List stored helper config from Core's storage collection
+  ([#2906](https://github.com/homeassistant-ai/ha-mcp/pull/2906))
+- Support Home Assistant 2026.11 (Marketplace, log timestamps, card editor, LLM API)
+  ([#2900](https://github.com/homeassistant-ai/ha-mcp/pull/2900))
+- Stop the component bulk progress message claiming confirmation
+  ([#2899](https://github.com/homeassistant-ai/ha-mcp/pull/2899))
+- Close the gaps found in tools ticked under #2632
+  ([#2884](https://github.com/homeassistant-ai/ha-mcp/pull/2884))
+- Approval waits for clients that cannot resume MRTR, and report the MCP protocol and client capabilities
+  ([#2897](https://github.com/homeassistant-ai/ha-mcp/pull/2897))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Changed
+
+- **agents**: Rebuild #2632 tools on the native path that does more
+  ([#2932](https://github.com/homeassistant-ai/ha-mcp/pull/2932))
+
+### Chores
+
+- **deps**: Update dependency fastmcp-slim to v4.1.4
+  ([#2961](https://github.com/homeassistant-ai/ha-mcp/pull/2961))
+- Sync ratchet baselines after merge [skip ci]
+  ([`a14bfc6`](https://github.com/homeassistant-ai/ha-mcp/commit/a14bfc6af26548547edf2f888804bf6b039fe3ef))
+- **deps**: Update public.ecr.aws/docker/library/python:3.13-slim docker digest to ae14d4c
+  ([#2959](https://github.com/homeassistant-ai/ha-mcp/pull/2959))
+- **deps**: Update src/ha_mcp/resources/skills-vendor digest to 166defa
+  ([#2960](https://github.com/homeassistant-ai/ha-mcp/pull/2960))
+- Sync ratchet baselines after merge [skip ci]
+  ([`00ebfe7`](https://github.com/homeassistant-ai/ha-mcp/commit/00ebfe7cbe49ccd7538f3ecb2b0800aa9590dd76))
+- Sync ratchet baselines after merge [skip ci]
+  ([`3c79dcf`](https://github.com/homeassistant-ai/ha-mcp/commit/3c79dcff31df2624e72fc4d2d74f2859b51d8af6))
+- Sync ratchet baselines after merge [skip ci]
+  ([`4392c68`](https://github.com/homeassistant-ai/ha-mcp/commit/4392c682b331cee78fee859cdbd0e37142e95a3f))
+- Sync ratchet baselines after merge [skip ci]
+  ([`b862088`](https://github.com/homeassistant-ai/ha-mcp/commit/b8620888447981374933112c43ce41cb9526289e))
+- Sync tool docs after merge [skip ci]
+  ([`e8ca3c0`](https://github.com/homeassistant-ai/ha-mcp/commit/e8ca3c0ed57a3cb14c641a2beead892e98ef155f))
+- Sync ratchet baselines after merge [skip ci]
+  ([`09322d2`](https://github.com/homeassistant-ai/ha-mcp/commit/09322d299682c3e73c9b9c3c5d2cb3eab2229769))
+- Sync ratchet baselines after merge [skip ci]
+  ([`1c4029d`](https://github.com/homeassistant-ai/ha-mcp/commit/1c4029d09d81168bd2530bca0ea664f156066aa2))
+- Simplify the helper scripts under scripts/
+  ([#2937](https://github.com/homeassistant-ai/ha-mcp/pull/2937))
+- Sync ratchet baselines after merge [skip ci]
+  ([`7420ef5`](https://github.com/homeassistant-ai/ha-mcp/commit/7420ef5a0dd61cd6a419990be1c656a060aa5dc8))
+- Machine-translate locale updates
+  ([`7bafd21`](https://github.com/homeassistant-ai/ha-mcp/commit/7bafd2190faf5cd1bd752569679dd41a2030acfa))
+- Sync ratchet baselines after merge [skip ci]
+  ([`65885e9`](https://github.com/homeassistant-ai/ha-mcp/commit/65885e969eab63152f6824091440aa874a9bd425))
+- Sync ratchet baselines after merge [skip ci]
+  ([`a2de54e`](https://github.com/homeassistant-ai/ha-mcp/commit/a2de54e4046287bf7a5bb5b4e095eb58ce4281e0))
+- Sync tool docs after merge [skip ci]
+  ([`871b531`](https://github.com/homeassistant-ai/ha-mcp/commit/871b531d8d0f835ad2095e93674bbb8df5e42272))
+- Sync tool docs after merge [skip ci]
+  ([`2556e9f`](https://github.com/homeassistant-ai/ha-mcp/commit/2556e9fe2240be3e7d1908a50d7f8478870ed2ba))
+- Sync ratchet baselines after merge [skip ci]
+  ([`a99f2ff`](https://github.com/homeassistant-ai/ha-mcp/commit/a99f2ffd71a9b49e98f78530da03500035ed22cb))
+- Sync tool docs after merge [skip ci]
+  ([`1c3adde`](https://github.com/homeassistant-ai/ha-mcp/commit/1c3adde5b8b8180eed0ad70275eda54f9d042d1c))
+- Machine-translate locale updates
+  ([`d348370`](https://github.com/homeassistant-ai/ha-mcp/commit/d348370fcb444cd5af649ec57c9c7177316ccf2f))
+- Sync ratchet baselines after merge [skip ci]
+  ([`4c0b737`](https://github.com/homeassistant-ai/ha-mcp/commit/4c0b73766b967e37e51cc187ffe00a21293079a0))
+- Sync tool docs after merge [skip ci]
+  ([`1ea5e65`](https://github.com/homeassistant-ai/ha-mcp/commit/1ea5e65ea4d269e8f4c3a4d3070a1508479a2b10))
+- Sync tool docs after merge [skip ci]
+  ([`389650b`](https://github.com/homeassistant-ai/ha-mcp/commit/389650bb94b474697770d44bc33cc977ccd10023))
+- Sync ratchet baselines after merge [skip ci]
+  ([`6dc7c36`](https://github.com/homeassistant-ai/ha-mcp/commit/6dc7c3601f367155ea427608508a5563f0cb8c5d))
+- Sync ratchet baselines after merge [skip ci]
+  ([`543cad8`](https://github.com/homeassistant-ai/ha-mcp/commit/543cad8e0ca20daaaacdd26c98adfac5f820c264))
+- Machine-translate locale updates
+  ([`074e6df`](https://github.com/homeassistant-ai/ha-mcp/commit/074e6df7903b5b8805a7e4c9907a5867ebb053e5))
+- Sync tool docs after merge [skip ci]
+  ([`10b5db3`](https://github.com/homeassistant-ai/ha-mcp/commit/10b5db3eb7ae9f15d613d24b11dd94962069d621))
+- Sync ratchet baselines after merge [skip ci]
+  ([`cad7aaa`](https://github.com/homeassistant-ai/ha-mcp/commit/cad7aaab17b6a443688b81f1ebac6a1a19733162))
+- Sync ratchet baselines after merge [skip ci]
+  ([`eda5c8c`](https://github.com/homeassistant-ai/ha-mcp/commit/eda5c8cd2f44c9b5e1856282a7d260d212d75954))
+- Sync ratchet baselines after merge [skip ci]
+  ([`8fad6a0`](https://github.com/homeassistant-ai/ha-mcp/commit/8fad6a0cab54b0ebedb25d173cb6e48d989306bf))
+- Machine-translate locale updates
+  ([`cf8a7ea`](https://github.com/homeassistant-ai/ha-mcp/commit/cf8a7eaa733bf138992d7573cff8cea3ab373457))
+- Sync tool docs after merge [skip ci]
+  ([`ff67d0c`](https://github.com/homeassistant-ai/ha-mcp/commit/ff67d0c90d66bd7f8fab449257b45874fe545b75))
+- Sync ratchet baselines after merge [skip ci]
+  ([`dc09cf4`](https://github.com/homeassistant-ai/ha-mcp/commit/dc09cf42843cb32604eae8ddc4a2c75b6873c852))
+- **deps**: Update dependency home-assistant/supervisor to v2026.10.5
+  ([#2909](https://github.com/homeassistant-ai/ha-mcp/pull/2909))
+- Machine-translate locale updates
+  ([`6debee0`](https://github.com/homeassistant-ai/ha-mcp/commit/6debee024722f840cfb30a7e4d3ece1e6e495742))
+- Sync ratchet baselines after merge [skip ci]
+  ([`1d1be4b`](https://github.com/homeassistant-ai/ha-mcp/commit/1d1be4b67a5e76dc3d5582131392d06b8b9c21d9))
+- Sync ratchet baselines after merge [skip ci]
+  ([`95115a0`](https://github.com/homeassistant-ai/ha-mcp/commit/95115a0bb83c2ca36713c356d845633cdff522fa))
+- Sync tool docs after merge [skip ci]
+  ([`25ee9f9`](https://github.com/homeassistant-ai/ha-mcp/commit/25ee9f96d2010559b49fe715bb833f00ee524803))
+- Sync ratchet baselines after merge [skip ci]
+  ([`dd73008`](https://github.com/homeassistant-ai/ha-mcp/commit/dd73008066ef28b9cdefb3b18f4017401435089c))
+- Sync tool docs after merge [skip ci]
+  ([`430c335`](https://github.com/homeassistant-ai/ha-mcp/commit/430c33519fc98d73c7c8566af32a3256d7937af4))
+- Sync ratchet baselines after merge [skip ci]
+  ([`79ea2a7`](https://github.com/homeassistant-ai/ha-mcp/commit/79ea2a71b3908703350cd663cbacc72255c1ace2))
+- Sync tool docs after merge [skip ci]
+  ([`4272122`](https://github.com/homeassistant-ai/ha-mcp/commit/427212253879ba15351df00f35ba6f1d2fce1dea))
+- Sync ratchet baselines after merge [skip ci]
+  ([`480a522`](https://github.com/homeassistant-ai/ha-mcp/commit/480a522e1dc604da5461dfa494210ff2e56bb7fb))
+- **addon**: Publish version 9.0.0 [skip ci]
+  ([`5bf27bb`](https://github.com/homeassistant-ai/ha-mcp/commit/5bf27bb7f1a9c29e849a0d9b752d01dcac280481))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 6 updates
+  ([#2948](https://github.com/homeassistant-ai/ha-mcp/pull/2948))
+- **intake**: Accept an ha_report_issue heading that lost its emoji
+  ([#2951](https://github.com/homeassistant-ai/ha-mcp/pull/2951))
+- Skip the dev publish and release workflows in forks
+  ([#2919](https://github.com/homeassistant-ai/ha-mcp/pull/2919))
+- Run the post-merge baseline and tool-docs syncs in this repository only
+  ([#2918](https://github.com/homeassistant-ai/ha-mcp/pull/2918))
+
+### Testing
+
+- **uat**: Run BAT scenarios against a dev environment
+  ([#2955](https://github.com/homeassistant-ai/ha-mcp/pull/2955))
+- Keep unit-test git out of the contributor's repository
+  ([#2929](https://github.com/homeassistant-ai/ha-mcp/pull/2929))
+- Keep the context-injection mock client off the network
+  ([#2898](https://github.com/homeassistant-ai/ha-mcp/pull/2898))
+</details>
+
+
 ## v9.0.0 (2026-10-28)
 
 ### Added

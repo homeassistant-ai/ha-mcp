@@ -519,7 +519,7 @@
     "advanced.sidecar_pin_port.label": "Port sidecaru uživatelského rozhraní nastavení",
     "advanced.sidecar_pin_port.help": "Hodnota 0 vybere volný port při prvním spuštění a ponechá si ho pro pozdější restarty; port v zadaném rozsahu zafixuje preferovaný port (pokud je obsazen, přejde na volný).",
     "advanced.enable_dev_mode.label": "Režim vývojáře",
-    "advanced.enable_dev_mode.help": "⚠ Registruje skryté nástroje, které mohou měnit nastavení a nahradit běžící server. Pouze pro vývoj a testování.",
+    "advanced.enable_dev_mode.help": "⚠ Registruje skryté nástroje, které mohou měnit nastavení a nahradit běžící server. Může také obejít některá omezení viditelnosti entit nebo jiná omezení. Pouze pro vývoj a testování.",
     "advanced.dev_tools_security_policy_access.label": "Přístup k bezpečnostním zásadám vývojářských nástrojů",
     "advanced.dev_tools_security_policy_access.help": "⚠ Zatímco je zapnutý režim vývojáře, umožňuje vývojářským nástrojům přepisovat bezpečnostní zásady nástrojů, přidávat nebo odebírat brány schválení pro jednotlivé nástroje a schvalovat nebo zamítat čekající schválení vaším jménem — agent AI může přijímat svá vlastní řízená volání. Pouze pro testování zásad. Projeví se bez restartu.",
     "addon.secret_path.name": "Přepsání tajné cesty",

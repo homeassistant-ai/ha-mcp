@@ -33,20 +33,16 @@ def _write_skill(skills_dir: Path, name: str = "my-skill") -> Path:
 
 
 class TestSkillsSection:
-    def test_no_skills_section_without_a_skills_directory(
-        self, settings: MagicMock
-    ) -> None:
-        assert build_skills_instructions(None, settings, tool_hidden=False) is None
+    def test_no_skills_section_without_a_skills_directory(self) -> None:
+        assert build_skills_instructions(None, tool_hidden=False) is None
 
-    def test_agents_are_told_to_read_skills_and_how(
-        self, settings: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_agents_are_told_to_read_skills_and_how(self, tmp_path: Path) -> None:
         """#2802: agents that read the skill:// resources never get the
         strict-BPS key or the MandatoryBPS=false opt-out, so the served
         ha_get_skill_guide is the access method, not a fallback."""
         _write_skill(tmp_path)
 
-        result = build_skills_instructions(tmp_path, settings, tool_hidden=False)
+        result = build_skills_instructions(tmp_path, tool_hidden=False)
 
         assert result is not None
         assert "IMPORTANT" in result
@@ -60,13 +56,13 @@ class TestSkillsSection:
         assert "ha_read_resource" not in result
 
     def test_a_disabled_skill_tool_is_not_offered_as_fallback(
-        self, settings: MagicMock, tmp_path: Path
+        self, tmp_path: Path
     ) -> None:
         """#1886: with ha_get_skill_guide disabled (possible only outside
         strict-BPS mode), agents are pointed at locally installed skills."""
         _write_skill(tmp_path)
 
-        result = build_skills_instructions(tmp_path, settings, tool_hidden=True)
+        result = build_skills_instructions(tmp_path, tool_hidden=True)
 
         assert result is not None
         assert "resources/read" in result
@@ -103,7 +99,7 @@ class TestSkillsSection:
         ],
     )
     def test_no_skills_section_when_no_skill_is_readable(
-        self, settings: MagicMock, tmp_path: Path, entry: str
+        self, tmp_path: Path, entry: str
     ) -> None:
         if entry == "file instead of a directory":
             (tmp_path / "not-a-dir.txt").write_text("just a file")
@@ -112,7 +108,7 @@ class TestSkillsSection:
         elif entry == "SKILL.md without frontmatter":
             (tmp_path / "bad").mkdir()
             (tmp_path / "bad" / "SKILL.md").write_text("# No frontmatter\n")
-        assert build_skills_instructions(tmp_path, settings, tool_hidden=False) is None
+        assert build_skills_instructions(tmp_path, tool_hidden=False) is None
 
 
 class TestNotices:
@@ -122,7 +118,7 @@ class TestNotices:
     ) -> None:
         """Agents that file issues without ha_report_issue output get them
         closed; the instructions must say so with or without skills."""
-        instructions = compose_instructions(skills, settings)
+        instructions = compose_instructions(skills, settings, tool_search=False)
         assert "run ha_report_issue and put the issue_body it returns" in instructions
         if skills:
             assert instructions.startswith(skills)
@@ -134,9 +130,22 @@ class TestNotices:
         """A client started in Read Only Mode must be warned up front, without
         losing the issue-filing rule."""
         settings.read_only_mode = True
-        instructions = compose_instructions(skills, settings)
+        instructions = compose_instructions(skills, settings, tool_search=False)
         assert "## Read Only Mode" in instructions
         assert "## Filing ha-mcp issues" in instructions
+
+    @pytest.mark.parametrize("skills", [None, "SKILLS"])
+    def test_only_search_connections_are_told_how_to_discover_tools(
+        self, settings: MagicMock, skills: str | None
+    ) -> None:
+        """A full-catalog connection has no ha_search_tools, so only a search
+        connection's instructions may tell the agent to use it; without skills
+        the discovery section leads the instructions."""
+        search = compose_instructions(skills, settings, tool_search=True)
+        full = compose_instructions(skills, settings, tool_search=False)
+        assert "## Tool Discovery" in search
+        assert "## Tool Discovery" not in full
+        assert search.startswith(skills or "## Tool Discovery")
 
 
 class TestCustomInstructions:
@@ -149,7 +158,7 @@ class TestCustomInstructions:
         self, settings: MagicMock, value: str
     ) -> None:
         settings.custom_instructions = value
-        assert compose_instructions("SKILLS", settings).endswith(
+        assert compose_instructions("SKILLS", settings, tool_search=False).endswith(
             ISSUE_FILING_INSTRUCTIONS
         )
 
@@ -157,7 +166,7 @@ class TestCustomInstructions:
         self, settings: MagicMock
     ) -> None:
         settings.custom_instructions = f"  {self.TEXT}\n"
-        instructions = compose_instructions("SKILLS", settings)
+        instructions = compose_instructions("SKILLS", settings, tool_search=False)
         assert instructions.endswith(
             f"{ISSUE_FILING_INSTRUCTIONS}\n\n"
             f"## Instructions from this installation's owner\n{self.TEXT}"
@@ -167,7 +176,7 @@ class TestCustomInstructions:
         self, settings: MagicMock
     ) -> None:
         settings.custom_instructions = "First rule.\nSecond rule."
-        assert compose_instructions(None, settings).endswith(
+        assert compose_instructions(None, settings, tool_search=False).endswith(
             "First rule.\nSecond rule."
         )
 
@@ -188,6 +197,7 @@ def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
     srv.mcp = MagicMock()
     srv._user_enabled_tools = set()
     srv._user_pinned_tools = []
+    srv._instructions = {"full": "", "search": ""}
     with (
         patch("ha_mcp.server.skill_tool_hidden", return_value=hidden),
         patch("ha_mcp.transforms.CategorizedSearchTransform") as transform,

@@ -36,6 +36,7 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import adapt_retired_arguments, current_tool_name
 from ..server_tool_text import SKILL_TOOL_NAME
+from ..tool_catalog import tool_search_active
 from .compact_params import compact_params, summary
 from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
@@ -166,8 +167,8 @@ class SearchKeywordsTransform(Transform):
     The original description is preserved unless an override is applied.
 
     Added to the transform pipeline unconditionally (#940), so ``keywords``
-    reach every client regardless of ``enable_tool_search``; only
-    ``overrides`` are gated behind that toggle.
+    reach every client whatever its catalog mode; ``overrides`` apply only
+    to connections using search mode.
     """
 
     def __init__(
@@ -182,7 +183,7 @@ class SearchKeywordsTransform(Transform):
     def _enrich(self, tool: Tool) -> Tool:
         # Overrides take priority — replace the entire description
         override = self._overrides.get(tool.name)
-        if override is not None:
+        if override is not None and tool_search_active():
             return tool.model_copy(update={"description": override})
         # Otherwise append keywords if present
         keywords = self._keywords.get(tool.name)
@@ -859,7 +860,12 @@ class CategorizedSearchTransform(BM25SearchTransform):
         )
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        """Replace tool listing with search + categorized call proxies."""
+        """Replace tool listing with search + categorized call proxies.
+
+        Connections using the full catalog get the tools unchanged.
+        """
+        if not tool_search_active():
+            return tools
         pinned = [t for t in tools if t.name in (self._always_visible or [])]
 
         search_tool = self._make_search_tool()
@@ -908,8 +914,11 @@ class CategorizedSearchTransform(BM25SearchTransform):
 
         The parent only handles _search_tool_name and _call_tool_name (unused).
         We must also intercept our three categorized proxy names so they can
-        be found when the LLM calls them.
+        be found when the LLM calls them. On a full-catalog connection the
+        synthetic names do not exist.
         """
+        if not tool_search_active():
+            return await call_next(name, version=version)
         if name == self._call_read_name:
             return self._make_categorized_proxy(
                 self._call_read_name,
