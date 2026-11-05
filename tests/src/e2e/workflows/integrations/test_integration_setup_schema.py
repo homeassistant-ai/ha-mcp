@@ -96,7 +96,7 @@ class TestIntegrationSetupSchema:
     async def test_an_entry_alone_reads_its_options_form(self, mcp_client):
         """The demo entry's options flow opens with form options_1; the flow
         stays open with its flow_id until aborted."""
-        flow_id = None
+        flow_id = aborted = None
         async with MCPAssertions(mcp_client) as mcp:
             listed = await mcp.call_tool_success(
                 "ha_get_integration", {"domain": "demo"}
@@ -112,7 +112,8 @@ class TestIntegrationSetupSchema:
                 flow_id = data["flow_id"]
             finally:
                 if flow_id:
-                    await mcp.call_tool_success(
+                    aborted = await safe_call_tool(
+                        mcp_client,
                         "ha_set_integration",
                         {
                             "entry_id": entry["entry_id"],
@@ -125,6 +126,8 @@ class TestIntegrationSetupSchema:
         assert data["step_id"] == "options_1"
         assert "bool" in {f["name"] for f in data["fields"]}
         assert "entry" not in data
+        # Only an open flow can be aborted.
+        assert aborted and aborted.get("success") is True, aborted
 
     async def test_unknown_domain_fails_the_setup_form(self, mcp_client):
         """A domain Core has no config flow for has no setup form to describe."""

@@ -2,7 +2,7 @@
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 _DOMAIN = "sun"
 
@@ -26,8 +26,10 @@ async def test_log_level_debug_then_default(mcp_client):
         assert result["action"] == "set_log_level"
         assert await _logger_level(mcp, _DOMAIN) == "DEBUG"
     finally:
-        await mcp.call_tool_success(
-            "ha_set_integration", {"domain": _DOMAIN, "log_level": "DEFAULT"}
+        await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {"domain": _DOMAIN, "log_level": "DEFAULT"},
         )
     assert await _logger_level(mcp, _DOMAIN) != "DEBUG"
 
@@ -56,8 +58,10 @@ async def test_log_level_permanent_persistence_is_accepted(mcp_client):
         )
         assert await _logger_level(mcp, _DOMAIN) == "DEBUG"
     finally:
-        await mcp.call_tool_success(
-            "ha_set_integration", {"domain": _DOMAIN, "log_level": "DEFAULT"}
+        await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {"domain": _DOMAIN, "log_level": "DEFAULT"},
         )
 
 

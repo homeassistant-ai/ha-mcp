@@ -244,7 +244,7 @@ class TestIntegrationManagement:
             "component.filesize.config.error.not_valid"
         ]
 
-        flow_id = None
+        flow_id = aborted = None
         async with MCPAssertions(mcp_client) as mcp:
             try:
                 data = await mcp.call_tool_failure(
@@ -255,7 +255,8 @@ class TestIntegrationManagement:
                 flow_id = data.get("flow_id")
             finally:
                 if flow_id:
-                    await mcp.call_tool_success(
+                    aborted = await safe_call_tool(
+                        mcp_client,
                         "ha_set_integration",
                         {"domain": "filesize", "flow_id": flow_id, "abort": True},
                     )
@@ -263,6 +264,8 @@ class TestIntegrationManagement:
         assert data["errors"] == {"base": "not_valid"}, data
         assert data["error_text"] == {"base": expected}, data
         assert flow_id, data
+        # Only an open flow can be aborted.
+        assert aborted and aborted.get("success") is True, aborted
 
     async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
         """A one-field options patch must not reset the fields it omits (#2254).
@@ -483,7 +486,8 @@ class TestIntegrationManagement:
                 )
             finally:
                 if flow_id:
-                    await mcp.call_tool_success(
+                    await safe_call_tool(
+                        mcp_client,
                         "ha_set_integration",
                         {
                             "entry_id": self.RECONFIGURE_ENTRY_ID,
@@ -559,7 +563,8 @@ class TestIntegrationManagement:
                     changed_entry
                 )
             finally:
-                await mcp.call_tool_success(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_set_integration",
                     {
                         "entry_id": self.RECONFIGURE_ENTRY_ID,
