@@ -182,7 +182,8 @@ edit_file:
       name: Path
       description: >-
         Relative path from config directory. Must be in www/, themes/,
-        custom_templates/, or dashboards/.
+        custom_templates/, dashboards/, or a directory added in the ha-mcp
+        settings.
       required: true
       example: "www/custom.css"
       selector:

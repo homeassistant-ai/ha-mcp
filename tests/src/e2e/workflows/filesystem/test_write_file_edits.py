@@ -6,22 +6,19 @@ import uuid
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions
-from . import test_custom_paths
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 # edit_file registers only in the "File & YAML Tools" config entry (#2292).
 pytestmark = [pytest.mark.requires_tools_entry, pytest.mark.filesystem]
 
-# Shared with the sibling suite so the flag and client setup stay in one place.
-_filesystem_feature_flag = test_custom_paths._filesystem_feature_flag
-mcp_client_fs = test_custom_paths.mcp_client_fs
-
 
 @pytest.fixture
-def card_path(cleanup_tracker) -> str:
+async def card_path(mcp_client_fs):
     path = f"www/test_edits_{uuid.uuid4().hex[:8]}.js"
-    cleanup_tracker.track("file", path)
-    return path
+    yield path
+    await safe_call_tool(
+        mcp_client_fs, "ha_delete_file", {"path": path, "confirm": True}
+    )
 
 
 async def test_edit_changes_only_the_matched_text_and_keeps_crlf(

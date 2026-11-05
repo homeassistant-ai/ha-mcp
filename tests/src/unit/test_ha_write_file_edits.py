@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import auto_backup, tools_filesystem
+from ha_mcp.tools import auto_backup, config_file_visibility, tools_filesystem
 from ha_mcp.tools.tools_filesystem import MCP_TOOLS_DOMAIN, FilesystemTools
 
 EDITS = [{"old": "30000", "new": "10000"}]
@@ -28,12 +28,20 @@ def _client(*services: str) -> MagicMock:
 
 
 async def _call_tool(
-    client: Any, service_result: dict[str, Any] | None = None, **kwargs: Any
+    client: Any,
+    service_result: dict[str, Any] | None = None,
+    refuse: AsyncMock | None = None,
+    **kwargs: Any,
 ) -> tuple[dict[str, Any], AsyncMock]:
     service = AsyncMock(return_value=service_result or {"success": True})
     with (
         patch.object(tools_filesystem, "_assert_mcp_tools_available", AsyncMock()),
         patch.object(tools_filesystem, "call_mcp_tools_service", service),
+        patch.object(
+            config_file_visibility,
+            "refuse_reading_hidden_definitions",
+            refuse or AsyncMock(),
+        ),
     ):
         tool = inspect.unwrap(FilesystemTools.ha_write_file)
         try:
@@ -129,6 +137,9 @@ async def test_edits_are_snapshotted_before_the_file_changes() -> None:
         patch.object(auto_backup, "_capture_pre_write_snapshot", capture),
         patch.object(tools_filesystem, "_assert_mcp_tools_available", AsyncMock()),
         patch.object(tools_filesystem, "call_mcp_tools_service", service),
+        patch.object(
+            config_file_visibility, "refuse_reading_hidden_definitions", AsyncMock()
+        ),
     ):
         await FilesystemTools(_client("edit_file")).ha_write_file(
             path="www/a.css", edits=EDITS
@@ -136,3 +147,19 @@ async def test_edits_are_snapshotted_before_the_file_changes() -> None:
 
     service.assert_awaited_once()
     assert capture.await_args.kwargs["domain"] == "file"
+    assert capture.await_args.kwargs["mandatory"] is True
+
+
+@pytest.mark.asyncio
+async def test_edits_cannot_probe_a_file_that_defines_a_hidden_item() -> None:
+    """Which edit failed would tell the caller whether a guessed text is in a
+    file ha_read_file refuses to show."""
+    refuse = AsyncMock(side_effect=ToolError("hidden"))
+
+    with pytest.raises(ToolError) as excinfo:
+        await _call_tool(
+            _client("edit_file"), refuse=refuse, path="www/a.yaml", edits=EDITS
+        )
+
+    refuse.assert_awaited_once()
+    assert excinfo.value.service.await_count == 0  # type: ignore[attr-defined]

@@ -1,5 +1,8 @@
 """The edit_file service changes only the matched text of a stored file."""
 
+import asyncio
+import errno
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,9 +64,33 @@ class TestEditKeepsTheRestOfTheFile:
     def test_mixed_line_endings_are_not_normalized(self, tmp_path: Path) -> None:
         target = _file(tmp_path, b"one\r\ntwo\nthree\r\n")
 
-        edit_file_sync(target, [_edit("two", "TWO")])
+        # A multi-line 'new' stays as sent: treating the file as CRLF would turn
+        # this newline into \r\n.
+        edit_file_sync(target, [_edit("two", "T\nW")])
 
-        assert target.read_bytes() == b"one\r\nTWO\nthree\r\n"
+        assert target.read_bytes() == b"one\r\nT\nW\nthree\r\n"
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+    def test_file_mode_survives_an_edit(self, tmp_path: Path) -> None:
+        target = _file(tmp_path, b"one\n")
+        target.chmod(0o640)
+
+        edit_file_sync(target, [_edit("one", "1")])
+
+        assert target.stat().st_mode & 0o777 == 0o640
+
+    @pytest.mark.skipif(os.name == "nt", reason="Symlinks need a privilege on Windows")
+    def test_symlink_stays_a_symlink_and_its_target_changes(
+        self, tmp_path: Path
+    ) -> None:
+        target = _file(tmp_path, b"one\n")
+        link = tmp_path / "link.js"
+        link.symlink_to(target)
+
+        edit_file_sync(link, [_edit("one", "1")])
+
+        assert link.is_symlink()
+        assert target.read_bytes() == b"1\n"
 
     def test_later_edit_sees_the_earlier_edit(self, tmp_path: Path) -> None:
         target = _file(tmp_path, b"alpha\n")
@@ -120,7 +147,7 @@ class TestRefusedEditSavesNothing:
         assert result["_error"] == "not_text"
         assert target.read_bytes() == b"\xff\xfe\x00one"
 
-    def test_oversized_file_is_refused_before_it_is_read(
+    def test_oversized_file_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(file_ops, "MAX_EDITABLE_FILE_SIZE", 3)
@@ -128,6 +155,44 @@ class TestRefusedEditSavesNothing:
 
         assert edit_file_sync(target, [_edit("one", "1")])["_error"] == "too_large"
         assert target.read_bytes() == b"one\n"
+
+    def test_edit_cannot_grow_a_file_past_the_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Otherwise the write succeeds and every later edit is refused."""
+        monkeypatch.setattr(file_ops, "MAX_EDITABLE_FILE_SIZE", 5)
+        target = _file(tmp_path, b"one\n")
+
+        assert edit_file_sync(target, [_edit("one", "12345")])["_error"] == "too_large"
+        assert target.read_bytes() == b"one\n"
+
+    def test_every_invalid_edit_is_named_at_once(self, tmp_path: Path) -> None:
+        target = _file(tmp_path, b"one\n")
+
+        result = edit_file_sync(
+            target, [_edit("", "x"), _edit("one", "1"), _edit("one", "one")]
+        )
+
+        assert result["_error"] == "invalid_edit"
+        assert result["invalid_edit_indexes"] == [0, 2]
+        assert target.read_bytes() == b"one\n"
+
+    def test_full_disk_leaves_the_file_and_no_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Writing in place would have emptied the file before failing."""
+
+        def disk_full(_fd: int) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(file_ops.os, "fsync", disk_full)
+        target = _file(tmp_path, b"one\n")
+
+        with pytest.raises(OSError, match="No space left"):
+            edit_file_sync(target, [_edit("one", "1")])
+
+        assert target.read_bytes() == b"one\n"
+        assert [path.name for path in tmp_path.iterdir()] == [target.name]
 
     def test_missing_file_is_not_created(self, tmp_path: Path) -> None:
         target = tmp_path / "missing.js"
@@ -157,16 +222,29 @@ class TestRefusedEditSavesNothing:
 class _Hass:
     def __init__(self, config_dir: Path) -> None:
         self.config = MagicMock(config_dir=str(config_dir))
+        self.running = 0
+        self.most_running = 0
 
     async def async_add_executor_job(self, func: Any, *args: Any) -> Any:
-        return func(*args)
+        self.running += 1
+        self.most_running = max(self.most_running, self.running)
+        # Hands over to any other call, as a real executor thread would.
+        await asyncio.sleep(0)
+        try:
+            return func(*args)
+        finally:
+            self.running -= 1
 
 
 def _handler(
-    tmp_path: Path, *, token_ok: bool = True, denied: str | None = None
+    tmp_path: Path,
+    *,
+    token_ok: bool = True,
+    denied: str | None = None,
+    hass: _Hass | None = None,
 ) -> Any:
     return build_edit_file_handler(
-        _Hass(tmp_path),  # type: ignore[arg-type]
+        hass or _Hass(tmp_path),  # type: ignore[arg-type]
         caller_token_ok=lambda _hass, _call: token_ok,
         unauthorized_response=lambda service: {"success": False, "error": service},
         write_denied=lambda _hass, _path: denied,
@@ -209,6 +287,23 @@ class TestEditFileService:
 
         assert response["success"] is False
         assert target.read_bytes() == b"one\n"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_edits_do_not_overlap(self, tmp_path: Path) -> None:
+        """Two overlapping read-modify-writes would lose one edit and report
+        success for both."""
+        target = _file(tmp_path, b"one two\n")
+        hass = _Hass(tmp_path)
+        handler = _handler(tmp_path, hass=hass)
+
+        responses = await asyncio.gather(
+            handler(_call("card.js", [_edit("one", "1")])),
+            handler(_call("card.js", [_edit("two", "2")])),
+        )
+
+        assert [response["success"] for response in responses] == [True, True]
+        assert hass.most_running == 1
+        assert target.read_bytes() == b"1 2\n"
 
     @pytest.mark.asyncio
     async def test_refusal_tells_the_model_which_edit_failed(

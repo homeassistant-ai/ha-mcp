@@ -858,10 +858,10 @@ class FilesystemTools:
         auto-backup (only modifications/deletions of text files are
         snapshotted); the skip is logged, the write is not blocked.
 
-        With edits, every 'old' must occur exactly once when its edit applies,
-        or nothing is saved; the rest of the file, line endings included, stays
-        as it is. A file ha_read_file shows with LF may be stored as CRLF; that
-        is handled unless the file mixes both.
+        With edits, nothing is saved unless every edit applies, and the rest of
+        the file, line endings included, stays as it is. A file ha_read_file
+        shows with LF may be stored as CRLF; that is handled unless the file
+        mixes both.
 
         EXAMPLE: ha_write_file(path="custom_templates/formatters.jinja", content="{% macro shout(text) %}{{ text | upper }}{% endmacro %}")
         EXAMPLE: ha_write_file(path="www/card.js", edits=[{"old": "const REFRESH = 30000;", "new": "const REFRESH = 10000;"}])
@@ -882,7 +882,13 @@ class FilesystemTools:
             service: str
             service_data: dict[str, Any]
             if edits is not None:
+                from .config_file_visibility import refuse_reading_hidden_definitions
+
                 await _assert_file_edits_supported(self._client)
+                # Which edit failed reveals whether a guessed text is in the file.
+                await refuse_reading_hidden_definitions(
+                    self._client, "ha_write_file", [path]
+                )
                 service = EDIT_FILE_SERVICE
                 service_data = {"path": path, "edits": edits}
             else:
