@@ -16,8 +16,7 @@ from .client.rest_client import HomeAssistantCommandError, HomeAssistantError
 logger = logging.getLogger(__name__)
 
 
-# Bounds of the second sweep below: wide enough for a past event or one booked
-# well ahead, without asking a busy calendar to expand a decade of recurrences.
+# Wide enough for past and far-booked events without expanding years of recurrences.
 _CALENDAR_WIDE_LOOKBACK_DAYS = 366
 _CALENDAR_WIDE_LOOKAHEAD_DAYS = 732
 
@@ -30,18 +29,9 @@ async def _find_calendar_event(
     start: datetime,
     end: datetime,
 ) -> Any:
-    """Return the event with ``uid`` on ``cal`` between ``start`` and ``end``.
+    """The ``uid`` event (occurrence ``recurrence_id``) on ``cal`` in the window.
 
-    Reads the REST calendar view rather than the ``calendar.get_events``
-    service: the service response is built by HA's
-    ``_list_events_dict_factory``, which keeps only ``LIST_EVENT_FIELDS``
-    (start/end/summary/description/location/status) and therefore carries no
-    ``uid`` to match on. ``/api/calendars/{entity_id}`` serialises the whole
-    CalendarEvent, so uid, recurrence_id and rrule survive — the same endpoint
-    ``ha_config_get_calendar_events`` reads.
-
-    A recurring series is expanded into occurrences that all share the ``uid``,
-    so ``recurrence_id`` selects which one; without it the first match wins.
+    The REST calendar view, not ``calendar.get_events``: the service drops uid.
     """
     try:
         events = await client._request(
@@ -50,11 +40,7 @@ async def _find_calendar_event(
             params={"start": start.isoformat(), "end": end.isoformat()},
         )
     except HomeAssistantError as err:
-        # Only treat 404 (calendar integration not loaded) as "skip silently".
-        # Auth/transport/server errors deserve a WARNING so an operator
-        # can spot a misconfigured calendar integration; matches the
-        # ``status_code == 404`` narrowing the automation/script/scene
-        # fetchers use.
+        # 404: the calendar integration is not loaded.
         if getattr(err, "status_code", None) == 404:
             return None
         raise
@@ -89,10 +75,6 @@ async def _locate_calendar_event(
 
     Out-of-window events and cancelled ones Local Calendar hides also read as None.
     """
-    # Configurable lookahead window. Default 7 days catches typical edits;
-    # set HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS to widen for far-future
-    # events or narrow to skip noise. Bounded so a typo can't query
-    # decades of history.
     try:
         from .config import get_global_settings
 
@@ -103,8 +85,7 @@ async def _locate_calendar_event(
         days = 7
     days = max(1, min(365, days))
     now = datetime.now(UTC)
-    # A recurrence_id names the occurrence's own date, so an occurrence far
-    # outside the windows below is still found in one request.
+    # A recurrence_id names the occurrence's date, so one request finds it.
     around = _recurrence_id_window(wanted)
     found = (
         await _find_calendar_event(client, cal, uid, wanted, *around)
@@ -116,11 +97,7 @@ async def _locate_calendar_event(
             client, cal, uid, wanted, now, now + timedelta(days=days)
         )
     if found is None:
-        # The configured window is the cheap common case, not the contract: a
-        # write targets an event by uid, and an event being edited or deleted
-        # can sit in the past or well beyond the lookahead. Missing it would
-        # silently skip the snapshot, or make a restore re-create an event that
-        # still exists, so sweep once more over a wide window.
+        # A missed event would skip the snapshot or be re-created on restore.
         found = await _find_calendar_event(
             client,
             cal,
@@ -133,7 +110,7 @@ async def _locate_calendar_event(
 
 
 async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
-    # entity_id is "<calendar.entity>::<event_uid>[::<recurrence_id>]"
+    # "<calendar.entity>::<event_uid>[::<recurrence_id>]"
     cal, _, rest = entity_id.partition("::")
     uid, _, recurrence_id = rest.partition("::")
     if not cal or not uid:
@@ -143,13 +120,8 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     if found is None:
         return None
     if wanted is None and found.get("rrule"):
-        # The write targets a whole series, but the calendar view only exposes
-        # expanded OCCURRENCES — never the master event's own start. Restoring
-        # one occurrence's values would revert a single date and leave the rest
-        # of the series edited, or re-create a series starting at the wrong
-        # date, both reported as a successful restore. No snapshot is the
-        # honest answer; a single-occurrence write (which carries a
-        # recurrence_id) is captured normally.
+        # The view shows only expanded occurrences, never the series itself,
+        # so a series-wide write cannot be restored faithfully.
         logger.warning(
             "Auto-backup: no snapshot for series-wide write on %s (event %s); "
             "Home Assistant exposes only expanded occurrences, so the series "
@@ -162,12 +134,7 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
 
 
 def _calendar_bound(value: Any) -> tuple[str, bool] | None:
-    """Return ``(iso_value, is_date_only)`` for a snapshotted event boundary.
-
-    The REST view wraps each boundary as ``{"dateTime": ...}`` (timed) or
-    ``{"date": ...}`` (all-day); snapshots taken before that switch hold a
-    flat ISO string, which a 10-character length identifies as date-only.
-    """
+    """``(iso_value, is_date_only)``; older snapshots hold a flat ISO string."""
     if isinstance(value, dict):
         if value.get("dateTime"):
             return str(value["dateTime"]), False
@@ -186,12 +153,9 @@ async def _restored_copy(
     start: tuple[str, bool],
     end: tuple[str, bool],
 ) -> dict[str, Any] | None:
-    """An event on ``cal`` with the snapshot's summary, times and text.
+    """The copy an earlier restore re-created: same summary, times and text.
 
-    A re-created event gets a new uid, so restoring the same snapshot again
-    finds the snapshotted uid gone again; this is the copy the earlier restore
-    made. None when the calendar has none (a 404 included: the re-create then
-    fails on the missing calendar itself).
+    A re-created event gets a new uid, so its snapshot's uid stays gone.
     """
     bounds = [
         f"{value}T00:00:00" if date_only else value for value, date_only in (start, end)
@@ -225,12 +189,7 @@ async def _recreate_calendar_event(
     start: tuple[str, bool],
     end: tuple[str, bool],
 ) -> Any:
-    """Create an event that no longer exists under its snapshotted uid.
-
-    Always a single event: a series-wide write is never snapshotted (the
-    calendar view cannot describe the series), and a snapshot of one
-    occurrence must not be re-created as a series of its own.
-    """
+    """Re-create a deleted event, always as a single event."""
     if (copy := await _restored_copy(client, cal, event, start, end)) is not None:
         return {"already_restored": True, "event": copy}
     data: dict[str, Any] = {"entity_id": cal, "summary": event["summary"]}
@@ -257,10 +216,7 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
             f"Calendar snapshot for {entity_id!r} has no usable start/end"
         )
 
-    # Home Assistant merges the update into the stored event (ical dumps it
-    # with ``exclude_unset``), so a field left out keeps whatever the write
-    # put there. Send the text fields unconditionally — empty clears a
-    # description or location the write added.
+    # Core merges an update into the stored event: empty text clears a field.
     event: dict[str, Any] = {
         "summary": config.get("summary") or "",
         "dtstart": start[0],
@@ -268,17 +224,11 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
         "description": config.get("description") or "",
         "location": config.get("location") or "",
     }
-    # ``rrule`` is deliberately never replayed. Every expanded occurrence
-    # carries the series' rule, and sending it back onto one occurrence —
-    # which ical has already forked into a plain event — would make that
-    # occurrence a second series under the same uid, duplicating every later
-    # date.
+    # No rrule: on one occurrence it would start a second series under the uid.
 
     if not uid:
         return await _recreate_calendar_event(client, cal, event, start, end)
 
-    # An edited event still exists under its uid, so put the captured values
-    # back in place instead of creating a second copy.
     message: dict[str, Any] = {
         "type": "calendar/event/update",
         "entity_id": cal,
@@ -291,22 +241,15 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
         return await _manager()._ws_send(client, message)
     except HomeAssistantCommandError as err:
         unsupported = err.code == "not_supported"
-        # Re-create only when the event is gone or the calendar has no
-        # UPDATE_EVENT. Local Calendar reports a missing event as a plain
-        # ``failed`` with generic text, so look the uid up; other codes cannot
-        # mean a deleted event. A failing lookup propagates, except a 404 (the
-        # calendar is gone), on which the re-create fails in turn.
+        # Local Calendar reports a missing event as a generic ``failed``, so
+        # only that code is checked against the calendar before re-creating.
         if not unsupported and (
             err.code != "failed"
             or await _locate_calendar_event(client, cal, uid, recurrence_id) is not None
         ):
             raise
         if recurrence_id:
-            # The occurrence is gone (deleted from the series, or the series
-            # moved and this recurrence_id no longer names one of its dates),
-            # or the calendar cannot update it. ``create_event`` could only add
-            # a detached event next to the series, which is not the occurrence
-            # being restored, so say so instead of inventing one.
+            # create_event can only add a detached event, not the occurrence.
             cause = "cannot be updated" if unsupported else "no longer exists"
             raise HomeAssistantError(
                 f"Occurrence {recurrence_id} of event {uid} {cause} on {cal}, "
