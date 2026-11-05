@@ -95,7 +95,7 @@ class LogTools(
         source: str,
         limit: int | None,
         search: str | None,
-        hours_back: int,
+        hours_back: int | None,
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
@@ -111,7 +111,7 @@ class LogTools(
         numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
-                hours_back=hours_back,
+                hours_back=hours_back if hours_back is not None else 1,
                 entity_id=entity_id,
                 device_id=device_id,
                 context_id=context_id,
@@ -147,11 +147,15 @@ class LogTools(
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
             return await self._get_system_service_log(
-                service=slug, limit=limit, search=search, order=order
+                service=slug,
+                limit=limit,
+                search=search,
+                order=order,
+                hours_back=hours_back,
             )
         assert slug is not None  # guaranteed by _validate_log_slug
         return await self._get_supervisor_log(
-            slug=slug, limit=limit, search=search, order=order
+            slug=slug, limit=limit, search=search, order=order, hours_back=hours_back
         )
 
     async def get_logs(
@@ -159,7 +163,7 @@ class LogTools(
         source: str,
         limit: int | None,
         search: str | None,
-        hours_back: int,
+        hours_back: int | None,
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
@@ -184,6 +188,7 @@ class LogTools(
             slug,
             order,
             offset,
+            hours_back=hours_back,
         )
         structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
@@ -319,8 +324,18 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = "newest",
         # Source-scoped options: each description names the sources it applies to
         hours_back: Annotated[
-            int, Field(ge=1, description="Logbook only: how many hours back to read.")
-        ] = 1,
+            int | None,
+            Field(
+                ge=1,
+                description=(
+                    "How many hours back to read. Logbook (default 1), "
+                    "supervisor and system_service. For the last two, only "
+                    "when given: lines then come in Supervisor's verbose "
+                    "format, each entry led by its timestamp, and "
+                    "window_complete says whether the read reached the cutoff."
+                ),
+            ),
+        ] = None,
         entity_id: Annotated[
             str | None,
             Field(
