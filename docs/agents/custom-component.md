@@ -5,6 +5,29 @@ server feature that depends on the component. The HACS component and the
 `ha-mcp` server ship through separate installation paths, so compatibility
 must hold in both update directions.
 
+## Release ZIP
+
+HACS and the Marketplace install `ha_mcp_tools.zip` from each release. Its root
+contains the integration files (`manifest.json`, `__init__.py`, translations,
+and the remaining tracked component files), without a repository or domain
+folder. Build it with `uv run -s scripts/build_component_zip.py`. The builder
+reads tracked **working-tree** files so release-time version/server stamps
+are included; it excludes untracked files and bytecode.
+
+Stable, dev and mirror publishing build the ZIP after stamping and attach it
+while the GitHub release is a draft, then publish it. The mirror receives the
+same builder and lockfile. Do not replace an existing asset just to refresh
+its download count; that count is downloads of one release asset, not users.
+
+The container E2E fixture installs this artifact before HA boots, so existing
+component scenarios exercise the ZIP. The existing update-path scenarios retain
+their released-component case and install the working-tree case from the ZIP.
+That case also reinstalls the ZIP over configured HA, restarts HA, and checks
+entry preservation, the selected server version and a real MCP read. It does
+not claim an old-version component migration or a Marketplace UI click test.
+For a focused GitHub runner execution, dispatch `e2e-tests.yml` on a test fork
+with `update_path_only=true`.
+
 ## Version cycle
 
 The component shares the server's version and pins the server build it runs

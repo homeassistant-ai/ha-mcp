@@ -12,6 +12,12 @@ on:
       - 'homeassistant-addon/**'
       - '.github/workflows/e2e-tests.yml'
   workflow_dispatch:
+    inputs:
+      update_path_only:
+        description: "Only run the existing component install/update scenarios"
+        type: boolean
+        required: false
+        default: false
 
 # Limit GITHUB_TOKEN permissions to minimum required
 permissions:
@@ -33,6 +39,7 @@ env:
 jobs:
   # Comprehensive E2E validation for main branch
   e2e-tests:
+    if: github.event_name != 'workflow_dispatch' || !inputs.update_path_only
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -116,6 +123,7 @@ jobs:
   # component" error; a raw service-not-found is the bug this lane catches (the
   # HAOS inaddon no-tools lane shares this topology and catches it too).
   e2e-tests-no-component:
+    if: github.event_name != 'workflow_dispatch' || !inputs.update_path_only
     name: E2E Tests (No Component)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -203,6 +211,7 @@ jobs:
   # memory + concurrent-pip pressure in check (arm gets +1). The larger timeout
   # covers that per-worker preinstall window.
   e2e-tests-embedded:
+    if: github.event_name != 'workflow_dispatch' || !inputs.update_path_only
     name: E2E Tests (Embedded Server, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -298,6 +307,7 @@ jobs:
   # user hits it. One ubuntu-latest lane at -n2, matching the per-worker wheel
   # build + in-container preinstall cost of the embedded matrix above.
   e2e-tests-embedded-server-only:
+    if: github.event_name != 'workflow_dispatch' || !inputs.update_path_only
     name: E2E Tests (Embedded Server, server entry only)
     runs-on: ubuntu-latest
     timeout-minutes: 25

@@ -37,6 +37,8 @@ on:
       - "README.md"
       - ".github/integration-mirror-readme-prefix.md"
       - "scripts/build_mirror_readme.py"
+      - "scripts/build_component_zip.py"
+      - "scripts/build_component_zip.py.lock"
       - ".github/integration-mirror-workflows/**"
   workflow_run:
     workflows: ["SemVer Release", "Publish Dev Channel"]
@@ -297,6 +299,8 @@ jobs:
           # carries no hand-made changes, so its release-on-tag.yml is
           # synced from here too rather than hand-edited in the mirror.
           mkdir -p /tmp/mirror/.github/workflows
+          mkdir -p /tmp/mirror/scripts
+          cp scripts/build_component_zip.py scripts/build_component_zip.py.lock /tmp/mirror/scripts/
           cp .github/integration-mirror-workflows/release-on-tag.yml \
             /tmp/mirror/.github/workflows/release-on-tag.yml
 
