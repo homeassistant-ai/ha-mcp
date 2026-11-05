@@ -2480,6 +2480,45 @@ def _calendar_bound(value: Any) -> tuple[str, bool] | None:
     return None
 
 
+async def _restored_copy(
+    client: Any,
+    cal: str,
+    event: dict[str, Any],
+    start: tuple[str, bool],
+    end: tuple[str, bool],
+) -> dict[str, Any] | None:
+    """An event on ``cal`` with the snapshot's summary, times and text.
+
+    A re-created event gets a new uid, so restoring the same snapshot again
+    finds the snapshotted uid gone again; this is the copy the earlier restore
+    made. None when the calendar has none (a 404 included: the re-create then
+    fails on the missing calendar itself).
+    """
+    bounds = [
+        f"{value}T00:00:00" if date_only else value for value, date_only in (start, end)
+    ]
+    try:
+        events = await client._request(
+            "GET", f"/calendars/{cal}", params={"start": bounds[0], "end": bounds[1]}
+        )
+    except HomeAssistantError as err:
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
+    for found in _require_list(events, f"/calendars/{cal}"):
+        if (
+            isinstance(found, dict)
+            and _calendar_bound(found.get("start")) == start
+            and _calendar_bound(found.get("end")) == end
+            and all(
+                (found.get(key) or "") == event[key]
+                for key in ("summary", "description", "location")
+            )
+        ):
+            return found
+    return None
+
+
 async def _recreate_calendar_event(
     client: Any,
     cal: str,
@@ -2493,6 +2532,8 @@ async def _recreate_calendar_event(
     calendar view cannot describe the series), and a snapshot of one
     occurrence must not be re-created as a series of its own.
     """
+    if (copy := await _restored_copy(client, cal, event, start, end)) is not None:
+        return {"already_restored": True, "event": copy}
     data: dict[str, Any] = {"entity_id": cal, "summary": event["summary"]}
     if start[1]:
         data.update({"start_date": start[0], "end_date": end[0]})
@@ -2554,7 +2595,8 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
         # Re-create only when the event is gone or the calendar has no
         # UPDATE_EVENT. Local Calendar reports a missing event as a plain
         # ``failed`` with generic text, so look the uid up; other codes cannot
-        # mean a deleted event. A failing lookup propagates.
+        # mean a deleted event. A failing lookup propagates, except a 404 (the
+        # calendar is gone), on which the re-create fails in turn.
         if not unsupported and (
             err.code != "failed"
             or await _locate_calendar_event(client, cal, uid, recurrence_id) is not None

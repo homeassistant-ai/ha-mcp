@@ -89,3 +89,45 @@ async def test_an_occurrence_on_a_calendar_without_updates_names_the_real_cause(
         )
     assert "no longer exists" not in str(exc_info.value)
     assert client.calls == []
+
+
+async def test_restoring_a_deleted_event_twice_keeps_one_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The first restore re-created the event under a new uid, so the second
+    # finds the snapshotted uid gone again; the copy it made is on the calendar.
+    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
+    copy = {
+        "uid": "evt-new",
+        "summary": "Standup",
+        "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+        "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+    }
+    result = await bm._restore_calendar_event(
+        _CalendarRestClient([copy]), "calendar.fam::evt-1", _SNAPSHOT
+    )
+    assert result == {"already_restored": True, "event": copy}
+
+
+async def test_a_deleted_event_with_no_copy_is_re_created(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An event at the same times with other text is not the restored copy.
+    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
+    posted: list[dict[str, Any]] = []
+
+    async def record_post(_client: Any, _path: str, data: dict[str, Any]) -> Any:
+        posted.append(data)
+        return []
+
+    monkeypatch.setattr(bm, "_rest_post", record_post)
+    other = {
+        "uid": "evt-2",
+        "summary": "Retro",
+        "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+        "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+    }
+    await bm._restore_calendar_event(
+        _CalendarRestClient([other]), "calendar.fam::evt-1", _SNAPSHOT
+    )
+    assert [p["summary"] for p in posted] == ["Standup"]
