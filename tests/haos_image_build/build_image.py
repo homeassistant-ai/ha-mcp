@@ -211,7 +211,7 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 # Dev-channel ha-mcp addon baked into the qcow2 from local source for the
 # inaddon HAOS E2E tier (#1349 item 7). The dev addon's config.yaml lives at
 # ``homeassistant-addon-dev/`` in the repo; we stage it under
-# ``/supervisor/addons/local/ha_mcp_dev/`` inside the qcow2 so Supervisor picks it up as
+# ``/supervisor/apps/local/ha_mcp_dev/`` inside the qcow2 so Supervisor picks it up as
 # a local addon (slug: ``local_<config-slug>`` → ``local_ha_mcp_dev``).
 #
 # The secret_path option must be set deterministically so the test harness
@@ -259,7 +259,7 @@ HA_MCP_SERVER_PLACEHOLDER_PIP_SPEC = (
 # registration, OAuth gate, webhook-ID persistence) gets real HAOS-tier
 # coverage. The addon's config.yaml lives at
 # ``homeassistant-addon-webhook-proxy/`` in the repo; we stage it under
-# ``/supervisor/addons/local/ha_mcp_webhook_proxy/`` and Supervisor picks it up
+# ``/supervisor/apps/local/ha_mcp_webhook_proxy/`` and Supervisor picks it up
 # as a local addon (slug becomes ``local_<config-slug>`` → ``local_ha_mcp_webhook_proxy``).
 #
 # Auto-discovery in the webhook-proxy ``start.py`` matches slug suffixes
@@ -1288,7 +1288,7 @@ def _check_core_auth(base_url: str, token: str) -> None:
 
 
 def _tar_in_local_addon(qcow2: Path, workdir: Path, name: str) -> None:
-    """Copy ``workdir/name`` into the qcow2's /supervisor/addons/local/ as root-owned files."""
+    """Copy ``workdir/name`` into the qcow2's /supervisor/apps/local/ as root-owned files."""
     seed_tar = workdir / f"{name}.tar"
     tar = ["tar", "--numeric-owner", "--owner=0", "--group=0", "-C", str(workdir)]
     _run([*tar, "-cf", str(seed_tar), name])
@@ -1303,12 +1303,15 @@ def _tar_in_local_addon(qcow2: Path, workdir: Path, name: str) -> None:
         "/dev/sda8",
         "/",
     ]
-    local = "/supervisor/addons/local"
+    # Supervisor 2026.06 renamed the local add-on store to apps/local. Stage
+    # directly at the current path: creating addons/local before first boot
+    # does not reliably migrate the store on HAOS 18.4.
+    local = "/supervisor/apps/local"
     _run([*guestfish, ":", "mkdir-p", local, ":", "tar-in", str(seed_tar), local])
 
 
 def stage_dev_addon_source(qcow2: Path) -> None:
-    """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
+    """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/apps/local/.
 
     Runs BEFORE first start_qemu so HAOS boots with the local addon visible
     to Supervisor in the store. The bake then installs + builds the addon
@@ -1331,23 +1334,23 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         )
 
     LOG.info(
-        "Staging ha-mcp dev addon source into qcow2 /supervisor/addons/local/ha_mcp_dev/"
+        "Staging ha-mcp dev addon source into qcow2 /supervisor/apps/local/ha_mcp_dev/"
     )
     workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
     try:
         staging = workdir / "ha_mcp_dev"
         stage_dev_addon_tree(repo_root, staging)
 
-        # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
+        # tar root-owned, root-mode files into /supervisor/apps/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.
         _tar_in_local_addon(qcow2, workdir, "ha_mcp_dev")
-        LOG.info("Dev addon source staged at /supervisor/addons/local/ha_mcp_dev/")
+        LOG.info("Dev addon source staged at /supervisor/apps/local/ha_mcp_dev/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
 def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
-    """Bake the webhook-proxy addon source into the qcow2 under /supervisor/addons/local/.
+    """Bake the webhook-proxy addon source into the qcow2 under /supervisor/apps/local/.
 
     Mirrors ``stage_dev_addon_source`` but for the in-tree webhook-proxy
     addon at ``homeassistant-addon-webhook-proxy/``. The webhook-proxy
@@ -1396,7 +1399,7 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
 
     LOG.info(
         "Staging webhook-proxy addon source into qcow2 "
-        "/supervisor/addons/local/ha_mcp_webhook_proxy/"
+        "/supervisor/apps/local/ha_mcp_webhook_proxy/"
     )
     workdir = Path(tempfile.mkdtemp(prefix="haos-webhook-proxy-addon-"))
     try:
@@ -1406,7 +1409,7 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
         _tar_in_local_addon(qcow2, workdir, "ha_mcp_webhook_proxy")
         LOG.info(
             "Webhook-proxy addon source staged at "
-            "/supervisor/addons/local/ha_mcp_webhook_proxy/"
+            "/supervisor/apps/local/ha_mcp_webhook_proxy/"
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -1433,7 +1436,7 @@ def stage_screenshot_engine_source(qcow2: Path) -> None:
 
     LOG.info(
         "Staging mock screenshot engine source into qcow2 "
-        "/supervisor/addons/local/puppet/"
+        "/supervisor/apps/local/puppet/"
     )
     workdir = Path(tempfile.mkdtemp(prefix="haos-screenshot-engine-"))
     try:
@@ -1441,7 +1444,7 @@ def stage_screenshot_engine_source(qcow2: Path) -> None:
         copy_addon_tree(src, staging, ignore=shutil.ignore_patterns("__pycache__"))
 
         _tar_in_local_addon(qcow2, workdir, "puppet")
-        LOG.info("Mock screenshot engine staged at /supervisor/addons/local/puppet/")
+        LOG.info("Mock screenshot engine staged at /supervisor/apps/local/puppet/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1526,7 +1529,7 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     """Install the local ha-mcp dev addon during the bake's running phase.
 
     Assumes ``stage_dev_addon_source`` ran before start_qemu so the source
-    is already at /supervisor/addons/local/ha_mcp_dev/. Supervisor's local store
+    is already at /supervisor/apps/local/ha_mcp_dev/. Supervisor's local store
     scanner picks up the addon automatically on boot; we reload to be
     explicit, install (which builds the Docker image — slow, ~5 min, but
     only paid once per cache lifetime), set options including a
@@ -1597,7 +1600,7 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     """Install the local webhook-proxy addon during the bake's running phase.
 
     Assumes ``stage_webhook_proxy_addon_source`` ran before start_qemu so
-    the source is at ``/supervisor/addons/local/ha_mcp_webhook_proxy/``.
+    the source is at ``/supervisor/apps/local/ha_mcp_webhook_proxy/``.
 
     Install-only — the addon is NOT started during bake and ``boot`` is
     set to ``manual`` so the cached qcow2 doesn't auto-start it on
@@ -1675,7 +1678,7 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
 def install_screenshot_engine(ws: HAWebSocket) -> str:
     """Install the mock screenshot engine as a LOCAL add-on.
 
-    The add-on source is staged into /supervisor/addons/local/puppet/ before
+    The add-on source is staged into /supervisor/apps/local/puppet/ before
     first boot (``stage_screenshot_engine_source``), so Supervisor's local-store
     scanner picks it up as ``local_puppet``. We reload the store to be explicit,
     then install — which builds the mock's small python:3.13-slim image into the
@@ -2594,7 +2597,7 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
 def build(work_dir: Path, output: Path) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     qcow2 = fetch_haos_qcow2(work_dir)
-    # Stage the ha-mcp dev addon source into /supervisor/addons/local/ BEFORE first
+    # Stage the ha-mcp dev addon source into /supervisor/apps/local/ BEFORE first
     # boot so Supervisor's local-store scanner picks it up during the
     # running phase below. install_ha_mcp_dev_addon then builds the addon's
     # Docker image while HAOS is up — that built image stays in the cached

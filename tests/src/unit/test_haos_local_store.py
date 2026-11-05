@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.haos_image_build.build_image import _tar_in_local_addon
 from tests.src.haos_runtime import _resolve_local_store_dir
 
 _QCOW2 = Path("/tmp/does-not-need-to-exist.qcow2")
@@ -52,3 +53,20 @@ def test_defaults_to_apps_local_when_neither_exists() -> None:
     run current Supervisor)."""
     with patch("tests.src.haos_runtime.subprocess.run", return_value=_proc(1)):
         assert _resolve_local_store_dir(_QCOW2) == _APPS
+
+
+def test_image_bake_stages_local_apps_under_apps_local(tmp_path: Path) -> None:
+    """Fresh HAOS 18.4 boots must see locally staged apps at the current path."""
+    (tmp_path / "ha_mcp_dev").mkdir()
+    commands: list[list[str]] = []
+
+    def capture(command: list[str]) -> None:
+        commands.append(command)
+
+    with patch(
+        "tests.haos_image_build.build_image._run",
+        side_effect=capture,
+    ):
+        _tar_in_local_addon(_QCOW2, tmp_path, "ha_mcp_dev")
+
+    assert commands[-1].count(_APPS) == 2
