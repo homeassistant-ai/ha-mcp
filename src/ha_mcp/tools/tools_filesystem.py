@@ -54,6 +54,7 @@ FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 # subsequent call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
+EDIT_FILE_SERVICE = "edit_file"
 
 # Minimum version of the ha_mcp_tools custom component that this ha-mcp
 # release expects. Bumps in lockstep with ``manifest.json`` whenever a
@@ -91,9 +92,6 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # with and without them and cannot distinguish the two (#1946). 1.2.0 is the
 # first component version cut after #1882, hence the first that guarantees both.
 MIN_COMPONENT_VERSION = "1.2.0"
-# First component release with the ``edit_file`` service. Gated per feature, not
-# through MIN_COMPONENT_VERSION, so whole-file writes need no component update.
-MIN_COMPONENT_VERSION_FILE_EDITS = "9.2.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -160,6 +158,17 @@ def _get_token_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
+async def _registered_tool_services(client: Any) -> dict[str, Any] | None:
+    """Return the ``ha_mcp_tools`` services in HA's registry, None for no domain."""
+    # HA /api/services returns a list of {"domain": str, "services": {...}}
+    # objects — stable across all supported HA versions.
+    services = await client.get_services()
+    for entry in services:
+        if isinstance(entry, dict) and entry.get("domain") == MCP_TOOLS_DOMAIN:
+            return entry.get("services") or {}
+    return None
+
+
 async def _bootstrap_service_state(client: Any) -> tuple[bool, bool]:
     """Return ``(domain_registered, bootstrap_registered)`` from HA's service
     registry.
@@ -175,17 +184,10 @@ async def _bootstrap_service_state(client: Any) -> tuple[bool, bool]:
       (<0.5.0) component that pre-dates the bootstrap service; the call would
       otherwise fail with an opaque 400 from HA. This one IS fixed by updating.
     """
-    # HA /api/services returns a list of {"domain": str, "services": {...}}
-    # objects — stable across all supported HA versions.
-    services = await client.get_services()
-    for entry in services:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("domain") != MCP_TOOLS_DOMAIN:
-            continue
-        domain_services = entry.get("services") or {}
-        return True, CALLER_TOKEN_BOOTSTRAP_SERVICE in domain_services
-    return False, False
+    domain_services = await _registered_tool_services(client)
+    if domain_services is None:
+        return False, False
+    return True, CALLER_TOKEN_BOOTSTRAP_SERVICE in domain_services
 
 
 def _raise_tools_entry_not_set_up() -> NoReturn:
@@ -451,52 +453,21 @@ def _assert_caps_version_ok(caps: ComponentCaps) -> None:
         _raise_component_too_old(f"reported version is {caps.component_version}")
 
 
-async def _component_meets_floor(client: Any, floor: str) -> tuple[bool, str]:
-    """Return whether the component is at ``floor``, and its reported version.
-
-    Reads the REST bootstrap cache, not the WebSocket caps, so a transport blip
-    cannot be mistaken for an outdated component.
-    """
-
-    def _current() -> tuple[int, ...] | None:
-        reported = _COMPONENT_VERSION_CACHE.get(client, "")
-        if not reported:
-            return None
-        try:
-            return _version_tuple(reported)
-        except ValueError:
-            return None
-
-    required = _version_tuple(floor)
-    await _ensure_caller_token(client)
-    parsed = _current()
-    if parsed is None or parsed < required:
-        # The token cache is keyed by the long-lived REST client and survives
-        # a Home Assistant restart, so a component updated after this process
-        # first bootstrapped would keep reporting its old version forever and
-        # the remediation the callers print ("update, then restart HA") would
-        # never take effect. Re-bootstrap once before blocking, so the update
-        # heals the gate on the next call rather than needing an ha-mcp
-        # restart. Only on the failure path: a satisfied gate costs nothing.
-        await _ensure_caller_token(client, force_refresh=True)
-        parsed = _current()
-    reported = _COMPONENT_VERSION_CACHE.get(client, "")
-    return parsed is not None and parsed >= required, reported
-
-
 async def _assert_file_edits_supported(client: Any) -> None:
-    """Replace an opaque missing-service failure with an update prompt."""
-    supported, reported = await _component_meets_floor(
-        client, MIN_COMPONENT_VERSION_FILE_EDITS
-    )
-    if supported:
+    """Replace an opaque missing-service failure with an update prompt.
+
+    Asks the service registry instead of comparing versions: an unreleased
+    component (E2E, the dev environment, a dev pre-release) reports the previous
+    release's number while already carrying the service. Scoped to edits, unlike
+    MIN_COMPONENT_VERSION, so whole-file writes need no component update.
+    """
+    if EDIT_FILE_SERVICE in (await _registered_tool_services(client) or {}):
         return
     raise_tool_error(
         create_error_response(
             ErrorCode.COMPONENT_NOT_INSTALLED,
-            "ha_write_file(edits=...) needs a newer ha_mcp_tools custom component "
-            f"(reported version: {reported or 'unknown'}; requires >= "
-            f"{MIN_COMPONENT_VERSION_FILE_EDITS}).",
+            "ha_write_file(edits=...) needs a newer ha_mcp_tools custom component: "
+            f"the installed one has no {EDIT_FILE_SERVICE} service.",
             suggestions=[
                 "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after the update completes",
@@ -912,7 +883,7 @@ class FilesystemTools:
             service_data: dict[str, Any]
             if edits is not None:
                 await _assert_file_edits_supported(self._client)
-                service = "edit_file"
+                service = EDIT_FILE_SERVICE
                 service_data = {"path": path, "edits": edits}
             else:
                 service = "write_file"

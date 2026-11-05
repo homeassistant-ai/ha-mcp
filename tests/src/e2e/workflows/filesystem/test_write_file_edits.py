@@ -2,39 +2,19 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 
 from ...utilities.assertions import MCPAssertions
+from . import test_custom_paths
 
 # edit_file registers only in the "File & YAML Tools" config entry (#2292).
 pytestmark = [pytest.mark.requires_tools_entry, pytest.mark.filesystem]
 
-FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
-
-
-@pytest.fixture(scope="module")
-def filesystem_tools_enabled(ha_container_with_fresh_config):
-    os.environ[FEATURE_FLAG] = "true"
-    yield
-    os.environ.pop(FEATURE_FLAG, None)
-
-
-@pytest.fixture
-async def filesystem_client(filesystem_tools_enabled, mcp_server, mcp_client):
-    """An MCP client whose server was built with the filesystem flag set."""
-    if mcp_server is None:
-        # Out-of-process servers get the flag at install time; the session
-        # client owns its lifecycle.
-        yield mcp_client
-        return
-
-    from ha_mcp._vendor.fastmcp import Client
-
-    async with Client(mcp_server.mcp) as client:
-        yield client
+# Shared with the sibling suite so the flag and client setup stay in one place.
+_filesystem_feature_flag = test_custom_paths._filesystem_feature_flag
+mcp_client_fs = test_custom_paths.mcp_client_fs
 
 
 @pytest.fixture
@@ -45,9 +25,9 @@ def card_path(cleanup_tracker) -> str:
 
 
 async def test_edit_changes_only_the_matched_text_and_keeps_crlf(
-    filesystem_client, card_path: str
+    mcp_client_fs, card_path: str
 ) -> None:
-    async with MCPAssertions(filesystem_client) as mcp:
+    async with MCPAssertions(mcp_client_fs) as mcp:
         await mcp.call_tool_success(
             "ha_write_file", {"path": card_path, "content": "one\r\ntwo\r\n"}
         )
@@ -65,9 +45,9 @@ async def test_edit_changes_only_the_matched_text_and_keeps_crlf(
 
 
 async def test_edit_that_cannot_apply_saves_nothing(
-    filesystem_client, card_path: str
+    mcp_client_fs, card_path: str
 ) -> None:
-    async with MCPAssertions(filesystem_client) as mcp:
+    async with MCPAssertions(mcp_client_fs) as mcp:
         await mcp.call_tool_success(
             "ha_write_file", {"path": card_path, "content": "one\n"}
         )
@@ -89,9 +69,9 @@ async def test_edit_that_cannot_apply_saves_nothing(
 
 
 async def test_edit_outside_the_write_allowlist_is_refused(
-    filesystem_client,
+    mcp_client_fs,
 ) -> None:
-    async with MCPAssertions(filesystem_client) as mcp:
+    async with MCPAssertions(mcp_client_fs) as mcp:
         await mcp.call_tool_failure(
             "ha_write_file",
             {
