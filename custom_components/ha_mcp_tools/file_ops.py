@@ -60,7 +60,8 @@ def shared_file_lock(hass: HomeAssistant) -> asyncio.Lock:
     to pay off.
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
-    return domain_data.setdefault("file_lock", asyncio.Lock())
+    lock: asyncio.Lock = domain_data.setdefault("file_lock", asyncio.Lock())
+    return lock
 
 
 def _delete_file_sync(target_file: Path) -> dict[str, Any]:
