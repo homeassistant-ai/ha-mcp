@@ -417,10 +417,16 @@ jobs:
 
     - name: Verify stable tag is present
       run: |
+        if [ "$GITHUB_REPOSITORY" != homeassistant-ai/ha-mcp ]; then
+          # Only the runner's local tag changes: forks may retain an older
+          # stable alias, but the compatibility baseline is upstream's release.
+          git fetch --force https://github.com/homeassistant-ai/ha-mcp.git refs/tags/stable:refs/tags/stable
+        fi
         if ! git rev-parse --verify refs/tags/stable >/dev/null 2>&1; then
           echo "::error::The 'stable' git tag is missing — the update-path lane checks the released component out from it. Ensure checkout uses fetch-depth: 0."
           exit 1
         fi
+        echo "Released component baseline: $(git rev-parse stable^{commit})"
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
