@@ -171,7 +171,12 @@ Core's REST config endpoint and its 400 text leads the error; WebSocket
 the first event of `trigger_platforms/subscribe` or
 `condition_platforms/subscribe`, the registry row from
 `config/entity_registry/get` and the load failure from
-`repairs/list_issues`, and references are not available. On both paths the
+`repairs/list_issues`. Core serves no references over its API there, so the
+get tool carries Core's `search/related` answer as `related` instead and
+`warnings` says so: the Related set the frontend shows, which also holds the
+devices, areas, floors and integrations of what the automation uses and the
+members of groups, scenes and scripts it names, so it stays apart from
+`references`. On both paths the
 config reaches Core as written and Core's text is never rewritten: no root
 key is pluralised, no alias or trigger key is required or renamed by the
 tool. Core does its own renaming while it validates a write (Core's
