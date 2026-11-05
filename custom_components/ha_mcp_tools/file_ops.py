@@ -51,8 +51,10 @@ SERVICE_EDIT_FILE_SCHEMA = vol.Schema(
 )
 
 
-def shared_file_lock(hass: HomeAssistant) -> asyncio.Lock:
-    """Return the lock that edit_file, write_file and delete_file all hold.
+async def run_file_job(
+    hass: HomeAssistant, job: Callable[..., dict[str, Any]], *args: Any
+) -> dict[str, Any]:
+    """Run edit_file, write_file or delete_file I/O in the executor, one at a time.
 
     An edit reads and then swaps in its result, so an overlapping write or delete
     would be undone while both calls report success. One lock for all files: edits
@@ -61,7 +63,17 @@ def shared_file_lock(hass: HomeAssistant) -> asyncio.Lock:
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
     lock: asyncio.Lock = domain_data.setdefault("file_lock", asyncio.Lock())
-    return lock
+    async with lock:
+        running = hass.async_add_executor_job(job, *args)
+        try:
+            result: dict[str, Any] = await asyncio.shield(running)
+        except asyncio.CancelledError:
+            # A running thread can't be stopped, so it keeps the lock until it ends.
+            while not running.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.wait({running})
+            raise
+        return result
 
 
 def _delete_file_sync(target_file: Path) -> dict[str, Any]:
@@ -254,10 +266,9 @@ def build_edit_file_handler(
         if denied is not None:
             return {"success": False, "error": denied}
         try:
-            async with shared_file_lock(hass):
-                result = await hass.async_add_executor_job(
-                    edit_file_sync, config_dir / rel_path, edits, volume_root_for
-                )
+            result = await run_file_job(
+                hass, edit_file_sync, config_dir / rel_path, edits, volume_root_for
+            )
         except PermissionError:
             _LOGGER.error("Permission denied editing: %s", rel_path)
             return {"success": False, "error": f"Permission denied: {rel_path}"}
