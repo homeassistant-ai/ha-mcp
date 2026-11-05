@@ -146,6 +146,19 @@ def _calendar_bound(value: Any) -> tuple[str, bool] | None:
     return None
 
 
+def _same_bound(found: tuple[str, bool] | None, wanted: tuple[str, bool]) -> bool:
+    """Equal bounds: timed ones by instant, or by wall clock, which Local
+    Calendar's floating times keep across a timezone change."""
+    if found is None or found[1] != wanted[1]:
+        return False
+    if found[1] or found[0] == wanted[0]:
+        return found[0] == wanted[0]
+    at, want = datetime.fromisoformat(found[0]), datetime.fromisoformat(wanted[0])
+    if at.replace(tzinfo=None) == want.replace(tzinfo=None):
+        return True
+    return at.tzinfo is not None and want.tzinfo is not None and at == want
+
+
 async def _restored_copy(
     client: Any,
     cal: str,
@@ -155,14 +168,21 @@ async def _restored_copy(
 ) -> dict[str, Any] | None:
     """The copy an earlier restore re-created: same summary, times and text.
 
-    A re-created event gets a new uid, so its snapshot's uid stays gone.
+    A re-created event gets a new uid, so its snapshot's uid stays gone. A day
+    either side covers a timezone change since the copy was made.
     """
-    bounds = [
-        f"{value}T00:00:00" if date_only else value for value, date_only in (start, end)
-    ]
+    first, last = (
+        datetime.fromisoformat(f"{value}T00:00:00" if date_only else value)
+        for value, date_only in (start, end)
+    )
     try:
         events = await client._request(
-            "GET", f"/calendars/{cal}", params={"start": bounds[0], "end": bounds[1]}
+            "GET",
+            f"/calendars/{cal}",
+            params={
+                "start": (first - timedelta(days=1)).isoformat(),
+                "end": (last + timedelta(days=1)).isoformat(),
+            },
         )
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
@@ -171,8 +191,8 @@ async def _restored_copy(
     for found in _manager()._require_list(events, f"/calendars/{cal}"):
         if (
             isinstance(found, dict)
-            and _calendar_bound(found.get("start")) == start
-            and _calendar_bound(found.get("end")) == end
+            and _same_bound(_calendar_bound(found.get("start")), start)
+            and _same_bound(_calendar_bound(found.get("end")), end)
             and all(
                 (found.get(key) or "") == event[key]
                 for key in ("summary", "description", "location")

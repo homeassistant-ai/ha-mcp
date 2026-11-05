@@ -131,3 +131,22 @@ async def test_a_deleted_event_with_no_copy_is_re_created(
         _CalendarRestClient([other]), "calendar.fam::evt-1", _SNAPSHOT
     )
     assert [p["summary"] for p in posted] == ["Standup"]
+
+
+async def test_the_restored_copy_is_found_after_a_timezone_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Local Calendar keeps floating times: after a timezone change the copy
+    # shows the same wall clock under the new offset.
+    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
+    copy = {
+        "uid": "evt-new",
+        "summary": "Standup",
+        "start": {"dateTime": "2026-06-15T09:00:00+02:00"},
+        "end": {"dateTime": "2026-06-15T09:15:00+02:00"},
+    }
+    client = _CalendarRestClient([copy])
+    result = await bm._restore_calendar_event(client, "calendar.fam::evt-1", _SNAPSHOT)
+    assert result == {"already_restored": True, "event": copy}
+    _path, params = client.calls[-1]
+    assert params["start"] == "2026-06-14T09:00:00-04:00"
