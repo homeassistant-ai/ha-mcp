@@ -1348,6 +1348,10 @@ class WebSocketManager:
         """The key the pool keeps these credentials' connection under."""
         return self._pool_key(url, token, verify_ssl)[2]
 
+    def holds(self, key: str, client: Any) -> bool:
+        """Whether the pool still keeps ``client`` under ``key``."""
+        return self._clients.get(key) is client
+
     def pooled_client(
         self,
         url: str | None = None,

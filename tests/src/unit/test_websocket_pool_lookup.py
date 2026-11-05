@@ -78,3 +78,18 @@ async def test_other_credentials_have_no_connection(
     assert manager.pooled_client("http://ha:8123", "other", True) is None
     assert manager.pooled_client("http://ha:8123", "t", False) is None
     assert len(made) == 1
+
+
+async def test_holds_only_the_current_connection_under_its_key(manager: Any) -> None:
+    pooled = await manager.get_client(url="http://ha:8123", token="t", verify_ssl=True)
+    key = manager.pool_key("http://ha:8123", "t", True)
+
+    assert manager.holds(key, pooled)
+
+    pooled.is_connected = False
+    replaced = await manager.get_client(
+        url="http://ha:8123", token="t", verify_ssl=True
+    )
+
+    assert not manager.holds(key, pooled)
+    assert manager.holds(key, replaced)

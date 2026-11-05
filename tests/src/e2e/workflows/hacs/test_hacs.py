@@ -677,6 +677,8 @@ class TestHacsWriteOperations:
         # Core has no command to take an acceptance back.
         if search["store"]["warning_accepted"]:
             pytest.skip("The server's user already accepted the Marketplace warning")
+        if not search.get("results"):
+            pytest.skip("The Marketplace index returned no repository to install")
         async with MCPAssertions(mcp_client) as mcp:
             refused = await mcp.call_tool_failure(
                 "ha_manage_hacs",

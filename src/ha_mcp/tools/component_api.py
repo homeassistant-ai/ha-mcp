@@ -224,9 +224,18 @@ def _pool_credentials(client: Any) -> dict[str, Any]:
 
 
 def _record_probed_connection(client: Any, ws: Any) -> None:
-    """Remember ``ws`` as the connection probed for this client's credentials."""
-    key = websocket_manager.pool_key(**_pool_credentials(client))
-    _PROBED_OVER.setdefault(client, {})[key] = ws
+    """Remember ``ws`` as the connection probed for this client's credentials.
+
+    Connections the pool has since replaced or evicted are dropped, so the
+    record never outgrows the pool.
+    """
+    connections = {
+        key: probed
+        for key, probed in _PROBED_OVER.get(client, {}).items()
+        if websocket_manager.holds(key, probed)
+    }
+    connections[websocket_manager.pool_key(**_pool_credentials(client))] = ws
+    _PROBED_OVER[client] = connections
 
 
 def _probed_connection_current(client: Any) -> bool:

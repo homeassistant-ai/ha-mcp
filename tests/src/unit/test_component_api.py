@@ -395,18 +395,31 @@ async def test_positive_unaffected_by_ttl(monkeypatch) -> None:
     assert ws.send_command.await_count == 1
 
 
-def _pool_holds(monkeypatch, pooled: list[Any]) -> None:
-    """The pool holds ``pooled[0]`` for ``_client()``'s credentials; nothing connects.
+def _fake_pool(monkeypatch, pool: dict[str, Any]) -> None:
+    """The pool holds ``pool[token]`` for ``_client()``'s URL with that token.
 
-    Other credentials find no connection, so a lookup with the wrong ones
-    reads as an empty slot and the re-probe tests fail.
+    Nothing connects. Other URLs or TLS modes find no connection, so a lookup
+    with the wrong credentials reads as an empty slot and the re-probe tests
+    fail.
     """
-    expected = {"url": "http://ha.local:8123", "token": "tok", "verify_ssl": None}
+    manager = component_api.websocket_manager
 
     def pooled_client(**credentials: Any) -> Any:
-        return pooled[0] if credentials == expected else None
+        if credentials["url"] != "http://ha.local:8123":
+            return None
+        if credentials["verify_ssl"] is not None:
+            return None
+        return pool.get(credentials["token"])
 
-    monkeypatch.setattr(component_api.websocket_manager, "pooled_client", pooled_client)
+    def holds(key: str, client: Any) -> bool:
+        return any(
+            manager.pool_key("http://ha.local:8123", token, None) == key
+            and held is client
+            for token, held in pool.items()
+        )
+
+    monkeypatch.setattr(manager, "pooled_client", pooled_client)
+    monkeypatch.setattr(manager, "holds", holds)
 
 
 @pytest.mark.asyncio
@@ -419,12 +432,12 @@ async def test_positive_reprobes_once_the_pool_reconnects(monkeypatch) -> None:
     upgraded = {**_INFO_OK, "capabilities": ["search", "automation_config"]}
     new_ws = _make_ws(info_result=upgraded)
     new_ws.is_connected = True
-    pooled = [old_ws]
-    _pool_holds(monkeypatch, pooled)
+    pool = {"tok": old_ws}
+    _fake_pool(monkeypatch, pool)
     client = _client()
     with _patch_ws(old_ws):
         first = await get_component_caps(client)
-    pooled[0] = new_ws
+    pool["tok"] = new_ws
     with _patch_ws(new_ws):
         second = await get_component_caps(client)
         third = await get_component_caps(client)
@@ -442,7 +455,7 @@ async def test_positive_reprobes_when_its_connection_dropped(monkeypatch) -> Non
     from the component that went away."""
     ws = _make_ws(info_result=_INFO_OK)
     ws.is_connected = True
-    _pool_holds(monkeypatch, [ws])
+    _fake_pool(monkeypatch, {"tok": ws})
     client = _client()
     with _patch_ws(ws):
         await get_component_caps(client)
@@ -456,7 +469,7 @@ async def test_positive_reprobes_when_its_connection_dropped(monkeypatch) -> Non
 async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None:
     ws = _make_ws(info_result=_INFO_OK)
     ws.is_connected = True
-    _pool_holds(monkeypatch, [ws])
+    _fake_pool(monkeypatch, {"tok": ws})
     client = _client()
     with _patch_ws(ws):
         first = await get_component_caps(client)
@@ -470,27 +483,48 @@ async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None
 async def test_alternating_oauth_users_each_probe_once(monkeypatch) -> None:
     """The OAuth proxy is one client whose token changes per request; each
     user's connection is its own, so switching users does not re-probe."""
-    connections = {"alice": _make_ws(info_result=_INFO_OK)}
-    connections["bob"] = _make_ws(info_result=_INFO_OK)
-    for ws in connections.values():
+    pool = {"alice": _make_ws(info_result=_INFO_OK)}
+    pool["bob"] = _make_ws(info_result=_INFO_OK)
+    for ws in pool.values():
         ws.is_connected = True
-    monkeypatch.setattr(
-        component_api.websocket_manager,
-        "pooled_client",
-        lambda **credentials: connections[credentials["token"]],
-    )
+    _fake_pool(monkeypatch, pool)
     proxy = _client()
 
     async def connect(*, url: str, token: str, verify_ssl: Any) -> Any:
-        return connections[token]
+        return pool[token]
 
     with patch.object(component_api, "get_websocket_client", connect):
         for user in ("alice", "bob", "alice", "bob", "alice"):
             proxy.token = user
             assert isinstance(await get_component_caps(proxy), ComponentCaps)
 
-    probes = sum(ws.send_command.await_count for ws in connections.values())
-    assert probes == 2
+    assert sum(ws.send_command.await_count for ws in pool.values()) == 2
+
+
+@pytest.mark.asyncio
+async def test_connections_the_pool_dropped_are_not_kept(monkeypatch) -> None:
+    """A probed connection the pool evicted or replaced leaves the record at the
+    next probe, so the record never holds more than the pool does."""
+    pool = {"alice": _make_ws(info_result=_INFO_OK)}
+    pool["alice"].is_connected = True
+    _fake_pool(monkeypatch, pool)
+    proxy = _client()
+
+    async def connect(*, url: str, token: str, verify_ssl: Any) -> Any:
+        return pool[token]
+
+    with patch.object(component_api, "get_websocket_client", connect):
+        proxy.token = "alice"
+        await get_component_caps(proxy)
+        evicted = pool.pop("alice")
+        pool["bob"] = _make_ws(info_result=_INFO_OK)
+        pool["bob"].is_connected = True
+        proxy.token = "bob"
+        await get_component_caps(proxy)
+
+    recorded = list(component_api._PROBED_OVER[proxy].values())
+    assert recorded == [pool["bob"]]
+    assert evicted not in recorded
 
 
 def test_component_supports() -> None:
