@@ -160,6 +160,10 @@ _PROBED_OVER: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 # Recorded in place of a connection when a re-probe failed but kept the caps
 # that worked: the next check re-probes even if the pool is empty by then.
 _CONNECTION_LOST = object()
+# Clients whose caps worked until ``invalidate_caps`` dropped them. A command
+# Core refuses right after a restart, before the component has set up, lands
+# here; the next probe treats an ``unknown_command`` like a working re-probe.
+_DROPPED_WORKING: weakref.WeakSet[Any] = weakref.WeakSet()
 # Preserve failed discovery separately so write callers can refuse a downgrade
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
@@ -372,11 +376,16 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
 
 
 def _after_failed_probe(
-    client: Any, exc: Exception, working: ComponentCaps | None, strict: bool
+    client: Any,
+    exc: Exception,
+    working: ComponentCaps | None,
+    strict: bool,
+    *,
+    had_working: bool,
 ) -> ComponentCaps | None:
     """Cache what a failed ``info`` probe establishes and answer its caller."""
     if is_unknown_command(exc):
-        if working is None:
+        if not had_working:
             _store_caps(client, None)
         else:
             # Right after a Core restart Core answers before the component has
@@ -422,7 +431,8 @@ async def get_component_caps(
     Cache-on-failure semantics follow the error taxonomy. A re-probe of caps
     that worked keeps them on any failure but ``unknown_command`` and caches
     nothing, so the next call probes again; its ``unknown_command`` gets the
-    short window, since Core answers before the component has set up:
+    short window, since Core answers before the component has set up, as does
+    the probe after ``invalidate_caps`` dropped caps that worked:
 
     - ``HomeAssistantCommandError`` with ``unknown_command`` (old or absent
       component): cache ``None`` with an expiry. The negative is re-probed
@@ -472,6 +482,8 @@ async def get_component_caps(
         # Core restart it can run before Core answers, and a cached failure
         # would refuse strict callers for its window once Core is back.
         working = None if client in _PROBE_FAILURES else _CAPS_CACHE.get(client)
+        had_working = working is not None or client in _DROPPED_WORKING
+        _DROPPED_WORKING.discard(client)
         # This probe alone decides the auth marker; never carry a stale one.
         _PROBE_AUTH_REJECTED.pop(client, None)
 
@@ -481,7 +493,9 @@ async def get_component_caps(
             )
             response = await ws.send_command(INFO_COMMAND)
         except Exception as exc:  # noqa: BLE001 - classified and logged below
-            return _after_failed_probe(client, exc, working, strict)
+            return _after_failed_probe(
+                client, exc, working, strict, had_working=had_working
+            )
 
         caps = _parse_caps(response)
         if caps is not None and caps.schema_version != SUPPORTED_SCHEMA_VERSION:
@@ -533,6 +547,8 @@ def invalidate_caps(client: Any) -> None:
     stale positive doesn't keep routing to a dead command.
     """
     client = _per_user(client)
+    if client not in _PROBE_FAILURES and _CAPS_CACHE.get(client) is not None:
+        _DROPPED_WORKING.add(client)
     _PROBE_FAILURES.pop(client, None)
     _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE.pop(client, None)

@@ -537,6 +537,31 @@ async def test_a_component_still_starting_is_probed_again_soon(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_a_command_refused_while_starting_also_gets_the_short_window(
+    monkeypatch,
+) -> None:
+    """A component command sent in the same restart gap answers
+    ``unknown_command`` and drops the caps; the probe that follows, still in
+    the gap, gets the short window too rather than five minutes."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    with _patch_ws(_make_ws(info_result=_INFO_OK)):
+        await get_component_caps(client)
+    invalidate_caps(client)
+
+    starting = _make_ws(
+        info_exc=HomeAssistantCommandError("Unknown command.", "unknown_command")
+    )
+    with _patch_ws(starting):
+        assert await get_component_caps(client) is None
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    with _patch_ws(_make_ws(info_result=_INFO_OK)):
+        assert isinstance(await get_component_caps(client), ComponentCaps)
+
+
+@pytest.mark.asyncio
 async def test_a_failed_reprobe_never_hands_out_a_malformed_snapshot(
     monkeypatch,
 ) -> None:
