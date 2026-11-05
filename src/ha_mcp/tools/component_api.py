@@ -44,7 +44,7 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..client.websocket_client import get_websocket_client
+from ..client.websocket_client import get_websocket_client, websocket_manager
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +156,7 @@ _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
 # closes it and the pool replaces it; the component on the far side may then be
 # another version (an app keeps running while the component updates through the
 # Marketplace and Core restarts), so the entry is re-probed rather than kept.
-_PROBED_OVER: weakref.WeakKeyDictionary[Any, weakref.ref[Any]] = (
-    weakref.WeakKeyDictionary()
-)
+_PROBED_OVER: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 # Preserve failed discovery separately so write callers can refuse a downgrade
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
@@ -213,33 +211,29 @@ def _get_caps_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
-async def _probed_connection_current(client: Any, caps: ComponentCaps | None) -> bool:
-    """False once the connection a positive entry came from was replaced.
+def _probed_connection_current(client: Any) -> bool:
+    """False once the connection a positive entry came from closed or was replaced.
 
-    The pool replaces a connection that closed (a Core restart) on the next
-    request, so comparing the pool's connection with the probed one tells
-    whether the component may have changed since. A negative entry, or a pool
-    that cannot connect right now, keeps the cached answer.
+    Reads the pool without connecting. An empty pool slot (a loop change
+    cleared it) says nothing about the component, so the entry holds until a
+    connection exists to compare.
     """
     probed = _PROBED_OVER.get(client)
-    if caps is None or client in _PROBE_FAILURES or probed is None:
+    if probed is None:
         return True
-    try:
-        current = await get_websocket_client(
-            url=client.base_url,
-            token=client.token,
-            verify_ssl=getattr(client, "verify_ssl", None),
-        )
-    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
-        return True
-    return current is probed()
+    current = websocket_manager.pooled_client(
+        url=client.base_url,
+        token=client.token,
+        verify_ssl=getattr(client, "verify_ssl", None),
+    )
+    return current is None or (current is probed and bool(current.is_connected))
 
 
 def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
     """Return ``(hit, caps)`` for a still-valid cache entry, else ``(False, None)``.
 
-    A valid positive entry is a hit for the process lifetime here;
-    ``get_component_caps`` also checks its connection. Malformed replies
+    A valid positive entry is a hit while the connection it was probed over
+    is the pool's live one. Malformed replies
     retained for permissive readers expire like transient failures. A negative (``None``)
     entry is a hit only within its window of when it was stored (monotonic clock):
     ``_NEGATIVE_CACHE_TTL_S`` for a definitive absent-negative, the shorter
@@ -251,7 +245,9 @@ def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
         return False, None
     cached = _CAPS_CACHE[client]
     if cached is not None and client not in _PROBE_FAILURES:
-        return True, cached
+        if _probed_connection_current(client):
+            return True, cached
+        return False, None
     now = _monotonic()
     stored_at = _NEGATIVE_CACHE_TS.get(client)
     if stored_at is not None and (now - stored_at) < _NEGATIVE_CACHE_TTL_S:
@@ -399,12 +395,12 @@ async def get_component_caps(
     command payloads shaped for a different wire-format generation.
     """
     hit, caps = _live_cache_entry(client)
-    if hit and await _probed_connection_current(client, caps):
+    if hit:
         return _checked_caps(client, caps, strict)
 
     async with _get_caps_lock(client):
         hit, caps = _live_cache_entry(client)
-        if hit and await _probed_connection_current(client, caps):
+        if hit:
             return _checked_caps(client, caps, strict)
 
         base_url = getattr(client, "base_url", None)
@@ -459,7 +455,7 @@ async def get_component_caps(
             )
             caps = None
         _store_caps(client, caps)
-        _PROBED_OVER[client] = weakref.ref(ws)
+        _PROBED_OVER[client] = ws
         result = response.get("result") if isinstance(response, dict) else None
         if (
             not isinstance(response, dict)

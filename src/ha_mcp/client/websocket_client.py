@@ -1318,6 +1318,40 @@ class WebSocketManager:
         """Create a cache key from credentials."""
         return hashlib.sha256(f"{url.rstrip('/')}:{token}".encode()).hexdigest()
 
+    def _pool_key(
+        self, url: str | None, token: str | None, verify_ssl: bool | None
+    ) -> tuple[str, str, str]:
+        """The credentials a caller connects with, and their pool key."""
+        if url and token:
+            ws_url, ws_token = url, token
+        else:
+            settings = get_global_settings()
+            ws_url = settings.homeassistant_url
+            ws_token = settings.homeassistant_token
+        # Key on the EFFECTIVE verification mode: a caller passing the
+        # resolved settings default (send_websocket_message) must share
+        # the pooled connection with callers that omit the argument
+        # (listener, HACS, installer) — only a genuine override such as
+        # verify_ssl=False gets its own isolated connection.
+        key = (
+            f"{self._client_key(ws_url, ws_token)}"
+            f"|verify_ssl={self._effective_verify_ssl(verify_ssl)}"
+        )
+        return ws_url, ws_token, key
+
+    def pooled_client(
+        self,
+        url: str | None = None,
+        token: str | None = None,
+        verify_ssl: bool | None = None,
+    ) -> HomeAssistantWebSocketClient | None:
+        """The pool's client for these credentials, without connecting.
+
+        It may be disconnected: ``get_client`` replaces such a client only on
+        its next call. None when the pool holds none for them.
+        """
+        return self._clients.get(self._pool_key(url, token, verify_ssl)[2])
+
     @staticmethod
     def _effective_verify_ssl(verify_ssl: bool | None) -> bool:
         """Resolve the effective TLS-verification mode for the pool key."""
@@ -1430,25 +1464,7 @@ class WebSocketManager:
             self._current_loop = current_loop
             self._release_stale_clients(stale_clients, previous_loop)
 
-            # Determine credentials to use
-            if url and token:
-                ws_url = url
-                ws_token = token
-            else:
-                settings = get_global_settings()
-                ws_url = settings.homeassistant_url
-                ws_token = settings.homeassistant_token
-
-            # Key on the EFFECTIVE verification mode: a caller passing the
-            # resolved settings default (send_websocket_message) must share
-            # the pooled connection with callers that omit the argument
-            # (listener, HACS, installer) — only a genuine override such as
-            # verify_ssl=False gets its own isolated connection.
-            effective_verify_ssl = self._effective_verify_ssl(verify_ssl)
-            key = (
-                f"{self._client_key(ws_url, ws_token)}"
-                f"|verify_ssl={effective_verify_ssl}"
-            )
+            ws_url, ws_token, key = self._pool_key(url, token, verify_ssl)
 
             # Return existing connected client for these credentials
             existing = self._clients.get(key)
