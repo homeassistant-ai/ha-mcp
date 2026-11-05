@@ -396,55 +396,51 @@ async def test_positive_unaffected_by_ttl(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_positive_reprobes_once_the_pool_reconnects(monkeypatch) -> None:
+async def test_positive_reprobes_once_the_pool_reconnects() -> None:
     """A Core restart replaces the pooled WS connection; caps probed over the old
     one are re-probed, so a component upgraded across that restart is adopted
     without restarting the server (#2967)."""
     old_ws = _make_ws(info_result=_INFO_OK)
-    old_ws.is_connected = True
     upgraded = {**_INFO_OK, "capabilities": ["search", "automation_config"]}
     new_ws = _make_ws(info_result=upgraded)
-    new_ws.is_connected = True
-    pooled = [old_ws]
-    monkeypatch.setattr(component_api, "_pooled_connection", lambda c: pooled[0])
     client = _client()
     with _patch_ws(old_ws):
         first = await get_component_caps(client)
-    pooled[0] = new_ws
     with _patch_ws(new_ws):
         second = await get_component_caps(client)
+        third = await get_component_caps(client)
 
     assert not component_supports(first, "automation_config")
     assert component_supports(second, "automation_config")
+    assert third is second
+    assert new_ws.send_command.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_positive_reprobes_when_its_connection_dropped(monkeypatch) -> None:
-    """The connection the caps came from closed (Core restarting); the next call
-    re-probes instead of trusting caps from the component that went away."""
+async def test_positive_kept_while_its_connection_is_pooled() -> None:
     ws = _make_ws(info_result=_INFO_OK)
-    ws.is_connected = True
-    monkeypatch.setattr(component_api, "_pooled_connection", lambda c: ws)
-    client = _client()
-    with _patch_ws(ws):
-        await get_component_caps(client)
-        ws.is_connected = False
-        await get_component_caps(client)
-
-    assert ws.send_command.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None:
-    ws = _make_ws(info_result=_INFO_OK)
-    ws.is_connected = True
-    monkeypatch.setattr(component_api, "_pooled_connection", lambda c: ws)
     client = _client()
     with _patch_ws(ws):
         first = await get_component_caps(client)
         second = await get_component_caps(client)
 
     assert first is second
+    assert ws.send_command.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_positive_kept_while_the_pool_cannot_connect() -> None:
+    """Home Assistant down: nothing says the component changed, so the cached
+    caps stand rather than turning into a probe failure."""
+    ws = _make_ws(info_result=_INFO_OK)
+    client = _client()
+    with _patch_ws(ws):
+        first = await get_component_caps(client)
+    down = AsyncMock(side_effect=HomeAssistantConnectionError("down"))
+    with patch.object(component_api, "get_websocket_client", down):
+        second = await get_component_caps(client, strict=True)
+
+    assert second is first
     assert ws.send_command.await_count == 1
 
 

@@ -75,9 +75,11 @@ DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime
 # (the cache key is the process-lifetime REST client — see ``_CAPS_CACHE``).
-# Valid positive entries never expire on this timer; they are dropped only by
-# ``invalidate_caps`` (a supposedly-supported command coming back
-# ``unknown_command``). This ABSENT-negative window covers a definitive
+# Valid positive entries never expire on this timer; they hold while the WS
+# connection they were probed over is the pool's live one (see
+# ``_PROBED_OVER``) and are dropped by ``invalidate_caps`` (a
+# supposedly-supported command coming back ``unknown_command``). This
+# ABSENT-negative window covers a definitive
 # "component responded, no usable surface" verdict (``unknown_command`` /
 # unsupported schema_version). Inconclusive failures use the short window below.
 _NEGATIVE_CACHE_TTL_S = 300.0
@@ -126,9 +128,11 @@ class ComponentCaps:
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
 # garbage-collected. The key is the process-lifetime REST client, NOT the WS
-# connection: an HA restart drops the socket but reuses the same pooled client,
-# so a valid positive entry persists for the whole process (dropped only by
-# ``invalidate_caps`` on an ``unknown_command``). A ``None`` value is a cached
+# connection: an HA restart drops the socket but reuses the same REST client.
+# A valid positive entry is re-probed once the connection it came from is gone
+# (``_PROBED_OVER``), since the restart may have loaded another component
+# version (#2967), and dropped by ``invalidate_caps`` on an
+# ``unknown_command``. A ``None`` value is a cached
 # *negative* ("probed, no usable WS surface"); absence means "not yet probed".
 # A negative carries an expiry in EXACTLY ONE of the two timestamp maps below —
 # ``_NEGATIVE_CACHE_TS`` (definitive absent, long) or ``_TRANSIENT_NEGATIVE_TS``
@@ -146,6 +150,13 @@ _NEGATIVE_CACHE_TS: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDicti
 # TTLs; a client is stamped in at most one of the two at a time (the store helpers
 # clear the other).
 _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
+    weakref.WeakKeyDictionary()
+)
+# The pooled WS connection a positive entry was probed over. A Core restart
+# closes it and the pool replaces it; the component on the far side may then be
+# another version (an app keeps running while the component updates through the
+# Marketplace and Core restarts), so the entry is re-probed rather than kept.
+_PROBED_OVER: weakref.WeakKeyDictionary[Any, weakref.ref[Any]] = (
     weakref.WeakKeyDictionary()
 )
 # Preserve failed discovery separately so write callers can refuse a downgrade
@@ -202,10 +213,33 @@ def _get_caps_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
+async def _probed_connection_current(client: Any, caps: ComponentCaps | None) -> bool:
+    """False once the connection a positive entry came from was replaced.
+
+    The pool replaces a connection that closed (a Core restart) on the next
+    request, so comparing the pool's connection with the probed one tells
+    whether the component may have changed since. A negative entry, or a pool
+    that cannot connect right now, keeps the cached answer.
+    """
+    probed = _PROBED_OVER.get(client)
+    if caps is None or client in _PROBE_FAILURES or probed is None:
+        return True
+    try:
+        current = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
+    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
+        return True
+    return current is probed()
+
+
 def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
     """Return ``(hit, caps)`` for a still-valid cache entry, else ``(False, None)``.
 
-    A valid positive entry is a hit for the process lifetime. Malformed replies
+    A valid positive entry is a hit for the process lifetime here;
+    ``get_component_caps`` also checks its connection. Malformed replies
     retained for permissive readers expire like transient failures. A negative (``None``)
     entry is a hit only within its window of when it was stored (monotonic clock):
     ``_NEGATIVE_CACHE_TTL_S`` for a definitive absent-negative, the shorter
@@ -327,8 +361,11 @@ async def get_component_caps(
 ) -> ComponentCaps | None:
     """Return the cached (or freshly probed) capabilities of the component.
 
-    One ``ha_mcp_tools/info`` probe per client, cached. ``None`` means "no
-    usable component WS surface" — the caller falls back to its legacy path.
+    One ``ha_mcp_tools/info`` probe per client, cached; usable caps are
+    probed again once the pooled WS connection they came from was replaced,
+    since the Core restart behind that may have loaded another component.
+    ``None`` means "no usable component WS surface" — the caller falls back
+    to its legacy path.
 
     With ``strict=True``, failed or malformed discovery raises
     ``ComponentDiscoveryError``, including failures cached by earlier read tools.
@@ -362,12 +399,12 @@ async def get_component_caps(
     command payloads shaped for a different wire-format generation.
     """
     hit, caps = _live_cache_entry(client)
-    if hit:
+    if hit and await _probed_connection_current(client, caps):
         return _checked_caps(client, caps, strict)
 
     async with _get_caps_lock(client):
         hit, caps = _live_cache_entry(client)
-        if hit:
+        if hit and await _probed_connection_current(client, caps):
             return _checked_caps(client, caps, strict)
 
         base_url = getattr(client, "base_url", None)
@@ -422,6 +459,7 @@ async def get_component_caps(
             )
             caps = None
         _store_caps(client, caps)
+        _PROBED_OVER[client] = weakref.ref(ws)
         result = response.get("result") if isinstance(response, dict) else None
         if (
             not isinstance(response, dict)
@@ -463,6 +501,7 @@ def invalidate_caps(client: Any) -> None:
     _PROBE_FAILURES.pop(client, None)
     _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE.pop(client, None)
+    _PROBED_OVER.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
 
