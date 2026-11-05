@@ -7,7 +7,7 @@
   "scripts/translate_locales.py": 1316,
   "src/ha_mcp/__main__.py": 1750,
   "src/ha_mcp/auth/provider.py": 1006,
-  "src/ha_mcp/backup_manager.py": 3890,
+  "src/ha_mcp/backup_manager.py": 3621,
   "src/ha_mcp/client/rest_client.py": 2559,
   "src/ha_mcp/client/websocket_client.py": 1812,
   "src/ha_mcp/server.py": 1115,
