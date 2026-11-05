@@ -192,7 +192,8 @@ class TestDashboardResourceLifecycle:
             # Cleanup created resources
             for resource_id in created_ids:
                 if resource_id:
-                    await mcp_client.call_tool(
+                    await safe_call_tool(
+                        mcp_client,
                         "ha_config_delete_dashboard_resource",
                         {"resource_id": resource_id},
                     )
@@ -243,7 +244,8 @@ class TestDashboardResourceLifecycle:
 
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -374,7 +376,8 @@ class TestDashboardResourceList:
             logger.info(f"Pagination verified across {first['total_count']} resources")
         finally:
             for resource_id in created:
-                await mcp.call_tool_success(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -412,7 +415,8 @@ class TestDashboardResourceList:
 
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -461,7 +465,8 @@ class TestDashboardResourceList:
             assert "_preview" not in row
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -488,7 +493,8 @@ class TestDashboardResourceUrlPatterns:
             assert add_data["url"] == "/local/custom-cards/my-card.js"
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -514,7 +520,8 @@ class TestDashboardResourceUrlPatterns:
             assert "jsdelivr" in add_data["url"]
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -537,7 +544,8 @@ class TestDashboardResourceUrlPatterns:
             assert add_data["url"] == "/hacsfiles/button-card/button-card.js"
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -632,7 +640,8 @@ class TestInlineDashboardResource:
 
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -660,7 +669,8 @@ class TestInlineDashboardResource:
             )
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -734,7 +744,8 @@ class TestInlineDashboardResource:
             assert match["_content"] == content
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -826,7 +837,8 @@ class TestInlineDashboardResource:
             assert migrated.get("_content") == new_content
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )
@@ -880,7 +892,8 @@ class TestInlineDashboardResource:
 
         finally:
             if resource_id:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_config_delete_dashboard_resource",
                     {"resource_id": resource_id},
                 )

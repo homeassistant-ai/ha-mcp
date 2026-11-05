@@ -8,7 +8,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ...utilities.assertions import assert_mcp_success
+from ...utilities.assertions import assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,8 @@ class TestShowAsOnIntegrationEntity:
             # it was) so we don't leak state to other tests sharing the demo
             # entity inside this test container.
             restore_dc = "" if original_override is None else original_override
-            await mcp_client.call_tool(
+            await safe_call_tool(
+                mcp_client,
                 "ha_set_entity",
                 {"entity_id": self.TARGET, "device_class": restore_dc},
             )
@@ -286,7 +287,8 @@ class TestShowAsOnIntegrationEntity:
             # round-trip when there was nothing captured — sending an empty
             # sub-dict would otherwise emit a no-op options={"sensor": {}} call.
             if original_sensor_options:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_set_entity",
                     {
                         "entity_id": self.TARGET,

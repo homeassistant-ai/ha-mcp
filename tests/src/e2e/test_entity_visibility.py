@@ -112,7 +112,8 @@ async def test_visibility_denylist_hides_entity_from_search_but_get_state_return
         assert got.get("data", {}).get("entity_id") == _PROBE_ENTITY_ID
 
     finally:
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
@@ -191,7 +192,8 @@ async def test_visibility_label_dimension_hides_entity_from_search(
         assert filtered.get("entity_total_matches") == 0
 
     finally:
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
@@ -200,7 +202,9 @@ async def test_visibility_label_dimension_hides_entity_from_search(
             },
         )
         if label_id:
-            await mcp_client.call_tool("ha_config_remove_label", {"label_id": label_id})
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_label", {"label_id": label_id}
+            )
 
 
 @pytest.mark.asyncio
@@ -252,7 +256,8 @@ async def test_visibility_allowlist_hides_unlisted_entity_from_search(
         assert filtered.get("entity_total_matches") == 0
 
     finally:
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
@@ -346,7 +351,8 @@ async def test_visibility_allowlist_keeps_allowed_visible_and_deny_wins(
 
     finally:
         for target in (allowed_query, unlisted_query):
-            await mcp_client.call_tool(
+            await safe_call_tool(
+                mcp_client,
                 "ha_remove_helpers_integrations",
                 {"helper_type": "input_boolean", "target": target, "confirm": True},
             )
@@ -402,7 +408,8 @@ async def test_visibility_filter_applies_to_get_overview(
         assert filtered["system_summary"]["total_entities"] == baseline_total - 1
 
     finally:
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": probe_query, "confirm": True},
         )
@@ -497,9 +504,10 @@ async def test_visibility_enforce_conceals_and_refuses_across_tools(
     finally:
         # Drop enforce BEFORE cleanup: if an assertion above failed while
         # enforce was still on, the helper removal would be refused by the
-        # outbound scan and its ToolError would MASK the real test failure.
+        # outbound scan and the probe helper would leak.
         save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": probe_query, "confirm": True},
         )
@@ -573,7 +581,8 @@ async def test_visibility_respect_assist_honors_explicit_unexpose(
         )
 
     finally:
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": probe_query, "confirm": True},
         )

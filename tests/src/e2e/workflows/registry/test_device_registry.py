@@ -655,13 +655,14 @@ class TestDeviceSet:
         finally:
             # Restore the device's original labels even when an assertion
             # above fails, then drop the labels this test created.
-            await mcp_client.call_tool(
+            await safe_call_tool(
+                mcp_client,
                 "ha_set_device",
                 {"device_id": device_id, "labels": original_labels},
             )
             for label_id in test_labels:
-                await mcp_client.call_tool(
-                    "ha_config_remove_label", {"label_id": label_id}
+                await safe_call_tool(
+                    mcp_client, "ha_config_remove_label", {"label_id": label_id}
                 )
 
     async def test_update_device_no_changes(self, mcp_client):
