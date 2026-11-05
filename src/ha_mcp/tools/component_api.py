@@ -244,7 +244,7 @@ def _probed_connection_current(client: Any) -> bool:
     if current is None:
         return True
     probed = connections.get(websocket_manager.pool_key(**credentials))
-    return current is probed and bool(current.is_connected)
+    return bool(current.is_connected) and current is probed
 
 
 def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
