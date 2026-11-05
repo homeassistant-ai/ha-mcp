@@ -29,6 +29,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .component_api import ComponentCaps, get_component_caps
 from .config_entry_flow import COMPONENT_DOMAIN as MCP_TOOLS_DOMAIN
 from .helpers import (
@@ -37,6 +38,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .resource_patch import MAX_EDITS, ResourceEdit
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import unwrap_service_response
 
@@ -52,11 +54,6 @@ FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 # subsequent call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
-# Component service that returns the operator's component-side extra YAML write
-# keys (#1887). Ships in the same component version as the ``extra_allowed_keys``
-# field, so it is read only when the component is new enough (see
-# ``effective_extra_yaml_write_keys``).
-GET_EXTRA_YAML_KEYS_SERVICE = "get_extra_yaml_keys"
 
 # Minimum version of the ha_mcp_tools custom component that this ha-mcp
 # release expects. Bumps in lockstep with ``manifest.json`` whenever a
@@ -94,6 +91,9 @@ GET_EXTRA_YAML_KEYS_SERVICE = "get_extra_yaml_keys"
 # with and without them and cannot distinguish the two (#1946). 1.2.0 is the
 # first component version cut after #1882, hence the first that guarantees both.
 MIN_COMPONENT_VERSION = "1.2.0"
+# First component release with the ``edit_file`` service. Gated per feature, not
+# through MIN_COMPONENT_VERSION, so whole-file writes need no component update.
+MIN_COMPONENT_VERSION_FILE_EDITS = "9.2.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -451,6 +451,61 @@ def _assert_caps_version_ok(caps: ComponentCaps) -> None:
         _raise_component_too_old(f"reported version is {caps.component_version}")
 
 
+async def _component_meets_floor(client: Any, floor: str) -> tuple[bool, str]:
+    """Return whether the component is at ``floor``, and its reported version.
+
+    Reads the REST bootstrap cache, not the WebSocket caps, so a transport blip
+    cannot be mistaken for an outdated component.
+    """
+
+    def _current() -> tuple[int, ...] | None:
+        reported = _COMPONENT_VERSION_CACHE.get(client, "")
+        if not reported:
+            return None
+        try:
+            return _version_tuple(reported)
+        except ValueError:
+            return None
+
+    required = _version_tuple(floor)
+    await _ensure_caller_token(client)
+    parsed = _current()
+    if parsed is None or parsed < required:
+        # The token cache is keyed by the long-lived REST client and survives
+        # a Home Assistant restart, so a component updated after this process
+        # first bootstrapped would keep reporting its old version forever and
+        # the remediation the callers print ("update, then restart HA") would
+        # never take effect. Re-bootstrap once before blocking, so the update
+        # heals the gate on the next call rather than needing an ha-mcp
+        # restart. Only on the failure path: a satisfied gate costs nothing.
+        await _ensure_caller_token(client, force_refresh=True)
+        parsed = _current()
+    reported = _COMPONENT_VERSION_CACHE.get(client, "")
+    return parsed is not None and parsed >= required, reported
+
+
+async def _assert_file_edits_supported(client: Any) -> None:
+    """Replace an opaque missing-service failure with an update prompt."""
+    supported, reported = await _component_meets_floor(
+        client, MIN_COMPONENT_VERSION_FILE_EDITS
+    )
+    if supported:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            "ha_write_file(edits=...) needs a newer ha_mcp_tools custom component "
+            f"(reported version: {reported or 'unknown'}; requires >= "
+            f"{MIN_COMPONENT_VERSION_FILE_EDITS}).",
+            suggestions=[
+                "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
+                "Restart Home Assistant after the update completes",
+                "Or send the whole file with content= instead of edits",
+            ],
+        )
+    )
+
+
 async def _probe_tools_services(client: Any) -> bool:
     """``_is_mcp_tools_available`` behind a short per-client TTL memo.
 
@@ -745,7 +800,12 @@ class FilesystemTools:
         name="ha_write_file",
         tags={"Files", "beta"},
         annotations=write_hints(
-            "Write File", destructive=True, idempotent=True, open_world=False
+            # Not idempotent: retrying an edit whose 'new' contains its 'old'
+            # applies it twice.
+            "Write File",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
         ),
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)
@@ -763,16 +823,23 @@ class FilesystemTools:
             ),
         ],
         content: Annotated[
-            str,
+            str | None,
             Field(
-                description="The content to write to the file.",
+                default=None,
+                description=(
+                    "The whole content to write to the file. Exactly one of "
+                    "content and edits is required."
+                ),
             ),
-        ],
+        ] = None,
         overwrite: Annotated[
             bool,
             Field(
                 default=False,
-                description=("Whether to overwrite if the file exists."),
+                description=(
+                    "Whether content may overwrite an existing file. Not needed "
+                    "with edits."
+                ),
             ),
         ] = False,
         create_dirs: Annotated[
@@ -784,6 +851,21 @@ class FilesystemTools:
                 ),
             ),
         ] = True,
+        edits: Annotated[
+            # Bounds on the list, not the union: there they render as
+            # minItems/maxItems instead of string-only minLength/maxLength.
+            Annotated[list[ResourceEdit], Field(min_length=1, max_length=MAX_EDITS)]
+            | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description=(
+                    "Search/replace edits for an existing text file, applied in "
+                    "order; prefer them over content for a small change to a "
+                    "large file."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Write a file to allowed directories in the Home Assistant config.
 
@@ -805,24 +887,46 @@ class FilesystemTools:
         auto-backup (only modifications/deletions of text files are
         snapshotted); the skip is logged, the write is not blocked.
 
+        With edits, every 'old' must occur exactly once when its edit applies,
+        or nothing is saved; the rest of the file, line endings included, stays
+        as it is. A file ha_read_file shows with LF may be stored as CRLF; that
+        is handled unless the file mixes both.
+
         EXAMPLE: ha_write_file(path="custom_templates/formatters.jinja", content="{% macro shout(text) %}{{ text | upper }}{% endmacro %}")
+        EXAMPLE: ha_write_file(path="www/card.js", edits=[{"old": "const REFRESH = 30000;", "new": "const REFRESH = 10000;"}])
         """
         try:
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
-            # Build service data
-            service_data: dict[str, Any] = {
-                "path": path,
-                "content": content,
-                "overwrite": overwrite,
-                "create_dirs": create_dirs,
-            }
+            if (content is None) == (edits is None):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Provide exactly one of content and edits.",
+                        context={"path": path},
+                    )
+                )
+
+            service: str
+            service_data: dict[str, Any]
+            if edits is not None:
+                await _assert_file_edits_supported(self._client)
+                service = "edit_file"
+                service_data = {"path": path, "edits": edits}
+            else:
+                service = "write_file"
+                service_data = {
+                    "path": path,
+                    "content": content,
+                    "overwrite": overwrite,
+                    "create_dirs": create_dirs,
+                }
 
             # Call the custom component service
             result = await call_mcp_tools_service(
                 self._client,
-                "write_file",
+                service,
                 service_data,
             )
 
@@ -954,130 +1058,3 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     logger.info("Filesystem tools enabled via feature flag")
     register_tool_methods(mcp, FilesystemTools(client))
-
-
-# First custom-component version whose ``edit_yaml_config`` schema accepts
-# ``extra_allowed_keys`` (#1887).
-MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS = "1.2.4"
-
-
-async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -> None:
-    """Block with an actionable prompt if the component predates #1887.
-
-    ``edit_yaml_config``'s service schema is strict, so sending
-    ``extra_allowed_keys`` to a component that does not declare the field makes
-    Home Assistant reject the whole call with an opaque "extra keys not
-    allowed". Callers only send the field when the operator configured keys,
-    and this turns the remaining server-ahead-of-component window into a clear
-    message. Both the write path and the backup restore path use it, so a
-    snapshot taken under the setting fails the same recognisable way.
-
-    Deliberately NOT a bump of ``MIN_COMPONENT_VERSION``: an operator who never
-    sets extra keys must not be forced to update the component to keep using
-    the filesystem tools.
-
-    The version comes from the REST bootstrap cache, which every call to this
-    component populates and validates, so a WebSocket hiccup cannot be
-    mistaken for an outdated component. An absent entry means the bootstrap
-    has not run yet; the caller below performs it first, and a component too
-    old to report a version at all is already rejected there.
-    """
-    if not extra_keys:
-        return
-
-    def _current() -> tuple[int, ...] | None:
-        reported = _COMPONENT_VERSION_CACHE.get(client, "")
-        if not reported:
-            return None
-        try:
-            return _version_tuple(reported)
-        except ValueError:
-            return None
-
-    floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-    await _ensure_caller_token(client)
-    parsed = _current()
-    if parsed is None or parsed < floor:
-        # The token cache is keyed by the long-lived REST client and survives
-        # a Home Assistant restart, so a component updated after this process
-        # first bootstrapped would keep reporting its old version forever and
-        # the remediation this error prints ("update, then restart HA") would
-        # never take effect. Re-bootstrap once before blocking, so the update
-        # heals the gate on the next call rather than needing an ha-mcp
-        # restart. Only on the failure path: a satisfied gate costs nothing.
-        await _ensure_caller_token(client, force_refresh=True)
-        parsed = _current()
-    reported = _COMPONENT_VERSION_CACHE.get(client, "")
-    if parsed is not None and parsed >= floor:
-        return
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.COMPONENT_NOT_INSTALLED,
-            "Extra YAML write keys are configured, but the installed "
-            "ha_mcp_tools custom component does not support them "
-            f"(reported version: {reported or 'unknown'}; requires >= "
-            f"{MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS}).",
-            suggestions=[
-                "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
-                "Restart Home Assistant after the update completes",
-                # Parenthesised so this reads as one suggestion rather than
-                # a list entry with a missing comma (py/implicit-string-
-                # concatenation-in-list).
-                (
-                    "Or clear the extra YAML write keys setting to write "
-                    "only the built-in allowed keys"
-                ),
-            ],
-        )
-    )
-
-
-async def effective_extra_yaml_write_keys(client: Any, settings: Any) -> list[str]:
-    """Return the write allowlist extension in force: server setting + component.
-
-    The operator can set extra YAML write keys in two places (#1887): the ha-mcp
-    server's own ``HA_MCP_EXTRA_YAML_KEYS`` and, via the integration UI, a store
-    the component owns. A key set only on the component would otherwise be
-    rejected by the server's own pre-dispatch allowlist before the write ever
-    reaches the component, so the server reads that store here (via
-    ``get_extra_yaml_keys``) and unions it with its own setting.
-
-    That service ships in the same component version as the ``extra_allowed_keys``
-    field (``MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS``), so it is read only when the
-    bootstrap reports a new-enough component; on an older component, or any read
-    failure, fall back to the server setting alone and let
-    ``assert_extra_yaml_keys_supported`` turn a real mismatch into an actionable
-    prompt. The store is read per write rather than cached: it changes at runtime
-    from the options flow, and a stale cache is the failure mode #1887's own
-    version-cache heal exists to avoid. YAML writes are rare and human-driven, so
-    the extra round-trip is negligible.
-    """
-    from ..config import parse_extra_yaml_write_keys
-
-    keys: set[str] = set(parse_extra_yaml_write_keys(settings))
-    try:
-        await _ensure_caller_token(client)
-        reported = _COMPONENT_VERSION_CACHE.get(client, "")
-        floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-        try:
-            current = _version_tuple(reported) if reported else None
-        except ValueError:
-            current = None
-        if current is not None and current >= floor:
-            result = await call_mcp_tools_service(
-                client, GET_EXTRA_YAML_KEYS_SERVICE, {}
-            )
-            inner = (
-                unwrap_service_response(result) if isinstance(result, dict) else None
-            )
-            if isinstance(inner, dict) and inner.get("success"):
-                stored = inner.get("keys", [])
-                if isinstance(stored, list):
-                    keys.update(k for k in stored if isinstance(k, str) and k)
-    except Exception:
-        logger.debug(
-            "Could not read the component extra-YAML-keys store; "
-            "using the server setting alone.",
-            exc_info=True,
-        )
-    return sorted(keys)

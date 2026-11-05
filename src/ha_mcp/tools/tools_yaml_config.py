@@ -38,13 +38,12 @@ from .helpers import (
 )
 from .tool_hints import write_hints
 from .tools_config_dashboards import fetch_dashboards_list
-from .tools_filesystem import (
-    _assert_mcp_tools_available,
+from .tools_filesystem import _assert_mcp_tools_available, call_mcp_tools_service
+from .util_helpers import unwrap_service_response
+from .yaml_extra_keys import (
     assert_extra_yaml_keys_supported,
-    call_mcp_tools_service,
     effective_extra_yaml_write_keys,
 )
-from .util_helpers import unwrap_service_response
 
 # YAML packages frequently include template sensors, command_line entities,
 # and mqtt templates — exactly where template misuse causes the most
