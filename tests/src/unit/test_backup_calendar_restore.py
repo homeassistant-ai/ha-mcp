@@ -157,9 +157,9 @@ async def test_the_restored_copy_is_found_after_a_timezone_change(
 async def test_an_existing_event_far_from_today_is_not_duplicated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # ical can refuse the update of an event that exists (an imported DURATION
-    # next to the restored dtend). Edited since the snapshot, it is no copy of
-    # it, so only a lookup around the snapshot's own date keeps it from being
+    # A calendar can answer ``failed`` for an event that still exists, such as
+    # on a backend error. Edited since the snapshot, it is no copy of it, so
+    # only a lookup around the snapshot's own date keeps it from being
     # duplicated. This calendar stub lists the event only in a window holding
     # its start.
     snapshot = {
