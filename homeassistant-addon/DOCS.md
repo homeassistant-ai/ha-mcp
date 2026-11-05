@@ -277,9 +277,9 @@ The app has minimal configuration - most settings are automatic.
 > **cached** tool list until it re-fetches. Restarting the app or Home
 > Assistant does **not** refresh the client — you must reconnect or refresh
 > the MCP server in your AI client (e.g. re-add/refresh the connector in
-> ChatGPT, disconnect and reconnect a Claude Desktop custom connector under
-> Settings › Connectors, refresh the tools list of a claude.ai connector, or
-> quit and reopen Claude Desktop for a server in `claude_desktop_config.json`),
+> ChatGPT, disconnect and reconnect a Claude Desktop custom connector,
+> refresh the tools list of a claude.ai connector, or quit and reopen Claude
+> Desktop for a server in `claude_desktop_config.json`),
 > then start a new conversation.
 > Symptom if you skip this:
 > newly enabled tools don't appear in the client at all, and tools the

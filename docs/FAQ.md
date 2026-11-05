@@ -573,7 +573,7 @@ An AI client stores the server's tool list and keeps using it until the connecti
 
 **Solution:** refresh the connection in the client, then start a new conversation:
 
-- Claude Desktop custom connector: disconnect and reconnect it under Settings › Connectors. Claude Desktop does not refetch the list on its own, not even for a new conversation ([anthropics/claude-ai-mcp#1182](https://github.com/anthropics/claude-ai-mcp/issues/1182)).
+- Claude Desktop custom connector: disconnect and reconnect it. Claude Desktop does not refetch the list on its own, not even for a new conversation ([anthropics/claude-ai-mcp#1182](https://github.com/anthropics/claude-ai-mcp/issues/1182)).
 - claude.ai custom connector: use **Refresh tools list** in the connector's settings. A conversation that is already open keeps its old list, so start a new one.
 - A server in `claude_desktop_config.json`: quit and reopen Claude Desktop.
 - Claude Code: run `/mcp` and reconnect the server.

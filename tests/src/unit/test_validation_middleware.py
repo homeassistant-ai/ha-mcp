@@ -502,7 +502,7 @@ async def test_renamed_parameter_names_a_stale_client_tool_list() -> None:
     assert "not a server bug" in hint
     # Each Claude client setup with its own refresh step (steps end at `;`).
     steps = (
-        ("Claude Desktop custom connector", "Settings › Connectors"),
+        ("Claude Desktop custom connector", "disconnect and reconnect"),
         ("claude_desktop_config.json", "reopen Claude Desktop"),
         ("claude.ai", "tools list"),
         ("Claude Code", "/mcp"),

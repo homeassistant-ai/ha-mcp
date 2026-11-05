@@ -105,7 +105,7 @@ MISSING_TOOL_HINT = (
     "enabled tools and keep showing parameter names an ha-mcp update renamed; "
     "server logs saying a tool is 'enabled' do NOT mean the client loaded it. "
     "Ask the user to refresh first: Claude Desktop custom connector -> "
-    "disconnect and reconnect it under Settings › Connectors; server in "
+    "disconnect and reconnect it; server in "
     "claude_desktop_config.json -> quit and reopen Claude Desktop; claude.ai -> "
     "refresh its tools list; Claude Code -> /mcp, reconnect; ChatGPT -> refresh "
     "the connector; then start a new conversation. Only file a bug if the "
