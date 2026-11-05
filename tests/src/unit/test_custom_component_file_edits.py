@@ -248,16 +248,23 @@ class _Hass:
         self.data: dict[str, Any] = {}
         self.running = 0
         self.most_running = 0
+        self.before_job: Any = lambda: asyncio.sleep(0)
 
-    async def async_add_executor_job(self, func: Any, *args: Any) -> Any:
-        self.running += 1
-        self.most_running = max(self.most_running, self.running)
-        # Hands over to any other call, as a real executor thread would.
-        await asyncio.sleep(0)
-        try:
-            return func(*args)
-        finally:
-            self.running -= 1
+    def async_add_executor_job(self, func: Any, *args: Any) -> "asyncio.Future[Any]":
+        """Return a future, as the real executor does."""
+
+        async def job() -> Any:
+            self.running += 1
+            self.most_running = max(self.most_running, self.running)
+            # Hands over to any other call, as a real executor thread would.
+            await self.before_job()
+            try:
+                return func(*args)
+            finally:
+                self.running -= 1
+
+        # Shielded because cancelling a call never stops a running thread.
+        return asyncio.shield(asyncio.ensure_future(job()))
 
 
 def _handler(
@@ -365,6 +372,36 @@ class TestEditFileService:
 
         assert [response["success"] for response in responses] == [True, True]
         assert hass.most_running == 1
+
+    @pytest.mark.asyncio
+    async def test_cancelled_call_keeps_the_lock_until_its_thread_ends(
+        self, tmp_path: Path
+    ) -> None:
+        """A cancelled call can't stop its executor thread, so the next change
+        has to wait for that thread or one of the two is lost."""
+        target = _file(tmp_path, b"one two\n")
+        hass = _Hass(tmp_path)
+        thread_may_finish = asyncio.Event()
+        hass.before_job = thread_may_finish.wait
+        handler = _handler(tmp_path, hass=hass)
+
+        cancelled = asyncio.create_task(handler(_call("card.js", [_edit("one", "1")])))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        await asyncio.sleep(0)
+        following = asyncio.create_task(handler(_call("card.js", [_edit("two", "2")])))
+        await asyncio.sleep(0)
+        # A second cancel must not release the lock either.
+        cancelled.cancel()
+        await asyncio.sleep(0)
+        thread_may_finish.set()
+        response = await following
+
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        assert response["success"] is True
+        assert hass.most_running == 1
+        assert target.read_bytes() == b"1 2\n"
 
     @pytest.mark.asyncio
     async def test_refusal_tells_the_model_which_edit_failed(
