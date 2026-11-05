@@ -395,10 +395,11 @@ class TestEditFileService:
         cancelled.cancel()
         await asyncio.sleep(0)
         thread_may_finish.set()
-        response = await following
+        outcome, response = await asyncio.gather(
+            cancelled, following, return_exceptions=True
+        )
 
-        with pytest.raises(asyncio.CancelledError):
-            await cancelled
+        assert isinstance(outcome, asyncio.CancelledError)
         assert response["success"] is True
         assert hass.most_running == 1
         assert target.read_bytes() == b"1 2\n"
