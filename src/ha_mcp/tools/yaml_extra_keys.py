@@ -30,6 +30,34 @@ GET_EXTRA_YAML_KEYS_SERVICE = "get_extra_yaml_keys"
 MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS = "1.2.4"
 
 
+async def _component_supports_extra_keys(client: Any) -> bool:
+    """Return whether the component is new enough for extra YAML write keys."""
+
+    def _current() -> tuple[int, ...] | None:
+        reported = _COMPONENT_VERSION_CACHE.get(client, "")
+        if not reported:
+            return None
+        try:
+            return _version_tuple(reported)
+        except ValueError:
+            return None
+
+    floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
+    await _ensure_caller_token(client)
+    parsed = _current()
+    if parsed is None or parsed < floor:
+        # The token cache is keyed by the long-lived REST client and survives
+        # a Home Assistant restart, so a component updated after this process
+        # first bootstrapped would keep reporting its old version forever and
+        # the remediation the gate prints ("update, then restart HA") would
+        # never take effect. Re-bootstrap once before answering no, so the
+        # update heals on the next call rather than needing an ha-mcp restart.
+        # Only on the failure path: a supported component costs nothing.
+        await _ensure_caller_token(client, force_refresh=True)
+        parsed = _current()
+    return parsed is not None and parsed >= floor
+
+
 async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -> None:
     """Block with an actionable prompt if the component predates #1887.
 
@@ -54,31 +82,9 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
     if not extra_keys:
         return
 
-    def _current() -> tuple[int, ...] | None:
-        reported = _COMPONENT_VERSION_CACHE.get(client, "")
-        if not reported:
-            return None
-        try:
-            return _version_tuple(reported)
-        except ValueError:
-            return None
-
-    floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-    await _ensure_caller_token(client)
-    parsed = _current()
-    if parsed is None or parsed < floor:
-        # The token cache is keyed by the long-lived REST client and survives
-        # a Home Assistant restart, so a component updated after this process
-        # first bootstrapped would keep reporting its old version forever and
-        # the remediation this error prints ("update, then restart HA") would
-        # never take effect. Re-bootstrap once before blocking, so the update
-        # heals the gate on the next call rather than needing an ha-mcp
-        # restart. Only on the failure path: a satisfied gate costs nothing.
-        await _ensure_caller_token(client, force_refresh=True)
-        parsed = _current()
-    reported = _COMPONENT_VERSION_CACHE.get(client, "")
-    if parsed is not None and parsed >= floor:
+    if await _component_supports_extra_keys(client):
         return
+    reported = _COMPONENT_VERSION_CACHE.get(client, "")
     raise_tool_error(
         create_error_response(
             ErrorCode.COMPONENT_NOT_INSTALLED,
@@ -125,14 +131,7 @@ async def effective_extra_yaml_write_keys(client: Any, settings: Any) -> list[st
 
     keys: set[str] = set(parse_extra_yaml_write_keys(settings))
     try:
-        await _ensure_caller_token(client)
-        reported = _COMPONENT_VERSION_CACHE.get(client, "")
-        floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-        try:
-            current = _version_tuple(reported) if reported else None
-        except ValueError:
-            current = None
-        if current is not None and current >= floor:
+        if await _component_supports_extra_keys(client):
             result = await call_mcp_tools_service(
                 client, GET_EXTRA_YAML_KEYS_SERVICE, {}
             )
