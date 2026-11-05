@@ -26,6 +26,7 @@ sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
 sys.modules["homeassistant.helpers.storage"] = MagicMock()
 sys.modules["homeassistant.loader"] = MagicMock()
 
+import custom_components.ha_mcp_tools as component  # noqa: E402
 from custom_components.ha_mcp_tools import file_ops  # noqa: E402
 from custom_components.ha_mcp_tools.file_ops import (  # noqa: E402
     build_edit_file_handler,
@@ -244,6 +245,7 @@ class TestRefusedEditSavesNothing:
 class _Hass:
     def __init__(self, config_dir: Path) -> None:
         self.config = MagicMock(config_dir=str(config_dir))
+        self.data: dict[str, Any] = {}
         self.running = 0
         self.most_running = 0
 
@@ -326,6 +328,43 @@ class TestEditFileService:
         assert [response["success"] for response in responses] == [True, True]
         assert hass.most_running == 1
         assert target.read_bytes() == b"1 2\n"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("build_other", "other_data"),
+        [
+            (
+                "_build_write_file_handler",
+                {"path": "card.js", "content": "written\n", "overwrite": True},
+            ),
+            ("_build_delete_file_handler", {"path": "card.js"}),
+        ],
+        ids=["write", "delete"],
+    )
+    async def test_edit_does_not_overlap_other_file_changes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        build_other: str,
+        other_data: dict[str, Any],
+    ) -> None:
+        """An edit that read the file first would swap its stale result back in,
+        undoing the write or delete while both report success."""
+        monkeypatch.setattr(component, "_caller_token_ok", lambda *_: True)
+        monkeypatch.setattr(component, "_write_denied", lambda *_: None)
+        monkeypatch.setattr(component, "_current_extra_dirs", lambda _: [])
+        monkeypatch.setattr(component, "_is_path_allowed_for_dir", lambda *_: True)
+        _file(tmp_path, b"one\n")
+        hass = _Hass(tmp_path)
+        other = getattr(component, build_other)(hass)
+
+        responses = await asyncio.gather(
+            _handler(tmp_path, hass=hass)(_call("card.js", [_edit("one", "1")])),
+            other(MagicMock(data=other_data)),
+        )
+
+        assert [response["success"] for response in responses] == [True, True]
+        assert hass.most_running == 1
 
     @pytest.mark.asyncio
     async def test_refusal_tells_the_model_which_edit_failed(

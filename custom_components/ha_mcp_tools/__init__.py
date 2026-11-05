@@ -67,6 +67,7 @@ from .file_ops import (
     _delete_file_sync,
     _replace_file_sync,
     register_edit_file,
+    shared_file_lock,
 )
 from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
@@ -2981,14 +2982,15 @@ def _build_write_file_handler(
         target_file = config_dir / rel_path
 
         try:
-            result = await hass.async_add_executor_job(
-                _write_file_sync,
-                target_file,
-                content,
-                overwrite,
-                create_dirs,
-                config_dir,
-            )
+            async with shared_file_lock(hass):
+                result = await hass.async_add_executor_job(
+                    _write_file_sync,
+                    target_file,
+                    content,
+                    overwrite,
+                    create_dirs,
+                    config_dir,
+                )
         except PermissionError:
             _LOGGER.error("Permission denied writing: %s", rel_path)
             return {
@@ -3058,7 +3060,10 @@ def _build_delete_file_handler(
         target_file = config_dir / rel_path
 
         try:
-            result = await hass.async_add_executor_job(_delete_file_sync, target_file)
+            async with shared_file_lock(hass):
+                result = await hass.async_add_executor_job(
+                    _delete_file_sync, target_file
+                )
         except PermissionError:
             _LOGGER.error("Permission denied deleting: %s", rel_path)
             return {
