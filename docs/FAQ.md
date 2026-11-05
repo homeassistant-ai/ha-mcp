@@ -567,6 +567,18 @@ uvx ha-mcp@latest --version
 
 The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest). If you see a much older version, the cache needs clearing.
 
+### A tool rejects a parameter your client's tool list shows (stale tool list)
+
+An AI client stores the server's tool list and keeps using it until the connection is refreshed. After an update renames a tool parameter, the client still offers the old name, and the tool rejects it with `VALIDATION_FAILED` and `unknown parameter`, listing the current names under `Valid parameters`; 9.1.0, for example, renamed `identifier` to `entity_id` on the automation tools. Newly enabled tools stay missing for the same reason. Restarting ha-mcp or Home Assistant does not refresh the client.
+
+**Solution:** refresh the connection in the client, then start a new conversation:
+
+- Claude Desktop custom connector: disconnect and reconnect it under Settings › Connectors. Claude Desktop does not refetch the list on its own, not even for a new conversation ([anthropics/claude-ai-mcp#1182](https://github.com/anthropics/claude-ai-mcp/issues/1182)).
+- claude.ai custom connector: use **Refresh tools list** in the connector's settings. A conversation that is already open keeps its old list, so start a new one.
+- A server in `claude_desktop_config.json`: quit and reopen Claude Desktop.
+- Claude Code: run `/mcp` and reconnect the server.
+- ChatGPT: see the next entry.
+
 ### ChatGPT doesn't show new or newly enabled tools (stale tool list)
 
 ChatGPT (web, including Codex Work Mode) caches a connector's tool list and sometimes keeps serving the stale list even after you enable new tools on the server, restart it, and remove and re-add the connector under the same name. Newly enabled tools (for example the beta filesystem/YAML tools) simply never appear in ChatGPT's tool list, even though the server logs show them registered — and other tools on the stale connection may fail with MCP internal errors.
