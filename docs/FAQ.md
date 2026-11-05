@@ -704,7 +704,7 @@ Yes. The component is required, but the tools are also gated by feature flags fo
 
 The split is deliberate: YAML *reads* sit behind the filesystem flag, and only YAML *edits* need `ENABLE_YAML_CONFIG_EDITING`.
 
-The component itself is installed through HACS (the Marketplace on Home Assistant 2026.11+) — add `homeassistant-ai/ha-mcp` as a custom repository (no feature flag required). An AI agent can drive that install with the generic HACS tools once the Marketplace's first-run warning is accepted and GitHub connected, which only you can do; then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+The component itself is installed through HACS (the Marketplace on Home Assistant 2026.11+) — add `homeassistant-ai/ha-mcp` as a custom repository (no feature flag required). An AI agent can drive that install with the generic HACS tools once GitHub is connected, which only you can do, and the Marketplace's first-run warning is accepted. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user; then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

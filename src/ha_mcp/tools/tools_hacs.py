@@ -24,6 +24,7 @@ from ..errors import ErrorCode, create_error_response
 from .hacs_backend import (
     CATEGORY_HELP,
     StoreApi,
+    accept_warning,
     detect_store_api,
     fetch_releases,
     raise_store_error,
@@ -219,13 +220,21 @@ class HacsTools:
     async def ha_manage_hacs(
         self,
         action: Annotated[
-            Literal["download", "add_repository", "remove", "update_information"],
+            Literal[
+                "download",
+                "add_repository",
+                "remove",
+                "update_information",
+                "accept_warning",
+            ],
             Field(
                 description=(
                     "'download' to install/update, 'add_repository' to register "
-                    "a custom repo, 'remove' to uninstall a downloaded repo, or "
+                    "a custom repo, 'remove' to uninstall a downloaded repo, "
                     "'update_information' to refresh a repository's release data "
-                    "from GitHub"
+                    "from GitHub, or 'accept_warning' to accept the "
+                    "Marketplace's first-run warning for the user this server "
+                    "connects as"
                 )
             ),
         ],
@@ -264,6 +273,15 @@ class HacsTools:
                 )
             ),
         ] = None,
+        confirm: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "action='accept_warning': True once the user has said they "
+                    "read the Marketplace's first-run warning and accept it"
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
@@ -281,6 +299,7 @@ class HacsTools:
         - Remove: ha_manage_hacs(action="remove", repository_id="owner/repo")
         - Add a custom repo: ha_manage_hacs(action="add_repository", repository="owner/repo", category="lovelace")
         - Refresh release data: ha_manage_hacs(action="update_information", repository_id="owner/repo")
+        - Accept the Marketplace warning: ha_manage_hacs(action="accept_warning", confirm=True)
 
         **Caveats:** Installing an integration usually needs a Home Assistant restart to
         activate; new Lovelace cards need a browser cache clear. ``add_repository`` requires ``owner/repo``
@@ -289,9 +308,12 @@ class HacsTools:
         entries first (``ha_remove_helpers_integrations``). HACS refreshes custom
         repositories on its own only about every 48 hours (the Marketplace only with a
         connected GitHub account), so ``update_information`` is the way to surface a
-        just-published release. The Marketplace refuses installs until the connected user has
-        accepted its first-run warning, and adding a repository needs a connected GitHub
-        account; both are steps the user takes in the Marketplace panel.
+        just-published release. The Marketplace refuses installs until the user this server
+        connects as has accepted its first-run warning; Home Assistant keeps that per user,
+        so the user's own acceptance in the UI does not cover this server. Ask the user
+        whether they have read it (Settings > Marketplace) and accept it before
+        ``accept_warning``. Adding a repository needs a GitHub account the user connects in
+        the Marketplace panel.
         """
         try:
             # Reject parameters that don't belong to the chosen action rather
@@ -301,19 +323,33 @@ class HacsTools:
             # whole repository while reporting plain success.
             _reject_foreign_params(
                 action,
-                download={"repository": repository, "category": category},
+                download={
+                    "repository": repository,
+                    "category": category,
+                    "confirm": confirm,
+                },
                 remove={
                     "version": version,
                     "repository": repository,
                     "category": category,
                     "confirm_replace_built_in": confirm_replace_built_in,
+                    "confirm": confirm,
                 },
                 add_repository={
                     "repository_id": repository_id,
                     "version": version,
                     "confirm_replace_built_in": confirm_replace_built_in,
+                    "confirm": confirm,
                 },
                 update_information={
+                    "version": version,
+                    "repository": repository,
+                    "category": category,
+                    "confirm_replace_built_in": confirm_replace_built_in,
+                    "confirm": confirm,
+                },
+                accept_warning={
+                    "repository_id": repository_id,
                     "version": version,
                     "repository": repository,
                     "category": category,
@@ -331,6 +367,9 @@ class HacsTools:
 
             if action == "update_information":
                 return await self._hacs_update_information(repository_id)
+
+            if action == "accept_warning":
+                return await self._hacs_accept_warning(confirm)
 
             # action == "add_repository"
             repository = validate_identifier_not_empty(
@@ -802,6 +841,23 @@ class HacsTools:
             },
         )
         return {"success": True, **wrapped}
+
+    async def _hacs_accept_warning(self, confirm: bool | None) -> dict[str, Any]:
+        if confirm is not True:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "action='accept_warning' needs confirm=True, given once the "
+                    "user has said they read the Marketplace's first-run warning "
+                    "and accept it.",
+                    suggestions=[
+                        "Ask the user to read the warning in Settings > "
+                        "Marketplace and say whether they accept it"
+                    ],
+                    context={"action": "accept_warning"},
+                )
+            )
+        return await accept_warning(*await self._get_hacs_client())
 
     async def _hacs_add_repository(
         self, repository: str, category: str

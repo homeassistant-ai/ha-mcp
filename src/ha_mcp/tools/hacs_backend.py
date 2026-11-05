@@ -35,6 +35,8 @@ _COMMANDS = {
         "add": "marketplace/repositories/add",
         "subscribe": "marketplace/subscribe",
         "releases": "marketplace/repository/releases",
+        # HACS has no first-run warning, so no counterpart.
+        "accept_warning": "marketplace/warning/accept",
     },
 }
 _REPOSITORY_SIGNAL = {
@@ -48,13 +50,17 @@ CATEGORY_HELP = (
     "'lovelace' means 'plugin' (dashboard cards)."
 )
 
-# The Marketplace refuses these until the calling user acts in the UI; the
-# message Core sends is already user-facing, the suggestions add the step.
+# The Marketplace refuses these until the calling user acts; the message Core
+# sends is already user-facing, the suggestions add the step.
 _GATE_SUGGESTIONS = {
+    # Core keeps the acceptance per user, and the server's user is often one
+    # nobody logs in as (Supervisor for the app), so the UI cannot reach it.
     "warning_not_accepted": [
-        "Open Settings > Marketplace as the user this server connects as, and "
-        "accept the first-run warning. The agent cannot accept it on the user's "
-        "behalf.",
+        "The Marketplace's first-run warning is accepted per user, and the user "
+        "this server connects as has not accepted it (an acceptance in the UI "
+        "under another account does not count). Ask the user whether they have "
+        "read the warning in Settings > Marketplace and accept it; if they do, "
+        "call ha_manage_hacs(action='accept_warning', confirm=True) and retry.",
     ],
     "github_not_connected": [
         "Open Settings > Marketplace and select Connect GitHub (a device "
@@ -199,6 +205,40 @@ def raise_store_error(
             )
         )
     exception_to_structured_error(err, context=context, raise_error=True)
+
+
+async def accept_warning(ws_client: Any, api: StoreApi) -> dict[str, Any]:
+    """Accept the Marketplace's first-run warning for the user this server is."""
+    if not api.is_marketplace:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "HACS has no first-run warning to accept; only the Marketplace "
+                "(Home Assistant 2026.11+) asks for one.",
+                context={"action": "accept_warning", "store": api.name},
+            )
+        )
+    accepted = {"success": True, "warning_accepted": True}
+    if api.info.get("warning_accepted"):
+        return {**accepted, "message": "Already accepted for this server's user."}
+    command = api.command("accept_warning")
+    try:
+        response = await ws_client.send_command(command)
+    except HomeAssistantCommandError as err:
+        raise_store_error(err, {"command": command})
+    if response.get("success") is False:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(response.get("error") or "Operation failed"),
+                context={"command": command},
+            )
+        )
+    return {
+        **accepted,
+        "message": "Accepted the Marketplace's first-run warning for the user "
+        "this server connects as; installs and updates now pass its gate.",
+    }
 
 
 async def fetch_releases(
