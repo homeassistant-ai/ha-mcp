@@ -61,7 +61,7 @@ class SupervisorLogSourcesMixin:
         }
         if read.journal_start:
             fields["warnings"] = [
-                f"The journal begins at {oldest}, inside the {hours_back}-hour "
+                f"The log begins at {oldest}, inside the {hours_back}-hour "
                 "window; nothing older is kept."
             ]
         elif not read.reached_cutoff:

@@ -197,13 +197,11 @@ class TestToolLayer:
         assert out["window_complete"] is False
         assert "100-hour cutoff" in out["warnings"][0]
 
-    async def test_a_journal_shorter_than_the_window_says_where_it_begins(
-        self, journal_of
-    ):
+    async def test_a_log_shorter_than_the_window_says_where_it_begins(self, journal_of):
         tools = journal_of(journal(50))
         out = await tools._get_system_service_log(service="dns", hours_back=24, now=NOW)
         assert out["window_complete"] is True
-        assert "journal begins at" in out["warnings"][0]
+        assert "log begins at" in out["warnings"][0]
 
     async def test_without_hours_back_the_newest_lines_are_read_as_before(self):
         client = MagicMock()
