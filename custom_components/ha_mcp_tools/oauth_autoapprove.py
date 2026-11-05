@@ -168,7 +168,7 @@ _UNLISTED_CALLBACK_PAGE = """<!DOCTYPE html>
 address is not on its list of allowed callback URLs.</p>
 <p>If you trust the app you are connecting, a Home Assistant administrator can
 add this exact address under <b>Settings &rarr; Devices &amp; Services &rarr;
-HA-MCP Custom Component &rarr; HA-MCP Server &rarr; Configure &rarr; Allowed
+HA-MCP — Manage Home Assistant with AI &rarr; HA-MCP Server &rarr; Configure &rarr; Allowed
 OAuth callback URLs</b>, or in the <b>HA-MCP</b> sidebar panel under <b>Server Settings</b>.
 Then start connecting again.</p>
 </body></html>

@@ -664,7 +664,7 @@ The first number in `-p` (the host port) can be anything — only the second num
 
 ## Custom Component (ha_mcp_tools)
 
-The **HA-MCP Custom Component** (`ha_mcp_tools`) has two config-entry types under one integration: the **File & YAML services entry** (**HA-MCP File & YAML Tools**) adds the privileged file and YAML-configuration services described below, and the **HA-MCP Server** entry runs the full ha-mcp server in-process inside Home Assistant — now the recommended way to install ha-mcp, working on every Home Assistant installation type (HAOS, Supervised, Container, Core). The **HA-MCP Server** entry is a complete, standalone install that replaces the app, Docker, and uvx/stdio methods — run only one ha-mcp server, never two side by side. See the [in-process server guide](in-process-server.md) for the full walkthrough.
+The **HA-MCP integration** (`ha_mcp_tools`) has two config-entry types under one integration: the **File & YAML services entry** (**HA-MCP File & YAML Tools**) adds the privileged file and YAML-configuration services described below, and the **HA-MCP Server** entry runs the full ha-mcp server in-process inside Home Assistant — now the recommended way to install ha-mcp, working on every Home Assistant installation type (HAOS, Supervised, Container, Core). The **HA-MCP Server** entry is a complete, standalone install that replaces the app, Docker, and uvx/stdio methods — run only one ha-mcp server, never two side by side. See the [in-process server guide](in-process-server.md) for the full walkthrough.
 
 ### What is the custom component and why do I need it?
 
@@ -687,9 +687,9 @@ Template helper edit backups and restores also require the component, using eith
 
 **Using HACS (recommended, Home Assistant 2026.10 or older):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or add it manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
 
-**Using the Marketplace (Home Assistant 2026.11 or newer):** HACS is built in as the **Marketplace**. Open **Settings → Marketplace**, accept its first-run warning and **Connect GitHub** (a device sign-in; adding a custom repository needs it, and until HA-MCP is in the Marketplace catalog it is also what makes the Marketplace check HA-MCP for updates in the background — otherwise use **Refresh information** on HA-MCP's page). Then open the same link, or the **Add from link** tab, add `https://github.com/homeassistant-ai/ha-mcp` as an **Integration**, and **Install**.
+**Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP — Manage Home Assistant with AI**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
 
-After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP Custom Component**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP — Manage Home Assistant with AI**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
 
 **Manual install:** Copy `custom_components/ha_mcp_tools/` from the [repository](https://github.com/homeassistant-ai/ha-mcp) into your HA config's `custom_components/` directory. Restart Home Assistant, then add the integration as described above.
 

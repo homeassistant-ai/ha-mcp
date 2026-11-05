@@ -463,7 +463,7 @@ def _surface_connect_urls(
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
         f"{panel_line}"
         "The connect URL is shown on the entry's Configure screen "
-        "(Settings - Devices & Services - HA-MCP Custom Component - "
+        "(Settings - Devices & Services - HA-MCP — Manage Home Assistant with AI - "
         "HA-MCP Server - Configure), which only administrators can open, "
         "because the URL is the credential.\n\n"
         f"{auth_note}\n\n"
@@ -628,7 +628,7 @@ async def _async_check_component_compat(
 
     if outdated:
         _LOGGER.warning(
-            "The installed ha-mcp server requires HA-MCP Custom Component %s or "
+            "The installed ha-mcp server requires HA-MCP — Manage Home Assistant with AI %s or "
             "newer, but %s is running; update the component via HACS (the "
             "Marketplace on Home Assistant 2026.11+).",
             required,

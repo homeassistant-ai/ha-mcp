@@ -1,6 +1,6 @@
 {
     "domain": "ha_mcp_tools",
-    "name": "HA-MCP Custom Component",
+    "name": "HA-MCP — Manage Home Assistant with AI",
     "after_dependencies": [
         "backup",
         "cloud",

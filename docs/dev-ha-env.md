@@ -147,7 +147,7 @@ Run it **from your fork only**. The job refuses to run in
    The job log's `STATUS` lines show the commit the run started from and any
    boot error. If the embedded server fails at boot, Home Assistant stays up
    but the server's own tools are gone: log in to `HA:` as `mcp` / `mcp`,
-   open the HA-MCP Custom Component integration's server entry under
+   open the HA-MCP — Manage Home Assistant with AI integration's server entry under
    Settings → Devices & services, and put the fixed spec in Configure →
    "Developer: ha-mcp package override".
 
