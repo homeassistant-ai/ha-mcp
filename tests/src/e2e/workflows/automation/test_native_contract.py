@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
-from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_condition, wait_for_tool_result
 
 pytestmark = pytest.mark.automation
@@ -412,12 +411,16 @@ async def test_get_reports_the_entities_core_says_it_uses(mcp_client) -> None:
             await _remove(mcp_client, config_id)
 
 
-async def test_get_without_the_component_carries_cores_related_set(
+async def test_get_lists_what_the_automation_uses_with_or_without_the_component(
     mcp_client,
 ) -> None:
     """Without the component's bridge the read cannot list the references, so
     it carries Core's broader Related set (search/related) under its own key
-    and says so; with the bridge the references stand alone (#2967)."""
+    and says so; with the bridge the references stand alone (#2967).
+
+    Which one answers follows the live component rather than the lane: a HAOS
+    test enables the baked server entry mid-session and leaves it enabled.
+    """
     tag = _tag()
     config_id = f"e2e_related_{tag}"
     config = _config(
@@ -426,27 +429,28 @@ async def test_get_without_the_component_carries_cores_related_set(
             {"action": "light.turn_on", "target": {"entity_id": "light.bed_light"}}
         ],
     )
-    with_component = component_surface_available()
+
+    def _lists_the_light(d: dict[str, Any]) -> bool:
+        references = (d.get("references") or {}).get("entities") or []
+        related = (d.get("related") or {}).get("entity") or []
+        return "light.bed_light" in references or "light.bed_light" in related
+
     async with MCPAssertions(mcp_client) as mcp:
         try:
             created = await mcp.call_tool_success(
                 "ha_config_set_automation", {"entity_id": config_id, "config": config}
             )
-            source = "references" if with_component else "related"
-            key = "entities" if with_component else "entity"
             got = await wait_for_tool_result(
                 mcp_client,
                 tool_name="ha_config_get_automation",
                 arguments={"entity_id": created["entity_id"]},
-                predicate=lambda d: (
-                    "light.bed_light" in ((d.get(source) or {}).get(key) or [])
-                ),
-                description=f"automation read lists the light in {source}",
+                predicate=_lists_the_light,
+                description="automation read lists the light it targets",
             )
-            if with_component:
+            if got["references"] is not None:
                 assert "related" not in got, got
             else:
-                assert got["references"] is None, got
+                assert "light.bed_light" in got["related"]["entity"], got
                 assert any(
                     "related" in warning for warning in got.get("warnings") or []
                 ), got

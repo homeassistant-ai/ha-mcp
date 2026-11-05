@@ -17,7 +17,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import tools_config_automations as automations_module
 from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.tools.tools_config_automations import (
@@ -185,6 +188,29 @@ class TestGetAutomation:
         assert len(result["warnings"]) == 1
         assert "references" in result["warnings"][0]
         assert "related" in result["warnings"][0]
+
+    async def test_without_the_component_a_lost_related_read_keeps_the_config(
+        self, tools, mock_client
+    ):
+        async def ws(msg: dict[str, Any]) -> dict[str, Any]:
+            if msg["type"] == "search/related":
+                raise HomeAssistantConnectionError("WebSocket closed")
+            if msg["type"] == "repairs/list_issues":
+                return {"success": True, "result": {"issues": []}}
+            return {"success": True, "result": {"entity_id": "automation.x"}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws)
+
+        result = await tools.ha_config_get_automation(
+            entity_id="automation.morning_routine"
+        )
+
+        assert result["config"] == STORED
+        assert result["related"] is None
+        assert any(
+            w.startswith("related unavailable") and "WebSocket closed" in w
+            for w in result["warnings"]
+        )
 
     async def test_without_the_component_a_failed_related_read_says_so(
         self, tools, mock_client

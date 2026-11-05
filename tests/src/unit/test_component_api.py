@@ -396,12 +396,17 @@ async def test_positive_unaffected_by_ttl(monkeypatch) -> None:
 
 
 def _pool_holds(monkeypatch, pooled: list[Any]) -> None:
-    """The pool's current connection is ``pooled[0]``; nothing connects."""
-    monkeypatch.setattr(
-        component_api.websocket_manager,
-        "pooled_client",
-        lambda **_credentials: pooled[0],
-    )
+    """The pool holds ``pooled[0]`` for ``_client()``'s credentials; nothing connects.
+
+    Other credentials find no connection, so a lookup with the wrong ones
+    reads as an empty slot and the re-probe tests fail.
+    """
+    expected = {"url": "http://ha.local:8123", "token": "tok", "verify_ssl": None}
+
+    def pooled_client(**credentials: Any) -> Any:
+        return pooled[0] if credentials == expected else None
+
+    monkeypatch.setattr(component_api.websocket_manager, "pooled_client", pooled_client)
 
 
 @pytest.mark.asyncio

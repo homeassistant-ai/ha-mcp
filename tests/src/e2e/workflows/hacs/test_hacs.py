@@ -21,6 +21,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...utilities.assertions import (
+    MCPAssertions,
     parse_mcp_result,
     safe_call_tool,
     tool_error_to_result,
@@ -670,25 +671,31 @@ class TestHacsWriteOperations:
         expected = "marketplace" if marketplace.get("success") else "hacs"
         assert search["store"]["api"] == expected
 
-        # The server's user, not the test user, is the one the gate checks.
-        if expected == "hacs" or search["store"]["warning_accepted"]:
+        if expected == "hacs":
             return
-        refused = await safe_hacs_call(
-            mcp_client,
-            "ha_manage_hacs",
-            {"action": "download", "repository_id": str(search["results"][0]["id"])},
-        )
-        assert refused.get("success") is not True, "Install ran without the warning"
-        assert "first-run warning" in str(refused), refused
-        assert "accept_warning" in str(refused), refused
-        accepted = await safe_hacs_call(
-            mcp_client, "ha_manage_hacs", {"action": "accept_warning", "confirm": True}
-        )
-        assert accepted.get("success") is True, accepted
-        search = await safe_hacs_call(
-            mcp_client, "ha_get_hacs_info", {"action": "search", "max_results": 1}
-        )
-        assert search["store"]["warning_accepted"] is True, search["store"]
+        # The server's user, not the test user, is the one the gate checks, and
+        # Core has no command to take an acceptance back.
+        if search["store"]["warning_accepted"]:
+            pytest.skip("The server's user already accepted the Marketplace warning")
+        async with MCPAssertions(mcp_client) as mcp:
+            refused = await mcp.call_tool_failure(
+                "ha_manage_hacs",
+                {
+                    "action": "download",
+                    "repository_id": str(search["results"][0]["id"]),
+                },
+            )
+            assert refused.get("store_error") == "warning_not_accepted", refused
+            assert "first-run warning" in str(refused), refused
+            assert "accept_warning" in str(refused), refused
+            await mcp.call_tool_success(
+                "ha_manage_hacs", {"action": "accept_warning", "confirm": True}
+            )
+            readback = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "search", "max_results": 1}
+            )
+        store = readback["data"]["store"]
+        assert store["warning_accepted"] is True, store
 
     async def test_download_then_remove_roundtrip(self, mcp_client):
         """
@@ -723,12 +730,10 @@ class TestHacsWriteOperations:
         # The Marketplace warning is per user: accept it for the server's user
         # rather than relying on the gate test running first. HACS has none.
         if search_data["store"]["api"] == "marketplace":
-            accepted = await safe_hacs_call(
-                mcp_client,
-                "ha_manage_hacs",
-                {"action": "accept_warning", "confirm": True},
-            )
-            assert accepted.get("success") is True, accepted
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_manage_hacs", {"action": "accept_warning", "confirm": True}
+                )
 
         download = await safe_hacs_call(
             mcp_client,
