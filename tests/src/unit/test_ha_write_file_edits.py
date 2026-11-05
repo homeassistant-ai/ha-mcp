@@ -1,5 +1,6 @@
 """ha_write_file(edits=...) routes to the component's edit_file service."""
 
+import asyncio
 import inspect
 import json
 from typing import Any
@@ -148,6 +149,41 @@ async def test_edits_are_snapshotted_before_the_file_changes() -> None:
     service.assert_awaited_once()
     assert capture.await_args.kwargs["domain"] == "file"
     assert capture.await_args.kwargs["mandatory"] is True
+
+
+@pytest.mark.asyncio
+async def test_parallel_writes_snapshot_and_write_one_at_a_time() -> None:
+    """A second snapshot taken before the first write finishes holds the state
+    before both, so restoring it would also remove the first edit. The two paths
+    could be a link and its target, so the lock can't be keyed by path."""
+    events: list[str] = []
+
+    async def capture(*_args: Any, **_kwargs: Any) -> None:
+        events.append("snapshot")
+        await asyncio.sleep(0)
+
+    async def service(*_args: Any, **_kwargs: Any) -> dict[str, bool]:
+        events.append("write")
+        await asyncio.sleep(0)
+        return {"success": True}
+
+    settings = MagicMock(enable_auto_backup=True)
+    with (
+        patch.object(auto_backup, "get_global_settings", return_value=settings),
+        patch.object(auto_backup, "_capture_pre_write_snapshot", capture),
+        patch.object(tools_filesystem, "_assert_mcp_tools_available", AsyncMock()),
+        patch.object(tools_filesystem, "call_mcp_tools_service", service),
+        patch.object(
+            config_file_visibility, "refuse_reading_hidden_definitions", AsyncMock()
+        ),
+    ):
+        tools = FilesystemTools(_client("edit_file"))
+        await asyncio.gather(
+            tools.ha_write_file(path="www/a.css", edits=EDITS),
+            tools.ha_write_file(path="www/link_to_a.css", edits=EDITS),
+        )
+
+    assert events == ["snapshot", "write", "snapshot", "write"]
 
 
 @pytest.mark.asyncio

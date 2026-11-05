@@ -51,6 +51,18 @@ SERVICE_EDIT_FILE_SCHEMA = vol.Schema(
 )
 
 
+def shared_file_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """Return the lock that edit_file, write_file and delete_file all hold.
+
+    An edit reads and then swaps in its result, so an overlapping write or delete
+    would be undone while both calls report success. One lock for all files: edits
+    are too rare for the bookkeeping of per-path locks (and of links to one file)
+    to pay off.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    return domain_data.setdefault("file_lock", asyncio.Lock())
+
+
 def _delete_file_sync(target_file: Path) -> dict[str, Any]:
     """Bundle delete_file blocking I/O for a single executor offload."""
     if not target_file.exists():
@@ -231,10 +243,6 @@ def build_edit_file_handler(
 ) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
     """Build the edit_file service handler."""
     config_dir = Path(hass.config.config_dir)
-    # One lock for all files: overlapping read-modify-writes of one file would
-    # lose an edit and report success for both, and edits are too rare for the
-    # bookkeeping of per-path locks (and of links to one file) to pay off.
-    edit_lock = asyncio.Lock()
 
     async def handle_edit_file(call: ServiceCall) -> ServiceResponse:
         if not caller_token_ok(hass, call):
@@ -245,7 +253,7 @@ def build_edit_file_handler(
         if denied is not None:
             return {"success": False, "error": denied}
         try:
-            async with edit_lock:
+            async with shared_file_lock(hass):
                 result = await hass.async_add_executor_job(
                     edit_file_sync, config_dir / rel_path, edits, volume_root_for
                 )
