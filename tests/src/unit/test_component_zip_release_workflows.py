@@ -25,11 +25,6 @@ def test_each_release_uploads_the_zip_before_publishing() -> None:
             "create-prerelease",
             "Create pre-release",
         ),
-        (
-            ".github/integration-mirror-workflows/release-on-tag.yml",
-            "release",
-            "Create release for tag",
-        ),
     ]:
         steps = _steps(path, job)
         build = next(
@@ -51,22 +46,29 @@ def test_each_release_uploads_the_zip_before_publishing() -> None:
             assert stamp < build
 
 
-def test_hacs_and_the_mirror_use_the_same_zip_filename() -> None:
-    import json
-
-    manifests = [
-        json.loads((_ROOT / name).read_text(encoding="utf-8"))
-        for name in ("hacs.json", "custom_components/ha_mcp_tools/hacs.json")
-    ]
-    assert all(m["zip_release"] for m in manifests)
-    assert {m["filename"] for m in manifests} == {"ha_mcp_tools.zip"}
+def test_the_mirror_copies_the_verified_upstream_artifact_without_rebuilding() -> None:
+    steps = _steps(".github/integration-mirror-workflows/release-on-tag.yml", "release")
+    copied = next(
+        i
+        for i, s in enumerate(steps)
+        if s.get("name") == "Copy the upstream integration ZIP"
+    )
+    create = next(
+        i for i, s in enumerate(steps) if s.get("name") == "Create release for tag"
+    )
+    assert copied < create
+    assert "gh release download" in steps[copied]["run"]
+    assert "sha256sum --check" in steps[copied]["run"]
+    assert "build_component_zip.py" not in steps[copied]["run"]
+    assert "ha_mcp_tools.zip" in steps[create]["run"]
     stage = next(
         s
         for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
         if s.get("name") == "Stage snapshot"
     )["run"]
-    assert "scripts/build_component_zip.py.lock" in stage
-    assert "/tmp/mirror/scripts/" in stage
+    assert "component-zip-source.json" in stage
+    assert "os.environ['PIN']" in stage
+    assert "SOURCE_REPOSITORY" in stage
 
 
 def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:

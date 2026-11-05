@@ -265,6 +265,7 @@ jobs:
 
       - name: Stage snapshot
         env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
           VER: ${{ steps.release.outputs.version }}
           PIN: ${{ steps.release.outputs.pin }}
           DIST: ${{ steps.release.outputs.dist }}
@@ -299,8 +300,20 @@ jobs:
           # carries no hand-made changes, so its release-on-tag.yml is
           # synced from here too rather than hand-edited in the mirror.
           mkdir -p /tmp/mirror/.github/workflows
-          mkdir -p /tmp/mirror/scripts
-          cp scripts/build_component_zip.py scripts/build_component_zip.py.lock /tmp/mirror/scripts/
+          if [ "$CHANNEL" != none ]; then
+            if [ -f "$SRC/scripts/build_component_zip.py" ]; then
+              python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/mirror/.github/component-zip-source.json').write_text(json.dumps({
+              'repository': os.environ['SOURCE_REPOSITORY'],
+              'tag': 'v' + os.environ['PIN'],
+          }) + '\n')
+          PY
+            else
+              rm -f /tmp/mirror/.github/component-zip-source.json
+            fi
+          fi
           cp .github/integration-mirror-workflows/release-on-tag.yml \
             /tmp/mirror/.github/workflows/release-on-tag.yml
 

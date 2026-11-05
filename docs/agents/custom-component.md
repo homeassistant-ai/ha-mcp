@@ -7,17 +7,23 @@ must hold in both update directions.
 
 ## Release ZIP
 
-HACS and the Marketplace install `ha_mcp_tools.zip` from each release. Its root
+Releases provide `ha_mcp_tools.zip` for integration installation. Its root
 contains the integration files (`manifest.json`, `__init__.py`, translations,
 and the remaining tracked component files), without a repository or domain
 folder. Build it with `uv run -s scripts/build_component_zip.py`. The builder
 reads tracked **working-tree** files so release-time version/server stamps
 are included; it excludes untracked files and bytecode.
 
-Stable, dev and mirror publishing build the ZIP after stamping and attach it
-while the GitHub release is a draft, then publish it. The mirror receives the
-same builder and lockfile. Do not replace an existing asset just to refresh
+Stable and dev publishing build the ZIP after stamping and attach it while
+the GitHub release is a draft. The mirror copies and verifies the upstream
+asset's digest instead of rebuilding it. Do not replace an existing asset just to refresh
 its download count; that count is downloads of one release asset, not users.
+
+This first rollout does not enable `zip_release`: HACS/Marketplace continue
+their existing archive installation. Activation is a separate change, after
+assets exist and the stable publisher guarantees the pinned PyPI build is
+available before exposing the GitHub release. The present stable sequencing
+is not changed by artifact publication alone.
 
 The container E2E fixture installs this artifact before HA boots, so existing
 component scenarios exercise the ZIP. The existing update-path scenarios retain

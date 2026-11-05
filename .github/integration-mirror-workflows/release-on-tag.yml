@@ -61,14 +61,30 @@ jobs:
             echo "Component snapshot synced from homeassistant-ai/ha-mcp." > /tmp/notes.md
           fi
 
-      - name: Install uv for the integration artifact
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.4"
-
-      - name: Build the stamped integration ZIP
-        run: uv run -s scripts/build_component_zip.py --output dist/integration/ha_mcp_tools.zip
+      - name: Copy the upstream integration ZIP
+        if: hashFiles('.github/component-zip-source.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['repository'])")
+          SOURCE_TAG=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['tag'])")
+          mkdir -p dist/integration
+          # The stable publisher may still be finalizing its draft after PyPI
+          # becomes available. Copy the published asset; never rebuild it here.
+          for attempt in $(seq 1 40); do
+            DIGEST=$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip") | .digest' 2>/dev/null || true)
+            if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              gh release download "$SOURCE_TAG" --repo "$SOURCE_REPOSITORY" \
+                --pattern ha_mcp_tools.zip --dir dist/integration --clobber
+              echo "${DIGEST#sha256:}  dist/integration/ha_mcp_tools.zip" | sha256sum --check -
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::The upstream integration ZIP was not published with a digest."
+          exit 1
 
       - name: Create release for tag
         env:
@@ -83,7 +99,7 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # Backfill a missing asset on recovery without replacing one that
             # already has a download history.
-            if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            if [ -f dist/integration/ha_mcp_tools.zip ] && ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --json assets --jq '.assets[].name' | grep -Fxq ha_mcp_tools.zip; then
               gh release upload "$GITHUB_REF_NAME" dist/integration/ha_mcp_tools.zip --repo "$GITHUB_REPOSITORY"
             fi
@@ -101,7 +117,11 @@ jobs:
           case "$GITHUB_REF_NAME" in
             *-dev.*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "$GITHUB_REF_NAME" dist/integration/ha_mcp_tools.zip --repo "$GITHUB_REPOSITORY" \
+          ASSETS=()
+          if [ -f dist/integration/ha_mcp_tools.zip ]; then
+            ASSETS+=(dist/integration/ha_mcp_tools.zip)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
             --title "$VER" -F /tmp/notes.md $PRERELEASE_FLAG --draft
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
