@@ -272,10 +272,11 @@ installs can replace the component files with the new release. Either path
 carries the matching server, and restarting Home Assistant after the update
 installs both. The component never downloads or swaps the server on its own.
 
-HACS, and the Marketplace with GitHub connected, check a custom repository
-such as HA-MCP for updates every 48 hours (the Marketplace without GitHub does
-not check it in the background). To have a newly updated server ask for that
-check right away, turn on **Refresh the component in HACS after an update** in
+HA-MCP is in the default catalog, which the Marketplace refreshes every six
+hours without a GitHub connection. Custom repositories, including the legacy
+distribution mirror, still need a GitHub connection for the Marketplace's
+48-hour background checks. To have a newly updated server ask for a repository
+refresh right away, turn on **Refresh the component in HACS after an update** in
 the settings panel's Advanced settings (Operations); installs that already did
 this before it became optional keep it on.
 

@@ -418,8 +418,9 @@ def _surface_connect_urls(
 
     log_message = (
         "HA-MCP in-process server is running. The connect URL(s) are on the "
-        "entry's Configure screen (Settings - Devices & Services - HA-MCP "
-        f"Custom Component - HA-MCP Server - Configure). {auth_note}"
+        "entry's Configure screen (Settings - Devices & Services - "
+        "HA-MCP — Manage Home Assistant with AI - "
+        f"HA-MCP Server - Configure). {auth_note}"
     )
     if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
         if not oauth_creds_active:

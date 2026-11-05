@@ -1462,9 +1462,9 @@ class DeepSearchMixin(SceneSearchMixin):
                     "Home Assistant serializes these per-id config reads, so "
                     "the ceiling is its throughput, and on a large instance "
                     "the budget needed can exceed what a caller will wait "
-                    "for. Installing the HA-MCP — Manage Home Assistant with AI removes the "
-                    "per-id fetches entirely by reading the loaded config "
-                    "in-process."
+                    "for. When the HA-MCP integration's in-process search "
+                    "routing is available, it reads the loaded config "
+                    "without these per-id fetches."
                 )
             if failed:
                 # Name ONE representative error inline when the fetch path

@@ -205,7 +205,7 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
             "second entry must be added to it.",
             suggestions=[
                 "In Home Assistant: Settings → Devices & Services → "
-                + 'HA-MCP — Manage Home Assistant with AI → "Add entry" → choose '
+                + 'HA-MCP — Manage Home Assistant with AI (formerly HA-MCP Custom Component) → "Add entry" → choose '
                 + '"HA-MCP File & YAML Tools" (NOT '
                 + '"HA-MCP Server", which starts a second in-process server '
                 + "this ha-mcp server does not need)",
