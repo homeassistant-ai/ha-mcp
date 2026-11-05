@@ -172,6 +172,31 @@ write_file:
       selector:
         boolean:
 
+edit_file:
+  name: Edit File
+  description: >-
+    Apply exact-match replacements to a text file in the allowed write
+    directories. Nothing is saved unless every edit applies.
+  fields:
+    path:
+      name: Path
+      description: >-
+        Relative path from config directory. Must be in www/, themes/,
+        custom_templates/, or dashboards/.
+      required: true
+      example: "www/custom.css"
+      selector:
+        text:
+    edits:
+      name: Edits
+      description: >-
+        List of replacements applied in order, each with 'old' (text that must
+        occur exactly once) and 'new'.
+      required: true
+      example: '[{"old": "#333", "new": "#444"}]'
+      selector:
+        object:
+
 delete_file:
   name: Delete File
   description: Delete a file from allowed directories (www/, themes/, custom_templates/, dashboards/).

@@ -62,6 +62,12 @@ from .const import (
 )
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
+from .file_ops import (
+    SERVICE_EDIT_FILE,
+    _delete_file_sync,
+    _replace_file_sync,
+    register_edit_file,
+)
 from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
 from .yaml_find import SERVICE_FIND_YAML_KEY, register_find_yaml_key
@@ -1446,31 +1452,6 @@ def _write_file_sync(
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
 
 
-def _delete_file_sync(target_file: Path) -> dict[str, Any]:
-    """Bundle delete_file blocking I/O for a single executor offload."""
-    if not target_file.exists():
-        return {"_error": "not_found"}
-    if not target_file.is_file():
-        return {"_error": "not_a_file"}
-    stat = target_file.stat()
-    target_file.unlink()
-    return {"size": stat.st_size}
-
-
-def _replace_file_sync(target_file: Path, content: str) -> dict[str, Any]:
-    """Bundle whole-file replace I/O for a single executor offload.
-
-    mkdir parent + atomic temp-write + rename + stat, mirroring
-    ``_write_file_sync``. Used by edit_yaml_config(action="replace_file").
-    """
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file = target_file.with_suffix(".tmp")
-    tmp_file.write_text(content)
-    os.replace(str(tmp_file), str(target_file))
-    stat = target_file.stat()
-    return {"size": stat.st_size, "mtime": stat.st_mtime}
-
-
 # Pre-#1579 YAML backups live here (config-root dotdir, never under www/ —
 # GHSA-g39v-cvjh-8fpf). New writes no longer land here; these are read-only
 # historical artifacts surfaced through the shared edits-backup interface.
@@ -2717,6 +2698,18 @@ def _current_extra_dirs(hass: HomeAssistant) -> list[str]:
     return []
 
 
+def _write_denied(hass: HomeAssistant, rel_path: str) -> str | None:
+    """Return why ``rel_path`` may not be written, or None when it may."""
+    extra_dirs = _current_extra_dirs(hass)
+    config_dir = Path(hass.config.config_dir)
+    if _is_path_allowed_for_dir(config_dir, rel_path, ALLOWED_WRITE_DIRS, extra_dirs):
+        return None
+    _LOGGER.warning("Attempted to write to disallowed path: %s", rel_path)
+    return (
+        f"Write not allowed. Must be in: {', '.join(ALLOWED_WRITE_DIRS + extra_dirs)}"
+    )
+
+
 def _current_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
     """Return the live component-configured extra YAML write keys from hass.data."""
     domain_data = hass.data.get(DOMAIN)
@@ -2981,16 +2974,9 @@ def _build_write_file_handler(
         overwrite = call.data.get("overwrite", False)
         create_dirs = call.data.get("create_dirs", True)
 
-        # Security check - only allow writes to specific directories
-        extra_dirs = _current_extra_dirs(hass)
-        if not _is_path_allowed_for_dir(
-            config_dir, rel_path, ALLOWED_WRITE_DIRS, extra_dirs
-        ):
-            _LOGGER.warning("Attempted to write to disallowed path: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Write not allowed. Must be in: {', '.join(ALLOWED_WRITE_DIRS + extra_dirs)}",
-            }
+        denied = _write_denied(hass, rel_path)
+        if denied is not None:
+            return {"success": False, "error": denied}
 
         target_file = config_dir / rel_path
 
@@ -3507,6 +3493,13 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 err,
             )
     register_find_yaml_key(hass, _caller_token_ok, _unauthorized_response)
+    register_edit_file(
+        hass,
+        caller_token_ok=_caller_token_ok,
+        unauthorized_response=_unauthorized_response,
+        write_denied=_write_denied,
+        volume_root_for=_volume_root_for,
+    )
     # Register all services with response support
     for service, schema, build_handler in (
         (
@@ -3596,6 +3589,7 @@ async def _async_unload_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     hass.services.async_remove(DOMAIN, SERVICE_FIND_YAML_KEY)
     hass.services.async_remove(DOMAIN, SERVICE_READ_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_WRITE_FILE)
+    hass.services.async_remove(DOMAIN, SERVICE_EDIT_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_DELETE_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_GET_CALLER_TOKEN)
     hass.services.async_remove(DOMAIN, SERVICE_GET_ALLOWED_PATHS)
