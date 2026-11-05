@@ -43,6 +43,9 @@ from ha_mcp.client.rest_client import (
     HomeAssistantError,
 )
 from ha_mcp.errors import ErrorCode, create_error_response
+
+# A lazy first import under _patch_services would keep its fakes for the whole run.
+from ha_mcp.tools import yaml_extra_keys
 from ha_mcp.tools.auto_backup import automation_backup_target, with_auto_backup
 
 # ---------------------------------------------------------------- fixtures
@@ -2105,6 +2108,7 @@ def _patch_services(
     monkeypatch.setattr(
         "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", fake_call
     )
+    monkeypatch.setattr(yaml_extra_keys, "call_mcp_tools_service", fake_call)
     monkeypatch.setattr(
         "ha_mcp.tools.util_helpers.unwrap_service_response", lambda r: r
     )
@@ -2248,7 +2252,6 @@ class TestYamlHandler:
         """
         from ha_mcp import config as ha_mcp_config
         from ha_mcp.tools import tools_filesystem as fsmod
-        from ha_mcp.tools import yaml_extra_keys
 
         monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
         monkeypatch.setattr(ha_mcp_config, "_settings", None)
@@ -2283,7 +2286,6 @@ class TestYamlHandler:
         from ha_mcp import config as ha_mcp_config
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.tools import tools_filesystem as fsmod
-        from ha_mcp.tools import yaml_extra_keys
 
         monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
         monkeypatch.setattr(ha_mcp_config, "_settings", None)

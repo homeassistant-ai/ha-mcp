@@ -61,7 +61,7 @@ async def test_edit_that_cannot_apply_saves_nothing(
                     {"old": "missing", "new": "x"},
                 ],
             },
-            expected_error="old_not_found",
+            expected_error="text not found",
         )
 
         read = await mcp.call_tool_success("ha_read_file", {"path": card_path})
