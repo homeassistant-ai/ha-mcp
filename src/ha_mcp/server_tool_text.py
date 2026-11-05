@@ -481,8 +481,8 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "field (duplicate check, the mandatory anonymisation step, and "
         "how to file the issue), plus "
         '`missing_tool_hint` for the "a tool I expected is missing" or '
-        '"a tool rejects a parameter my tool list shows" case, which is '
-        "usually a stale client tool list rather than a bug. Read "
+        '"a tool rejects as unknown a parameter my tool list shows" case, '
+        "which is usually a stale client tool list rather than a bug. Read "
         "`instructions` before presenting anything to the user; "
         "ha_get_skill_guide does not cover issue reporting."
     ),

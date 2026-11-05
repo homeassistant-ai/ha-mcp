@@ -167,7 +167,8 @@ def _stale_tool_list_hint(names: Sequence[str]) -> str:
         f"copy from before an ha-mcp update renamed or removed {them}, "
         "not a server bug. Ask the user to reconnect this MCP server in their "
         "client (Claude Desktop custom connector: disconnect and reconnect it "
-        "under Settings › Connectors; claude.ai: refresh the connector's tools "
+        "under Settings › Connectors; server in claude_desktop_config.json: quit "
+        "and reopen Claude Desktop; claude.ai: refresh the connector's tools "
         "list; Claude Code: /mcp, reconnect; ChatGPT: refresh the connector), "
         "then start a new conversation."
     )

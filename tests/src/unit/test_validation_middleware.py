@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -495,8 +496,20 @@ async def test_renamed_parameter_names_a_stale_client_tool_list() -> None:
 
     stale = [s for s in _suggestions(json.loads(str(exc_info.value))) if "stale" in s]
     assert len(stale) == 1
-    assert "`identifier`" in stale[0]
-    assert "Settings › Connectors" in stale[0]
+    hint = stale[0]
+    # Conditional: the agent may also have invented the name (#2877).
+    assert hint.startswith("If your tool list shows `identifier`")
+    assert "not a server bug" in hint
+    # Each Claude client setup with its own refresh step (steps end at `;`).
+    steps = (
+        ("Claude Desktop custom connector", "Settings › Connectors"),
+        ("claude_desktop_config.json", "reopen Claude Desktop"),
+        ("claude.ai", "tools list"),
+        ("Claude Code", "/mcp"),
+    )
+    for setup, step in steps:
+        assert re.search(rf"{re.escape(setup)}[^;]*{re.escape(step)}", hint)
+    assert "new conversation" in hint
 
 
 @pytest.mark.asyncio

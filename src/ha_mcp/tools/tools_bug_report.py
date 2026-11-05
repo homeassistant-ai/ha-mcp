@@ -95,22 +95,21 @@ _TITLE_PREFIXES = {
 # GitHub refuses a longer issue title.
 _ISSUE_TITLE_MAX_CHARS = 256
 
-# Guidance surfaced when a tool never shows up in the client's tool list, or a
-# tool rejects a parameter the list shows. In #1804 the tool was enabled and
-# loaded server-side, but the client had never refreshed its cached list, so
-# the agent filed a server bug; #2968 and #2978 did the same for a parameter an
-# update renamed. A stale client-side tool list is the most likely cause of
-# both and must be ruled out before filing.
+# #1804 (missing tool) and #2968 / #2978 (renamed parameter) were filed as
+# server bugs; a stale client tool list caused #1804 and #2968 and is the
+# likely cause of #2978, so the hint has it ruled out before filing.
 MISSING_TOOL_HINT = (
-    "MISSING TOOL OR REJECTED PARAMETER? A tool you expected is not in your tool "
-    "list, or a tool rejects a parameter your tool list shows: very likely NOT a "
-    "bug. MCP clients cache the tool list, so they miss newly enabled tools and "
-    "keep showing parameter names an ha-mcp update renamed; server logs saying a "
-    "tool is 'enabled' do NOT mean the client loaded it. Ask the user to refresh "
-    "first: Claude Desktop -> disconnect and reconnect the connector under "
-    "Settings › Connectors; claude.ai -> refresh its tools list; Claude Code -> "
-    "/mcp, reconnect; ChatGPT -> refresh the connector; then start a new "
-    "conversation. Only file a bug if the problem remains after a refresh."
+    "MISSING TOOL OR UNKNOWN PARAMETER? A tool you expected is not in your tool "
+    "list, or a tool rejects as unknown a parameter your tool list shows: very "
+    "likely NOT a bug. MCP clients cache the tool list, so they miss newly "
+    "enabled tools and keep showing parameter names an ha-mcp update renamed; "
+    "server logs saying a tool is 'enabled' do NOT mean the client loaded it. "
+    "Ask the user to refresh first: Claude Desktop custom connector -> "
+    "disconnect and reconnect it under Settings › Connectors; server in "
+    "claude_desktop_config.json -> quit and reopen Claude Desktop; claude.ai -> "
+    "refresh its tools list; Claude Code -> /mcp, reconnect; ChatGPT -> refresh "
+    "the connector; then start a new conversation. Only file a bug if the "
+    "problem remains after a refresh."
 )
 
 # Known Claude Desktop bugs that present as ha-mcp failures. Both live in
@@ -793,8 +792,8 @@ class BugReportTools:
         before showing anything to the user: it covers the missing-tool and
         known-client pre-checks, the duplicate check, the mandatory
         anonymisation step, and how to file the issue. Check
-        `missing_tool_hint` FIRST when a tool is missing or rejects a listed
-        parameter: a stale client tool list (not a bug) is the usual cause.
+        `missing_tool_hint` FIRST when a tool is missing or rejects as unknown
+        a parameter your tool list shows: a stale list (not a bug) is the usual cause.
         """
         # Validate fields= before anything is collected: the projection at the
         # end was the only parse, outside any ValueError handler, so a
@@ -993,13 +992,13 @@ class BugReportTools:
                 "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
                 "instructions": (
                     "WORKFLOW FOR FILING A REPORT:\n\n"
-                    "0. **PRE-CHECK — missing tool or rejected parameter?** If the "
+                    "0. **PRE-CHECK — missing tool or unknown parameter?** If the "
                     "user's issue is that a tool they expected is missing, cannot be "
-                    "called or rejects a parameter the client's tool list shows, DO NOT "
-                    "file a bug yet. See the `missing_tool_hint` field: the likely cause "
-                    "is a stale MCP client tool list (not a server bug), fixed by "
-                    "refreshing or reconnecting the MCP connection. Only continue if the "
-                    "problem remains after the user refreshes.\n\n"
+                    "called or rejects as unknown a parameter the client's tool list "
+                    "shows, DO NOT file a bug yet. See the `missing_tool_hint` field: "
+                    "the likely cause is a stale MCP client tool list (not a server "
+                    "bug), fixed by refreshing or reconnecting the MCP connection. "
+                    "Only continue if the problem remains after the user refreshes.\n\n"
                     "0b. **PRE-CHECK — is it a known Claude Desktop bug?** A write "
                     "tool that hangs to a 4-minute timeout, or every call failing "
                     "with 'expected nonoptional, received undefined', is a client "

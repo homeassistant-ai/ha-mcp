@@ -567,7 +567,7 @@ uvx ha-mcp@latest --version
 
 The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest). If you see a much older version, the cache needs clearing.
 
-### A tool rejects a parameter your client's tool list shows (stale tool list)
+### A tool rejects as unknown a parameter your client's tool list shows (stale tool list)
 
 An AI client stores the server's tool list and keeps using it until the connection is refreshed. After an update renames a tool parameter, the client still offers the old name, and the tool rejects it with `VALIDATION_FAILED` and `unknown parameter`, listing the current names under `Valid parameters`; 9.1.0, for example, renamed `identifier` to `entity_id` on the automation tools. Newly enabled tools stay missing for the same reason. Restarting ha-mcp or Home Assistant does not refresh the client.
 
