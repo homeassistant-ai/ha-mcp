@@ -4,6 +4,7 @@ import asyncio
 import errno
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -69,6 +70,27 @@ class TestEditKeepsTheRestOfTheFile:
         edit_file_sync(target, [_edit("two", "T\nW")])
 
         assert target.read_bytes() == b"one\r\nT\nW\nthree\r\n"
+
+    def test_longest_valid_file_name_can_be_edited(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A name at the filesystem's limit must stay editable, so the temp file
+        cannot inherit it. The target's length stands in for that limit, which
+        Windows' shorter path limit would otherwise hide."""
+        target = _file(tmp_path, b"one\n").rename(tmp_path / ("a" * 100))
+        real_mkstemp = tempfile.mkstemp
+
+        def limited_mkstemp(*, dir: Path, prefix: str, suffix: str) -> tuple[int, str]:  # noqa: A002
+            random_part = 8
+            if len(prefix) + random_part + len(suffix) > len(target.name):
+                raise OSError(errno.ENAMETOOLONG, "File name too long")
+            return real_mkstemp(dir=dir, prefix=prefix, suffix=suffix)
+
+        monkeypatch.setattr(file_ops.tempfile, "mkstemp", limited_mkstemp)
+
+        edit_file_sync(target, [_edit("one", "1")])
+
+        assert target.read_bytes() == b"1\n"
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
     def test_file_mode_survives_an_edit(self, tmp_path: Path) -> None:

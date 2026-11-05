@@ -150,7 +150,11 @@ def _replace_contents(target_file: Path, data: bytes) -> None:
     real_file = Path(os.path.realpath(target_file))
     original = real_file.stat()
     handle, temp_name = tempfile.mkstemp(
-        dir=real_file.parent, prefix=f".{real_file.name}.", suffix=".tmp"
+        # A fixed prefix: the target's own name may already be at the filesystem's
+        # limit, and a temp name built from it would make that file uneditable.
+        dir=real_file.parent,
+        prefix=".ha_mcp_edit.",
+        suffix=".tmp",
     )
     try:
         with os.fdopen(handle, "wb") as temp_file:
