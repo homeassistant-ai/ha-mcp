@@ -376,7 +376,12 @@ def _after_failed_probe(
 ) -> ComponentCaps | None:
     """Cache what a failed ``info`` probe establishes and answer its caller."""
     if is_unknown_command(exc):
-        _store_caps(client, None)
+        if working is None:
+            _store_caps(client, None)
+        else:
+            # Right after a Core restart Core answers before the component has
+            # registered its commands; the short window finds it once it has.
+            _store_transient_negative(client)
         return _checked_caps(client, None, strict, cause=exc)
     if working is not None:
         _PROBED_OVER[client] = _CONNECTION_LOST
@@ -415,13 +420,15 @@ async def get_component_caps(
     seconds for both readers and writers.
 
     Cache-on-failure semantics follow the error taxonomy. A re-probe of caps
-    that worked keeps them on any failure but ``unknown_command``, which says
-    the component is gone:
+    that worked keeps them on any failure but ``unknown_command`` and caches
+    nothing, so the next call probes again; its ``unknown_command`` gets the
+    short window, since Core answers before the component has set up:
 
     - ``HomeAssistantCommandError`` with ``unknown_command`` (old or absent
-      component): cache ``None`` with an expiry. The negative is re-probed after ``_NEGATIVE_CACHE_TTL_S`` so a component
-      installed / upgraded mid-session (the REST client — the cache key — is not
-      recreated on an HA restart) is eventually adopted instead of pinned absent.
+      component): cache ``None`` with an expiry. The negative is re-probed
+      after ``_NEGATIVE_CACHE_TTL_S`` so a component installed / upgraded
+      mid-session (the REST client — the cache key — is not recreated on an HA
+      restart) is eventually adopted instead of pinned absent.
     - ``HomeAssistantConnectionError`` / ``HomeAssistantCommandTimeout`` (WS
       down or slow, including the failed-connect raise from
       ``WebSocketManager``): cache a SHORT transient

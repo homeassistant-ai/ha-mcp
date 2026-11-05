@@ -501,6 +501,63 @@ async def test_a_failed_reprobe_keeps_the_working_caps(monkeypatch) -> None:
     assert component_supports(after, "automation_config")
 
 
+@pytest.mark.asyncio
+async def test_a_component_still_starting_is_probed_again_soon(monkeypatch) -> None:
+    """After a Core restart Core answers before the component has registered
+    its commands; a re-probe of working caps that meets ``unknown_command``
+    there gets the short window, so the started component is found within it
+    instead of after the five-minute absence window."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    old_ws = _make_ws(info_result=_INFO_OK)
+    old_ws.is_connected = True
+    pool = {"tok": old_ws}
+    _fake_pool(monkeypatch, pool)
+    client = _client()
+    with _patch_ws(old_ws):
+        await get_component_caps(client)
+
+    starting = _make_ws(
+        info_exc=HomeAssistantCommandError("Unknown command.", "unknown_command")
+    )
+    starting.is_connected = True
+    pool["tok"] = starting
+    with _patch_ws(starting):
+        during = await get_component_caps(client)
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    started = _make_ws(info_result=_INFO_OK)
+    started.is_connected = True
+    pool["tok"] = started
+    with _patch_ws(started):
+        after = await get_component_caps(client)
+
+    assert during is None
+    assert isinstance(after, ComponentCaps)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reprobe_never_hands_out_a_malformed_snapshot(
+    monkeypatch,
+) -> None:
+    """Caps parsed from a malformed ``info`` reply are not caps that worked: a
+    failed re-probe must not pass them to a strict caller."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    malformed = _make_ws(info_result={**_INFO_OK, "schema_version": "1"})
+    client = _client()
+    with _patch_ws(malformed):
+        await get_component_caps(client)
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    down = AsyncMock(side_effect=HomeAssistantConnectionError("down"))
+    with (
+        patch.object(component_api, "get_websocket_client", down),
+        pytest.raises(component_api.ComponentDiscoveryError),
+    ):
+        await get_component_caps(client, strict=True)
+
+
 class _OAuthProxy:
     """The OAuth proxy's shape: one object naming each request's own client."""
 
