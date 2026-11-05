@@ -8,10 +8,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import tools_filesystem
-from ha_mcp.tools.tools_filesystem import FilesystemTools
+from ha_mcp.tools import auto_backup, tools_filesystem
+from ha_mcp.tools.tools_filesystem import MCP_TOOLS_DOMAIN, FilesystemTools
 
 EDITS = [{"old": "30000", "new": "10000"}]
+
+
+def _client(*services: str) -> MagicMock:
+    client = MagicMock()
+    client.get_services = AsyncMock(
+        return_value=[
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {service: {} for service in services},
+            }
+        ]
+    )
+    return client
 
 
 async def _call_tool(
@@ -30,27 +43,9 @@ async def _call_tool(
             raise
 
 
-@pytest.fixture
-def client_on_version() -> Any:
-    def _client(version: str) -> MagicMock:
-        client = MagicMock()
-        tools_filesystem._COMPONENT_VERSION_CACHE[client] = version
-        tools_filesystem._CALLER_TOKEN_CACHE[client] = "token"
-        return client
-
-    return _client
-
-
-CURRENT = tools_filesystem.MIN_COMPONENT_VERSION_FILE_EDITS
-
-
 @pytest.mark.asyncio
-async def test_edits_reach_the_edit_service_without_a_whole_file_write(
-    client_on_version: Any,
-) -> None:
-    _, service = await _call_tool(
-        client_on_version(CURRENT), path="www/card.js", edits=EDITS
-    )
+async def test_edits_reach_the_edit_service_without_a_whole_file_write() -> None:
+    _, service = await _call_tool(_client("edit_file"), path="www/card.js", edits=EDITS)
 
     service.assert_awaited_once()
     assert service.await_args.args[1:] == (
@@ -60,13 +55,9 @@ async def test_edits_reach_the_edit_service_without_a_whole_file_write(
 
 
 @pytest.mark.asyncio
-async def test_content_write_works_on_a_component_without_edit_file(
-    client_on_version: Any,
-) -> None:
+async def test_content_write_works_on_a_component_without_edit_file() -> None:
     """Whole-file writes must not force a component update."""
-    _, service = await _call_tool(
-        client_on_version("1.2.0"), path="www/a.css", content="x"
-    )
+    _, service = await _call_tool(_client("write_file"), path="www/a.css", content="x")
 
     assert service.await_args.args[1] == "write_file"
 
@@ -78,33 +69,28 @@ async def test_content_write_works_on_a_component_without_edit_file(
     ids=["neither", "both"],
 )
 async def test_exactly_one_of_content_and_edits_is_required(
-    client_on_version: Any, modes: dict[str, Any]
+    modes: dict[str, Any],
 ) -> None:
     with pytest.raises(ToolError) as excinfo:
-        await _call_tool(client_on_version(CURRENT), path="www/a.css", **modes)
+        await _call_tool(_client("edit_file"), path="www/a.css", **modes)
 
     assert excinfo.value.service.await_count == 0  # type: ignore[attr-defined]
     assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_older_component_gets_an_update_prompt_not_a_service_error(
-    client_on_version: Any,
-) -> None:
-    with (
-        patch.object(tools_filesystem, "_fetch_caller_token", AsyncMock()),
-        pytest.raises(ToolError) as excinfo,
-    ):
-        await _call_tool(client_on_version("1.2.0"), path="www/a.css", edits=EDITS)
+async def test_component_without_edit_file_gets_an_update_prompt() -> None:
+    """Asks the registry, not a version: an unreleased component reports the
+    previous release's number and still has the service."""
+    with pytest.raises(ToolError) as excinfo:
+        await _call_tool(_client("write_file"), path="www/a.css", edits=EDITS)
 
     assert excinfo.value.service.await_count == 0  # type: ignore[attr-defined]
     assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_component_refusal_reaches_the_model_with_its_reason(
-    client_on_version: Any,
-) -> None:
+async def test_component_refusal_reaches_the_model_with_its_reason() -> None:
     refusal = {
         "success": False,
         "error": "Edit 0: 'old' text not found in www/a.css. Nothing was saved.",
@@ -114,7 +100,7 @@ async def test_component_refusal_reaches_the_model_with_its_reason(
 
     with pytest.raises(ToolError) as excinfo:
         await _call_tool(
-            client_on_version(CURRENT),
+            _client("edit_file"),
             service_result=refusal,
             path="www/a.css",
             edits=EDITS,
@@ -123,3 +109,30 @@ async def test_component_refusal_reaches_the_model_with_its_reason(
     payload = json.loads(str(excinfo.value))
     assert payload["reason"] == "old_not_found"
     assert payload["edit_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_edits_are_snapshotted_before_the_file_changes() -> None:
+    """An edit overwrites the file, so it must take the mandatory backup even
+    though it sends neither content nor overwrite."""
+    capture = AsyncMock(return_value=None)
+    service = AsyncMock(return_value={"success": True})
+    settings = MagicMock(enable_auto_backup=True)
+
+    def backup_taken_first(*_args: Any, **_kwargs: Any) -> dict[str, bool]:
+        capture.assert_awaited_once()
+        return {"success": True}
+
+    service.side_effect = backup_taken_first
+    with (
+        patch.object(auto_backup, "get_global_settings", return_value=settings),
+        patch.object(auto_backup, "_capture_pre_write_snapshot", capture),
+        patch.object(tools_filesystem, "_assert_mcp_tools_available", AsyncMock()),
+        patch.object(tools_filesystem, "call_mcp_tools_service", service),
+    ):
+        await FilesystemTools(_client("edit_file")).ha_write_file(
+            path="www/a.css", edits=EDITS
+        )
+
+    service.assert_awaited_once()
+    assert capture.await_args.kwargs["domain"] == "file"

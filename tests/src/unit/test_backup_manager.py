@@ -2248,6 +2248,7 @@ class TestYamlHandler:
         """
         from ha_mcp import config as ha_mcp_config
         from ha_mcp.tools import tools_filesystem as fsmod
+        from ha_mcp.tools import yaml_extra_keys
 
         monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
         monkeypatch.setattr(ha_mcp_config, "_settings", None)
@@ -2264,11 +2265,9 @@ class TestYamlHandler:
         )
 
         client = _StubClient()
-
-        async def _ensure(_client, **_kwargs):
-            return "token"
-
+        _ensure = AsyncMock(return_value="token")
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
         fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.4"
 
         await bm._restore_yaml(client, "packages/alerts.yaml::alert2", "defaults: {}\n")
@@ -2284,6 +2283,7 @@ class TestYamlHandler:
         from ha_mcp import config as ha_mcp_config
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.tools import tools_filesystem as fsmod
+        from ha_mcp.tools import yaml_extra_keys
 
         monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
         monkeypatch.setattr(ha_mcp_config, "_settings", None)
@@ -2291,11 +2291,9 @@ class TestYamlHandler:
         _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
 
         client = _StubClient()
-
-        async def _ensure(_client, **_kwargs):
-            return "token"
-
+        _ensure = AsyncMock(return_value="token")
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
         fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.3"
 
         with pytest.raises(ToolError) as excinfo:
