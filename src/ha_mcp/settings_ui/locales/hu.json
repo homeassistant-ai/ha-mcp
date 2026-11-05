@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "elutasítva",
     "policies.pending.invalid_token": "Ez a jóváhagyási token már nem érvényes (már felhasználták vagy lejárt).",
     "policies.pending.action_failed": "A jóváhagyási művelet sikertelen: {detail}",
+    "policies.pending.announcement": "Függőben lévő jóváhagyások: {count}",
     "visibility.errors.reach_server": "Nem sikerült elérni a szervert: {message}",
     "visibility.errors.corrupt_suffix": " (az entity_visibility.json sérültnek tűnik; szerkessze vagy törölje a szerver adatkönyvtárában)",
     "visibility.errors.load_detail": "A láthatósági konfiguráció betöltése sikertelen: {detail}",

@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "отклонено",
     "policies.pending.invalid_token": "Токен одобрения больше недействителен: он уже использован или истёк.",
     "policies.pending.action_failed": "Операция с одобрением не выполнена: {detail}",
+    "policies.pending.announcement": "Ожидают одобрения: {count}",
     "visibility.errors.reach_server": "Не удалось связаться с сервером: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json выглядит поврежденным; отредактируйте или удалите его в каталоге данных сервера)",
     "visibility.errors.load_detail": "Не удалось загрузить настройки видимости: {detail}",

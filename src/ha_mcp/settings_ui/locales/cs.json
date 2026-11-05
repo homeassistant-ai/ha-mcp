@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "zamítnuto",
     "policies.pending.invalid_token": "Tento schvalovací token již není platný (již spotřebován nebo vypršel).",
     "policies.pending.action_failed": "Akce schválení selhala: {detail}",
+    "policies.pending.announcement": "Čekající schválení: {count}",
     "visibility.errors.reach_server": "Nepodařilo se dosáhnout serveru: {message}",
     "visibility.errors.corrupt_suffix": " (soubor entity_visibility.json se zdá být poškozený; upravte jej nebo smažte v datovém adresáři serveru)",
     "visibility.errors.load_detail": "Nepodařilo se načíst konfiguraci viditelnosti: {detail}",

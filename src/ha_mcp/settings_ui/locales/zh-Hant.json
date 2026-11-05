@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "拒絕",
     "policies.pending.invalid_token": "此批准權杖已失效（已被使用或已過期）。",
     "policies.pending.action_failed": "批准動作失敗：{detail}",
+    "policies.pending.announcement": "待處理核准：{count}",
     "visibility.errors.reach_server": "無法連線至伺服器：{message}",
     "visibility.errors.corrupt_suffix": " （entity_visibility.json 似乎已損壞；請在伺服器的資料目錄中進行編輯或刪除）",
     "visibility.errors.load_detail": "載入可見性設定失敗：{detail}",

@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "refusée",
     "policies.pending.invalid_token": "Ce jeton d'approbation n'est plus valide (déjà consommé ou expiré).",
     "policies.pending.action_failed": "L'action d'approbation a échoué : {detail}",
+    "policies.pending.announcement": "Approbations en attente : {count}",
     "visibility.errors.reach_server": "Impossible d'atteindre le serveur : {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json semble corrompu ; modifiez-le ou supprimez-le dans le répertoire de données du serveur)",
     "visibility.errors.load_detail": "Échec du chargement de la configuration de visibilité : {detail}",

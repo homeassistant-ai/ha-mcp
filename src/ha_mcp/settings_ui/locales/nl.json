@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "geweigerd",
     "policies.pending.invalid_token": "Dit goedkeuringstoken is niet langer geldig (reeds verbruikt of verlopen).",
     "policies.pending.action_failed": "Goedkeuringsactie mislukt: {detail}",
+    "policies.pending.announcement": "In afwachting van goedkeuring: {count}",
     "visibility.errors.reach_server": "Kon de server niet bereiken: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json lijkt beschadigd; bewerk of verwijder deze in de datamap van de server)",
     "visibility.errors.load_detail": "Laden van zichtbaarheidsconfiguratie mislukt: {detail}",

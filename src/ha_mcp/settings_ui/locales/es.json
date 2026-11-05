@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "denegada",
     "policies.pending.invalid_token": "Este token de aprobación ya no es válido (ya se ha consumido o ha caducado).",
     "policies.pending.action_failed": "Ha fallado la acción de aprobación: {detail}",
+    "policies.pending.announcement": "Aprobaciones pendientes: {count}",
     "visibility.errors.reach_server": "No se ha podido contactar con el servidor: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json parece estar corrupto; edítalo o bórralo en el directorio de datos del servidor)",
     "visibility.errors.load_detail": "Fallo al cargar la configuración de visibilidad: {detail}",

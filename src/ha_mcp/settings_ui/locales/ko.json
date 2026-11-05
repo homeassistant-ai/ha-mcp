@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "거부",
     "policies.pending.invalid_token": "이 승인 토큰은 더 이상 유효하지 않습니다(이미 사용되었거나 만료되었습니다).",
     "policies.pending.action_failed": "승인 처리에 실패했습니다: {detail}",
+    "policies.pending.announcement": "대기 중인 승인: {count}개",
     "visibility.errors.reach_server": "서버에 연결하지 못했습니다: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json이 손상된 것으로 보입니다. 서버 데이터 디렉터리에서 수정하거나 삭제하세요)",
     "visibility.errors.load_detail": "표시 범위 설정을 불러오지 못했습니다: {detail}",

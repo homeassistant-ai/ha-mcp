@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "nekat",
     "policies.pending.invalid_token": "Denna godkännandetoken är inte längre giltig (redan förbrukad eller utgången).",
     "policies.pending.action_failed": "Godkännandeåtgärden misslyckades: {detail}",
+    "policies.pending.announcement": "Väntande godkännanden: {count}",
     "visibility.errors.reach_server": "Kunde inte nå servern: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json verkar vara skadad; redigera eller ta bort den i serverns datakatalog)",
     "visibility.errors.load_detail": "Misslyckades med att ladda synlighetskonfiguration: {detail}",

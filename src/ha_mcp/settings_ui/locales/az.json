@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "rədd edilib",
     "policies.pending.invalid_token": "Bu təsdiq tokeni artıq etibarlı deyil (artıq istifadə edilib və ya vaxtı bitib).",
     "policies.pending.action_failed": "Təsdiq əməliyyatı alınmadı: {detail}",
+    "policies.pending.announcement": "Gözləyən təsdiqlər: {count}",
     "visibility.errors.reach_server": "Serverlə əlaqə yaratmaq mümkün olmadı: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json faylı zədələnmiş görünür; serverin məlumat qovluğunda onu redaktə edin və ya silin)",
     "visibility.errors.load_detail": "Görünürlük konfiqurasiyasını yükləmək alınmadı: {detail}",

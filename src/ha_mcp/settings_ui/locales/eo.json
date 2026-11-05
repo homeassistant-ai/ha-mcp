@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "rifuzita",
     "policies.pending.invalid_token": "Ĉi tiu aprobo-ĵetono ne plu validas (jam konsumita aŭ eksvalidiĝinta).",
     "policies.pending.action_failed": "Aprobo-ago malsukcesis: {detail}",
+    "policies.pending.announcement": "Pendentaj aproboj: {count}",
     "visibility.errors.reach_server": "Ne eblis atingi la servilon: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json ŝajnas difektita; redaktu aŭ forigu ĝin en la datendosierujo de la servilo)",
     "visibility.errors.load_detail": "Malsukcesis ŝargi videblecan agordon: {detail}",

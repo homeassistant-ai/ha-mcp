@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "拒绝",
     "policies.pending.invalid_token": "此审批令牌已失效（已被消费或过期）。",
     "policies.pending.action_failed": "审批操作失败：{detail}",
+    "policies.pending.announcement": "待处理的批准：{count}",
     "visibility.errors.reach_server": "无法连接到服务器：{message}",
     "visibility.errors.corrupt_suffix": "（entity_visibility.json 似乎已损坏；请在服务器的数据目录中对其进行编辑或删除）",
     "visibility.errors.load_detail": "加载可见性配置失败：{detail}",

@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "odrzucone",
     "policies.pending.invalid_token": "Ten token zatwierdzenia jest już nieważny (już zużyty lub wygasły).",
     "policies.pending.action_failed": "Akcja zatwierdzenia nie powiodła się: {detail}",
+    "policies.pending.announcement": "Oczekujące zatwierdzenia: {count}",
     "visibility.errors.reach_server": "Nie można połączyć się z serwerem: {message}",
     "visibility.errors.corrupt_suffix": " (plik entity_visibility.json wydaje się uszkodzony; edytuj go lub usuń w katalogu danych serwera)",
     "visibility.errors.load_detail": "Nie udało się załadować konfiguracji widoczności: {detail}",

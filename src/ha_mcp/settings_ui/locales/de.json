@@ -444,6 +444,7 @@
     "policies.pending.decision.denied": "abgelehnt",
     "policies.pending.invalid_token": "Dieses Genehmigungs-Token ist nicht mehr gültig (bereits verbraucht oder abgelaufen).",
     "policies.pending.action_failed": "Genehmigungs-Aktion fehlgeschlagen: {detail}",
+    "policies.pending.announcement": "Ausstehende Genehmigungen: {count}",
     "visibility.errors.reach_server": "Server konnte nicht erreicht werden: {message}",
     "visibility.errors.corrupt_suffix": " (entity_visibility.json scheint beschädigt zu sein; bearbeite oder lösche sie im Datenverzeichnis des Servers)",
     "visibility.errors.load_detail": "Sichtbarkeitskonfiguration konnte nicht geladen werden: {detail}",
