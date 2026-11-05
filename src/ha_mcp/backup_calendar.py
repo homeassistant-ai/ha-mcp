@@ -53,23 +53,18 @@ async def _find_calendar_event(
     return None
 
 
-def _recurrence_id_window(
-    recurrence_id: str | None,
-) -> tuple[datetime, datetime] | None:
-    """A day-wide window around an iCalendar recurrence id, if it parses."""
-    if not recurrence_id:
+def _day_window(value: str | None) -> tuple[datetime, datetime] | None:
+    """A day either side of a recurrence id or ISO date(-time), if it parses."""
+    try:
+        at = datetime.fromisoformat(value or "")
+    except ValueError:
         return None
-    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M%SZ", "%Y%m%d"):
-        try:
-            at = datetime.strptime(recurrence_id, fmt).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-        return at - timedelta(days=1), at + timedelta(days=1)
-    return None
+    at = at if at.tzinfo else at.replace(tzinfo=UTC)
+    return at - timedelta(days=1), at + timedelta(days=1)
 
 
 async def _locate_calendar_event(
-    client: Any, cal: str, uid: str, wanted: str | None
+    client: Any, cal: str, uid: str, wanted: str | None, near: str | None = None
 ) -> Any:
     """The ``uid`` event (occurrence ``wanted``) on ``cal``; None if no window has it.
 
@@ -85,8 +80,10 @@ async def _locate_calendar_event(
         days = 7
     days = max(1, min(365, days))
     now = datetime.now(UTC)
-    # A recurrence_id names the occurrence's date, so one request finds it.
-    around = _recurrence_id_window(wanted)
+    # A recurrence_id names the occurrence's date; without one, ``near`` (the
+    # snapshot's start) places the request that finds an event the windows
+    # below would miss.
+    around = _day_window(wanted) or _day_window(near)
     found = (
         await _find_calendar_event(client, cal, uid, wanted, *around)
         if around
@@ -265,7 +262,8 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
         # only that code is checked against the calendar before re-creating.
         if not unsupported and (
             err.code != "failed"
-            or await _locate_calendar_event(client, cal, uid, recurrence_id) is not None
+            or await _locate_calendar_event(client, cal, uid, recurrence_id, start[0])
+            is not None
         ):
             raise
         if recurrence_id:

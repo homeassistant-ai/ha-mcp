@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -150,3 +151,37 @@ async def test_the_restored_copy_is_found_after_a_timezone_change(
     assert result == {"already_restored": True, "event": copy}
     _path, params = client.calls[-1]
     assert params["start"] == "2026-06-14T09:00:00-04:00"
+    assert params["end"] == "2026-06-16T09:15:00-04:00"
+
+
+async def test_an_existing_event_far_from_today_is_not_duplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ical can refuse the update of an event that exists (an imported DURATION
+    # next to the restored dtend). Edited since the snapshot, it is no copy of
+    # it, so only a lookup around the snapshot's own date keeps it from being
+    # duplicated. This calendar stub lists the event only in a window holding
+    # its start.
+    snapshot = {
+        **_SNAPSHOT,
+        "start": {"dateTime": "2000-01-10T09:00:00+00:00"},
+        "end": {"dateTime": "2000-01-10T09:15:00+00:00"},
+    }
+    edited = {**snapshot, "summary": "Standup (moved room)"}
+    at = datetime.fromisoformat(snapshot["start"]["dateTime"])
+
+    class _WindowedCalendar(_CalendarRestClient):
+        async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+            await super()._request(method, path, **kwargs)
+            start, end = (
+                datetime.fromisoformat(kwargs["params"][k]) for k in ("start", "end")
+            )
+            return [edited] if start <= at <= end else []
+
+    err = HomeAssistantCommandError("Command failed: An error occurred", "failed")
+    _fail_update(err, monkeypatch)
+    with pytest.raises(HomeAssistantCommandError) as exc_info:
+        await bm._restore_calendar_event(
+            _WindowedCalendar([]), "calendar.fam::evt-1", snapshot
+        )
+    assert exc_info.value is err
