@@ -843,6 +843,10 @@ class FilesystemTools:
         Creates or updates files (custom CSS/JS for dashboards, Jinja2 macro
         templates, theme YAML) in restricted directories only.
 
+        Not for configuration: use ha_config_set_yaml for configuration.yaml and
+        packages, and ha_config_set_automation, ha_config_set_script,
+        ha_config_set_scene or ha_config_set_dashboard for storage-mode items.
+
         **Allowed Write Directories:**
         - `www/` - Web assets for dashboards
         - `themes/` - Theme YAML files
