@@ -64,6 +64,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -740,9 +741,21 @@ class TestEmbeddedUpdatePath:
                 ]
             )
             assert installed.exit_code == 0, installed.output.decode()
-            container.get_wrapped_container().restart(timeout=30)
+            previous_url = base_url
+            wrapped = container.get_wrapped_container()
+            wrapped.restart(timeout=30)
+            wrapped.reload()
+            base_url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(8123)}"
+            logging.getLogger(__name__).info(
+                "HA restart address: %s -> %s", previous_url, base_url
+            )
             headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
-            _wait_http_ok(f"{base_url}/api/", headers, _API_READY_TIMEOUT_S)
+            try:
+                _wait_http_ok(f"{base_url}/api/", headers, _API_READY_TIMEOUT_S)
+            except AssertionError as err:
+                raise AssertionError(
+                    f"{err}\nContainer logs:\n{_dump_logs(container)}"
+                ) from err
             version, session_id = _wait_for_server(
                 base_url, _PHASE2_READY_TIMEOUT_S, expected_version=sentinel
             )
