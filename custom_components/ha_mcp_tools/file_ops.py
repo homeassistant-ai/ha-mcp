@@ -9,9 +9,12 @@ server-side read and write would rewrite every line ending in the file.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import os
 import posixpath
-import re
+import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +31,8 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .volume_mounts import on_mounted_volume, os_error_text
+
+_LOGGER = logging.getLogger(__name__)
 
 SERVICE_EDIT_FILE = "edit_file"
 MAX_EDITS = 100
@@ -83,9 +88,15 @@ def _occurrences(text: str, needle: str) -> int:
     """Count ``needle`` in ``text``, overlaps included.
 
     ``str.count`` skips overlaps ("aa" in "aaa" is 1), which would let an
-    ambiguous ``old`` pass the exactly-once check.
+    ambiguous ``old`` pass the exactly-once check. Not a regex lookahead: that
+    rescans ``needle`` at every position while holding the GIL, which stalls
+    Home Assistant's event loop on repetitive text even from an executor thread.
     """
-    return len(re.findall(f"(?={re.escape(needle)})", text))
+    matches = 0
+    position = -1
+    while (position := text.find(needle, position + 1)) != -1:
+        matches += 1
+    return matches
 
 
 def _with_file_newlines(text: str, crlf: bool) -> str:
@@ -99,12 +110,23 @@ def _apply_edits(
     # Only a purely CRLF file can translate safely: in a mixed file the text
     # read_file shows does not say which line ending each line has.
     crlf = "\r\n" in content and "\n" not in content.replace("\r\n", "")
+    translated = [
+        (_with_file_newlines(edit["old"], crlf), _with_file_newlines(edit["new"], crlf))
+        for edit in edits
+    ]
+    invalid = [
+        index
+        for index, (old, new) in enumerate(translated)
+        if not old or old == new or not _is_valid_utf8(old + new)
+    ]
+    if invalid:
+        return "", {
+            "_error": "invalid_edit",
+            "edit_index": invalid[0],
+            "invalid_edit_indexes": invalid,
+        }
     result = content
-    for index, edit in enumerate(edits):
-        old = _with_file_newlines(edit["old"], crlf)
-        new = _with_file_newlines(edit["new"], crlf)
-        if not old or old == new or not _is_valid_utf8(old + new):
-            return "", {"_error": "invalid_edit", "edit_index": index}
+    for index, (old, new) in enumerate(translated):
         matches = _occurrences(result, old)
         if matches == 0:
             return "", {"_error": "old_not_found", "edit_index": index}
@@ -116,6 +138,33 @@ def _apply_edits(
             }
         result = result.replace(old, new, 1)
     return result, None
+
+
+def _replace_contents(target_file: Path, data: bytes) -> None:
+    """Swap in ``data`` through a sibling temp file, keeping mode and owner.
+
+    A failure before the swap leaves the file as it was. Resolves symlinks first,
+    because ``os.replace`` would swap the link itself for a plain file. A target
+    that is its own mount point fails the swap with ``EBUSY`` and stays intact.
+    """
+    real_file = Path(os.path.realpath(target_file))
+    original = real_file.stat()
+    handle, temp_name = tempfile.mkstemp(
+        dir=real_file.parent, prefix=f".{real_file.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "wb") as temp_file:
+            temp_file.write(data)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.chmod(temp_name, original.st_mode & 0o7777)
+        if hasattr(os, "chown"):
+            os.chown(temp_name, original.st_uid, original.st_gid)
+        os.replace(temp_name, real_file)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name)
+        raise
 
 
 def edit_file_sync(
@@ -144,7 +193,10 @@ def edit_file_sync(
     result, refusal = _apply_edits(content, edits)
     if refusal is not None:
         return refusal
-    target_file.write_bytes(result.encode("utf-8"))
+    data = result.encode("utf-8")
+    if len(data) > MAX_EDITABLE_FILE_SIZE:
+        return {"_error": "too_large"}
+    _replace_contents(target_file, data)
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime}
 
@@ -153,10 +205,10 @@ _REFUSALS = {
     "not_found": "File not found: {path}. Pass content to create it.",
     "not_a_file": "Not a file: {path}.",
     "not_text": "{path} is not UTF-8 text, so it cannot be edited.",
-    "too_large": "{path} is too large to edit.",
+    "too_large": "{path} would be too large to edit. Nothing was saved.",
     "not_mounted": "{parent} is not mounted into Home Assistant Core on this install.",
-    "invalid_edit": "Edit {edit_index} needs a non-empty 'old' that differs from "
-    "'new', both valid UTF-8. Nothing was saved.",
+    "invalid_edit": "Edits at index {invalid_edit_indexes} need a non-empty 'old' "
+    "that differs from 'new', both valid UTF-8. Nothing was saved.",
     "old_not_found": "Edit {edit_index}: 'old' text not found in {path}. Match it "
     "exactly, including whitespace and line endings; earlier edits apply first. "
     "Nothing was saved.",
@@ -175,6 +227,10 @@ def build_edit_file_handler(
 ) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
     """Build the edit_file service handler."""
     config_dir = Path(hass.config.config_dir)
+    # One lock for all files: overlapping read-modify-writes of one file would
+    # lose an edit and report success for both, and edits are too rare for the
+    # bookkeeping of per-path locks (and of links to one file) to pay off.
+    edit_lock = asyncio.Lock()
 
     async def handle_edit_file(call: ServiceCall) -> ServiceResponse:
         if not caller_token_ok(hass, call):
@@ -185,12 +241,15 @@ def build_edit_file_handler(
         if denied is not None:
             return {"success": False, "error": denied}
         try:
-            result = await hass.async_add_executor_job(
-                edit_file_sync, config_dir / rel_path, edits, volume_root_for
-            )
+            async with edit_lock:
+                result = await hass.async_add_executor_job(
+                    edit_file_sync, config_dir / rel_path, edits, volume_root_for
+                )
         except PermissionError:
+            _LOGGER.error("Permission denied editing: %s", rel_path)
             return {"success": False, "error": f"Permission denied: {rel_path}"}
         except OSError as err:
+            _LOGGER.error("Error editing file %s: %s", rel_path, err)
             return {"success": False, "error": os_error_text(err, rel_path)}
         reason = result.pop("_error", None)
         if reason is not None:
@@ -200,6 +259,7 @@ def build_edit_file_handler(
                 "reason": reason,
                 **result,
             }
+        _LOGGER.info("Edited file: %s (%d bytes)", rel_path, result["size"])
         return {
             "success": True,
             "path": rel_path,
