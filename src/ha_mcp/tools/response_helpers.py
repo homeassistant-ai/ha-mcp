@@ -311,11 +311,11 @@ async def fetch_ha_timezone(client: Any) -> tuple[str, bool]:
     ``client.get_config()`` fetch exactly as before — the path taken when the
     component is absent, predates the ``timezone`` field, or reports it empty.
 
-    Staleness trade-off: the component route reads a cached, process-lifetime
-    probe, so an HA timezone change mid-session keeps serving the value from
-    the last successful negotiation (positive cache entries do not expire on a
-    timer — only ``invalidate_caps`` or a process restart forces a re-probe)
-    until then. The #1813 Phase 2 audit rated this Low risk and acceptable —
+    Staleness trade-off: the component route reads a cached probe, so an HA
+    timezone change mid-session keeps serving the value from the last
+    successful negotiation (positive cache entries do not expire on a timer —
+    a replaced WebSocket connection, such as after a Core restart,
+    ``invalidate_caps`` or a process restart forces a re-probe) until then. The #1813 Phase 2 audit rated this Low risk and acceptable —
     instance timezone changes are rare — versus the legacy path, which always
     re-fetches fresh on every call.
 

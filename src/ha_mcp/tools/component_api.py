@@ -365,6 +365,29 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     )
 
 
+def _after_failed_probe(
+    client: Any, exc: Exception, working: ComponentCaps | None, strict: bool
+) -> ComponentCaps | None:
+    """Cache what a failed ``info`` probe establishes and answer its caller."""
+    if is_unknown_command(exc):
+        _store_caps(client, None)
+        return _checked_caps(client, None, strict, cause=exc)
+    if working is not None:
+        return working
+    if isinstance(exc, HomeAssistantCommandError):
+        message = f"{INFO_COMMAND} failed: {exc}"
+    elif isinstance(exc, HomeAssistantConnectionError | HomeAssistantCommandTimeout):
+        logger.debug("%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=exc)
+        message = f"{INFO_COMMAND} probe could not reach Home Assistant"
+    else:
+        # Read callers retain best-effort fallback; strict write callers
+        # must not confuse an unexpected fault with capability absence.
+        logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=exc)
+        message = f"{INFO_COMMAND} probe failed unexpectedly"
+    _store_probe_failure(client, exc, message)
+    return _checked_caps(client, None, strict, cause=exc)
+
+
 async def get_component_caps(
     client: Any, *, strict: bool = False
 ) -> ComponentCaps | None:
@@ -384,7 +407,9 @@ async def get_component_caps(
     retains best-effort read behavior. Inconclusive failures expire after 30
     seconds for both readers and writers.
 
-    Cache-on-failure semantics follow the error taxonomy:
+    Cache-on-failure semantics follow the error taxonomy. A re-probe of caps
+    that worked keeps them on any failure but ``unknown_command``, which says
+    the component is gone:
 
     - ``HomeAssistantCommandError`` with ``unknown_command`` (old or absent
       component): cache ``None`` with an expiry. The negative is re-probed after ``_NEGATIVE_CACHE_TTL_S`` so a component
@@ -428,6 +453,11 @@ async def get_component_caps(
         # silently unreachable on an HTTPS + verify_ssl=False install. ``None`` is
         # the pool's settings default, so a client without the attr is unchanged.
         verify_ssl = getattr(client, "verify_ssl", None)
+        # A re-probe of caps that worked (their connection was replaced) that
+        # fails without saying the component is gone keeps them: right after a
+        # Core restart it can run before Core answers, and a cached failure
+        # would refuse strict callers for its window once Core is back.
+        working = None if client in _PROBE_FAILURES else _CAPS_CACHE.get(client)
         # This probe alone decides the auth marker; never carry a stale one.
         _PROBE_AUTH_REJECTED.pop(client, None)
 
@@ -436,28 +466,8 @@ async def get_component_caps(
                 url=base_url, token=token, verify_ssl=verify_ssl
             )
             response = await ws.send_command(INFO_COMMAND)
-        except HomeAssistantCommandError as exc:
-            if is_unknown_command(exc):
-                _store_caps(client, None)
-            else:
-                _store_probe_failure(client, exc, f"{INFO_COMMAND} failed: {exc}")
-            return _checked_caps(client, None, strict, cause=exc)
-        except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as exc:
-            logger.debug(
-                "%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=True
-            )
-            _store_probe_failure(
-                client, exc, f"{INFO_COMMAND} probe could not reach Home Assistant"
-            )
-            return _checked_caps(client, None, strict, cause=exc)
-        except Exception as exc:
-            # Read callers retain best-effort fallback; strict write callers
-            # must not confuse an unexpected fault with capability absence.
-            logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
-            _store_probe_failure(
-                client, exc, f"{INFO_COMMAND} probe failed unexpectedly"
-            )
-            return _checked_caps(client, None, strict, cause=exc)
+        except Exception as exc:  # noqa: BLE001 - classified and logged below
+            return _after_failed_probe(client, exc, working, strict)
 
         caps = _parse_caps(response)
         if caps is not None and caps.schema_version != SUPPORTED_SCHEMA_VERSION:

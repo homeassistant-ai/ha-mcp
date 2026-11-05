@@ -55,6 +55,9 @@ async def core_related(
 ) -> dict[str, Any] | None:
     """Core's Related set for the automation, what its UI's Related panel shows."""
     if entity_id is None:
+        warnings.append(
+            "related unavailable: no automation entity was found for this config id"
+        )
         return None
     try:
         result = await client.send_websocket_message(

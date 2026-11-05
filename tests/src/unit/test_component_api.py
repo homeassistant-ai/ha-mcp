@@ -470,6 +470,35 @@ async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None
     assert ws.send_command.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_a_failed_reprobe_keeps_the_working_caps(monkeypatch) -> None:
+    """Right after a Core restart the re-probe can run before Core answers; the
+    caps that worked stay in place instead of a cached failure refusing strict
+    callers once Core is back."""
+    old_ws = _make_ws(info_result=_INFO_OK)
+    old_ws.is_connected = True
+    pool = {"tok": old_ws}
+    _fake_pool(monkeypatch, pool)
+    client = _client()
+    with _patch_ws(old_ws):
+        working = await get_component_caps(client)
+
+    old_ws.is_connected = False
+    down = AsyncMock(side_effect=HomeAssistantConnectionError("Core restarting"))
+    with patch.object(component_api, "get_websocket_client", down):
+        during = await get_component_caps(client, strict=True)
+
+    back_ws = _make_ws(info_result=_INFO_OK)
+    back_ws.is_connected = True
+    pool["tok"] = back_ws
+    with _patch_ws(back_ws):
+        after = await get_component_caps(client, strict=True)
+
+    assert during is working
+    assert isinstance(after, ComponentCaps)
+    assert back_ws.send_command.await_count == 1
+
+
 class _OAuthProxy:
     """The OAuth proxy's shape: one object naming each request's own client."""
 

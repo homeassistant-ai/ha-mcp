@@ -122,6 +122,9 @@ class TestGetAutomation:
 
         assert result["automation_id"] == "orphaned_unique_id"
         assert result["entity"] is None
+        # The references warning points at related, which has nothing to show.
+        assert result["related"] is None
+        assert any(w.startswith("related unavailable") for w in result["warnings"])
 
     async def test_identifier_key_no_longer_in_response(self, tools):
         """Issue #1334: one canonical typed-id key, no raw input echo."""
