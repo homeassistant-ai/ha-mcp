@@ -402,7 +402,6 @@ def _fake_pool(monkeypatch, pool: dict[str, Any]) -> None:
     with the wrong credentials reads as an empty slot and the re-probe tests
     fail.
     """
-    manager = component_api.websocket_manager
 
     def pooled_client(**credentials: Any) -> Any:
         if credentials["url"] != "http://ha.local:8123":
@@ -411,15 +410,7 @@ def _fake_pool(monkeypatch, pool: dict[str, Any]) -> None:
             return None
         return pool.get(credentials["token"])
 
-    def holds(key: str, client: Any) -> bool:
-        return any(
-            manager.pool_key("http://ha.local:8123", token, None) == key
-            and held is client
-            for token, held in pool.items()
-        )
-
-    monkeypatch.setattr(manager, "pooled_client", pooled_client)
-    monkeypatch.setattr(manager, "holds", holds)
+    monkeypatch.setattr(component_api.websocket_manager, "pooled_client", pooled_client)
 
 
 @pytest.mark.asyncio
@@ -479,52 +470,68 @@ async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None
     assert ws.send_command.await_count == 1
 
 
-@pytest.mark.asyncio
-async def test_alternating_oauth_users_each_probe_once(monkeypatch) -> None:
-    """The OAuth proxy is one client whose token changes per request; each
-    user's connection is its own, so switching users does not re-probe."""
-    pool = {"alice": _make_ws(info_result=_INFO_OK)}
-    pool["bob"] = _make_ws(info_result=_INFO_OK)
+class _OAuthProxy:
+    """The OAuth proxy's shape: one object naming each request's own client."""
+
+    def __init__(self, users: dict[str, _FakeClient]) -> None:
+        self.users = users
+        self.user = ""
+
+    def current_client(self) -> _FakeClient:
+        return self.users[self.user]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.current_client(), name)
+
+
+def _oauth_users(monkeypatch, infos: dict[str, Any]) -> tuple[_OAuthProxy, dict]:
+    """A proxy over one client per token, each with its own pooled connection."""
+    pool = {token: _make_ws(**info) for token, info in infos.items()}
     for ws in pool.values():
         ws.is_connected = True
     _fake_pool(monkeypatch, pool)
-    proxy = _client()
 
     async def connect(*, url: str, token: str, verify_ssl: Any) -> Any:
         return pool[token]
 
-    with patch.object(component_api, "get_websocket_client", connect):
-        for user in ("alice", "bob", "alice", "bob", "alice"):
-            proxy.token = user
-            assert isinstance(await get_component_caps(proxy), ComponentCaps)
+    monkeypatch.setattr(component_api, "get_websocket_client", connect)
+    return _OAuthProxy({token: _FakeClient(token=token) for token in infos}), pool
+
+
+@pytest.mark.asyncio
+async def test_alternating_oauth_users_each_probe_once(monkeypatch) -> None:
+    """The OAuth proxy is one object whose token changes per request; each
+    user's caps are their own, so switching users does not re-probe."""
+    ok = {"info_result": _INFO_OK}
+    proxy, pool = _oauth_users(monkeypatch, {"alice": ok, "bob": ok})
+
+    for user in ("alice", "bob", "alice", "bob", "alice"):
+        proxy.user = user
+        assert isinstance(await get_component_caps(proxy), ComponentCaps)
 
     assert sum(ws.send_command.await_count for ws in pool.values()) == 2
 
 
 @pytest.mark.asyncio
-async def test_connections_the_pool_dropped_are_not_kept(monkeypatch) -> None:
-    """A probed connection the pool evicted or replaced leaves the record at the
-    next probe, so the record never holds more than the pool does."""
-    pool = {"alice": _make_ws(info_result=_INFO_OK)}
-    pool["alice"].is_connected = True
-    _fake_pool(monkeypatch, pool)
-    proxy = _client()
+async def test_a_non_admins_refused_probe_leaves_the_admins_caps(monkeypatch) -> None:
+    """``info`` is admin-only: a non-admin OAuth user's refused probe must not
+    replace an administrator's caps, or the administrator's strict reads fail
+    for the failure window."""
+    refused = HomeAssistantCommandError("Unauthorized", "unauthorized")
+    proxy, _pool = _oauth_users(
+        monkeypatch,
+        {"admin": {"info_result": _INFO_OK}, "viewer": {"info_exc": refused}},
+    )
 
-    async def connect(*, url: str, token: str, verify_ssl: Any) -> Any:
-        return pool[token]
+    proxy.user = "admin"
+    admin_caps = await get_component_caps(proxy, strict=True)
+    proxy.user = "viewer"
+    with pytest.raises(component_api.ComponentDiscoveryError):
+        await get_component_caps(proxy, strict=True)
+    proxy.user = "admin"
 
-    with patch.object(component_api, "get_websocket_client", connect):
-        proxy.token = "alice"
-        await get_component_caps(proxy)
-        evicted = pool.pop("alice")
-        pool["bob"] = _make_ws(info_result=_INFO_OK)
-        pool["bob"].is_connected = True
-        proxy.token = "bob"
-        await get_component_caps(proxy)
-
-    recorded = list(component_api._PROBED_OVER[proxy].values())
-    assert recorded == [pool["bob"]]
-    assert evicted not in recorded
+    assert await get_component_caps(proxy, strict=True) is admin_caps
+    assert not component_api.component_probe_auth_failed(proxy)
 
 
 def test_component_supports() -> None:

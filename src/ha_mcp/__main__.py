@@ -65,8 +65,8 @@ class OAuthProxyClient:
         self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
-    def _get_oauth_client(self) -> "HomeAssistantClient":
-        """Get the OAuth client for the current request context."""
+    def current_client(self) -> "HomeAssistantClient":
+        """The requesting user's client; per-user caches key on it, not the proxy."""
         from ha_mcp._vendor.fastmcp.server.dependencies import get_access_token
         from ha_mcp.client.rest_client import (
             HomeAssistantAuthError,
@@ -116,7 +116,7 @@ class OAuthProxyClient:
 
     def __getattr__(self, name: str) -> Any:
         """Forward all attribute access to the OAuth client."""
-        client = self._get_oauth_client()
+        client = self.current_client()
         return getattr(client, name)
 
 

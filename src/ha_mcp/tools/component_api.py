@@ -152,15 +152,11 @@ _NEGATIVE_CACHE_TS: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDicti
 _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
     weakref.WeakKeyDictionary()
 )
-# The pooled WS connections a positive entry was probed over, by pool key: the
-# OAuth proxy is one client whose token changes per request, so each user's
-# connection is tracked on its own. A Core restart closes them and the pool
-# replaces them; the component on the far side may then be another version (an
-# app keeps running while the component updates through the Marketplace and
-# Core restarts), so the entry is re-probed rather than kept.
-_PROBED_OVER: weakref.WeakKeyDictionary[Any, dict[str, Any]] = (
-    weakref.WeakKeyDictionary()
-)
+# The pooled WS connection a positive entry was probed over. A Core restart
+# closes it and the pool replaces it; the component on the far side may then be
+# another version (an app keeps running while the component updates through the
+# Marketplace and Core restarts), so the entry is re-probed rather than kept.
+_PROBED_OVER: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 # Preserve failed discovery separately so write callers can refuse a downgrade
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
@@ -173,12 +169,12 @@ _PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDicti
 
 def component_probe_auth_failed(client: Any) -> bool:
     """True when the latest capability probe was rejected as unauthorized."""
-    return client in _PROBE_AUTH_REJECTED
+    return _per_user(client) in _PROBE_AUTH_REJECTED
 
 
 def component_probe_auth_kind(client: Any) -> str | None:
     """``permission`` or ``token`` for the latest probe rejection, else None."""
-    return _PROBE_AUTH_REJECTED.get(client)
+    return _PROBE_AUTH_REJECTED.get(_per_user(client))
 
 
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
@@ -199,7 +195,7 @@ def _checked_caps(
 
     ``cause`` is the exception that failed this call's own probe; a strict caller
     gets it as ``__cause__``. A failure cached by an earlier call gets no cause:
-    the OAuth proxy client is one cache key for every user's token.
+    each OAuth user's caps are keyed on their own client (``_per_user``).
     """
     if strict and (failure := _PROBE_FAILURES.get(client)):
         raise ComponentDiscoveryError(failure) from cause
@@ -215,27 +211,15 @@ def _get_caps_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
-def _pool_credentials(client: Any) -> dict[str, Any]:
-    return {
-        "url": client.base_url,
-        "token": client.token,
-        "verify_ssl": getattr(client, "verify_ssl", None),
-    }
+def _per_user(client: Any) -> Any:
+    """The client the caller's requests run on, which every cache here keys on.
 
-
-def _record_probed_connection(client: Any, ws: Any) -> None:
-    """Remember ``ws`` as the connection probed for this client's credentials.
-
-    Connections the pool has since replaced or evicted are dropped, so the
-    record never outgrows the pool.
+    The OAuth proxy is one object whose token changes per request; it names
+    the requesting user's own client, so one user's probe (an unauthorized one
+    from a non-admin included) never stands in for another's.
     """
-    connections = {
-        key: probed
-        for key, probed in _PROBED_OVER.get(client, {}).items()
-        if websocket_manager.holds(key, probed)
-    }
-    connections[websocket_manager.pool_key(**_pool_credentials(client))] = ws
-    _PROBED_OVER[client] = connections
+    current_client = getattr(type(client), "current_client", None)
+    return client.current_client() if current_client is not None else client
 
 
 def _probed_connection_current(client: Any) -> bool:
@@ -245,14 +229,16 @@ def _probed_connection_current(client: Any) -> bool:
     cleared it) says nothing about the component, so the entry holds until a
     connection exists to compare.
     """
-    connections = _PROBED_OVER.get(client)
-    if not connections:
+    probed = _PROBED_OVER.get(client)
+    if probed is None:
         return True
-    credentials = _pool_credentials(client)
-    current = websocket_manager.pooled_client(**credentials)
+    current = websocket_manager.pooled_client(
+        url=client.base_url,
+        token=client.token,
+        verify_ssl=getattr(client, "verify_ssl", None),
+    )
     if current is None:
         return True
-    probed = connections.get(websocket_manager.pool_key(**credentials))
     return bool(current.is_connected) and current is probed
 
 
@@ -421,6 +407,7 @@ async def get_component_caps(
     treated as no-caps (cached negative, logged once): the server can't trust
     command payloads shaped for a different wire-format generation.
     """
+    client = _per_user(client)
     hit, caps = _live_cache_entry(client)
     if hit:
         return _checked_caps(client, caps, strict)
@@ -482,7 +469,7 @@ async def get_component_caps(
             )
             caps = None
         _store_caps(client, caps)
-        _record_probed_connection(client, ws)
+        _PROBED_OVER[client] = ws
         result = response.get("result") if isinstance(response, dict) else None
         if (
             not isinstance(response, dict)
@@ -521,6 +508,7 @@ def invalidate_caps(client: Any) -> None:
     ``unknown_command`` (e.g. the component was downgraded mid-session), so the
     stale positive doesn't keep routing to a dead command.
     """
+    client = _per_user(client)
     _PROBE_FAILURES.pop(client, None)
     _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE.pop(client, None)
@@ -534,10 +522,9 @@ async def read_info(client: Any) -> InfoResult | None:
 
     For callers that show a field which can change while the client lives:
     the bug report's component version and webhook auth mode. Routing and
-    gating keep the ``get_component_caps`` snapshot, which lasts as long as the
-    client (for a server running outside HA, an HA restart does not end it),
-    while a component update changes the version and an options change the
-    mode. Only a component whose ``info`` the snapshot accepted is asked. The
+    gating keep the ``get_component_caps`` snapshot, which holds until its
+    WebSocket connection is replaced, while an options change alters the mode
+    without one. Only a component whose ``info`` the snapshot accepted is asked. The
     call goes to ``send_command`` on the pooled WebSocket directly, as the
     probe does, bypassing ``send_websocket_message``'s ERROR log (a report
     quotes its log sections); an ``unknown_command`` drops the snapshot so the
