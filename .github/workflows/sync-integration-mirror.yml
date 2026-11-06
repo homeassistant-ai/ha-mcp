@@ -416,12 +416,14 @@ jobs:
           existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/${TAG}")
           if [ -n "$existing" ]; then
             echo "mirror tag ${TAG} exists - skipping ZIP wait"
+            echo "SKIP_MIRROR_TAG=true" >> "$GITHUB_ENV"
             exit 0
           fi
           if [ "$CHANNEL" = dev ]; then
             stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
             if [ -n "$stable_exists" ]; then
               echo "v${VER} is already stable - skipping ZIP wait"
+              echo "SKIP_MIRROR_TAG=true" >> "$GITHUB_ENV"
               exit 0
             fi
           fi
@@ -471,6 +473,10 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
+          if [ "${SKIP_MIRROR_TAG:-false}" = true ]; then
+            echo "No mirror tag needed at ZIP verification; skipping tag creation."
+            exit 0
+          fi
           # Publication can advance while the earlier pin/asset waits run.
           if [ "$CHANNEL" = stable ]; then
             CURRENT=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/stable" --jq .object.sha)

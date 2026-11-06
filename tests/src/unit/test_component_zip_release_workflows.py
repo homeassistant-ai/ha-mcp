@@ -146,6 +146,7 @@ def test_sync_retry_does_not_fetch_a_pruned_zip_when_no_tag_is_needed(
         env={
             **os.environ,
             "TAG_STATE": tag_state,
+            "GITHUB_ENV": (tmp_path / "env").as_posix(),
             "TAG": "v1.0.0-dev.7",
             "VER": "1.0.0",
             "CHANNEL": "dev",
@@ -157,6 +158,34 @@ def test_sync_retry_does_not_fetch_a_pruned_zip_when_no_tag_is_needed(
     )
     assert (result.returncode == 0) is (tag_state != "lookup-error"), result.stderr
     assert not (tmp_path / "upstream-requested").exists()
+    if tag_state != "lookup-error":
+        # Even if the ref disappears afterwards, skipping verification must
+        # never turn into creation of an unverified tag in the next step.
+        written_env = dict(
+            line.split("=", 1) for line in (tmp_path / "env").read_text().splitlines()
+        )
+        tag_step = next(
+            s
+            for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+            if s.get("name") == "Tag the mirror"
+        )
+        result = subprocess.run(
+            [
+                shutil.which("bash") or "bash",
+                "-e",
+                "-c",
+                "git() { touch tag-requested; return 2; }; gh() { touch tag-requested; return 2; };\n"
+                + tag_step["run"],
+            ],
+            cwd=tmp_path,
+            env={**os.environ, **written_env, "CHANNEL": "dev"},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not (tmp_path / "tag-requested").exists()
 
 
 def _steps(path: str, job: str) -> list[dict]:
