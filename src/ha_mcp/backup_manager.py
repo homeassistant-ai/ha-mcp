@@ -2586,12 +2586,12 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     and can therefore be left off.
     """
     from .config import get_global_settings
-    from .tools.tools_filesystem import (
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+    from .tools.yaml_extra_keys import (
         assert_extra_yaml_keys_supported,
-        call_mcp_tools_service,
         effective_extra_yaml_write_keys,
     )
-    from .tools.util_helpers import unwrap_service_response
 
     # Split on the LAST "::" (see _fetch_yaml) so an exotic file path
     # containing "::" still restores to the right file and key.

@@ -77,7 +77,9 @@ These tools provide direct file access to your Home Assistant filesystem and req
 
 **Access is restricted but sensitive.** The built-in writable directories are `www/`, `themes/`, `custom_templates/`, and `dashboards/`; `ha_read_file` additionally allows reading config YAML files, logs, and `custom_components/`. Power users can grant further read+write access to extra config-relative directories or the HAOS sibling volumes (`/share`, `/media`, and `/ssl`, which is read-only on HAOS and Supervised) via the web Settings UI — each is opt-in and enforced by the `ha_mcp_tools` component. An AI assistant with these tools enabled has meaningful read and write access to your HA configuration.
 
-**No undo.** `ha_delete_file` and `ha_write_file` (with `overwrite=True`) are irreversible. There is no recycle bin or automatic backup for file operations.
+**Limited undo.** `ha_delete_file` and `ha_write_file` (with `overwrite=True` or `edits`) change existing files. They require auto-backup and snapshot a text file first, restorable with `ha_manage_backup(scope='edits')`. With the auto-backup throttle above 0, a change inside that window takes no new snapshot, so restoring the file's last snapshot also removes the changes made since it. Binary files cannot be captured, and a restored CRLF file comes back with LF line endings. There is no recycle bin.
+
+**Policy rules and `edits`.** A security policy rule that matches `overwrite` or `content` in a call's arguments does not match an `edits` call. In a block list, such a call therefore runs without approval; to require approval, add a condition on `args.edits` with the *is present* operator. In an allow list, such a call still needs approval, and that same condition would let every `edits` call run without one.
 
 **Requires the custom component.** If `ha_mcp_tools` is not installed and active, all file tools will return an error with installation instructions.
 
