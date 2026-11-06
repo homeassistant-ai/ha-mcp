@@ -222,6 +222,18 @@ Core's `BASE_COMMAND_MESSAGE_SCHEMA`. A call is sent over WebSocket as given:
 Core validates it against that schema before the handler runs, so the tool
 passes Core's error through instead of validating first.
 
+A config entry's `options` are read through the component's `config_entries`
+command, which returns Core's entry row with the stored mapping. Core's REST
+and WebSocket entry reads carry no `options` and Core has no read API for
+them, so without the component `ha_get_integration` returns the entry without
+`options` and says so in `warnings`. An entry's options flow is opened only
+when the caller asks for its form (`include_schema`), as the frontend opens it
+only when the user chooses Configure: the flow's first step is the
+integration's own code and may act (#2987). Only that form marks which fields
+are passwords, so under `redact_secrets` a read that does not ask for it
+withholds every option value of an entry that has an options flow. That is an
+HA-MCP policy, not a Core rule.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative
