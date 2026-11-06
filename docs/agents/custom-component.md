@@ -20,22 +20,43 @@ asset's digest instead of rebuilding it. Do not replace an existing asset just t
 its download count; that count is downloads of one release asset, not users.
 
 HACS/Marketplace select the asset through `zip_release` and `filename` in
-`hacs.json`. Enable these only after selectable stable/dev/mirror releases
-have the ZIP. Stable SemVer creates a draft with the stamped ZIP; Release
-Publish publishes PyPI, verifies its availability and the requested asset,
+`hacs.json`. Enable these only after **every selectable stable, dev and mirror
+release, including older versions**, has the ZIP. HACS may reuse the latest
+manifest for an older version selected at first install; checking only the
+latest release is insufficient. Keep the activation PR draft until this is
+verified against both stable and pre-release version choices. Backfill missing
+assets from each exact release checkout, preserving its manifest/pin; copy the
+same bytes to its mirror release. Never replace a usable counted asset.
+
+Stable SemVer creates a draft with the stamped ZIP; Release
+Publish publishes PyPI, verifies an available pure Python wheel for the Python
+versions declared by the released project's metadata, and checks the ZIP,
 then publishes the draft and advances `stable`. Do not wait for PyPI inside
 SemVer: the PyPI workflow starts only after SemVer completes. The site deploy
-follows Release Publish so its `stable` checkout is not taken too early.
+and the mirror consume the finalized-tag artifact from Release Publish, even
+if a later Docker or MCP Registry job fails. They ignore a superseded marker.
 
 Release Publish takes the exact tag artifact from the triggering SemVer run;
 gated runs provide none. Moving master cannot change its selection. Runs are
-serialized, and an old retry cannot move `stable` backwards or overwrite the
-current stable/latest container images.
+serialized across finalization and container publishing. The alias push uses
+the exact previously observed tag-object SHA as its force-with-lease condition;
+a concurrent operator change is never overwritten. Tag ancestry compares
+immutable peeled commit SHAs while the alias preserves the annotated tag object.
+An old retry cannot move the alias backwards, and a partial Docker rerun checks
+that its release is still current before promotion. Independent manual release
+publication must not race this workflow; historical workflow revisions do not
+inherit new concurrency controls. Recover through the current publisher.
 
-If finalization fails, the draft remains private. Rerun Release Publish after
-repairing the prerequisite; an already published release with the right stable
-alias is a no-op, and existing assets are not replaced. The finalizer reads the
+If a prerequisite or publication fails, the draft stays private. If publication
+succeeds but the alias lease fails, the verified, installable release stays
+public, this run leaves the alias alone, and Docker publishing is skipped.
+Inspect the operator's change before retrying the current publisher. Returning
+the release to draft cannot undo downloads or publication events and is not a
+transactional rollback. A public release with the correct alias is a no-op, and
+existing assets are not replaced. The finalizer reads the
 tag's manifests, so pre-ZIP tags keep their legacy archive behavior on recovery.
+The wheel check does not resolve or qualify all transitive Core dependencies;
+their existing compatibility and no-stomp checks remain authoritative.
 
 The container E2E fixture installs this artifact before HA boots, so existing
 component scenarios exercise the ZIP. The existing update-path scenarios retain

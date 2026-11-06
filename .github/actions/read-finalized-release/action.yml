@@ -1,0 +1,39 @@
+name: Read finalized release
+description: Read this run's finalized tag only while it still names the stable alias
+inputs:
+  run-id:
+    description: Release Publish workflow run
+    required: true
+outputs:
+  tag:
+    description: Current finalized tag, empty when no release was finalized
+    value: ${{ steps.release.outputs.tag }}
+runs:
+  using: composite
+  steps:
+    - id: release
+      shell: bash
+      env:
+        RELEASE_RUN_ID: ${{ inputs.run-id }}
+      run: |
+        set -euo pipefail
+        COUNT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts" \
+          --jq '[.artifacts[] | select(.name == "finalized-release-tag")] | length')
+        if [ "$COUNT" -eq 0 ]; then
+          echo "tag=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        DEST=$(mktemp -d)
+        trap 'rm -f "$DEST/finalized-release-tag.txt"; rmdir "$DEST"' EXIT
+        gh run download "$RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+          --name finalized-release-tag --dir "$DEST"
+        TAG=$(cat "$DEST/finalized-release-tag.txt")
+        [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        CURRENT=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/stable" --jq .object.sha)
+        TARGET=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)
+        if [ "$CURRENT" != "$TARGET" ]; then
+          echo "Ignoring a finalized tag superseded by the stable alias."
+          echo "tag=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"

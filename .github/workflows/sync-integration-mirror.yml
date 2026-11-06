@@ -4,9 +4,9 @@ name: Sync Integration Mirror
 # in lockstep. The component shares the server's version and pins the server
 # build it runs (#2427), so every mirror release is a component + server pair:
 #
-# - stable: after "SemVer Release", the release tag's component (stamped by
+# - stable: after "Release Publish" finalizes, the tag's component (stamped by
 #   semantic-release with the release version and its ha-mcp== pin) is tagged
-#   vX.Y.Z once PyPI serves that ha-mcp build.
+#   vX.Y.Z once its PyPI pin, public ZIP and stable alias are finalized.
 # - dev: after "Publish Dev Channel", the snapshot of the commit it built is
 #   stamped with the next release number and pinned to the exact build it
 #   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N. Server-only
@@ -41,7 +41,7 @@ on:
       - "scripts/build_component_zip.py.lock"
       - ".github/integration-mirror-workflows/**"
   workflow_run:
-    workflows: ["SemVer Release", "Publish Dev Channel"]
+    workflows: ["Release Publish", "Publish Dev Channel"]
     types: [completed]
     # Publish Dev Channel also runs on dispatch from any branch; only master
     # builds may reach the mirror.
@@ -69,22 +69,35 @@ concurrency:
   queue: max
 
 jobs:
-  # Decide from the TRIGGERING RUN'S JOBS which leg runs. Gating on the run's
+  # Decide from the triggering run's finalization artifact (stable) or PyPI
+  # job (dev). Gating on the run's
   # overall conclusion skipped the mirror tag whenever any UNRELATED leg
   # failed (v7.12.2: an app image cache flake failed the release run and HACS
   # never got the component tag), so each leg keys on the one job it needs:
-  # "Semantic Release" for stable, the ha-mcp-dev PyPI publish for dev (the
-  # pin must exist on PyPI). Both legs are idempotent, so the stable leg fails
-  # OPEN on an unreadable job list: a spurious run re-confirms the existing
-  # tag, while a suppressed one strands HACS on the previous release.
+  # The stable marker survives failed Docker/MCP jobs and partial reruns;
+  # it is emitted only after the package, ZIP, public release and alias exist.
   gate:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       actions: read
     outputs:
       channel: ${{ steps.decide.outputs.channel }}
       dev_run: ${{ steps.decide.outputs.dev_run }}
+      finalized_tag: ${{ steps.decide.outputs.finalized_tag }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish'
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/read-finalized-release
+      - id: finalized
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish'
+        uses: ./.github/actions/read-finalized-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
       - name: Pick the leg from the trigger
         id: decide
         env:
@@ -95,6 +108,7 @@ jobs:
           TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
           TRIGGER_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          FINALIZED_TAG: ${{ steps.finalized.outputs.tag }}
         run: |
           if [ "$TRIGGER_BRANCH" != master ]; then
             echo "::warning::Ignoring a run from ${TRIGGER_BRANCH}; the mirror follows master only."
@@ -125,18 +139,20 @@ jobs:
             echo "channel=skip" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$TRIGGER_WORKFLOW" = "SemVer Release" ]; then
-            job="Semantic Release"; leg=stable
-          else
-            job="Publish PyPI (dev channel)"; leg=dev
+          if [ "$TRIGGER_WORKFLOW" = "Release Publish" ]; then
+            if [ -z "$FINALIZED_TAG" ]; then
+              echo "channel=skip" >> "$GITHUB_OUTPUT"
+            else
+              echo "channel=stable" >> "$GITHUB_OUTPUT"
+              echo "finalized_tag=$FINALIZED_TAG" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
           fi
+          job="Publish PyPI (dev channel)"
           if ! conclusion=$(gh api \
             "repos/${{ github.repository }}/actions/runs/${TRIGGER_RUN_ID}/jobs?per_page=100" \
             --jq "[.jobs[] | select(.name == \"$job\") | .conclusion] | first // empty"); then
-            if [ "$leg" = stable ]; then
-              echo "::warning::Could not query the triggering run's jobs; failing open."
-              echo "channel=stable" >> "$GITHUB_OUTPUT"
-            elif [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$EVENT" = workflow_dispatch ]; then
               # A maintainer asked for this pre-release: fail and say why.
               echo "::error::Could not query Publish Dev Channel run ${TRIGGER_RUN_ID}'s jobs."
               exit 1
@@ -147,8 +163,8 @@ jobs:
             exit 0
           fi
           echo "'$job' conclusion: ${conclusion:-<job absent>}"
-          if [ "$conclusion" = success ] || { [ "$leg" = stable ] && [ -z "$conclusion" ]; }; then
-            echo "channel=$leg" >> "$GITHUB_OUTPUT"
+          if [ "$conclusion" = success ]; then
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
             echo "dev_run=$TRIGGER_RUN_ID" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT" = workflow_dispatch ]; then
             echo "::error::'$job' in Publish Dev Channel run ${TRIGGER_RUN_ID} is ${conclusion:-absent}, not success; no dev build to pin."
@@ -190,29 +206,20 @@ jobs:
         id: release
         env:
           TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          FINALIZED_TAG: ${{ needs.gate.outputs.finalized_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           case "$CHANNEL" in
             stable)
-              # The release semantic-release cut from the triggering commit is
-              # the first stable tag that contains it; the newest tag could be
-              # a later release when this run waited in the queue. A recovery
-              # dispatch has no trigger and re-tags the newest. That commit
-              # carries the stamped manifest: snapshot ITS component, not
-              # master's tip. A separate worktree keeps this workflow's own
-              # scripts: a recovery dispatch may target an older tag.
-              stable_tags() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V; }
-              VER=""
-              if [ -n "$TRIGGER_SHA" ]; then
-                VER=$(git tag -l 'v*' --contains "$TRIGGER_SHA" | stable_tags | head -n 1)
-              fi
-              if [ -z "$VER" ]; then
-                VER=$(git tag -l 'v*' | stable_tags | tail -n 1)
-              fi
-              VER="${VER#v}"
+              # Release Publish's head_sha is not the SemVer producer commit.
+              # Its finalized marker names the exact tag; recovery uses the
+              # latest published release, never an unpublished version tag.
+              TAG="${FINALIZED_TAG:-$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)}"
+              [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+              VER="${TAG#v}"
               SRC="$RUNNER_TEMP/release-src"
               git worktree add --quiet --detach "$SRC" "v${VER}"
               PIN="$VER"
-              TAG="v${VER}"
               DIST=ha-mcp
               ;;
             dev)
@@ -380,7 +387,7 @@ jobs:
           SOURCE_TAG=$(python3 -c "import json; print(json.load(open('$MARKER'))['tag'])")
           for attempt in $(seq 1 40); do
             DIGEST=$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
-              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
+              --jq 'select(.draft == false) | .assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
             if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               exit 0
             fi

@@ -24,7 +24,8 @@ jobs:
     permissions:
       contents: read
       actions: read
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # A produced tag survives an unrelated SemVer app-publishing failure.
+    if: ${{ github.repository == 'homeassistant-ai/ha-mcp' && github.ref == 'refs/heads/master' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
@@ -151,6 +152,7 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.prepare.outputs.release_tag }}
           path: release-source
+          fetch-depth: 0
 
       - name: Generate GitHub App token for the stable alias
         id: app-token
@@ -175,7 +177,21 @@ jobs:
           uv run -s publisher/scripts/finalize_github_release.py \
             --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
             --hacs release-source/hacs.json \
-            --component release-source/custom_components/ha_mcp_tools/manifest.json
+            --component release-source/custom_components/ha_mcp_tools/manifest.json \
+            --pyproject release-source/pyproject.toml --checkout release-source
+
+      - name: Record finalized stable tag
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: printf '%s\n' "$RELEASE_TAG" > finalized-release-tag.txt
+
+      - name: Signal successful finalization to docs and mirror
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: finalized-release-tag
+          path: finalized-release-tag.txt
+          if-no-files-found: error
+          overwrite: true
 
   publish_docker:
     name: Publish Docker image

@@ -45,17 +45,25 @@ class TestMirrorSyncShape:
         # yaml reads the bare `on` key as True.
         triggers = _workflow(_MIRROR)[True]
         assert triggers["workflow_run"]["workflows"] == [
-            "SemVer Release",
+            "Release Publish",
             "Publish Dev Channel",
         ]
         # A dispatched dev build from another branch must never be mirrored.
         assert triggers["workflow_run"]["branches"] == ["master"]
-        gate = _workflow(_MIRROR)["jobs"]["gate"]["steps"][0]
+        gate = next(
+            s
+            for s in _workflow(_MIRROR)["jobs"]["gate"]["steps"]
+            if s.get("id") == "decide"
+        )
         assert "head_branch" in gate["env"]["TRIGGER_BRANCH"]
         assert '"$TRIGGER_BRANCH" != master' in gate["run"]
 
     def test_gate_keys_on_the_jobs_that_publish_the_pin(self) -> None:
-        gate = _workflow(_MIRROR)["jobs"]["gate"]["steps"][0]["run"]
+        gate = next(
+            s
+            for s in _workflow(_MIRROR)["jobs"]["gate"]["steps"]
+            if s.get("id") == "decide"
+        )["run"]
         jobs = {
             job["name"]
             for path in (
@@ -67,7 +75,8 @@ class TestMirrorSyncShape:
         }
         assert "Semantic Release" in jobs
         assert "Publish PyPI (dev channel)" in jobs
-        assert 'job="Semantic Release"' in gate
+        assert '"$TRIGGER_WORKFLOW" = "Release Publish"' in gate
+        assert '"finalized_tag=$FINALIZED_TAG"' in gate
         assert 'job="Publish PyPI (dev channel)"' in gate
 
     def test_dev_leg_pins_the_version_the_dev_build_uploaded(self) -> None:
@@ -120,7 +129,7 @@ class TestMirrorSyncShape:
         assert 'cp "$SRC/hacs.json" "$SRC/LICENSE" /tmp/mirror/' in stage["run"]
 
     @pytest.mark.parametrize(
-        ("trigger", "expected"), [("release-of-c0", "1.0.0"), ("", "1.1.0")]
+        ("trigger", "expected"), [("v1.0.0", "1.0.0"), ("", "1.1.0")]
     )
     def test_stable_leg_syncs_the_release_its_trigger_cut(
         self, tmp_path: Path, trigger: str, expected: str
@@ -161,14 +170,19 @@ class TestMirrorSyncShape:
         )
         output = tmp_path / "out"
         result = subprocess.run(
-            ["bash", "-e", "-c", resolve["run"]],
+            [
+                shutil.which("bash") or "bash",
+                "-e",
+                "-c",
+                "gh() { echo v1.1.0; }\n" + resolve["run"],
+            ],
             cwd=repo,
             env={
-                "PATH": "/usr/bin:/bin",
+                **os.environ,
                 "CHANNEL": "stable",
-                "TRIGGER_SHA": shas[0] if trigger else "",
-                "RUNNER_TEMP": str(tmp_path),
-                "GITHUB_OUTPUT": str(output),
+                "FINALIZED_TAG": trigger,
+                "RUNNER_TEMP": tmp_path.as_posix(),
+                "GITHUB_OUTPUT": output.as_posix(),
             },
             capture_output=True,
             text=True,
