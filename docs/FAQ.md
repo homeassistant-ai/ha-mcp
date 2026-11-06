@@ -685,9 +685,11 @@ Template helper edit backups and restores also require the component, using eith
 
 ### How do I install it?
 
-**Using HACS (recommended, Home Assistant 2026.10 or older):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **HACS** > **Integrations**, search for **HA-MCP**, and **Download**. The main repository is already in the default catalog.
+**Using HACS (recommended, Home Assistant 2026.8–2026.10):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **HACS** > **Integrations**, search for **HA-MCP**, and **Download**. The main repository is already in the default catalog.
 
 **Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
+
+On Home Assistant 2026.7, use the manual install below and select **HA-MCP File & YAML Tools** with an external server. The in-process server requires 2026.8.0 or newer. Earlier Home Assistant versions cannot load the integration.
 
 After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
 
