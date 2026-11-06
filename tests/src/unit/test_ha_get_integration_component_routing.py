@@ -8,6 +8,7 @@ falls back to the legacy REST read; a WS-down ConnectionError falls back too
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import component_api, component_config_entries
 from ha_mcp.tools.component_config_entries import fetch_config_entries
 from ha_mcp.tools.tools_integrations import register_integration_tools
@@ -607,6 +609,61 @@ async def test_ignored_entry_component_single_schema_opens_no_flow() -> None:
     assert resp["entry"]["supports_options"] is False
     assert "options_schema" not in resp
     assert "warnings" not in resp
+
+
+# --- a read opens no options flow (#2987) ---------------------------------------
+# An options flow's first step is the integration's own code and may act: Sonoff
+# LAN logs in to its cloud there, which ends the session the integration runs on.
+# Only include_schema=True, which asks for the form, opens one.
+@pytest.mark.asyncio
+async def test_reading_an_entry_without_the_component_opens_no_options_flow() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(single_entry=_rest_entry("cfg1", "sonoff"))
+    resp = await _get(ws, client, entry_id="cfg1")
+
+    assert client.start_options_flow_calls == 0
+    assert "options" not in resp["entry"]
+    assert "ha_mcp_tools" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_listing_options_without_the_component_opens_no_options_flow() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(
+        rest_entries=[_rest_entry("c1", "sonoff"), _rest_entry("c2", "sonoff")]
+    )
+    resp = await _get(ws, client, domain="sonoff")
+
+    assert client.start_options_flow_calls == 0
+    assert all("options" not in entry for entry in resp["entries"])
+    assert len(resp["warnings"]) == 1
+    assert "ha_mcp_tools" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call", [{"entry_id": "cfg1"}, {"include_options": True}], ids=["single", "list"]
+)
+async def test_redact_secrets_withholds_options_without_opening_the_options_flow(
+    call: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    options = {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"}
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("cfg1", "sonoff", options=options)]},
+    )
+    client = RoutingClient()
+    resp = await _get(ws, client, **call)
+
+    entry = resp["entry"] if "entry" in resp else resp["entries"][0]
+    assert client.start_options_flow_calls == 0
+    assert entry["options"] == {"api_key": REDACTED_SET, "host": REDACTED_SET}
+    assert "include_schema" in resp["warnings"][0]
 
 
 @pytest.mark.asyncio
