@@ -394,6 +394,9 @@ class TestMirrorReleaseOnTag:
         [
             "new",
             "bad-digest",
+            "upstream-replaced",
+            "mirror-replaced",
+            "draft-replaced-before-publish",
             "upstream-pruned",
             "incomplete-upload",
             "draft-empty",
@@ -407,12 +410,22 @@ class TestMirrorReleaseOnTag:
         """A retry recovers drafts and preserves uploaded assets after pruning."""
         marker = tmp_path / ".github"
         marker.mkdir()
-        (marker / "component-zip-source.json").write_text(
-            json.dumps({"repository": "upstream/repo", "tag": "v9.1.0-dev.1"})
-        )
         payload = tmp_path / "payload.zip"
         payload.write_bytes(b"the upstream integration artifact")
         digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+        (marker / "component-zip-source.json").write_text(
+            json.dumps(
+                {
+                    "repository": "upstream/repo",
+                    "tag": "v9.1.0-dev.1",
+                    "digest": "sha256:"
+                    + ("0" * 64 if scenario == "bad-digest" else digest),
+                }
+            )
+        )
+        if scenario == "upstream-replaced":
+            payload.write_bytes(b"a replacement artifact with its own valid digest")
+            digest = hashlib.sha256(payload.read_bytes()).hexdigest()
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         calls = tmp_path / "calls"
@@ -423,11 +436,14 @@ class TestMirrorReleaseOnTag:
             '    case "$SCENARIO" in draft-*) return 1;; esac\n'
             '    [ "$SCENARIO" = upstream-pruned ] && printf "sha256:%s\\n" "$ZIP_DIGEST"; return 0;;\n'
             '  "api repos/mirror/repo/releases/73")\n'
+            '    case "$SCENARIO" in mirror-replaced) printf "sha256:%064d\\n" 0;;\n'
+            '      draft-replaced-before-publish) if [ -f mirror-looked-up ]; then printf "sha256:%064d\\n" 0; else touch mirror-looked-up; fi;;\n'
+            "    esac\n"
             '    case "$SCENARIO" in upstream-pruned|draft-complete-upstream-pruned)\n'
             '      printf "sha256:%s\\n" "$ZIP_DIGEST";; esac\n'
             "    return 0;;\n"
             '  "release view")\n'
-            '    case "$SCENARIO" in upstream-pruned|incomplete-upload|draft-*) ;; *) return 1;; esac\n'
+            '    case "$SCENARIO" in upstream-pruned|incomplete-upload|mirror-replaced|draft-*) ;; *) return 1;; esac\n'
             '    case "$*" in *databaseId*) echo 73;; *isDraft*)\n'
             '      case "$SCENARIO" in draft-*) echo true;; *) echo false;; esac;;\n'
             "      *) echo ha_mcp_tools.zip;; esac;;\n"
@@ -481,9 +497,17 @@ class TestMirrorReleaseOnTag:
                 break
         assert calls.exists(), result.stderr
         attempted = calls.read_text().splitlines()
-        if scenario == "bad-digest":
+        if scenario in {
+            "bad-digest",
+            "upstream-replaced",
+            "mirror-replaced",
+            "draft-replaced-before-publish",
+        }:
             assert result.returncode != 0
-            assert not any(c.startswith("release create") for c in attempted)
+            assert not any(
+                c.startswith(("release create", "release edit", "release upload"))
+                for c in attempted
+            )
         else:
             assert result.returncode == 0, result.stderr
             if scenario.endswith("upstream-pruned"):

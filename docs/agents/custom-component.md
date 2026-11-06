@@ -16,13 +16,17 @@ are included; it excludes untracked files and bytecode.
 
 Stable and dev publishing build the ZIP after stamping and attach it while
 the GitHub release is a draft. The mirror copies and verifies the upstream
-asset's digest instead of rebuilding it. Do not replace an existing asset just to refresh
+asset instead of rebuilding it. Before tagging, sync compares every ZIP member
+and its bytes with the committed, stamped component snapshot, then commits the
+verified asset digest alongside its source metadata. Copying requires that pinned
+digest, so a replaced dev release cannot silently change a mirror tag's payload.
+Do not replace an existing asset just to refresh
 its download count; that count is downloads of one release asset, not users.
 
 Dev and mirror creation pass the ZIP to `gh release create`, which stages the
 upload before publishing and attempts cleanup on failure. Mirror retries resolve their
 own releases by database ID so leftover drafts are recoverable. A complete
-mirror asset is reused even if its upstream dev release was pruned; incomplete
+mirror asset matching the tag's digest is reused even if its upstream dev release was pruned; incomplete
 uploads are replaced before a recovered draft is published. The upstream
 source lookup still requires a published release.
 

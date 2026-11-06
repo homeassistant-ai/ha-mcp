@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 import zipfile
@@ -47,8 +49,7 @@ def _tracked_files(component: Path) -> list[tuple[str, Path]]:
     return sorted(files)
 
 
-def build_component_zip(component_dir: Path, output: Path) -> Path:
-    """Package the integration's files directly at ZIP root, without repo files."""
+def _validated_component_files(component_dir: Path) -> list[tuple[str, Path]]:
     component = component_dir.resolve(strict=True)
     files = _tracked_files(component)
     names = {name for name, _ in files}
@@ -59,6 +60,38 @@ def build_component_zip(component_dir: Path, output: Path) -> Path:
         raise ValueError(
             "The integration manifest needs its domain and release version"
         )
+    return files
+
+
+def verify_component_zip(component_dir: Path, archive_path: Path) -> str:
+    """Bind an upstream artifact to the exact tracked component bytes."""
+    expected = dict(_validated_component_files(component_dir))
+    with archive_path.open("rb") as source:
+        with zipfile.ZipFile(source) as archive:
+            entries = archive.infolist()
+            if len(entries) != len(expected) or {i.filename for i in entries} != set(
+                expected
+            ):
+                raise ValueError("ZIP members differ from the component snapshot")
+            for info in entries:
+                mode = stat.S_IFMT(info.external_attr >> 16)
+                path = expected[info.filename]
+                if mode not in (0, stat.S_IFREG) or info.is_dir():
+                    raise ValueError(f"Not a regular ZIP member: {info.filename}")
+                if (
+                    info.file_size != path.stat().st_size
+                    or archive.read(info) != path.read_bytes()
+                ):
+                    raise ValueError(
+                        f"ZIP bytes differ from the component snapshot: {info.filename}"
+                    )
+        source.seek(0)
+        return "sha256:" + hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def build_component_zip(component_dir: Path, output: Path) -> Path:
+    """Package the integration's files directly at ZIP root, without repo files."""
+    files = _validated_component_files(component_dir)
 
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -91,8 +124,15 @@ def main() -> None:
         / "custom_components"
         / COMPONENT_DOMAIN,
     )
-    parser.add_argument("--output", type=Path, default=Path("dist") / ASSET_NAME)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--output", type=Path, default=Path("dist") / ASSET_NAME)
+    mode.add_argument(
+        "--verify", type=Path, help="Verify an existing ZIP against the component"
+    )
     args = parser.parse_args()
+    if args.verify:
+        print(verify_component_zip(args.component_dir, args.verify))
+        return
     path = build_component_zip(args.component_dir, args.output)
     print(f"Built {path} ({path.stat().st_size} bytes)")
 
