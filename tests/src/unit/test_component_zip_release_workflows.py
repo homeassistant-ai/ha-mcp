@@ -1,7 +1,14 @@
 """Consumers select the artifact built from the stamped release checkout."""
 
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -106,3 +113,48 @@ def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:
     target = workflow["jobs"]["e2e-tests-update-path"]
     assert "if" not in target
     assert any(s.get("env", {}).get("E2E_UPDATE_PATH") == "1" for s in target["steps"])
+
+
+@pytest.mark.parametrize("draft", [False, True])
+def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, draft):
+    """The source token can see a draft that the mirror cannot download."""
+    marker = tmp_path / ".github"
+    marker.mkdir()
+    (marker / "component-zip-source.json").write_text(
+        json.dumps({"repository": "upstream/repo", "tag": "v9.1.1"})
+    )
+    release = {
+        "draft": draft,
+        "assets": [
+            {
+                "name": "ha_mcp_tools.zip",
+                "state": "uploaded",
+                "size": 42,
+                "digest": "sha256:" + "a" * 64,
+            }
+        ],
+    }
+    stub = (
+        f'gh() {{ printf "%s\\n" {shlex.quote(json.dumps(release))} | jq -r "$4"; }}\n'
+        "seq() { echo 1; }\nsleep() { :; }\n"
+    )
+    step = next(
+        s
+        for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+        if s.get("name") == "Wait for the upstream integration ZIP before tagging"
+    )
+    script = (
+        step["run"]
+        .replace("/tmp/mirror", tmp_path.as_posix())
+        .replace("python3 ", shlex.quote(Path(sys.executable).as_posix()) + " ")
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", stub + script],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is not draft, result.stderr
