@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import NON_ADMIN_TOKEN_WARNING
 from ha_mcp.tools import helper_flows
 from ha_mcp.tools.smart_search import SmartSearchTools
 
@@ -663,6 +664,44 @@ class TestHelperDashboardPartialThroughDeepSearch:
         client.start_options_flow.assert_not_awaited()
         assert result["partial"] is True
         assert "1 custom helper integration entry" in result["partial_reason"]
+
+    async def test_a_refused_own_helper_catalog_names_the_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """integration/descriptions is admin-only: when a non-admin token is
+        refused there, every flow helper stays unsearched and the search says
+        the token is why."""
+        monkeypatch.setattr(
+            helper_flows,
+            "_fetch_core_helper_domains",
+            AsyncMock(side_effect=RuntimeError("Command failed: Unauthorized")),
+        )
+        client = MagicMock()
+        client.admin_route_refused = True
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXTEMPLATEA",
+                    "domain": "template",
+                    "title": "Some Template",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        client.start_options_flow.assert_not_awaited()
+        assert result["partial"] is True
+        assert NON_ADMIN_TOKEN_WARNING in result.get("warnings", [])
 
     async def test_flow_helper_options_probe_failure_surfaces_partial(self) -> None:
         """A flow-helper whose options-flow probe FAILS (vs returns a
