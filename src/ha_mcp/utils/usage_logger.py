@@ -350,11 +350,10 @@ _SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_password", "_passwd")
 _REDACTED_VALUE = "[REDACTED]"
 _MAX_REDACT_DEPTH = 6
 _JSON_CONTAINER_START = re.compile(r"\s*[\[{]")
-# An object brace anywhere in the string that is not part of a Jinja
-# delimiter: only an object can carry a secret under a key. "[tag] text" and
-# a plain template have none.
-_UNPARSED_OBJECT = re.compile(r"(?<![{%#]){(?![{%#])")
-_UNPARSED_VALUE = "[malformed JSON string omitted]"
+# A name written as a JSON member, as in "code": or, inside an escaped
+# string, \"code\":
+_QUOTED_MEMBER_NAME = re.compile(r"""\\*["']([A-Za-z_]\w*)\\*["']\s*:""")
+_UNPARSED_VALUE = "[text naming a sensitive key omitted]"
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -376,17 +375,21 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
 
     A JSON object or array sent as a string (a stringified ``data``, an MQTT
     payload) hides its keys from the match, so it is parsed and masked like
-    the container it encodes. A string that starts like JSON, holds an object
-    and does not parse is left out whole; a Jinja template or ``[tag] text``
-    stays as it is.
+    the container it encodes. Any other text that names a sensitive key as a
+    JSON member, such as a truncated or otherwise malformed object, is left
+    out whole, because its value cannot be told apart from the rest.
     """
     if _depth > _MAX_REDACT_DEPTH:
         return _REDACTED_VALUE
-    if isinstance(value, str) and _JSON_CONTAINER_START.match(value):
-        try:
-            value = json.loads(value)
-        except (ValueError, RecursionError):
-            return _UNPARSED_VALUE if _UNPARSED_OBJECT.search(value) else value
+    if isinstance(value, str):
+        if _JSON_CONTAINER_START.match(value):
+            try:
+                return _redact_parameters(json.loads(value), _depth + 1)
+            except (ValueError, RecursionError):
+                pass
+        if any(_is_sensitive_key(name) for name in _QUOTED_MEMBER_NAME.findall(value)):
+            return _UNPARSED_VALUE
+        return value
     if isinstance(value, dict):
         return {
             key: (
@@ -398,7 +401,7 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [_redact_parameters(item, _depth + 1) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     # Entries are dumped as JSON (log file, ha_report_issue); keep odd objects
     # from breaking that.

@@ -359,13 +359,21 @@ class TestParameterRedaction:
             '[{"code": "4321"}',
             '[ [{"code": "4321"',
             '[0, {"code": "4321"}',
+            '[{{"code":"4321"}]',
+            'note {\\"code\\": \\"4321\\"}',
         ],
     )
-    def test_code_inside_a_truncated_json_string_left_out(self, truncated):
-        """A stringified object, alone or in an array, that does not parse
-        still shows the code."""
+    def test_code_inside_unparsed_json_text_left_out(self, truncated):
+        """Text that names a sensitive key as a JSON member but does not
+        parse, whatever is wrong with it, still shows the code."""
         result = _redact_parameters({"data": truncated})
         assert "4321" not in json.dumps(result)
+
+    def test_unparsed_json_without_a_sensitive_key_stays_readable(self):
+        """A broken payload is what a report reader debugs with; only one
+        that names a sensitive key has to go."""
+        params = {"data": '{"entity_id": "light.kitchen", "brightness": 255'}
+        assert _redact_parameters(params) == params
 
     def test_templates_and_bracketed_text_stay_readable(self):
         """A Jinja template and a "[tag] message" start like JSON but are not;
