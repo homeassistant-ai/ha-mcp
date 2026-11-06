@@ -62,6 +62,7 @@ def test_the_verified_zip_digest_is_committed_with_its_snapshot(
     source.write_text("VALUE = 1\n")
     digest = "sha256:" + hashlib.sha256(payload.read_bytes()).hexdigest()
     stub = (
+        'git() { case "$*" in *ls-remote*) return 0;; *) command git "$@";; esac; }\n'
         'gh() { case "$1 $2" in "api repos/upstream/repo/releases/tags/v1.0.0.dev7")\n'
         f'printf "%s\\n" {shlex.quote(digest)};;\n'
         '"release download") while [ "$#" -gt 0 ]; do '
@@ -86,6 +87,9 @@ def test_the_verified_zip_digest_is_committed_with_its_snapshot(
             **os.environ,
             "RUNNER_TEMP": tmp_path.as_posix(),
             "PAYLOAD": payload.as_posix(),
+            "TAG": "v1.0.0-dev.7",
+            "VER": "1.0.0",
+            "CHANNEL": "dev",
         },
         capture_output=True,
         text=True,
@@ -109,6 +113,50 @@ def test_the_verified_zip_digest_is_committed_with_its_snapshot(
         assert committed["digest"] == digest
     else:
         assert "digest" not in committed
+
+
+@pytest.mark.parametrize("tag_state", ["exists", "superseded", "lookup-error"])
+def test_sync_retry_does_not_fetch_a_pruned_zip_when_no_tag_is_needed(
+    tmp_path, tag_state
+):
+    marker = tmp_path / ".github/component-zip-source.json"
+    marker.parent.mkdir()
+    marker.write_text(json.dumps({"repository": "upstream/repo", "tag": "v1.0.0.dev7"}))
+    stub = (
+        'git() { case "$TAG_STATE" in\n'
+        "exists) echo existing-tag;;\n"
+        'superseded) case "$*" in *refs/tags/v1.0.0) echo stable-tag;; esac;;\n'
+        "lookup-error) return 2;; esac; }\n"
+        "gh() { touch upstream-requested; return 1; }\n"
+        "seq() { echo 1; }; sleep() { :; }\n"
+    )
+    step = next(
+        s
+        for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+        if s.get("name") == "Wait for the upstream integration ZIP before tagging"
+    )
+    script = (
+        step["run"]
+        .replace("/tmp/mirror", tmp_path.as_posix())
+        .replace("python3 ", shlex.quote(Path(sys.executable).as_posix()) + " ")
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", stub + script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "TAG_STATE": tag_state,
+            "TAG": "v1.0.0-dev.7",
+            "VER": "1.0.0",
+            "CHANNEL": "dev",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is (tag_state != "lookup-error"), result.stderr
+    assert not (tmp_path / "upstream-requested").exists()
 
 
 def _steps(path: str, job: str) -> list[dict]:
