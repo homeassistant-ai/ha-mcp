@@ -29,7 +29,6 @@ from ..redaction import (
 )
 from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import iter_schema_fields
-from .config_entry_flow_introspect import abort_probe_flow
 from .config_helpers.describe import describe_step
 from .helpers import raise_tool_error, validate_identifier_not_empty
 
@@ -85,35 +84,6 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
-    """The options flow's first-form schema, or None when it cannot be read."""
-    data_schema: list[Any] | None = None
-    flow_id = None
-    try:
-        flow = await client.start_options_flow(entry_id)
-        flow_id = flow.get("flow_id")
-        if flow.get("type") == "form":
-            # An empty/missing schema on a form (e.g. a confirm-only
-            # step) classifies nothing — persisted options can outlive
-            # fields removed from the flow, so treat it as unreadable
-            # and take the fail-closed branch instead of "redacting"
-            # zero fields.
-            candidate = flow.get("data_schema")
-            if isinstance(candidate, list) and candidate:
-                data_schema = candidate
-    except Exception as exc:
-        logger.warning(
-            "redact_secrets: options-flow probe failed for %s: %r",
-            entry_id,
-            exc,
-            exc_info=True,
-        )
-    finally:
-        if flow_id:
-            await abort_probe_flow(client.abort_options_flow, flow_id)
-    return data_schema
-
-
 def withhold_component_options(entry: dict[str, Any]) -> bool:
     """Replace every option value of an entry with an options flow by a
     set/empty sentinel; True when it did (#2157).
@@ -136,48 +106,34 @@ def withhold_component_options(entry: dict[str, Any]) -> bool:
     return True
 
 
-async def redact_component_options(
-    client: Any, entry_id: Any, entry: dict[str, Any], warnings: list[str]
+def redact_options_by_form(
+    entry: dict[str, Any],
+    flow: dict[str, Any] | None,
+    entry_id: Any,
+    warnings: list[str],
 ) -> None:
-    """Redact the fields the options flow's form marks as passwords (#2157).
+    """Redact component-served options by the options flow's first step (#2157).
 
-    Opens the entry's options flow, which runs the integration's own code
-    (#2987), so only a read that asks for that form (include_schema) calls
-    this; every other read uses :func:`withhold_component_options`. When no
-    form schema could be read (the flow raised, or opens with a menu), every
-    option value is withheld the same way.
+    ``flow`` is the step the caller opened to describe (None when the flow
+    raised); a read that does not ask for the form never opens one (#2987)
+    and uses :func:`withhold_component_options` alone. Fields the form marks
+    as passwords are replaced. A step that is no form, or a form without
+    fields (a confirm-only step), classifies nothing, and persisted options
+    can outlive fields removed from the flow, so every value is withheld.
     """
-    options = entry.get("options")
-    if not isinstance(options, dict) or not options:
-        return
-    if not entry.get("supports_options"):
-        return
-    data_schema = await _options_form_schema(client, entry_id)
-    if isinstance(data_schema, list):
-        entry["options"] = redact_options_by_flow_schema(options, data_schema)
+    data_schema = (
+        flow.get("data_schema") if flow and flow.get("type") == "form" else None
+    )
+    if isinstance(data_schema, list) and data_schema:
+        entry["options"] = redact_options_by_flow_schema(
+            entry.get("options"), data_schema
+        )
     elif withhold_component_options(entry):
         warnings.append(
             f"redact_secrets: no options schema readable for {entry_id} — "
             "every option value was redacted conservatively (the password "
             "fields cannot be told apart without the schema)"
         )
-
-
-async def redact_entry_options(
-    client: Any, entry_id: str, entry: dict[str, Any], *, open_flow: bool | None
-) -> list[str]:
-    """Redact one component-served entry's options; the warnings to report.
-
-    ``open_flow`` is set by a read that asks for the options form
-    (include_schema): only then is the flow opened to tell the password
-    fields apart. Any other read withholds every value (#2987).
-    """
-    warnings: list[str] = []
-    if open_flow and entry.get("supports_options"):
-        await redact_component_options(client, entry_id, entry, warnings)
-    elif withhold_component_options(entry):
-        warnings.append(options_withheld_warning(entry_id))
-    return warnings
 
 
 _OPTIONS_FLOW_NOTE = (
@@ -234,8 +190,17 @@ async def fetch_options_schema(
     overwritten by the OptionsFlow-derived suggested-value shape.
     """
     entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
+    # Component-served options are raw persisted values (the component only
+    # scrubs resolved !secret references). The step opened here is also the
+    # one that names the password fields, so the flow is opened once, and
+    # every way out of this function leaves the options redacted.
+    redact = entry is not None and not populate_options and redaction_enabled()
+    redaction_warnings: list[str] = []
     try:
         flow_result = await client.start_options_flow(entry_id)
+        if redact and entry is not None:
+            redact_options_by_form(entry, flow_result, entry_id, redaction_warnings)
+            redact = False
         described = await describe_step(
             client,
             flow_result,
@@ -245,17 +210,9 @@ async def fetch_options_schema(
             abort=client.abort_options_flow,
             menu_note=_MENU_NOTE,
         )
-        if flow_result.get("type") == "form" and entry is not None:
-            if populate_options:
+        if flow_result.get("type") == "form":
+            if populate_options and entry is not None:
                 entry["options"] = options_from_form_flow(flow_result)
-            elif redaction_enabled():
-                # Component-served path: options carry raw persisted
-                # values (the component only scrubs resolved !secret
-                # references). Now that the flow schema is in hand,
-                # redact the fields it marks as passwords.
-                entry["options"] = redact_options_by_flow_schema(
-                    entry.get("options"), flow_result.get("data_schema", [])
-                )
         elif populate_options and entry is not None:
             # A branch form behind a menu holds that branch's fields, not
             # the entry's options.
@@ -279,6 +236,11 @@ async def fetch_options_schema(
             f"{type(schema_err).__name__}: {schema_err} — 'options_schema' is "
             "missing and 'options' may be incomplete"
         )
+    finally:
+        if redact and entry is not None:
+            redact_options_by_form(entry, None, entry_id, redaction_warnings)
+        if redaction_warnings:
+            resp.setdefault("warnings", []).extend(redaction_warnings)
 
 
 async def fetch_config_subentry_schema(

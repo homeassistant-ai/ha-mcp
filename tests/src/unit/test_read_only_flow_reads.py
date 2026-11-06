@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.read_only import read_only_request
-from ha_mcp.tools.integration_schema import redact_component_options
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
@@ -84,27 +83,3 @@ def test_read_only_is_not_named_as_why_options_are_missing() -> None:
         DeepSearchMixin._apply_per_type_partial_flag(response, helper_failed=1)
 
     assert "OptionsFlow could not be read" in response["partial_reason"]
-
-
-@pytest.mark.asyncio
-async def test_read_only_redaction_probe_reads_the_password_fields() -> None:
-    client = AsyncMock()
-    client.start_options_flow.return_value = {
-        **_FORM,
-        "data_schema": [
-            {"name": "host", "selector": {"text": {}}},
-            {"name": "api_key", "selector": {"text": {"type": "password"}}},
-        ],
-    }
-    entry: dict[str, Any] = {
-        "supports_options": True,
-        "options": {"host": "h", "api_key": "k"},
-    }
-    warnings: list[str] = []
-
-    with read_only_request():
-        await redact_component_options(client, "e1", entry, warnings)
-
-    assert entry["options"]["host"] == "h"
-    assert entry["options"]["api_key"] != "k"
-    assert warnings == []

@@ -23,7 +23,6 @@ from ha_mcp.tools.config_helpers import describe as flow_describe
 from ha_mcp.tools.integration_schema import (
     fetch_config_subentry_schema,
     fetch_options_schema,
-    redact_component_options,
 )
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
@@ -146,10 +145,7 @@ async def _describe(
     resp: dict[str, Any] | None = None,
 ) -> None:
     resp = _resp() if resp is None else resp
-    if kind == "probe":
-        entry = {"supports_options": True, "options": {"host": "h"}}
-        await redact_component_options(client, "e1", entry, [])
-    elif kind == "entry_options":
+    if kind == "entry_options":
         await fetch_entry_options_with_status(client, "e1")
     elif kind == "options":
         await fetch_options_schema(client, "e1", resp)
@@ -163,7 +159,7 @@ _FLOW_METHODS = {
 }
 
 
-_ABORTS = {"probe": "abort_options_flow", "entry_options": "abort_options_flow"} | {
+_ABORTS = {"entry_options": "abort_options_flow"} | {
     kind: methods[1] for kind, methods in _FLOW_METHODS.items()
 }
 
@@ -332,20 +328,6 @@ async def test_an_options_abort_that_never_answers_does_not_hold_the_read(
     await asyncio.wait_for(_describe(kind, client), timeout=2)
 
     client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
-    client = _client(_form("init", _HOST, _API_KEY))
-    client.abort_options_flow.side_effect = _never_answers
-    entry = {"supports_options": True, "options": {"host": "h", "api_key": "k"}}
-
-    await asyncio.wait_for(redact_component_options(client, "e1", entry, []), timeout=2)
-
-    assert entry["options"] == {"host": "h", "api_key": REDACTED_SET}
 
 
 @pytest.mark.asyncio
@@ -667,15 +649,14 @@ async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["probe", "options"])
 async def test_a_swallowed_options_flow_failure_logs_its_traceback(
-    kind: str, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     client = _client(_form("init", _HOST))
     client.start_options_flow.side_effect = RuntimeError("ws down")
 
     with caplog.at_level("WARNING", logger="ha_mcp.tools.integration_schema"):
-        await _describe(kind, client)
+        await _describe("options", client)
 
     (record,) = [
         r for r in caplog.records if r.name == "ha_mcp.tools.integration_schema"

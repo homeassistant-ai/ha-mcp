@@ -71,7 +71,6 @@ from .integration_schema import (
     options_from_form_flow,
     options_unread_warning,
     options_withheld_warning,
-    redact_entry_options,
     withhold_component_options,
 )
 from .integration_ws_commands import (
@@ -390,7 +389,8 @@ class IntegrationTools:
                 "Assistant aborts gives aborted, plus reason_text when Home "
                 "Assistant has a string for the reason. Only applies "
                 "when supports_options=true. The flow is started, described "
-                "and aborted. For an integration's setup form, use "
+                "and aborted; starting it runs the integration's own code, "
+                "which can have side effects. For an integration's setup form, use "
                 "ha_set_integration(domain=...).",
                 default=False,
             ),
@@ -617,8 +617,10 @@ class IntegrationTools:
         runs the integration's own code, and without the component also reads
         ``options`` from that form: unset fields at their schema default, a
         section's fields at the top level. With redact_secrets on, every
-        option value is redacted unless include_schema=True names the
-        password fields.
+        option value of an entry that has an options flow is redacted unless
+        include_schema=True reads the form that names the password fields.
+        An entry without an options flow has no such form, so its option
+        values come back as stored.
 
         Each entry carries ``log_level``: the canonical Python logger level name
         (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
@@ -1027,22 +1029,22 @@ class IntegrationTools:
             resp.setdefault("warnings", []).extend(level_warnings)
 
         # Component options are raw persisted values — under redact_secrets
-        # they must be redacted on EVERY read (#2157). The include_schema
-        # fetch below redacts only when the flow opens with a form, so
-        # relying on it alone would fail OPEN on menu-first flows and probe
-        # failures. Redaction is idempotent, so the double application costs
-        # one extra probe and nothing else.
-        if redaction_enabled():
-            redact_warnings = await redact_entry_options(
-                self._client, entry_id, entry, open_flow=include_schema
-            )
-            if redact_warnings:
-                resp.setdefault("warnings", []).extend(redact_warnings)
+        # they must be redacted on EVERY read (#2157). A read that asks for
+        # the options form redacts by that form in fetch_options_schema
+        # below, which opens the flow once; any other read opens no flow and
+        # withholds every value (#2987).
+        schema_read = bool(include_schema and entry.get("supports_options"))
+        if (
+            redaction_enabled()
+            and not schema_read
+            and withhold_component_options(entry)
+        ):
+            resp.setdefault("warnings", []).append(options_withheld_warning(entry_id))
 
         # Options schema only exists in a live options flow — read it from the
         # legacy flow, but keep the component-provided options (populate_options
         # False) so the raw persisted values win over the flow-derived shape.
-        if include_schema and entry.get("supports_options"):
+        if schema_read:
             await fetch_options_schema(
                 self._client,
                 entry_id,
