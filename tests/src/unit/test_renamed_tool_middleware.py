@@ -12,6 +12,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
+from ha_mcp.renamed_tools import RENAMED_PARAMETERS
 from ha_mcp.tools.renamed_tool_middleware import (
     RENAMED_TOOLS,
     RenamedToolAliasMiddleware,
@@ -222,8 +223,6 @@ async def test_the_first_call_with_a_retired_parameter_name_is_audible(caplog):
 def test_every_tool_that_renamed_identifier_keeps_it_callable():
     """The three automation tools took the rename together; a client with the
     old list calls all three."""
-    from ha_mcp.renamed_tools import RENAMED_PARAMETERS
-
     assert {
         tool
         for tool, renames in RENAMED_PARAMETERS.items()

@@ -450,8 +450,6 @@ class TestParameterRedaction:
     def test_secrets_not_persisted_to_jsonl(self, tmp_path):
         """The on-disk mcp_usage.jsonl must not contain raw secrets either — the
         redacted entry is what gets queued for the background disk write."""
-        import json
-
         log_path = tmp_path / "usage.jsonl"
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
