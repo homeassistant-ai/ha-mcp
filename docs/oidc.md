@@ -146,7 +146,7 @@ token as a JWT:
 
 Once OIDC is configured:
 
-1. In Claude.ai, go to **Customize** (left sidebar) **> Connectors > Add**
+1. In Claude.ai, go to **Customize** (left sidebar) **> Connectors > Add** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there)
 2. Enter a name and the MCP endpoint URL `https://mcp.example.com/mcp`, then click **Continue**
 3. Claude.ai discovers the OIDC endpoints and pre-fills the sign-in settings (**Always required**); keep them, click **Add**, then **Connect**
 4. You're redirected to your OIDC provider to authenticate

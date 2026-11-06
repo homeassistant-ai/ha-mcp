@@ -97,7 +97,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth
 
 ### 4. Connect in Claude.ai
 
-1. Go to **Customize** (left sidebar) → **Connectors** → **Add**
+1. Go to **Customize** (left sidebar) → **Connectors** → **Add** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there)
 2. Enter a name and the URL `https://your-tunnel.com/mcp`, then click **Continue**
 3. Keep the detected settings — **Authentication: Always required**, **OAuth client: No client ID — register one automatically (DCR)** — and click **Add**
 4. Click the connector's **Connect** button. In the consent form that opens:

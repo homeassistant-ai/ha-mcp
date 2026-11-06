@@ -40,7 +40,7 @@ automatically on the next clean start.
 
 ### Connecting from Claude.ai (web)
 
-1. In Claude.ai, go to **Settings → Connectors → Add custom connector**, give it a name, paste the remote URL, and click **Add**.
+1. In Claude.ai, go to **Customize** (left sidebar) → **Connectors** → **+ Add** → **Add custom connector** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there), give it a name, paste the remote URL, and click **Add**.
 2. **Click _Connect_ on the new connector.** This step is required — adding the connector does not connect it. With OAuth enabled this opens the consent page; click **Allow** to finish. (With OAuth off there is no consent page and it connects directly.)
 3. Claude.ai may briefly show *"Couldn't reach the MCP server"* — this is often a harmless artifact of the initial handshake. Check whether the connector actually shows as connected before assuming it failed.
 

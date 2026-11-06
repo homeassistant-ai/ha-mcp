@@ -503,8 +503,9 @@ Workarounds, any one of them:
 1. **Wait a few seconds before clicking Allow once**, longer for large
    dashboard writes. Desktop gives no "generation finished" signal, so this
    is timing-based.
-2. **Set the ha-mcp write tools to Always allow**: Settings → Connectors →
-   your server → Tool permissions.
+2. **Set the ha-mcp write tools to Always allow**: choose **Allow always**
+   when Desktop asks to approve one of them, or set it in the server's tool
+   permissions in Desktop's connector settings.
 3. **Keep manual approval, but in ha-mcp instead of Desktop**: set the tools to
    Always allow in Desktop and enable **Tool Security Policies** with a
    require-approval rule on the write tools. The call is dispatched
