@@ -129,13 +129,14 @@ class TestMirrorSyncShape:
         assert 'cp "$SRC/hacs.json" "$SRC/LICENSE" /tmp/mirror/' in stage["run"]
 
     @pytest.mark.parametrize(
-        ("trigger", "expected"), [("v1.0.0", "1.0.0"), ("", "1.1.0")]
+        ("trigger", "matches_alias", "expected"),
+        [("v1.0.0", True, "1.0.0"), ("", True, None), ("v1.0.0", False, None)],
     )
     def test_stable_leg_syncs_the_release_its_trigger_cut(
-        self, tmp_path: Path, trigger: str, expected: str
+        self, tmp_path: Path, trigger: str, matches_alias: bool, expected: str | None
     ) -> None:
-        # Runs queue: a run for release 1.0.0 that waits while 1.1.0 lands must
-        # still tag 1.0.0. A recovery dispatch (no trigger) re-tags the newest.
+        # Recovery needs a finalized tag and its still-current raw stable alias;
+        # a newer public release is not evidence of successful finalization.
         repo = tmp_path / "repo"
         repo.mkdir()
 
@@ -174,13 +175,24 @@ class TestMirrorSyncShape:
                 shutil.which("bash") or "bash",
                 "-e",
                 "-c",
-                "gh() { echo v1.1.0; }\n" + resolve["run"],
+                (
+                    'gh() { case "$2" in\n'
+                    "repos/o/r/releases/latest) echo v1.1.0;;\n"
+                    'repos/o/r/git/ref/tags/stable) echo "$STABLE_OBJECT";;\n'
+                    "repos/o/r/git/ref/tags/v1.0.0) echo finalized-object;;\n"
+                    "*) return 2;; esac; }\n"
+                )
+                + resolve["run"],
             ],
             cwd=repo,
             env={
                 **os.environ,
                 "CHANNEL": "stable",
                 "FINALIZED_TAG": trigger,
+                "STABLE_OBJECT": "finalized-object"
+                if matches_alias
+                else "other-object",
+                "GITHUB_REPOSITORY": "o/r",
                 "RUNNER_TEMP": tmp_path.as_posix(),
                 "GITHUB_OUTPUT": output.as_posix(),
             },
@@ -188,8 +200,83 @@ class TestMirrorSyncShape:
             text=True,
             check=False,
         )
-        assert result.returncode == 0, result.stderr
-        assert f"version={expected}" in output.read_text().splitlines()
+        assert (result.returncode == 0) is (expected is not None), result.stderr
+        if expected is None:
+            assert not (tmp_path / "release-src").exists()
+        else:
+            assert f"version={expected}" in output.read_text().splitlines()
+
+    @pytest.mark.parametrize("finalized", ["", "v1.0.0"])
+    def test_manual_stable_recovery_requires_the_publishers_marker(
+        self, tmp_path: Path, finalized: str
+    ) -> None:
+        workflow = _workflow(_MIRROR)
+        pick = next(
+            s for s in workflow["jobs"]["gate"]["steps"] if s.get("id") == "decide"
+        )
+        output = tmp_path / "output"
+        result = subprocess.run(
+            [shutil.which("bash") or "bash", "-e", "-c", pick["run"]],
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "EVENT": "workflow_dispatch",
+                "DISPATCH_CHANNEL": "stable",
+                "TRIGGER_BRANCH": "master",
+                "TRIGGER_CONCLUSION": "",
+                "FINALIZED_TAG": finalized,
+                "GITHUB_OUTPUT": output.as_posix(),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert (result.returncode == 0) is bool(finalized), result.stderr
+        if finalized:
+            values = output.read_text().splitlines()
+            assert "channel=stable" in values and f"finalized_tag={finalized}" in values
+            reader = next(
+                s
+                for s in workflow["jobs"]["gate"]["steps"]
+                if s.get("id") == "finalized"
+            )
+            assert "workflow_dispatch" in reader["if"]
+            inputs = re.findall(r"inputs\.(\w+)", reader["with"]["run-id"])
+            assert (
+                len(inputs) == 1
+                and inputs[0] in workflow[True]["workflow_dispatch"]["inputs"]
+            )
+
+    def test_alias_change_after_resolution_blocks_the_mirror_tag(
+        self, tmp_path
+    ) -> None:
+        step = next(
+            s
+            for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]
+            if s.get("name") == "Tag the mirror"
+        )
+        stub = (
+            'gh() { case "$2" in *tags/stable) echo other-object;; '
+            "*tags/v1.0.0) echo finalized-object;; *) return 2;; esac; }\n"
+            "git() { echo called > git-called; echo existing-tag; }\n"
+        )
+        result = subprocess.run(
+            [shutil.which("bash") or "bash", "-e", "-c", stub + step["run"]],
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "CHANNEL": "stable",
+                "TAG": "v1.0.0",
+                "GITHUB_REPOSITORY": "o/r",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert not (tmp_path / "git-called").exists()
 
     def test_snapshot_is_stamped(self) -> None:
         stage = next(

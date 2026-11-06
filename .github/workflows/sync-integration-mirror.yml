@@ -50,13 +50,18 @@ on:
     inputs:
       channel:
         description: >-
-          stable re-tags the latest stable release (recovery path when a
-          release run flaked); dev cuts a v<next>-dev.N pre-release from the
+          stable re-tags a finalized Release Publish run (provide its run ID);
+          dev cuts a v<next>-dev.N pre-release from the
           current master snapshot, pinned to its already-published dev build.
           Dispatch from master only.
         type: choice
         options: [stable, dev]
         default: stable
+      release_publish_run_id:
+        description: "For stable recovery: Release Publish run with the current finalized-tag artifact"
+        type: string
+        required: false
+        default: ""
 
 # Serialize mirror syncs: a release and the dev build after it can both clone
 # the mirror and push to main at nearly the same time; without serialization
@@ -86,18 +91,32 @@ jobs:
       dev_run: ${{ steps.decide.outputs.dev_run }}
       finalized_tag: ${{ steps.decide.outputs.finalized_tag }}
     steps:
+      - name: Validate stable recovery input
+        if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable'
+        env:
+          RECOVERY_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RECOVERY_BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ "$RECOVERY_BRANCH" != master ] || ! [[ "$RECOVERY_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Stable recovery requires master and a finalized Release Publish run ID. Retry the current publisher first if finalization failed."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish'
+        if: >-
+          (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish') ||
+          (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
         with:
           persist-credentials: false
           sparse-checkout: .github/actions/read-finalized-release
       - id: finalized
-        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish'
+        if: >-
+          (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish') ||
+          (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
         uses: ./.github/actions/read-finalized-release
         env:
           GH_TOKEN: ${{ github.token }}
         with:
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event.workflow_run.id || inputs.release_publish_run_id }}
       - name: Pick the leg from the trigger
         id: decide
         env:
@@ -119,19 +138,18 @@ jobs:
             push) echo "channel=none" >> "$GITHUB_OUTPUT"; exit 0 ;;
             workflow_dispatch)
               if [ "$DISPATCH_CHANNEL" = stable ]; then
-                echo "channel=stable" >> "$GITHUB_OUTPUT"
-                exit 0
+                TRIGGER_WORKFLOW="Release Publish"
+              else
+                # A dev dispatch pins the build of this exact commit.
+                TRIGGER_RUN_ID=$(gh api \
+                  "repos/${{ github.repository }}/actions/workflows/publish-dev.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" \
+                  --jq '.workflow_runs[0].id // empty')
+                if [ -z "$TRIGGER_RUN_ID" ]; then
+                  echo "::error::Publish Dev Channel never built ${GITHUB_SHA}; nothing to pin."
+                  exit 1
+                fi
+                TRIGGER_WORKFLOW="Publish Dev Channel"
               fi
-              # A dev dispatch pins the build Publish Dev Channel made of this
-              # very commit; there is none for a docs-only commit it skipped.
-              TRIGGER_RUN_ID=$(gh api \
-                "repos/${{ github.repository }}/actions/workflows/publish-dev.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" \
-                --jq '.workflow_runs[0].id // empty')
-              if [ -z "$TRIGGER_RUN_ID" ]; then
-                echo "::error::Publish Dev Channel never built ${GITHUB_SHA}; nothing to pin."
-                exit 1
-              fi
-              TRIGGER_WORKFLOW="Publish Dev Channel"
               ;;
           esac
           if [ "$TRIGGER_CONCLUSION" = "skipped" ]; then
@@ -141,6 +159,10 @@ jobs:
           fi
           if [ "$TRIGGER_WORKFLOW" = "Release Publish" ]; then
             if [ -z "$FINALIZED_TAG" ]; then
+              if [ "$EVENT" = workflow_dispatch ]; then
+                echo "::error::No current finalized tag in that Release Publish run. Retry the current publisher before recovering the mirror."
+                exit 1
+              fi
               echo "channel=skip" >> "$GITHUB_OUTPUT"
             else
               echo "channel=stable" >> "$GITHUB_OUTPUT"
@@ -212,10 +234,15 @@ jobs:
           case "$CHANNEL" in
             stable)
               # Release Publish's head_sha is not the SemVer producer commit.
-              # Its finalized marker names the exact tag; recovery uses the
-              # latest published release, never an unpublished version tag.
-              TAG="${FINALIZED_TAG:-$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)}"
+              # Automatic and manual runs both require the publisher's marker.
+              TAG="${FINALIZED_TAG:?A finalized Release Publish tag is required}"
               [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+              CURRENT=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/stable" --jq .object.sha)
+              TARGET=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)
+              if [ "$CURRENT" != "$TARGET" ]; then
+                echo "::error::The finalized tag no longer matches stable; refusing mirror recovery."
+                exit 1
+              fi
               VER="${TAG#v}"
               SRC="$RUNNER_TEMP/release-src"
               git worktree add --quiet --detach "$SRC" "v${VER}"
@@ -399,11 +426,21 @@ jobs:
       - name: Tag the mirror
         if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
         env:
+          GH_TOKEN: ${{ github.token }}
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
           VER: ${{ steps.release.outputs.version }}
           TAG: ${{ steps.release.outputs.tag }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
+          # Publication can advance while the earlier pin/asset waits run.
+          if [ "$CHANNEL" = stable ]; then
+            CURRENT=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/stable" --jq .object.sha)
+            TARGET=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)
+            if [ "$CURRENT" != "$TARGET" ]; then
+              echo "::error::Stable changed after resolution; refusing the mirror tag."
+              exit 1
+            fi
+          fi
           # Captures instead of `| grep -q .`: without pipefail a FAILED
           # ls-remote looks identical to "tag absent"; a bare assignment under
           # set -e aborts loud instead. Every release is a new shared version,

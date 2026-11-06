@@ -57,6 +57,13 @@ that its release is still current before promotion. Independent manual release
 publication must not race this workflow; historical workflow revisions do not
 inherit new concurrency controls. Recover through the current publisher.
 
+A manual stable mirror recovery supplies `release_publish_run_id` from a
+finalized Release Publish run on master. It reads the same finalized-tag artifact
+as an automatic run, never the latest public release. A public release left by
+a failed alias lease is not sufficient: retry the current publisher first.
+The resolved tag must still match the raw stable alias both before staging
+the snapshot and again at the final mirror-tag step.
+
 Prerequisite failures perform no GitHub writes. An unconfirmed publication
 response stops before the alias write; inspect the release and retry to
 reconcile its state. If publication succeeds but the alias lease fails, the
