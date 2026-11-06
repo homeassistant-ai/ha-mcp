@@ -654,6 +654,39 @@ async def test_redact_secrets_withholds_options_without_opening_the_options_flow
 
 
 @pytest.mark.asyncio
+async def test_a_schema_read_under_redact_secrets_opens_the_options_flow_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The flow's first step may act, so the form that is described is also the
+    # one that names the password fields.
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    options = {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"}
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("cfg1", "sonoff", options=options)]},
+    )
+    client = RoutingClient(
+        options_flow={
+            "type": "form",
+            "flow_id": "f1",
+            "step_id": "init",
+            "data_schema": [
+                {"name": "host", "selector": {"text": {}}},
+                {"name": "api_key", "selector": {"text": {"type": "password"}}},
+            ],
+        }
+    )
+    resp = await _get(ws, client, entry_id="cfg1", include_schema=True)
+
+    assert client.start_options_flow_calls == 1
+    assert resp["entry"]["options"] == {"api_key": REDACTED_SET, "host": "1.2.3.4"}
+
+
+@pytest.mark.asyncio
 async def test_legacy_list_passes_domain_filter_to_core() -> None:
     ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
     client = RoutingClient(
