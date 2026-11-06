@@ -19,6 +19,13 @@ the GitHub release is a draft. The mirror copies and verifies the upstream
 asset's digest instead of rebuilding it. Do not replace an existing asset just to refresh
 its download count; that count is downloads of one release asset, not users.
 
+Dev and mirror creation pass the ZIP to `gh release create`, which stages the
+upload before publishing and attempts cleanup on failure. Mirror retries resolve their
+own releases by database ID so leftover drafts are recoverable. A complete
+mirror asset is reused even if its upstream dev release was pruned; incomplete
+uploads are replaced before a recovered draft is published. The upstream
+source lookup still requires a published release.
+
 HACS/Marketplace select the asset through `zip_release` and `filename` in
 `hacs.json`. Enable these only after **every selectable stable, dev and mirror
 release, including older versions**, has the ZIP. HACS may reuse the latest

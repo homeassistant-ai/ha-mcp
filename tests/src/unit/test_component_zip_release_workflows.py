@@ -43,14 +43,20 @@ def test_each_release_uploads_the_zip_before_publishing() -> None:
         assert build < create
         assert "uv run -s scripts/build_component_zip.py" in steps[build]["run"]
         assert "ha_mcp_tools.zip" in steps[create]["run"]
-        assert "--draft" in steps[create]["run"]
         if job == "create-prerelease":
+            # With an asset, gh owns the draft/upload/publish lifecycle and
+            # attempts cleanup on failure; explicit --draft disables cleanup.
+            assert "--draft" not in steps[create]["run"]
+            assert "gh release edit" not in steps[create]["run"]
             stamp = next(
                 i
                 for i, s in enumerate(steps)
                 if s.get("name") == "Stamp the component for this build"
             )
             assert stamp < build
+        else:
+            # Stable publishing is finalized separately, after its PyPI gate.
+            assert "--draft" in steps[create]["run"]
 
 
 def test_the_mirror_copies_the_verified_upstream_artifact_without_rebuilding() -> None:

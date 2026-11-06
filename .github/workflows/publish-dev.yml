@@ -259,14 +259,12 @@ jobs:
           # fetch, and the remote one stays if its deletion above failed.
           git tag -f "$TAG" HEAD
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          # Passing the asset lets gh stage, upload and publish with cleanup.
           gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
             --verify-tag \
             --title "Dev Build $VERSION" \
             --notes-file release_notes.md \
-            --prerelease --draft
-
-          # Do not expose a zip_release version before its asset is uploaded.
-          gh release edit "$TAG" --draft=false
+            --prerelease
 
           echo "✓ Created pre-release $TAG"
 

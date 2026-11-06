@@ -67,8 +67,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          MIRROR_DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
-            --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
+          # gh's lookup includes drafts left by interrupted uploads; the REST
+          # tag endpoint only guarantees published releases.
+          MIRROR_DIGEST=""
+          if MIRROR_RELEASE_ID=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId --jq .databaseId 2>/dev/null); then
+            MIRROR_DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${MIRROR_RELEASE_ID}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest')
+          fi
           if [[ "$MIRROR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "The mirror already has the uploaded ZIP; preserving its download history."
             exit 0
@@ -103,10 +109,11 @@ jobs:
           # notes file) as already-exists and reported green with no release
           # published (review finding). Now only a genuine duplicate no-ops;
           # a real create failure fails the job visibly.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if MIRROR_RELEASE_ID=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId --jq .databaseId 2>/dev/null); then
             # Backfill a missing asset on recovery without replacing one that
             # already has a download history.
-            DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${MIRROR_RELEASE_ID}" \
               --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest')
             if [ -f dist/integration/ha_mcp_tools.zip ] && ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               # Replace only an incomplete upload, never a usable counted asset.
@@ -130,9 +137,10 @@ jobs:
           if [ -f dist/integration/ha_mcp_tools.zip ]; then
             ASSETS+=(dist/integration/ha_mcp_tools.zip)
           fi
+          # With an asset, gh stages the upload before publishing and attempts
+          # cleanup on failure; explicit --draft would disable that cleanup.
           gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
-            --title "$VER" -F /tmp/notes.md $PRERELEASE_FLAG --draft
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+            --title "$VER" -F /tmp/notes.md $PRERELEASE_FLAG
 
       - name: Retire superseded dev pre-releases
         # A stable release supersedes every dev pre-release cut before it:
