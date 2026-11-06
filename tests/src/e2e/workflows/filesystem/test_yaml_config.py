@@ -29,6 +29,10 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 from ...utilities.cleanup import CleanupSteps
+from ...utilities.component_services import (
+    bootstrap_caller_token,
+    set_extra_yaml_keys,
+)
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logging.basicConfig(level=logging.INFO)
@@ -1586,55 +1590,6 @@ class TestYamlConfirmFlow:
 # ---------------------------------------------------------------------------
 
 
-async def _bootstrap_caller_token(base_url: str) -> str:
-    """Fetch the caller token via the admin-gated bootstrap service.
-
-    Mirrors ``test_custom_paths.py``: the component services are driven
-    directly over HA REST with the admin token, exactly as the ha-mcp server
-    drives them.
-    """
-    import httpx
-
-    from tests.test_constants import TEST_TOKEN
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/services/ha_mcp_tools/get_caller_token",
-            headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            params={"return_response": ""},
-            json={},
-        )
-    assert resp.status_code == 200, f"get_caller_token failed: {resp.text!r}"
-    service_response = resp.json().get("service_response", {})
-    assert service_response.get("success") is True, f"bootstrap failed: {resp.text!r}"
-    return service_response["token"]
-
-
-async def _set_extra_yaml_keys(base_url: str, token: str, keys: list[str]) -> dict:
-    """Call set_extra_yaml_keys as admin; assert success, return the response."""
-    import httpx
-
-    from tests.test_constants import TEST_TOKEN
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/services/ha_mcp_tools/set_extra_yaml_keys",
-            headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            params={"return_response": ""},
-            json={"_ha_mcp_token": token, "keys": keys},
-        )
-    assert resp.status_code == 200, f"set_extra_yaml_keys failed: {resp.text!r}"
-    sr = resp.json().get("service_response", {})
-    assert sr.get("success") is True, f"set_extra_yaml_keys failed: {sr!r}"
-    return sr
-
-
 @pytest.mark.filesystem
 class TestExtraYamlKeysStorePathLive:
     """The extra-key setting configured through the integration UI writes live.
@@ -1651,8 +1606,9 @@ class TestExtraYamlKeysStorePathLive:
 
     Cross-lane (no backend marker): the store lives in the component (HA
     process), so unlike the env-var path it is available in every backend,
-    including inaddon. Mirrors ``test_custom_paths.py`` for the REST-driven
-    service calls; the write goes through the MCP ``ha_config_set_yaml`` tool.
+    including inaddon. The service calls go over HA REST
+    (``utilities/component_services.py``); the write goes through the MCP
+    ``ha_config_set_yaml`` tool.
     """
 
     async def test_store_configured_key_writes_live(
@@ -1666,12 +1622,12 @@ class TestExtraYamlKeysStorePathLive:
         generic allowlist rejection, so the success actually pins the store path.
         """
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_caller_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         # Session-scoped container: delete the package in finally so it does not
         # linger for later tests (parity with test_custom_paths.py).
         fname = f"packages/_e2e_store_key_{uuid.uuid4().hex[:8]}.yaml"
         try:
-            sr = await _set_extra_yaml_keys(base_url, token, ["alert2_store"])
+            sr = await set_extra_yaml_keys(base_url, token, ["alert2_store"])
             assert sr.get("keys") == ["alert2_store"], sr
             assert not sr.get("rejected"), sr
 
@@ -1703,7 +1659,7 @@ class TestExtraYamlKeysStorePathLive:
                         {"path": fname, "confirm": True},
                     )
                 with cleanup.step():
-                    await _set_extra_yaml_keys(base_url, token, [])
+                    await set_extra_yaml_keys(base_url, token, [])
 
     async def test_deny_floor_drops_store_key_and_blocks_write_live(
         self, mcp_client_with_yaml_config, ha_container_with_fresh_config
@@ -1716,10 +1672,10 @@ class TestExtraYamlKeysStorePathLive:
         a denied key is refused live even after it was pushed through the service.
         """
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_caller_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         try:
             # Push a denylisted key alongside a valid one in a single set.
-            sr = await _set_extra_yaml_keys(
+            sr = await set_extra_yaml_keys(
                 base_url, token, ["homeassistant", "alert2_store"]
             )
             assert "homeassistant" in sr.get("rejected", []), sr
@@ -1747,4 +1703,4 @@ class TestExtraYamlKeysStorePathLive:
             logger.info("Deny floor dropped the store key and blocked the write")
         finally:
             with CleanupSteps() as cleanup, cleanup.step():
-                await _set_extra_yaml_keys(base_url, token, [])
+                await set_extra_yaml_keys(base_url, token, [])
