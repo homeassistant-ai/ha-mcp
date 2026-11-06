@@ -406,8 +406,25 @@ jobs:
         if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+          VER: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
+          # A retry may outlive the upstream asset. The tag step rechecks
+          # these refs to cover changes during verification.
+          existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -n "$existing" ]; then
+            echo "mirror tag ${TAG} exists - skipping ZIP wait"
+            exit 0
+          fi
+          if [ "$CHANNEL" = dev ]; then
+            stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+            if [ -n "$stable_exists" ]; then
+              echo "v${VER} is already stable - skipping ZIP wait"
+              exit 0
+            fi
+          fi
           MARKER=/tmp/mirror/.github/component-zip-source.json
           [ -f "$MARKER" ] || exit 0
           SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('$MARKER'))['repository'])")
