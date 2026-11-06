@@ -140,7 +140,7 @@ You can also start a new conversation and ask Claude if it can see your Home Ass
 
 This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.
 
-**If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also make sure you clicked **Connect** on the connector (and, with OAuth enabled, **Allow** on the consent page) — adding the connector alone does not complete the connection.
+**If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also check whether the connector shows a **Connect** button: if it does, click it (and, with OAuth enabled, **Allow** on the consent page) — adding the connector does not always complete the connection.
 
 ### Claude.ai connects from my browser but the connector fails — ports, firewalls, timeouts
 
@@ -430,7 +430,7 @@ By default the Webhook Proxy app registers an **unauthenticated** webhook endpoi
 
 For a real auth layer on top of the URL secret, the Webhook Proxy app (v1.1.0 and later) ships an optional OAuth 2.1 mode. Toggle **Show unused optional configuration options**, turn **Enable OAuth (Beta)** on, set **OAuth Mode** to `legacy` if you want the Client ID + Secret flow described here (a first-time enable with the mode left unset defaults to `ha_auth`, which generates no credentials), leave Client ID and Client Secret blank, and restart the app. Legacy mode also needs a **full Home Assistant restart** (a Repair prompts you) — restarting only the app is not enough; `ha_auth` needs no Home Assistant restart. In legacy mode the app generates a strong Client ID and Client Secret on first start, persists them at `/data/oauth_creds.json`, and prints them in the app log.
 
-That is the app's `legacy` OAuth mode. Webhook Proxy 3.x defaults a first-time enable to `ha_auth` instead: you sign in with your Home Assistant account and no Client ID or Secret exists. In Claude.ai's connector wizard, `ha_auth` is **Always required** + **Use Anthropic's hosted client metadata** (both auto-detected); for `legacy`, choose **Use your own OAuth client** and paste the Client ID and Client Secret from the app log. Click **Add**, then the connector's **Connect** button — Claude.ai handles the rest of the OAuth handshake. When the toggle is off, the webhook URL behaves exactly as before with no auth check.
+That is the app's `legacy` OAuth mode. Webhook Proxy 3.x defaults a first-time enable to `ha_auth` instead: you sign in with your Home Assistant account and no Client ID or Secret exists. In Claude.ai's connector form, `ha_auth` is **Sign in now** or **Sign in when needed** + **Use Claude's published identity** (both auto-detected); for `legacy`, choose **Use your own OAuth client** and paste the Client ID and Client Secret from the app log. Click **Add**, then the connector's **Connect** button if it shows one — Claude.ai handles the rest of the OAuth handshake. When the toggle is off, the webhook URL behaves exactly as before with no auth check.
 
 **OAuth flow end-to-end**
 
@@ -570,7 +570,7 @@ The version should match the [latest release](https://github.com/homeassistant-a
 
 ### A tool rejects as unknown a parameter your client's tool list shows (stale tool list)
 
-An AI client stores the server's tool list and keeps using it until the connection is refreshed. After an update renames a tool parameter, the client still offers the old name, and the tool rejects it with `VALIDATION_FAILED` and `unknown parameter`, listing the current names under `Valid parameters`; 9.1.0, for example, renamed `identifier` to `entity_id` on the automation tools. Newly enabled tools stay missing for the same reason. Restarting ha-mcp or Home Assistant does not refresh the client.
+An AI client stores the server's tool list and keeps using it until the connection is refreshed. After an update renames a tool parameter, the client still offers the old name. Where the change is a plain rename, ha-mcp still serves the call and adds a warning to the result saying the tool list is stale: 9.1.0 renamed `identifier` to `entity_id` on the automation tools, and releases after 9.1.0 accept `identifier` this way. Otherwise the tool rejects the old name with `VALIDATION_FAILED` and `unknown parameter`, listing the current names under `Valid parameters`. Newly enabled tools stay missing for the same reason. Restarting ha-mcp or Home Assistant does not refresh the client.
 
 **Solution:** refresh the connection in the client, then start a new conversation:
 
@@ -606,7 +606,7 @@ If the old tool list is still there after a refresh, delete the connector on tha
 
 ### Claude.ai connection issues
 
-Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. Enter the URL, click **Continue**, and keep the settings marked **Detected**. If authentication is not auto-detected, the connection may not be working: **delete any existing connector and create a new one, then try again**. You can try selecting settings manually, but connections typically only work when the settings are auto-detected, so manually forcing them — including **None / No login** — may not help.
+Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. Enter the URL, click **Continue**, and keep the settings Claude detected and selected. If authentication is not auto-detected, the connection may not be working: **delete any existing connector and create a new one, then try again**. You can try selecting settings manually, but connections typically only work when the settings are auto-detected, so manually forcing them — including **No sign in** — may not help.
 
 If you installed the embedded HA-MCP server, make sure you have **restarted Home Assistant** after installation so everything registers properly.
 

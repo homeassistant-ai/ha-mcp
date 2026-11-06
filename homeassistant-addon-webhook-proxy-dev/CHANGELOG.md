@@ -11,16 +11,18 @@ history from before the fork.
 
 ## v3.0.5.dev5 (2026-11-06)
 
-- The Claude.ai connector step in DOCS.md names the path Customize →
-  Connectors → + Add → Add custom connector instead of Settings →
-  Connectors → Add custom connector, and notes that Customize reads
-  Plugins on accounts with the new Plugins page. It also gives the Team or
-  Enterprise path, where an Owner or Primary Owner adds the connector
-  under Organization settings → Connectors and members then connect it.
-  It warns that with OAuth off or in legacy mode every member who
-  connects it gets the server's Home Assistant access without signing
-  in, and that in ha_auth mode any account that can sign in gets the same
-  admin-equivalent access.
+- The Claude.ai connector steps in DOCS.md follow the current connector
+  form: Settings → Customize → Add → Add custom connector (Customize reads
+  Plugins on accounts with the new Plugins page), Continue, the sign-in
+  settings Claude detects (No sign in, or Sign in now / Sign in when
+  needed with Use Claude's published identity for ha_auth and Use your own
+  OAuth client for legacy), Add, then Connect if the connector shows that
+  button. They also give the Team or Enterprise path, where an Owner or
+  Primary Owner adds the connector under Organization settings →
+  Connectors and members then connect it. They warn that with OAuth off or
+  in legacy mode every member who connects it gets the server's Home
+  Assistant access without signing in, and that in ha_auth mode any
+  account that can sign in gets the same admin-equivalent access.
 
 ## v3.0.5.dev4 (2026-11-03)
 

@@ -34,6 +34,7 @@ from ..mcp_client_context import (
     extract_client_info,
     protocol_version,
 )
+from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
 from ..utils.mcp_client_host import detect_client_host
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
@@ -97,19 +98,17 @@ _ISSUE_TITLE_MAX_CHARS = 256
 
 # #1804 (missing tool) and #2968 / #2978 (renamed parameter) were filed as
 # server bugs; a stale client tool list caused #1804 and #2968 and is the
-# likely cause of #2978, so the hint has it ruled out before filing.
+# likely cause of #2978, so the hint has the agent rule it out before filing.
+# The name predates the parameter case and stays: it is a response key.
 MISSING_TOOL_HINT = (
     "MISSING TOOL OR UNKNOWN PARAMETER? A tool you expected is not in your tool "
     "list, or a tool rejects as unknown a parameter your tool list shows: very "
     "likely NOT a bug. MCP clients cache the tool list, so they miss newly "
     "enabled tools and keep showing parameter names an ha-mcp update renamed; "
     "server logs saying a tool is 'enabled' do NOT mean the client loaded it. "
-    "Ask the user to refresh first: Claude Desktop custom connector -> "
-    "disconnect and reconnect it; server in "
-    "claude_desktop_config.json -> quit and reopen Claude Desktop; claude.ai -> "
-    "refresh its tools list; Claude Code -> /mcp, reconnect; ChatGPT -> refresh "
-    "the connector; then start a new conversation. Only file a bug if the "
-    "problem remains after a refresh."
+    f"Ask the user to refresh first ({CLIENT_TOOL_LIST_REFRESH_STEPS}), then "
+    "start a new conversation. Only file a bug if the problem remains after a "
+    "refresh."
 )
 
 # Known Claude Desktop bugs that present as ha-mcp failures. Both live in

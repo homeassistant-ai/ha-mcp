@@ -32,6 +32,8 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 )
 
 from ..errors import create_validation_error
+from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
+from ..utils.usage_logger import log_tool_call
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -166,10 +168,7 @@ def _stale_tool_list_hint(names: Sequence[str]) -> str:
         f"If your tool list shows {listed} on this tool, that list is a stale "
         f"copy from before an ha-mcp update renamed or removed {them}, "
         "not a server bug. Ask the user to reconnect this MCP server in their "
-        "client (Claude Desktop custom connector: disconnect and reconnect it; "
-        "server in claude_desktop_config.json: quit and reopen Claude Desktop; "
-        "claude.ai: refresh the connector's tools list; Claude Code: /mcp, "
-        "reconnect; ChatGPT: refresh the connector), then start a new "
+        f"client ({CLIENT_TOOL_LIST_REFRESH_STEPS}), then start a new "
         "conversation."
     )
 
@@ -186,7 +185,8 @@ def _argument_hint(
     Returns the hint text and the rejection kind: ``misplaced`` for a config
     root key passed at the top level of a config-writing tool, which is told
     to move inside ``config`` (issue #2649), ``undeclared`` for any other name
-    the tool does not declare, else ``other``.
+    the tool does not declare, and ``other`` for a type error or for any
+    rejection when the tool's schema could not be read.
     """
     if valid_parameters is None or errs[0]["type"] != _UNKNOWN_ARGUMENT:
         return _type_hint(errs), "other"
@@ -206,7 +206,7 @@ def _rejection_suggestions(
 
     A misplaced config key repeats the move into ``config`` (issue #2649
     section 1); any other undeclared name may come from a tool list the client
-    stored before an update renamed it (#2968, #2978).
+    stored before an update renamed or removed it (#2968, #2978).
     """
     suggestions = [
         f"Move `{key}` inside the `config` argument, e.g. config={{'{key}': ...}}."
@@ -215,6 +215,25 @@ def _rejection_suggestions(
     if undeclared_names:
         suggestions.append(_stale_tool_list_hint(undeclared_names))
     return suggestions
+
+
+def _record_rejection(
+    tool_name: str | None, arguments: dict[str, Any], message: str
+) -> None:
+    """Put a rejected call in the usage log that ha_report_issue reads.
+
+    The call never reaches the tool, so the tool's own usage-log wrapper never
+    runs; without this entry a report shows no trace of the call or of the
+    argument names the client sent.
+    """
+    if tool_name:
+        log_tool_call(
+            tool_name=tool_name,
+            parameters=dict(arguments),
+            execution_time_ms=0.0,
+            success=False,
+            error_message=message,
+        )
 
 
 def _type_hint(errs: Sequence[ErrorDetails]) -> str:
@@ -266,30 +285,30 @@ class ValidationErrorMiddleware(Middleware):
                 if any(err["type"] == _UNKNOWN_ARGUMENT for err in errors)
                 else None
             )
+            message_obj = getattr(context, "message", None)
+            supplied = getattr(message_obj, "arguments", None) or {}
+            tool_name = getattr(message_obj, "name", None)
             unclaimed: list[str] = []
             config_keys: set[str] | None = None
             if valid_parameters is not None:
                 # Skip parameters the call already supplied: a second, invented
                 # argument almost never means one of them.
-                message_obj = getattr(context, "message", None)
-                supplied = getattr(message_obj, "arguments", None) or {}
                 unclaimed = [p for p in valid_parameters if p not in supplied]
-                tool_name = getattr(message_obj, "name", None)
                 config_keys = (
                     _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None
                 )
 
             parts: list[str] = []
-            by_kind: dict[_RejectionKind, list[str]] = {
-                "misplaced": [],
-                "undeclared": [],
-                "other": [],
-            }
+            misplaced_keys: list[str] = []
+            undeclared_names: list[str] = []
             for param, errs in grouped.items():
                 hint, kind = _argument_hint(
                     param, errs, unclaimed, valid_parameters, config_keys
                 )
-                by_kind[kind].append(param)
+                if kind == "misplaced":
+                    misplaced_keys.append(param)
+                elif kind == "undeclared":
+                    undeclared_names.append(param)
                 parts.append(f"`{param}`: {hint}" if param else hint)
             message = "; ".join(parts) if parts else "Invalid argument types."
             error_context: dict[str, Any] | None = None
@@ -298,15 +317,15 @@ class ValidationErrorMiddleware(Middleware):
                 listing = ", ".join(valid_parameters) or "none"
                 message += f"{separator}Valid parameters: {listing}."
                 error_context = {"valid_parameters": valid_parameters}
-            suggestions = _rejection_suggestions(
-                by_kind["misplaced"], by_kind["undeclared"]
-            )
+            _record_rejection(tool_name, supplied, message)
             raise_tool_error(
                 create_validation_error(
                     message,
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
                     context=error_context,
-                    suggestions=suggestions,
+                    suggestions=_rejection_suggestions(
+                        misplaced_keys, undeclared_names
+                    ),
                 )
             )
         return result

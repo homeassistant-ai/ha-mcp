@@ -18,6 +18,10 @@ readers pick the more restrictive one (``rename_retired_keys``'s ``prefer``).
 And a call on a retired name carries the old signature, which the merged tool
 cannot dispatch without the ``action`` it never had —
 ``adapt_retired_arguments`` fills that in.
+
+A parameter can move the same way a tool does. ``RENAMED_PARAMETERS`` keeps
+the old parameter name callable for a client that has not re-listed, and
+``CLIENT_TOOL_LIST_REFRESH_STEPS`` is what such a client's user has to do.
 """
 
 from __future__ import annotations
@@ -36,6 +40,24 @@ RENAMED_TOOLS: dict[str, str] = {
     "ha_get_blueprint": "ha_manage_blueprints",
     "ha_import_blueprint": "ha_manage_blueprints",
 }
+
+# Current tool name -> retired parameter name -> the name that serves it today.
+# Only a pure rename belongs here: the value keeps its meaning and its format.
+RENAMED_PARAMETERS: dict[str, dict[str, str]] = {
+    "ha_config_get_automation": {"identifier": "entity_id"},
+    "ha_config_set_automation": {"identifier": "entity_id"},
+    "ha_config_remove_automation": {"identifier": "entity_id"},
+}
+
+# How each client re-fetches the tool list, for every text that tells an agent
+# its list is stale. Steps are separated by ";" and carry none inside.
+CLIENT_TOOL_LIST_REFRESH_STEPS = (
+    "Claude Desktop custom connector: disconnect and reconnect it; "
+    "server in claude_desktop_config.json: quit and reopen Claude Desktop; "
+    "claude.ai: refresh the connector's tools list; Claude Code: /mcp, "
+    "reconnect; ChatGPT: open Settings, then the plugin settings, select the "
+    "connector and click Refresh tools"
+)
 
 
 def current_tool_name(name: str) -> str:
@@ -101,3 +123,23 @@ def adapt_retired_arguments(
     if adapter is None:
         return dict(arguments) if arguments is not None else None
     return adapter(dict(arguments or {}))
+
+
+def retired_parameters_used(
+    name: str, arguments: Mapping[str, Any] | None
+) -> dict[str, str]:
+    """The retired parameter names a call on ``name`` carries, with their current names.
+
+    A retired name sent together with its current name is left out: that
+    caller knows the current signature, so the stray argument is rejected like
+    any other unknown one instead of replacing the value sent under the
+    current name.
+    """
+    renames = RENAMED_PARAMETERS.get(name)
+    if not renames or not arguments:
+        return {}
+    return {
+        old: new
+        for old, new in renames.items()
+        if old in arguments and new not in arguments
+    }
