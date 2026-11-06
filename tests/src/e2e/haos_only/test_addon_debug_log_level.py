@@ -56,6 +56,7 @@ from ..utilities.addon_restart import (
     restart_self as _restart_self,
 )
 from ..utilities.addon_restart import restore_info_level
+from ..utilities.cleanup import CleanupSteps
 
 LOG = logging.getLogger(__name__)
 
@@ -191,12 +192,13 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
         await _restart_self(settings_restart)
         await _await_full_debug_proof(slug)
     finally:
-        await restore_info_level(
-            settings_advanced,
-            settings_restart,
-            settings_info,
-            addon_url,
-            restore_timeout=_RECOVERY_TIMEOUT,
-            ready_timeout=_RECOVERY_TIMEOUT,
-            poll_interval=_POLL_INTERVAL,
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await restore_info_level(
+                settings_advanced,
+                settings_restart,
+                settings_info,
+                addon_url,
+                restore_timeout=_RECOVERY_TIMEOUT,
+                ready_timeout=_RECOVERY_TIMEOUT,
+                poll_interval=_POLL_INTERVAL,
+            )

@@ -21,6 +21,7 @@ import uuid
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +127,15 @@ class TestCustomFilesystemPaths:
                 read = await mcp.call_tool_success("ha_read_file", {"path": fname})
                 assert "# 1567 test" in read.get("content", ""), read
         finally:
-            await safe_call_tool(
-                mcp_client_fs, "ha_delete_file", {"path": fname, "confirm": True}
-            )
-            await _set_allowed_paths(base_url, token, [])
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client_fs,
+                        "ha_delete_file",
+                        {"path": fname, "confirm": True},
+                    )
+                with cleanup.step():
+                    await _set_allowed_paths(base_url, token, [])
 
     async def test_exact_file_grants_root_read_write_live(
         self, mcp_client_fs, ha_container_with_fresh_config
@@ -155,10 +161,15 @@ class TestCustomFilesystemPaths:
                 read = await mcp.call_tool_success("ha_read_file", {"path": fname})
                 assert "# 2268 exact-file test" in read.get("content", ""), read
         finally:
-            await safe_call_tool(
-                mcp_client_fs, "ha_delete_file", {"path": fname, "confirm": True}
-            )
-            await _set_allowed_paths(base_url, token, [])
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client_fs,
+                        "ha_delete_file",
+                        {"path": fname, "confirm": True},
+                    )
+                with cleanup.step():
+                    await _set_allowed_paths(base_url, token, [])
 
     async def test_deny_floor_blocks_storage_even_with_custom_dir(
         self, mcp_client_fs, ha_container_with_fresh_config
@@ -186,4 +197,5 @@ class TestCustomFilesystemPaths:
                 f"allowlist; got: {data!r}"
             )
         finally:
-            await _set_allowed_paths(base_url, token, [])
+            with CleanupSteps() as cleanup, cleanup.step():
+                await _set_allowed_paths(base_url, token, [])

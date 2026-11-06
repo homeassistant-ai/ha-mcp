@@ -28,6 +28,7 @@ from ...utilities.assertions import (
     extract_error_message,
     safe_call_tool,
 )
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logging.basicConfig(level=logging.INFO)
@@ -1302,37 +1303,32 @@ class TestYamlConfigThemesIntegration:
             logger.info(f"Verified {theme_name} appears in theme list")
 
         finally:
-            # Cleanup: remove the theme and verify it disappears from the list.
-            # This guarantees the themes-module count==2 assertion can never
-            # observe the extra theme (sequential within-worker execution).
-            async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-                remove_data = await call_set_yaml_confirmed(
-                    mcp,
-                    {
-                        "yaml_path": theme_name,
-                        "action": "remove",
-                        "file": theme_file,
-                    },
+            # Cleanup: remove the theme and verify it disappears from the list, so
+            # the themes-module count==2 assertion (sequential per-worker runs) does
+            # not see it. After a failed body, a failed remove is only logged.
+            with CleanupSteps() as cleanup, cleanup.step():
+                async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+                    remove_data = await call_set_yaml_confirmed(
+                        mcp,
+                        {
+                            "yaml_path": theme_name,
+                            "action": "remove",
+                            "file": theme_file,
+                        },
+                    )
+                    assert remove_data.get("success") is True, (
+                        f"Theme remove should succeed: {remove_data}"
+                    )
+                    assert remove_data.get("post_action") == "reload_performed", (
+                        f"Theme remove should trigger reload_performed: {remove_data}"
+                    )
+                    listed = await mcp.call_tool_success(
+                        "ha_manage_theme", {"action": "list"}
+                    )
+                final_theme_names = listed["data"]["themes"]
+                assert theme_name not in final_theme_names, (
+                    f"{theme_name} should disappear after remove+reload: {final_theme_names}"
                 )
-                assert remove_data.get("success") is True, (
-                    f"Theme remove should succeed: {remove_data}"
-                )
-                assert remove_data.get("post_action") == "reload_performed", (
-                    f"Theme remove should trigger reload_performed: {remove_data}"
-                )
-
-            # Verify the theme no longer appears.
-            list_after_remove = await safe_call_tool(
-                mcp_client_with_yaml_config, "ha_manage_theme", {"action": "list"}
-            )
-            assert list_after_remove.get("success") is True, (
-                f"List themes after remove failed: {list_after_remove}"
-            )
-            final_theme_names = list_after_remove["data"]["themes"]
-            assert theme_name not in final_theme_names, (
-                f"{theme_name} should disappear after remove+reload: {final_theme_names}"
-            )
-            logger.info(f"Verified {theme_name} removed and no longer in list")
 
 
 @pytest.mark.filesystem
@@ -1699,12 +1695,15 @@ class TestExtraYamlKeysStorePathLive:
                 )
                 logger.info("Store-configured extra key alert2_store wrote live")
         finally:
-            await safe_call_tool(
-                mcp_client_with_yaml_config,
-                "ha_delete_file",
-                {"path": fname, "confirm": True},
-            )
-            await _set_extra_yaml_keys(base_url, token, [])
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client_with_yaml_config,
+                        "ha_delete_file",
+                        {"path": fname, "confirm": True},
+                    )
+                with cleanup.step():
+                    await _set_extra_yaml_keys(base_url, token, [])
 
     async def test_deny_floor_drops_store_key_and_blocks_write_live(
         self, mcp_client_with_yaml_config, ha_container_with_fresh_config
@@ -1747,4 +1746,5 @@ class TestExtraYamlKeysStorePathLive:
             assert "cannot be lifted" in message, message
             logger.info("Deny floor dropped the store key and blocked the write")
         finally:
-            await _set_extra_yaml_keys(base_url, token, [])
+            with CleanupSteps() as cleanup, cleanup.step():
+                await _set_extra_yaml_keys(base_url, token, [])

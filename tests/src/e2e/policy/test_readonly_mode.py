@@ -39,6 +39,7 @@ from ..utilities.assertions import (
     parse_mcp_result,
     tool_error_to_result,
 )
+from ..utilities.cleanup import CleanupSteps
 
 
 async def _expect_read_only_blocked(
@@ -690,6 +691,7 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
             )
             assert blocked.get("tool_name") == "ha_manage_radio", blocked
     finally:
-        await _restore_read_only_and_warm_client(
-            _set_read_only, _await_read_only, mcp_client, _transient
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _restore_read_only_and_warm_client(
+                _set_read_only, _await_read_only, mcp_client, _transient
+            )

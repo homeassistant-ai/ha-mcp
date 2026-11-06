@@ -20,7 +20,12 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    parse_mcp_result,
+    safe_call_tool,
+)
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -655,15 +660,17 @@ class TestDeviceSet:
         finally:
             # Restore the device's original labels even when an assertion
             # above fails, then drop the labels this test created.
-            await safe_call_tool(
-                mcp_client,
-                "ha_set_device",
-                {"device_id": device_id, "labels": original_labels},
-            )
-            for label_id in test_labels:
-                await safe_call_tool(
-                    mcp_client, "ha_config_remove_label", {"label_id": label_id}
-                )
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_set_device",
+                        {"device_id": device_id, "labels": original_labels},
+                    )
+                for label_id in test_labels:
+                    with cleanup.step():
+                        await safe_call_tool(
+                            mcp_client, "ha_config_remove_label", {"label_id": label_id}
+                        )
 
     async def test_update_device_no_changes(self, mcp_client):
         """
@@ -752,11 +759,10 @@ class TestDeviceSetBlankAndQuoteOnlyValues:
             after = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
             assert after.get("name_by_user") == original, after
         finally:
-            await safe_call_tool(
-                mcp_client,
-                "ha_set_device",
-                {"device_id": device_id, "name": original or ""},
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_set_device", {"device_id": device_id, "name": original or ""}
+                )
 
     async def test_whitespace_name_clears_custom_name(self, mcp_client: Any) -> None:
         device = await _device_for_entity(mcp_client, "number.small_range")
@@ -772,11 +778,10 @@ class TestDeviceSetBlankAndQuoteOnlyValues:
                 )
             assert data["device_entry"]["name_by_user"] is None, data
         finally:
-            await safe_call_tool(
-                mcp_client,
-                "ha_set_device",
-                {"device_id": device_id, "name": original or ""},
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_set_device", {"device_id": device_id, "name": original or ""}
+                )
 
 
 @pytest.mark.registry

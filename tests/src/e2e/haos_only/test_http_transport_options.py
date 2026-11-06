@@ -13,6 +13,7 @@ from ..utilities.addon_restart import (
     restore_advanced_settings,
     wait_for_addon_replacement,
 )
+from ..utilities.cleanup import CleanupSteps
 from ..utilities.streamable_http import parse_mcp_response
 
 _FIELDS = ("http_transport_diagnostics", "http_json_response", "log_level")
@@ -111,8 +112,9 @@ async def test_http_options_apply_and_restore_after_restart(
         assert "request_complete=True" in logs["log"]
         assert "response_complete=True" in logs["log"]
     finally:
-        await restore_advanced_settings(
-            advanced, restart, info, addon_url, changes=saved
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await restore_advanced_settings(
+                advanced, restart, info, addon_url, changes=saved
+            )
     assert await _read_settings(advanced) == saved
     assert await _probe_response(addon_url) == baseline_content_type

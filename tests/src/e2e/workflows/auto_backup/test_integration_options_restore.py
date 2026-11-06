@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.wait_helpers import wait_for_tool_result
 from .test_capture_and_restore import _enable_auto_backup, _wait_for_backup
 
@@ -87,20 +88,23 @@ class TestIntegrationOptionsRestore:
                 # report success.
                 await _wait_for_int_option(mcp_client, entry_id, 11)
             finally:
-                # Demo's options flow merges into the stored options, so an
-                # absent int cannot be put back; 10 is its form default for one.
-                await _set_int_option(
-                    lambda name, params: safe_call_tool(mcp_client, name, params),
-                    entry_id,
-                    before.get("int", 10),
-                )
-                if backup_name:
-                    await safe_call_tool(
-                        mcp_client,
-                        "ha_manage_backup",
-                        {
-                            "scope": "edits",
-                            "action": "delete",
-                            "backup_name": backup_name,
-                        },
-                    )
+                with CleanupSteps() as cleanup:
+                    with cleanup.step():
+                        # Demo's options flow merges into the stored options, so an
+                        # absent int cannot be put back; 10 is its form default for one.
+                        await _set_int_option(
+                            mcp.call_tool_success,
+                            entry_id,
+                            before.get("int", 10),
+                        )
+                    if backup_name:
+                        with cleanup.step():
+                            await safe_call_tool(
+                                mcp_client,
+                                "ha_manage_backup",
+                                {
+                                    "scope": "edits",
+                                    "action": "delete",
+                                    "backup_name": backup_name,
+                                },
+                            )

@@ -102,8 +102,8 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(
         )
         logger.info("✅ reference graph flagged %s", _ALIAS)
     finally:
-        # ``safe_call_tool`` so a cleanup failure cannot mask the real
-        # assertion above (tests/AGENTS.md "Test Patterns").
+        # Deletes the probe automation this test created under its own name, so
+        # ``safe_call_tool`` is enough (tests/AGENTS.md "Test Patterns").
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",

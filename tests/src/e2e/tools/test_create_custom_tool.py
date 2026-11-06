@@ -1953,12 +1953,11 @@ class TestCodeModeSavePersistenceFailure:
             )
         finally:
             # Always restore writeability so the rest of the session
-            # (and any retry) sees a usable persistence path. Wrap in
-            # its own try/except so a flaky SSH session here doesn't
-            # mask the original test exception — log the restore
-            # failure and re-raise, leaving the directory poisoned so
-            # the next test fails loudly instead of cascading on a
-            # stale 444/EISDIR.
+            # (and any retry) sees a usable persistence path. A failed
+            # restore is logged and re-raised, even over the original
+            # test exception: the directory stays poisoned, and this
+            # test should fail loudly on it instead of the next tests
+            # cascading on a stale 444/EISDIR.
             try:
                 docker_exec_in_addon(
                     HA_MCP_DEV_ADDON_SLUG,
