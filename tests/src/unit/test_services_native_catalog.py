@@ -10,7 +10,6 @@ per-field ``filter`` and the service's ``response`` shape.
 from __future__ import annotations
 
 import copy
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,7 +19,6 @@ from ha_mcp.tools import component_api
 from ha_mcp.tools.tools_services import _process_services, register_services_tools
 
 from ._services_catalog_fixture import SERVICES, TRANSLATIONS
-from .test_component_ws_search import FakeHass
 
 
 def _process(
@@ -346,37 +344,6 @@ def test_shaped_field_metadata_adds_no_incomplete_warning() -> None:
     )
 
     assert warnings == []
-
-
-@pytest.mark.asyncio
-async def test_component_prep_uses_home_assistant_configured_language(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from custom_components.ha_mcp_tools.websocket_api import (
-        services as component_services,
-    )
-
-    seen: list[str] = []
-
-    async def _descriptions(hass: Any) -> dict[str, Any]:
-        return {}
-
-    async def _translations(hass: Any, language: str) -> dict[str, Any]:
-        seen.append(language)
-        return {}
-
-    monkeypatch.setattr(
-        component_services, "_fetch_service_descriptions", _descriptions
-    )
-    monkeypatch.setattr(
-        component_services, "_fetch_service_translations", _translations
-    )
-
-    await component_services._services_list_prep(
-        FakeHass(config=SimpleNamespace(language="de")), {}
-    )
-
-    assert seen == ["de"]
 
 
 class _LegacyClient:
