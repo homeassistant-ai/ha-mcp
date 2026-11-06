@@ -2184,7 +2184,7 @@
         },
         "menu_choice": {
           "type": "str | None",
-          "description": "describe only: sub-type of a menu-based helper (template, group), e.g. 'sensor'.",
+          "description": "describe only: sub-type of a menu-based helper (template, group), e.g. 'sensor'. A choice that finishes the flow saves the helper: flow_type create_entry.",
           "default": null
         },
         "helper_id": {
@@ -2740,7 +2740,7 @@
   {
     "name": "ha_get_integration",
     "title": "Get Integration",
-    "description": "Get integration (config entry) information with pagination.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nEXAMPLES:\n- List / search: ha_get_integration(query=\"zigbee\")\n- Get an entry with its editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id=\"abc123\", include_diagnostics=True, diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10, diagnostics_data_offset=20)\n- Inspect a subentry reconfigure schema: ha_get_integration(entry_id=\"abc123\", include_subentry_schema=True, subentry_type=\"conversation\", subentry_id=\"sub123\")\n- List template entries with their options: ha_get_integration(domain=\"template\")\n\nSTATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',\n'failed_unload', 'migration_error'.\n\nOPTIONS: ``options`` reflect the entry's persisted values. Values that\nmatch a ``secrets.yaml`` entry are returned as ``\"**redacted**\"``. Use\n``include_schema=True`` to see every editable field and its\ndefault/type. The shape depends on the read path, which the response\ndoes not name: when the ha_mcp_tools custom component serves the read,\n``options`` are the stored mapping as-is, so a field never set may be\nabsent and a section's fields stay nested under the section key (e.g. a\ntemplate helper's ``additional_options``). Otherwise they are read from\nthe options flow form, which shows unset fields at their schema default\nand lists a section's fields at the top level. Check both places for a\nsection field.\n\nEach entry carries ``log_level``: the canonical Python logger level name\n(``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the\nintegration has a log-level override (set one with\n``ha_set_integration(log_level=...)``), or ``\"DEFAULT\"``\n(uppercase sentinel) when no override is set; and ``log_level_raw``: the\noriginal numeric level (e.g. ``10`` for DEBUG) when HA returned an int,\n``None`` otherwise. This is distinct from the app side, where\n``ha_get_app`` returns Supervisor's lowercase ``\"default\"`` literal — do\nnot cross-compare.",
+    "description": "Get integration (config entry) information with pagination.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nWHEN NOT TO USE:\n- Changing an entry, or describing a setup form or a form behind a\n  menu: use ha_set_integration (without config it returns the form).\n\nEXAMPLES:\n- List / search: ha_get_integration(query=\"zigbee\")\n- Get an entry with its editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id=\"abc123\", include_diagnostics=True, diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10, diagnostics_data_offset=20)\n- Inspect a subentry reconfigure schema: ha_get_integration(entry_id=\"abc123\", include_subentry_schema=True, subentry_type=\"conversation\", subentry_id=\"sub123\")\n- Options flow that opens with a menu: ha_get_integration(entry_id=\"abc123\", include_schema=True) lists menu_options; ha_set_integration(entry_id=\"abc123\", menu_choice=\"<option>\") opens that form\n- List template entries with their options: ha_get_integration(domain=\"template\")\n- Only service integrations: ha_get_integration(integration_type=\"service\")\n- An entry's panel commands: ha_get_integration(entry_id=\"abc123\", include_ws_commands=True)\n\nOPTIONS: ``options`` reflect the entry's persisted values. Values that\nmatch a ``secrets.yaml`` entry are returned as ``\"**redacted**\"``. For\nthe options form itself, see include_schema. The shape depends on the read path, which the response\ndoes not name: when the ha_mcp_tools custom component serves the read,\n``options`` are the stored mapping as-is, so a field never set may be\nabsent and a section's fields stay nested under the section key (e.g. a\ntemplate helper's ``additional_options``). Otherwise they are read from\nthe options flow form, which shows unset fields at their schema default\nand lists a section's fields at the top level. Check both places for a\nsection field.\n\nEach entry carries ``log_level``: the canonical Python logger level name\n(``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the\nintegration has a log-level override (set one with\n``ha_set_integration(log_level=...)``), or ``\"DEFAULT\"``\n(uppercase sentinel) when no override is set; and ``log_level_raw``: the\noriginal numeric level (e.g. ``10`` for DEBUG) when HA returned an int,\n``None`` otherwise. This is distinct from the app side, where\n``ha_get_app`` returns Supervisor's lowercase ``\"default\"`` literal — do\nnot cross-compare.",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -2758,6 +2758,11 @@
           "description": "Filter by integration domain (e.g. 'template', 'group'). When set, includes the full options/configuration for each entry.",
           "default": null
         },
+        "integration_type": {
+          "type": "str | None",
+          "description": "When listing, keep only entries whose integration has this type, matched by Home Assistant itself (the manifest's integration_type, e.g. 'device', 'hub', 'service', 'helper'). Home Assistant does not reject an unknown type: for any type but 'helper' it also keeps entries whose integration it cannot find (e.g. a removed custom integration), so an unknown type returns only those.",
+          "default": null
+        },
         "include_options": {
           "type": "bool",
           "description": "Include the options object for each entry. Automatically enabled when domain filter is set. For UI-created flow-based helpers (template, group, utility_meter, derivative, ...), the current config — template body, group members, source entity, etc. — is surfaced here by probing the options flow. Prefer this over include_schema when you only need to read the current values; use include_schema when you also need the field types or selector metadata.",
@@ -2765,7 +2770,7 @@
         },
         "include_schema": {
           "type": "bool",
-          "description": "When entry_id is set, also return the options flow schema (available fields and their types). Only applies when supports_options=true.",
+          "description": "When entry_id is set, also describe the options flow form as options_schema.fields: each field's type, current value and Home Assistant's help text. A flow that opens with a menu lists menu_options instead (ha_set_integration(entry_id=..., menu_choice=...) opens one), and a flow Home Assistant aborts gives aborted, plus reason_text when Home Assistant has a string for the reason. Only applies when supports_options=true. The flow is started, described and aborted. For an integration's setup form, use ha_set_integration(domain=...).",
           "default": false
         },
         "include_subentries": {
@@ -2775,7 +2780,7 @@
         },
         "include_subentry_schema": {
           "type": "bool",
-          "description": "When entry_id is set, return introspection-only config subentry schema information; no subentry is created. Pair with subentry_type, and optionally subentry_id for reconfigure schema.",
+          "description": "When entry_id is set, describe a config subentry flow's form as subentry_schema.fields (same shape as include_schema); the flow is aborted afterwards. Pair with subentry_type, and optionally subentry_id for the reconfigure form.",
           "default": false
         },
         "subentry_type": {
@@ -2820,9 +2825,9 @@
           "description": "When entry_id is set, also fetch the integration's diagnostics dump — integration-defined JSON (commonly includes redacted config, device list, state snapshots; exact top-level keys vary by integration), the same artifact as the UI's 'Download diagnostics'. Payloads can be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with diagnostics_fields or diagnostics_truncate_at_bytes.",
           "default": false
         },
-        "include_knx_project": {
+        "include_ws_commands": {
           "type": "bool",
-          "description": "When entry_id is a KNX config entry, also return the parsed ETS project: the full group-address table (address, name, DPT, description) under knx_project.group_addresses, plus the group-range hierarchy and project metadata. This GA table is not in the diagnostics dump; per-entity GA assignments are (config_store / configuration_yaml). Ignored (with a warning) when the entry is not a KNX integration. KNX exposes a single project, so the result is the same for every KNX entry_id.",
+          "description": "When entry_id is set, also list the integration's own '<domain>/' WebSocket commands (the API its panel uses, e.g. KNX's knx/get_knx_project) under ws_commands, each with the request schema Home Assistant registered for it. Send one with ha_set_integration(entry_id=..., ws_command=...). Needs the ha_mcp_tools custom component; without it a warning says the list is unavailable.",
           "default": false
         },
         "device_id": {
@@ -2958,7 +2963,7 @@
   {
     "name": "ha_set_integration",
     "title": "Set Integration",
-    "description": "Manage an integration (config entry): enable/disable, add, update options, or reconfigure.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n- Reconfigure: entry_id + reconfigure=True + config — connection\n  settings such as host, port, credentials. Repeat with the token the\n  preflight returns as confirm_token to apply.\n- Log level: log_level + domain (or entry_id) — sets how much the\n  integration logs; read it back with ha_get_integration's log_level.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. `otp` is the user's to set up in the HA UI: its\n  secret is a credential enrolled in an authenticator app; do not create it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update. Its supports_reconfigure field tells\nyou whether an entry qualifies for reconfigure=True.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step instead of completing. Reconfigure edits the\nsettings a live integration connects with: a wrong host or credential\ntakes it offline, and there is no automatic rollback — the returned\nrollback metadata describes repeating the official flow by hand with\nthe previous values, which this tool cannot read back. The preflight\ndoes not validate config keys against the integration's form; wrong\nfield names surface on the confirm call.\n\nEXAMPLES:\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure preflight: ha_set_integration(entry_id=\"abc123\", reconfigure=True, config={\"host\": \"10.0.0.5\"}), then repeat adding confirm_token=\"sha256:...\"\n- Debug logging: ha_set_integration(domain=\"zha\", log_level=\"DEBUG\"), then log_level=\"DEFAULT\" to stop",
+    "description": "Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ menu_choice, + config) — runs the\n  domain's config flow one step per call, as the HA UI does.\n- Update options: entry_id (+ menu_choice, + config) — the entry's\n  options flow (what the \"Configure\" button does in the HA UI), one\n  step per call.\n- Reconfigure: entry_id + reconfigure=True — connection settings\n  such as host, port, credentials, one step per call. Each call\n  except an abort first checks the entry's identity; the first call\n  without config returns the flow's first step.\n- Log level: log_level + domain (or entry_id) — sets how much the\n  integration logs; read it back with ha_get_integration's log_level.\n- Integration command: entry_id + ws_command (+ ws_data) — what the\n  integration's panel sends (KNX project, entities, telegrams).\n  Home Assistant marks none of these commands as read-only, so a read\n  such as knx/get_knx_project goes through this tool too.\n\nFlows, one step per call: a call answers the step the flow is at and\nreturns Home Assistant's next answer. A form comes back with its\nfields (type, default, current value, Home Assistant's help text) and\nflow_id; a menu with menu_options. Answer with flow_id and config (a\nform) or menu_choice (a menu); flow_id alone returns the step again,\nand flow_id with abort=True ends the flow. Without flow_id a new flow\nstarts: its first form gets config, and without config the call\nreturns that first step. A form Home Assistant rejects is an error\nwith errors and error_text (Core's text), and the flow stays open to\ncorrect it. A flow stays open until Home Assistant finishes\nit or you abort it; while a setup flow is open, Home Assistant\nrefuses another one for the same device as already_in_progress.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. `otp` is the user's to set up in the HA UI: its\n  secret is a credential enrolled in an authenticator app; do not create it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry'); subentry_type\n  here describes their form; a menu_choice that finishes the flow\n  saves the subentry.\n- Removing an entry: use ha_remove_helpers_integrations.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields. Its supports_reconfigure field tells you whether an\nentry qualifies for reconfigure=True, and\nha_get_integration(entry_id=..., include_ws_commands=True) lists the\ncommands ws_command accepts with their schemas.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) are refused at that step and\naborted. A progress step (Home Assistant working in the background)\nis waited out for up to 120 s; after that the error carries flow_id\nto ask again. When Home Assistant does not answer a submit or a\nprogress poll (or, on reconfigure, answers with any 5xx), the error\ncarries status applied_but_unverified: the entry may exist or the\nchange may be saved, so check it before retrying. An aborted flow\nreturns Core's own text next to the key (reason_text). Reconfigure\nedits the settings a live integration connects with: a wrong host or\ncredential takes it offline, and there is no automatic rollback. A\nfinished reconfigure waits for the reload Home Assistant runs and\nreports the entry's state as entry_state: status applied_and_verified\nonce it is loaded, applied_but_unverified otherwise.\n\nEXAMPLES:\n- Add: ha_set_integration(domain=\"local_calendar\", config={\"calendar_name\": \"Chores\"})\n- Add in two steps: ha_set_integration(domain=\"knx\", config={\"connection_type\": \"routing\"}) returns the routing form and flow_id, then ha_set_integration(domain=\"knx\", flow_id=\"...\", config={})\n- Answer a menu: ha_set_integration(domain=\"...\", flow_id=\"...\", menu_choice=\"<one of menu_options>\")\n- See the setup form first: ha_set_integration(domain=\"workday\")\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure: ha_set_integration(entry_id=\"abc123\", reconfigure=True), then ha_set_integration(entry_id=\"abc123\", reconfigure=True, flow_id=\"...\", config={\"host\": \"10.0.0.5\"})\n- Cancel a flow: ha_set_integration(domain=\"knx\", flow_id=\"...\", abort=True)\n- Debug logging: ha_set_integration(domain=\"zha\", log_level=\"DEBUG\"), then log_level=\"DEFAULT\" to stop\n- KNX project: ha_set_integration(entry_id=\"abc123\", ws_command=\"knx/get_knx_project\")",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -2978,18 +2983,18 @@
         },
         "config": {
           "type": "dict[str, Any] | None",
-          "description": "Flow form data. Updating an existing entry — options or reconfigure — is a patch: a field you omit keeps its current value, and a field set to null is cleared where the integration's schema allows that field to be empty. Multi-step flows consume keys per step. A field two steps declare gets your one value both times; pass step_values={'<step_id>': {'<field>': <value>}} to give a step its own value, or to leave the field out of that step; a LIST of those objects supplies one per encounter when the flow presents a step more than once. Menu steps take 'next_step_id' — a string, or a list of successive selections for flows that present more than one menu (e.g. a menu revisited after each branch, ending in a finish option). The step's data_schema is returned on validation errors so field names can be corrected.",
+          "description": "The values for the form the flow is at: one form per call. Without flow_id it answers the new flow's first form (after menu_choice, when the flow opens with a menu). A key the form does not declare is refused before anything is sent. On an existing entry (options, reconfigure) a field you omit keeps its current value, and a field set to null is cleared where the integration's schema allows that field to be empty.",
           "default": null
         },
         "reconfigure": {
           "type": "bool",
           "default": false,
-          "description": "Use the existing config entry's official reconfigure flow (its connection settings) instead of its options flow. Without confirm_token this is a read-only preflight that returns one."
+          "description": "Use the existing config entry's official reconfigure flow (its connection settings) instead of its options flow. Every call except an abort checks the entry's identity first. Without flow_id and config this opens the flow and returns its first step; nothing is submitted. Continue with the flow_id this entry's call returned: Home Assistant does not say which entry a reconfigure flow edits."
         },
         "expected_device_id": {
           "type": "str | None",
           "default": null,
-          "description": "Requires reconfigure=True. Device registry ID the entry must still own, before and after the change."
+          "description": "Requires reconfigure=True. Device registry ID the entry must still own."
         },
         "expected_unique_id": {
           "type": "str | None",
@@ -3006,15 +3011,50 @@
           "default": null,
           "description": "Requires reconfigure=True. Exact entity IDs that must remain associated with the entry."
         },
-        "confirm_token": {
-          "type": "str | None",
-          "default": null,
-          "description": "Requires reconfigure=True. Any token still matching the entry's current state and the same requested config is accepted, so a token stays valid while nothing moves."
-        },
         "log_level": {
           "type": "Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'DEFAULT'] | None",
           "default": null,
-          "description": "Set the integration's log level, like the integration page's Enable/Disable debug logging: pass the integration with 'domain' (no config flow runs) or 'entry_id', and nothing else. Lasts through the next Home Assistant restart. DEFAULT clears the override: the integration then logs at the inherited default level, and a level set for it in configuration.yaml returns only after a restart."
+          "description": "Set the integration's log level, like the integration page's Enable/Disable debug logging: pass the integration with 'domain' (no config flow runs) or 'entry_id', and no other mode's parameters (log_persistence may accompany it). Lasts through the next Home Assistant restart unless log_persistence says otherwise. DEFAULT clears the override: the integration then logs at the inherited default level, and a level set for it in configuration.yaml returns only after a restart."
+        },
+        "log_persistence": {
+          "type": "str | None",
+          "default": null,
+          "description": "Only with log_level: how long Home Assistant keeps the level. 'once' (default) through the next restart, 'permanent' after every restart until changed, 'none' until the next restart. Home Assistant validates the value."
+        },
+        "menu_choice": {
+          "type": "str | None",
+          "default": null,
+          "description": "The option to pick at a menu step: with flow_id the menu the flow is at, without it the menu a new flow opens with. Refused when the step is not a menu or does not offer the option."
+        },
+        "subentry_type": {
+          "type": "str | None",
+          "default": null,
+          "description": "With entry_id: the integration-defined subentry type whose form to describe as subentry_schema; the flow is aborted afterwards, unless a menu_choice finished it (flow_type create_entry: saved)."
+        },
+        "subentry_id": {
+          "type": "str | None",
+          "default": null,
+          "description": "With entry_id and subentry_type: the existing subentry whose reconfigure form to describe."
+        },
+        "flow_id": {
+          "type": "str | None",
+          "default": null,
+          "description": "Continue an open flow: the flow_id a previous call returned, with the same domain or entry_id (and reconfigure=True for a reconfigure flow), until ha-mcp restarts. With config or menu_choice it answers the step; alone it returns the step again."
+        },
+        "abort": {
+          "type": "bool",
+          "default": false,
+          "description": "With flow_id: end the open flow without saving. A flow Home Assistant no longer has, or one ha-mcp did not open (or opened before it restarted), is an error."
+        },
+        "ws_command": {
+          "type": "str | None",
+          "default": null,
+          "description": "With entry_id: one of the integration's own '<domain>/' WebSocket commands to send, as its panel in the HA UI does (e.g. 'knx/get_knx_project'). Its result is returned under result. Streaming commands are refused."
+        },
+        "ws_data": {
+          "type": "dict[str, Any] | None",
+          "default": null,
+          "description": "The ws_command's arguments, without 'type' and 'id'. Home Assistant checks them against the command's registered schema and returns its error when they do not match."
         }
       }
     },
