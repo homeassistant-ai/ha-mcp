@@ -685,11 +685,11 @@ Template helper edit backups and restores also require the component, using eith
 
 ### How do I install it?
 
-**Using HACS (recommended, Home Assistant 2026.10 or older):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or add it manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
+**Using HACS (recommended, Home Assistant 2026.10 or older):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **HACS** > **Integrations**, search for **HA-MCP**, and **Download**. The main repository is already in the default catalog.
 
-**Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP — Manage Home Assistant with AI**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
+**Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
 
-After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP — Manage Home Assistant with AI**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
 
 **Manual install:** Copy `custom_components/ha_mcp_tools/` from the [repository](https://github.com/homeassistant-ai/ha-mcp) into your HA config's `custom_components/` directory. Restart Home Assistant, then add the integration as described above.
 
@@ -704,7 +704,7 @@ Yes. The component is required, but the tools are also gated by feature flags fo
 
 The split is deliberate: YAML *reads* sit behind the filesystem flag, and only YAML *edits* need `ENABLE_YAML_CONFIG_EDITING`.
 
-The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP — Manage Home Assistant with AI** (no feature flag required). On the Marketplace, first accept the warning in its UI; catalog installs and updates do not require a GitHub connection. An AI agent can drive the install with the generic HACS tools after that warning is accepted for its connection's user. A GitHub connection is still needed if you choose a custom repository such as the legacy distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first accept the warning in its UI; catalog installs and updates do not require a GitHub connection. An AI agent can drive the install with the generic HACS tools after that warning is accepted for its connection's user. A GitHub connection is still needed if you choose a custom repository such as the legacy distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

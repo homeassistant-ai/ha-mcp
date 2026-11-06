@@ -205,14 +205,12 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
             "second entry must be added to it.",
             suggestions=[
                 "In Home Assistant: Settings → Devices & Services → "
-                + 'HA-MCP — Manage Home Assistant with AI (formerly HA-MCP Custom Component) → "Add entry" → choose '
+                + '“HA-MCP — Manage Home Assistant with AI” (“HA-MCP Custom Component” on older installs) → "Add entry" → choose '
                 + '"HA-MCP File & YAML Tools" (NOT '
                 + '"HA-MCP Server", which starts a second in-process server '
                 + "this ha-mcp server does not need)",
                 "If the HA-MCP integration is not listed there, install it "
-                + 'first: ha_manage_hacs(action="add_repository", '
-                + 'repository="homeassistant-ai/ha-mcp", '
-                + 'category="integration"), then ha_manage_hacs('
+                + "from the default catalog: ha_manage_hacs("
                 + 'action="download", '
                 + 'repository_id="homeassistant-ai/ha-mcp"), '
                 + "then restart Home Assistant (ha_restart)",

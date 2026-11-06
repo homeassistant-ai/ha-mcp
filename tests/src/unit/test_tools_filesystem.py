@@ -679,41 +679,36 @@ class TestHaListFilesTool:
         client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
-        # Capture the registered function
-        registered_func = None
-
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_list_files" in func.__name__:
-                    registered_func = func
-                return func
-
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "true", "ENABLE_BETA_FEATURES": "true"}
+        ):
             register_filesystem_tools(mcp, client)
 
-        # Call the captured function
-        if registered_func:
-            # Need to unwrap from log_tool_usage decorator
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            with pytest.raises(ToolError) as exc_info:
-                await inner_func(path="www/")
-            # The error is the #1853 install recipe: generic HACS tools plus
-            # the File & YAML entry, never the removed installer tool.
-            error_data = json.loads(str(exc_info.value))
-            assert error_data["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-            suggestions = " ".join(error_data["error"]["suggestions"])
-            assert 'repository="homeassistant-ai/ha-mcp"' in suggestions
-            assert "HA-MCP File & YAML Tools" in suggestions
-            assert "ha_install_mcp_tools" not in suggestions
+        registered_func = next(
+            (
+                call.args[0]
+                for call in mcp.add_tool.call_args_list
+                if call.args and call.args[0].__name__ == "ha_list_files"
+            ),
+            None,
+        )
+        assert registered_func is not None
+        with pytest.raises(ToolError) as exc_info:
+            await registered_func(path="www/")
+        # The error is the #1853 install recipe: generic HACS tools plus
+        # the File & YAML entry, never the removed installer tool.
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+        suggestions = " ".join(error_data["error"]["suggestions"])
+        assert (
+            'ha_manage_hacs(action="download", repository_id="homeassistant-ai/ha-mcp")'
+            in suggestions
+        )
+        # The integration is in the default catalog; adding a custom repo
+        # would unnecessarily require a connected Marketplace GitHub account.
+        assert 'action="add_repository"' not in suggestions
+        assert "HA-MCP File & YAML Tools" in suggestions
+        assert "ha_install_mcp_tools" not in suggestions
 
     @pytest.mark.asyncio
     async def test_calls_service_when_mcp_tools_installed(self):

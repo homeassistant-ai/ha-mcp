@@ -629,7 +629,7 @@ async def _async_check_component_compat(
 
     if outdated:
         _LOGGER.warning(
-            "The installed ha-mcp server requires HA-MCP — Manage Home Assistant with AI %s or "
+            "The installed ha-mcp server requires the HA-MCP integration %s or "
             "newer, but %s is running; update the component via HACS (the "
             "Marketplace on Home Assistant 2026.11+).",
             required,

@@ -43,13 +43,14 @@ The recommended way to run ha-mcp is the **HA-MCP integration**. It installs int
 
 > The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
-1. Install the **HA-MCP integration**. On **Home Assistant 2026.10 or older**, from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp` (category: **Integration**), then **Download**.
-   On **Home Assistant 2026.11 or newer**, open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP — Manage Home Assistant with AI**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
-   Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases; nothing to change.
+1. Install the **HA-MCP integration**. On **Home Assistant 2026.10 or older**, open HACS — click the badge above, or open **Integrations**, search for **HA-MCP**, then **Download**.
+   On **Home Assistant 2026.11 or newer**, open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
+   Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases. On the Marketplace, keep GitHub connected for its background checks on that custom repository.
+   Older installed releases may still appear as **HA-MCP Custom Component**; searching for **HA-MCP** matches both names.
 2. **Restart Home Assistant.**
 3. Decide which administrator account the server acts as. Either create a long-lived access token on your own account (your profile → **Security** → **Long-lived access tokens** → **Create token**; it works from anywhere if it leaks, and the server's changes show under your name), or, safer, create an account just for HA-MCP under **Settings → People → Add person** with **Allow login**, **Local access only** and **Administrator** on. Never use your own login for the second option.
-4. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP — Manage Home Assistant with AI** and choose **HA-MCP Server**. Paste your token, or enter the user name and password of the account you made for HA-MCP (HA-MCP creates its token), pick how clients may connect — **Remote access through Home Assistant** (start with **Secret URL**, the simplest; **Home Assistant sign-in** adds a login) and/or **Network access: Local network** — then click **Submit**. Both start disabled, so a client on another device needs one of them.
-5. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP — Manage Home Assistant with AI → HA-MCP Server → Configure**). A notification confirms the server started and points you there.
+4. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP** and choose **HA-MCP Server**. Paste your token, or enter the user name and password of the account you made for HA-MCP (HA-MCP creates its token), pick how clients may connect — **Remote access through Home Assistant** (start with **Secret URL**, the simplest; **Home Assistant sign-in** adds a login) and/or **Network access: Local network** — then click **Submit**. Both start disabled, so a client on another device needs one of them.
+5. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → “HA-MCP — Manage Home Assistant with AI” → HA-MCP Server → Configure**). A notification confirms the server started and points you there.
 6. Paste that URL into your AI client — done.
 
 **Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.
@@ -310,13 +311,13 @@ These tools also require beta feature flags. See **[Beta Features](docs/beta.md)
 
 ### Install
 
-Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP — Manage Home Assistant with AI**:
+Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP integration**:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
 
-To add manually on Home Assistant 2026.10 or older: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**. On 2026.11 or newer: open **Marketplace**, accept the first-run warning, search for **HA-MCP — Manage Home Assistant with AI**, and **Install**. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
+To add manually on Home Assistant 2026.10 or older: open **HACS** > **Integrations**, search for **HA-MCP**, and **Download**. On 2026.11 or newer: open **Marketplace**, accept the first-run warning, search for **HA-MCP**, and **Install**. The main repository is in the default catalog for both. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
-After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP — Manage Home Assistant with AI**, and add the **HA-MCP File & YAML Tools** entry.
+After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP**, and add the **HA-MCP File & YAML Tools** entry.
 
 To run the full ha-mcp server in-process through this same component, see the **Get Started** section at the top and the [full in-process server documentation →](docs/in-process-server.md).
 

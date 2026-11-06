@@ -553,9 +553,9 @@ class BugReportTools:
         if not domain_registered:
             return (
                 "not set up — no ha_mcp_tools services registered; add the "
-                '"HA-MCP File & YAML Tools" entry via "Add entry" on the '
-                "HA-MCP — Manage Home Assistant with AI integration (or install the "
-                "component first)"
+                '"HA-MCP File & YAML Tools" entry via "Add entry" under '
+                "Settings → Devices & Services → “HA-MCP — Manage Home Assistant with AI” "
+                "(“HA-MCP Custom Component” on older installs), or install the component first"
             )
         if not bootstrap_registered:
             return "set up, but the component is pre-0.5.0 (update via HACS or the Marketplace)"
