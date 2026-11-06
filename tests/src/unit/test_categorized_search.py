@@ -15,6 +15,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import Tool
+from ha_mcp._vendor.fastmcp.tools.base import ToolResult
 from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
 from ha_mcp.tool_catalog import catalog_endpoint
@@ -752,6 +753,41 @@ class TestCategorizedCallDispatch:
         ctx.fastmcp.call_tool.assert_called_once_with(
             "ha_manage_app", {"slug": "core_ssh"}
         )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("name", "arguments"),
+        [
+            ("ha_manage_addon", {"slug": "core_ssh"}),
+            (
+                "ha_call_write_tool",
+                {"name": "ha_manage_addon", "arguments": {"slug": "core_ssh"}},
+            ),
+        ],
+        ids=["retired_name", "double_wrapped_retired_name"],
+    )
+    async def test_proxy_call_on_a_retired_name_says_the_tool_list_is_stale(
+        self, transform, name, arguments
+    ):
+        """The proxy resolves a retired name itself, so the alias middleware
+        only ever sees the current one and adds no warning; a client using the
+        search proxies would be served without learning its list is stale."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_app", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(
+            call_tool_return=ToolResult(structured_content={"success": True})
+        )
+        fn = self._get_proxy_fn(transform, "write")
+
+        result = await fn(name, arguments, ctx)
+
+        (warning,) = result.structured_content["warnings"]
+        assert "`ha_manage_addon`" in warning and "`ha_manage_app`" in warning
 
     @pytest.mark.anyio
     async def test_write_proxy_happy_path(self, transform):

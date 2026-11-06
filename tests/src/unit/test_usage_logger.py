@@ -353,7 +353,13 @@ class TestParameterRedaction:
         assert result["data"]["entity_id"] == "lock.front"
 
     @pytest.mark.parametrize(
-        "truncated", ['{"code": "4321"', '[{"code": "4321"}', '[ [{"code": "4321"']
+        "truncated",
+        [
+            '{"code": "4321"',
+            '[{"code": "4321"}',
+            '[ [{"code": "4321"',
+            '[0, {"code": "4321"}',
+        ],
     )
     def test_code_inside_a_truncated_json_string_left_out(self, truncated):
         """A stringified object, alone or in an array, that does not parse
