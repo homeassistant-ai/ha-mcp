@@ -280,12 +280,21 @@ _OLD_DEV_TAGS = ["v2.2.3-dev.423", "v9.0.0-dev.996", "v9.0.0-dev.997"]
 
 class TestMirrorReleaseOnTag:
     @pytest.mark.parametrize(
-        "scenario", ["new", "bad-digest", "upstream-pruned", "incomplete-upload"]
+        "scenario",
+        [
+            "new",
+            "bad-digest",
+            "upstream-pruned",
+            "incomplete-upload",
+            "draft-empty",
+            "draft-incomplete",
+            "draft-complete-upstream-pruned",
+        ],
     )
     def test_only_verified_or_already_uploaded_zips_can_be_published(
         self, tmp_path: Path, scenario: str
     ) -> None:
-        """A bad copy blocks publishing; an existing mirror asset survives pruning."""
+        """A retry recovers drafts and preserves uploaded assets after pruning."""
         marker = tmp_path / ".github"
         marker.mkdir()
         (marker / "component-zip-source.json").write_text(
@@ -301,15 +310,31 @@ class TestMirrorReleaseOnTag:
             'gh() { printf "%s\\n" "$*" >> calls\n'
             'case "$1 $2" in\n'
             '  "api repos/mirror/repo/releases/tags/v9.1.0-dev.1")\n'
+            '    case "$SCENARIO" in draft-*) return 1;; esac\n'
             '    [ "$SCENARIO" = upstream-pruned ] && printf "sha256:%s\\n" "$ZIP_DIGEST"; return 0;;\n'
+            '  "api repos/mirror/repo/releases/73")\n'
+            '    case "$SCENARIO" in upstream-pruned|draft-complete-upstream-pruned)\n'
+            '      printf "sha256:%s\\n" "$ZIP_DIGEST";; esac\n'
+            "    return 0;;\n"
             '  "release view")\n'
-            '    case "$SCENARIO" in upstream-pruned|incomplete-upload) ;; *) return 1;; esac\n'
-            '    case "$*" in *isDraft*) echo false;; *) echo ha_mcp_tools.zip;; esac;;\n'
+            '    case "$SCENARIO" in upstream-pruned|incomplete-upload|draft-*) ;; *) return 1;; esac\n'
+            '    case "$*" in *databaseId*) echo 73;; *isDraft*)\n'
+            '      case "$SCENARIO" in draft-*) echo true;; *) echo false;; esac;;\n'
+            "      *) echo ha_mcp_tools.zip;; esac;;\n"
             '  "api repos/upstream/repo/releases/tags/v9.1.0-dev.1")\n'
-            '    [ "$SCENARIO" = upstream-pruned ] && return 1\n'
+            '    case "$SCENARIO" in *upstream-pruned) return 1;; esac\n'
             '    printf "sha256:%s\\n" "$ZIP_DIGEST";;\n'
             '  "release download") mkdir -p dist/integration; cp payload.zip dist/integration/ha_mcp_tools.zip;;\n'
-            '  "release create"|"release edit"|"release upload") return 0;;\n'
+            '  "release create")\n'
+            '    [ "$4" = dist/integration/ha_mcp_tools.zip ] && [ -s "$4" ] || return 1\n'
+            "    touch mirror-uploaded;;\n"
+            '  "release upload")\n'
+            '    case "$SCENARIO" in *incomplete*)\n'
+            '      case "$*" in *--clobber*) ;; *) return 1;; esac;; esac\n'
+            "    touch mirror-uploaded;;\n"
+            '  "release edit")\n'
+            '    [ "$SCENARIO" = draft-complete-upstream-pruned ] || [ -f mirror-uploaded ] || return 1\n'
+            "    touch draft-published;;\n"
             "  *) return 2;;\nesac\n}\nsleep() { :; }\n"
         )
         if sys.platform == "win32":
@@ -350,7 +375,7 @@ class TestMirrorReleaseOnTag:
             assert not any(c.startswith("release create") for c in attempted)
         else:
             assert result.returncode == 0, result.stderr
-            if scenario == "upstream-pruned":
+            if scenario.endswith("upstream-pruned"):
                 assert not any(
                     c.startswith(
                         ("api repos/upstream/", "release download", "release upload")
@@ -360,13 +385,16 @@ class TestMirrorReleaseOnTag:
             else:
                 expected = (
                     "release upload"
-                    if scenario == "incomplete-upload"
+                    if scenario
+                    in {"incomplete-upload", "draft-empty", "draft-incomplete"}
                     else "release create"
                 )
                 assert any(c.startswith(expected) for c in attempted)
                 assert (
                     tmp_path / "dist/integration/ha_mcp_tools.zip"
                 ).read_bytes() == payload.read_bytes()
+            if scenario.startswith("draft-"):
+                assert (tmp_path / "draft-published").exists()
 
     def test_keeps_as_many_dev_pre_releases_as_the_main_repository(self) -> None:
         # Past HACS's 30-release window a stable release behind the dev
