@@ -245,16 +245,51 @@ class TestMirrorSyncShape:
         if finalized:
             values = output.read_text().splitlines()
             assert "channel=stable" in values and f"finalized_tag={finalized}" in values
-            reader = next(
-                s
-                for s in workflow["jobs"]["gate"]["steps"]
-                if s.get("id") == "finalized"
-            )
-            assert "workflow_dispatch" in reader["if"]
-            inputs = re.findall(r"inputs\.(\w+)", reader["with"]["run-id"])
+
+    def test_manual_recovery_can_read_the_selected_publishers_artifact(self) -> None:
+        workflow = _workflow(_MIRROR)
+        gate = workflow["jobs"]["gate"]
+        reader = next(s for s in gate["steps"] if s.get("id") == "finalized")
+        assert gate["permissions"]["actions"] == "read"
+        assert "workflow_dispatch" in reader["if"]
+        inputs = re.findall(r"inputs\.(\w+)", reader["with"]["run-id"])
+        assert (
+            len(inputs) == 1
+            and inputs[0] in workflow[True]["workflow_dispatch"]["inputs"]
+        )
+
+    @pytest.mark.parametrize(
+        "branch,run_id,accepted",
+        [
+            ("master", "42", True),
+            ("feature", "42", False),
+            ("master", "abc", False),
+            ("master", "0", False),
+            ("master", "", False),
+        ],
+    )
+    def test_manual_recovery_rejects_an_untrusted_ref_or_invalid_run_id(
+        self, tmp_path: Path, branch: str, run_id: str, accepted: bool
+    ) -> None:
+        step = next(
+            s
+            for s in _workflow(_MIRROR)["jobs"]["gate"]["steps"]
+            if s.get("name") == "Validate stable recovery input"
+        )
+        result = subprocess.run(
+            [shutil.which("bash") or "bash", "-e", "-c", step["run"]],
+            cwd=tmp_path,
+            env={**os.environ, "RECOVERY_BRANCH": branch, "RECOVERY_RUN_ID": run_id},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert (result.returncode == 0) is accepted, result.stderr
+        if not accepted:
             assert (
-                len(inputs) == 1
-                and inputs[0] in workflow[True]["workflow_dispatch"]["inputs"]
+                "Stable recovery requires master and a finalized Release Publish run ID"
+                in result.stdout
             )
 
     def test_alias_change_after_resolution_blocks_the_mirror_tag(
@@ -285,6 +320,7 @@ class TestMirrorSyncShape:
             timeout=30,
         )
         assert result.returncode != 0
+        assert "Stable changed after resolution" in result.stdout
         assert not (tmp_path / "git-called").exists()
 
     def test_snapshot_is_stamped(self) -> None:
