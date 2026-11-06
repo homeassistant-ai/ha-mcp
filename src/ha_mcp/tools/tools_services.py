@@ -180,6 +180,7 @@ class ServiceDiscoveryTools:
                 limit=limit_int,
                 offset=offset_int,
                 detail_level=detail_level,
+                warnings=catalog_warnings,
             )
 
             if parsed_service_fields is not None and "services" in result:
@@ -411,6 +412,7 @@ def _process_services(
     limit: int = 50,
     offset: int = 0,
     detail_level: Literal["summary", "full"] = "summary",
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Process raw service data into structured output.
@@ -423,12 +425,16 @@ def _process_services(
         limit: Maximum number of services per page
         offset: Number of services to skip
         detail_level: 'summary' or 'full'
+        warnings: Degradation warnings to extend when Core's field payload is
+            not the mapping shape this shaping expects (the discarded metadata
+            is labelled incomplete rather than silently dropped)
 
     Returns:
         Processed service dictionary with pagination metadata
     """
     services: dict[str, dict[str, Any]] = {}
     domains_seen: set[str] = set()
+    incomplete_fields: list[str] = []
 
     # Handle both list and dict formats from REST API
     if isinstance(rest_services, list):
@@ -475,9 +481,22 @@ def _process_services(
                 translations,
                 query_lower,
                 detail_level,
+                incomplete=incomplete_fields if detail_level == "full" else None,
             )
             if entry is not None:
                 services[service_key] = entry
+
+    if incomplete_fields and warnings is not None:
+        shown = ", ".join(incomplete_fields[:5])
+        more = (
+            f" (+{len(incomplete_fields) - 5} more)"
+            if len(incomplete_fields) > 5
+            else ""
+        )
+        warnings.append(
+            "service field metadata incomplete: expected a mapping, got another "
+            f"type at {shown}{more}"
+        )
 
     # Sort domains alphabetically
     sorted_domains = sorted(domains_seen)
@@ -510,6 +529,7 @@ def _build_service_entry(
     translations: dict[str, Any],
     query_lower: str | None,
     detail_level: Literal["summary", "full"],
+    incomplete: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Build a single service entry, returning None if it doesn't match the query.
 
@@ -552,6 +572,8 @@ def _build_service_entry(
             translations,
             prefix,
             placeholders,
+            service_key=f"{domain}.{service_name}",
+            incomplete=incomplete,
         )
 
     # Add target only if present
@@ -598,6 +620,9 @@ def _process_service_fields(
     translations: Mapping[str, Any],
     prefix: str,
     placeholders: Any,
+    *,
+    service_key: str = "",
+    incomplete: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Shape Core's field descriptions, recursing into section entries.
 
@@ -607,13 +632,21 @@ def _process_service_fields(
     and a section keeps its nested ``fields`` processed the same way. Core puts
     section field translations under the service's flat ``fields.<name>``
     namespace and the section's own name under ``sections.<name>``.
+
+    A payload shape that is not a mapping is discarded, never fatal. Its dotted
+    path is appended to ``incomplete`` so the catalog can label the description
+    incomplete instead of silently serving a shorter field list.
     """
     if not isinstance(fields_def, Mapping):
+        if incomplete is not None:
+            incomplete.append(f"{service_key}.fields" if service_key else "fields")
         return {}
 
     processed: dict[str, dict[str, Any]] = {}
     for field_name, field_info in fields_def.items():
         if not isinstance(field_info, Mapping):
+            if incomplete is not None:
+                incomplete.append(f"{service_key}.fields.{field_name}")
             continue
 
         is_section = isinstance(field_info.get("fields"), Mapping)
@@ -641,7 +674,12 @@ def _process_service_fields(
         )
         if is_section:
             entry["fields"] = _process_service_fields(
-                field_info["fields"], translations, prefix, placeholders
+                field_info["fields"],
+                translations,
+                prefix,
+                placeholders,
+                service_key=service_key,
+                incomplete=incomplete,
             )
         processed[field_name] = entry
 

@@ -296,6 +296,58 @@ def test_drifted_field_payloads_are_skipped_not_fatal() -> None:
     assert set(result["services"]["drift.mixed"]["fields"]) == {"good"}
 
 
+def test_discarded_field_metadata_is_labelled_incomplete() -> None:
+    """Dropping non-mapping field metadata must be reported, not swallowed.
+
+    ``_process_service_fields`` cannot shape a payload that is not a mapping, so
+    the entry loses those fields. Serving that shorter list silently claims Core
+    sent nothing; the response has to say the description is incomplete.
+    """
+    catalog = [
+        {
+            "domain": "drift",
+            "services": {
+                "not_a_mapping": {"fields": "not-a-mapping"},
+                "mixed": {
+                    "fields": {
+                        "good": {"selector": {}},
+                        "bad": "not-a-mapping",
+                    }
+                },
+            },
+        }
+    ]
+    warnings: list[str] = []
+
+    _process_services(
+        rest_services=catalog,
+        translations={},
+        limit=200,
+        detail_level="full",
+        warnings=warnings,
+    )
+
+    assert len(warnings) == 1
+    assert "incomplete" in warnings[0]
+    assert "drift.not_a_mapping.fields" in warnings[0]
+    assert "drift.mixed.fields.bad" in warnings[0]
+
+
+def test_shaped_field_metadata_adds_no_incomplete_warning() -> None:
+    """A healthy catalog must not carry the drift label."""
+    warnings: list[str] = []
+
+    _process_services(
+        rest_services=SERVICES,
+        translations=TRANSLATIONS,
+        limit=200,
+        detail_level="full",
+        warnings=warnings,
+    )
+
+    assert warnings == []
+
+
 @pytest.mark.asyncio
 async def test_component_prep_uses_home_assistant_configured_language(
     monkeypatch: pytest.MonkeyPatch,

@@ -181,39 +181,49 @@ class TestServiceDiscovery:
 
         services = data.get("services", {})
 
-        # Check light.turn_on service (should have brightness, color, etc.)
-        if "light.turn_on" in services:
-            turn_on = services["light.turn_on"]
-            fields = turn_on.get("fields", {})
+        # light.turn_on is the reference full-detail entry: Core's own
+        # light/services.yaml defines it, so its absence is a failure rather
+        # than a street of skipped checks.
+        assert "light.turn_on" in services, (
+            f"light domain must list turn_on, got {sorted(services)}"
+        )
+        turn_on = services["light.turn_on"]
+        fields = turn_on.get("fields", {})
 
-            assert len(fields) > 0, "Full mode should include fields"
-            logger.info(f"light.turn_on has {len(fields)} fields")
+        assert len(fields) > 0, "Full mode should include fields"
+        logger.info(f"light.turn_on has {len(fields)} fields")
 
-            # Check field structure: Core's selector replaces the hand-derived type.
-            for field_name, field_def in fields.items():
-                assert "name" in field_def, f"Field {field_name} should have name"
-                if "fields" in field_def:
-                    assert field_def["fields"], (
-                        f"Section {field_name} should carry nested fields"
-                    )
-                else:
-                    assert "selector" in field_def, (
-                        f"Field {field_name} should carry Core's selector"
-                    )
-                assert "type" not in field_def, (
-                    f"Field {field_name} should not carry a hand-derived type"
+        # Check field structure: Core's selector replaces the hand-derived type.
+        for field_name, field_def in fields.items():
+            assert "name" in field_def, f"Field {field_name} should have name"
+            if "fields" in field_def:
+                assert field_def["fields"], (
+                    f"Section {field_name} should carry nested fields"
                 )
+            else:
+                assert "selector" in field_def, (
+                    f"Field {field_name} should carry Core's selector"
+                )
+            assert "type" not in field_def, (
+                f"Field {field_name} should not carry a hand-derived type"
+            )
 
-            # The collapsed section Core serves for light.turn_on is preserved.
-            additional = fields.get("additional_fields", {})
-            if additional:
-                assert additional.get("collapsed") is True
-                assert "rgbw_color" in additional.get("fields", {})
+        # The collapsed section Core serves for light.turn_on is preserved.
+        # Required, not conditional: `additional_fields` ships in Core's own
+        # light/services.yaml, and a silent absence would leave this check green
+        # while the section shaping broke.
+        additional = fields["additional_fields"]
+        assert additional.get("collapsed") is True
+        additional_fields = additional.get("fields", {})
+        assert "rgbw_color" in additional_fields, (
+            f"section fields should carry Core's keys, got {sorted(additional_fields)}"
+        )
+        assert "color_name" in additional_fields
 
-            # Common light.turn_on fields to check
-            expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
-            found_fields = [f for f in expected_fields if f in fields]
-            logger.info(f"Found expected fields: {found_fields}")
+        # Common light.turn_on fields to check
+        expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
+        found_fields = [f for f in expected_fields if f in fields]
+        logger.info(f"Found expected fields: {found_fields}")
 
         logger.info("Service field details test passed")
 
@@ -246,11 +256,17 @@ class TestServiceDiscovery:
             {"domain": "calendar"},
         )
         calendar_data = assert_mcp_success(calendar, "calendar response metadata")
-        get_events = calendar_data.get("services", {}).get("calendar.get_events")
-        if get_events is not None:
-            assert get_events.get("response") == {"optional": False}, (
-                "calendar.get_events must report Core's non-optional response"
-            )
+        calendar_services = calendar_data.get("services", {})
+        # Every lane seeds a calendar entity (see test_call_service_return_response),
+        # so the calendar domain is registered: a missing entry is a failure, not a
+        # reason to skip the response assertion.
+        assert "calendar.get_events" in calendar_services, (
+            f"calendar domain must list get_events, got {sorted(calendar_services)}"
+        )
+        get_events = calendar_services["calendar.get_events"]
+        assert get_events.get("response") == {"optional": False}, (
+            "calendar.get_events must report Core's non-optional response"
+        )
 
         logger.info("Translated text and response metadata test passed")
 
