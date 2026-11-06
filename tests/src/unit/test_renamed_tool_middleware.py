@@ -5,16 +5,19 @@ name from a catalog it has not re-listed: the call has to reach the current
 tool, and the old name has to stay out of the catalog.
 """
 
+import json
 import logging
 
 import pytest
 
 from ha_mcp._vendor.fastmcp import FastMCP
-from ha_mcp._vendor.fastmcp.exceptions import NotFoundError
+from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
+from ha_mcp.renamed_tools import RENAMED_PARAMETERS
 from ha_mcp.tools.renamed_tool_middleware import (
     RENAMED_TOOLS,
     RenamedToolAliasMiddleware,
 )
+from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
 
 
 def _make_mcp() -> FastMCP:
@@ -45,6 +48,14 @@ def _make_mcp() -> FastMCP:
             "url": url,
         }
 
+    @mcp.tool()
+    async def ha_config_get_automation(entity_id: str) -> dict:
+        return {"tool": "ha_config_get_automation", "entity_id": entity_id}
+
+    @mcp.tool()
+    async def ha_config_remove_automation(entity_id: str) -> dict:
+        return {"entity_id": entity_id, "warnings": ["Backup skipped."]}
+
     return mcp
 
 
@@ -72,10 +83,8 @@ async def test_the_arguments_survive_the_rewrite():
     """Only the name is replaced — a dropped argument would be silent."""
     result = await _make_mcp().call_tool("ha_get_addon", {"source": "available"})
 
-    assert result.structured_content == {
-        "tool": "ha_get_app",
-        "source": "available",
-    }
+    assert result.structured_content["tool"] == "ha_get_app"
+    assert result.structured_content["source"] == "available"
 
 
 @pytest.mark.asyncio
@@ -90,7 +99,13 @@ async def test_the_old_names_stay_out_of_the_catalog():
 
     listed = {tool.name for tool in (await mcp.list_tools())}
 
-    assert listed == {"ha_get_app", "ha_manage_app", "ha_manage_blueprints"}
+    assert listed == {
+        "ha_get_app",
+        "ha_manage_app",
+        "ha_manage_blueprints",
+        "ha_config_get_automation",
+        "ha_config_remove_automation",
+    }
     assert not listed & set(RENAMED_TOOLS)
 
 
@@ -151,3 +166,116 @@ async def test_a_consolidated_tool_gets_the_action_its_old_signature_lacked():
     )
     assert imported.structured_content["action"] == "import"
     assert imported.structured_content["url"] == "https://example.com/bp.yaml"
+
+
+@pytest.mark.asyncio
+async def test_a_call_with_a_retired_parameter_name_reaches_the_tool():
+    """9.1.0 renamed `identifier` to `entity_id` on the automation tools. A
+    client still holding the older tool list sends the old name and could not
+    call them at all (#2968, #2978)."""
+    result = await _make_mcp().call_tool(
+        "ha_config_get_automation", {"identifier": "automation.morning"}
+    )
+
+    assert result.structured_content["tool"] == "ha_config_get_automation"
+    assert result.structured_content["entity_id"] == "automation.morning"
+
+
+@pytest.mark.asyncio
+async def test_a_retired_parameter_name_does_not_override_the_current_one():
+    """A call that carries both names knows the current signature, so the
+    stray old name is rejected like any other unknown argument instead of
+    replacing the value the caller sent under the current name."""
+    mcp = _make_mcp()
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_config_get_automation",
+            {"entity_id": "automation.morning", "identifier": "automation.night"},
+        )
+
+    assert "`identifier`: unknown parameter" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_the_first_call_with_a_retired_parameter_name_is_audible(caplog):
+    """The alias hides the stale tool list from the client, so the server log
+    is the only place that shows a client is still sending the old name."""
+    mcp = _make_mcp()
+
+    with caplog.at_level(logging.DEBUG, logger="ha_mcp.tools.renamed_tool_middleware"):
+        await mcp.call_tool("ha_config_get_automation", {"identifier": "automation.a"})
+        await mcp.call_tool("ha_config_get_automation", {"identifier": "automation.b"})
+        await mcp.call_tool("ha_config_get_automation", {"entity_id": "automation.c"})
+
+    records = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "ha_mcp.tools.renamed_tool_middleware"
+    ]
+
+    assert [level for level, _ in records] == [logging.INFO, logging.DEBUG]
+    assert "identifier" in records[0][1] and "entity_id" in records[0][1]
+    assert "ha_config_get_automation" in records[0][1]
+
+
+def test_every_tool_that_renamed_identifier_keeps_it_callable():
+    """The three automation tools took the rename together; a client with the
+    old list calls all three."""
+    assert {
+        tool
+        for tool, renames in RENAMED_PARAMETERS.items()
+        if renames.get("identifier") == "entity_id"
+    } == {
+        "ha_config_get_automation",
+        "ha_config_set_automation",
+        "ha_config_remove_automation",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "arguments", "old", "new"),
+    [
+        ("ha_get_addon", {"source": "available"}, "ha_get_addon", "ha_get_app"),
+        (
+            "ha_config_get_automation",
+            {"identifier": "automation.morning"},
+            "identifier",
+            "entity_id",
+        ),
+    ],
+)
+async def test_a_call_served_through_an_old_name_says_the_tool_list_is_stale(
+    tool, arguments, old, new
+):
+    """The alias makes the call work, so the rejection that used to point at
+    the stale list never happens; the result has to say it instead, in the
+    structured content and in the text a client without it reads."""
+    result = await _make_mcp().call_tool(tool, arguments)
+
+    for payload in (result.structured_content, json.loads(result.content[0].text)):
+        (warning,) = payload["warnings"]
+        assert f"`{old}`" in warning and f"`{new}`" in warning
+        assert "tool list" in warning and "new conversation" in warning
+
+
+@pytest.mark.asyncio
+async def test_a_call_on_the_current_names_carries_no_stale_list_warning():
+    result = await _make_mcp().call_tool(
+        "ha_config_get_automation", {"entity_id": "automation.morning"}
+    )
+
+    assert "warnings" not in result.structured_content
+
+
+@pytest.mark.asyncio
+async def test_the_stale_list_warning_keeps_the_tools_own_warnings():
+    result = await _make_mcp().call_tool(
+        "ha_config_remove_automation", {"identifier": "automation.morning"}
+    )
+
+    warnings = result.structured_content["warnings"]
+    assert warnings[0] == "Backup skipped."
+    assert len(warnings) == 2 and "`identifier`" in warnings[1]

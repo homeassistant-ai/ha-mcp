@@ -146,11 +146,14 @@ token as a JWT:
 
 Once OIDC is configured:
 
-1. In Claude.ai, go to **Customize** (left sidebar) **> Connectors > Add**
+1. In Claude.ai, open the connector form for your plan:
+   - **Individual plan:** **Settings** → **Customize** → **Add** → **Add custom connector** (the entry point can differ by browser; on accounts with the new Plugins page, **Customize** reads **Plugins**)
+   - **Team or Enterprise plan:** an Owner or Primary Owner goes to **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**
 2. Enter a name and the MCP endpoint URL `https://mcp.example.com/mcp`, then click **Continue**
-3. Claude.ai discovers the OIDC endpoints and pre-fills the sign-in settings (**Always required**); keep them, click **Add**, then **Connect**
-4. You're redirected to your OIDC provider to authenticate
-5. After authentication, Claude.ai can access your Home Assistant
+3. Claude.ai discovers the OIDC endpoints and selects the sign-in settings; keep the sign-in option Claude detected (**Sign in now** or **Sign in when needed**) and click **Add**
+4. If the connector shows a **Connect** button, click it. On a Team or Enterprise plan, members then find the connector under **Customize** → **Connectors** (under **Plugins** on accounts with the new Plugins page) and click **Connect** themselves.
+5. You're redirected to your OIDC provider to authenticate
+6. After authentication, Claude.ai can access your Home Assistant
 
 ---
 

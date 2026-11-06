@@ -356,7 +356,7 @@ then batch-verify.
 ## Tool Consolidation and Module Size
 
 When another tool fully covers a tool's behavior, remove the redundant tool and
-update references rather than adding a deprecation shim. Fewer, more distinct
+update references rather than keeping it registered as a deprecation shim. Fewer, more distinct
 tools improve model selection. Combine frequently chained operations when the
 combined interface remains coherent.
 This repository exceeds the
@@ -367,6 +367,20 @@ where selection accuracy degrades, so reducing count is a priority. See also
 Consolidation, renaming with a migration path, parameter evolution, and return
 restructuring are not breaking when the same outcome and information remain
 available. Removing functionality with no replacement is breaking.
+
+A rename is not breaking, but a client keeps the tool list it fetched before
+the update until its user refreshes it, and many never do. Keep the old name
+callable for those clients without listing it: add a retired tool name to
+`RENAMED_TOOLS` and a retired parameter name to `RENAMED_PARAMETERS` in
+`src/ha_mcp/renamed_tools.py`. `RenamedToolAliasMiddleware` then serves the
+call under the current name, adds a warning with the refresh steps to the
+result and logs the first use. Never declare the old name in the tool's schema
+or register it as a second tool; either puts it back in `tools/list`. A tool
+folded into another goes in `RENAMED_TOOLS` as well, with an adapter in
+`_RETIRED_ARGUMENT_ADAPTERS` that maps its old arguments onto the tool that
+serves it now. `RENAMED_PARAMETERS` takes only a pure rename: a parameter
+whose meaning or format changed stays rejected, and the unknown-parameter
+rejection names a stale tool list as the likely cause.
 
 Module size is canonical in
 [`AGENTS.md` → Code Conventions](../AGENTS.md#code-conventions). Flag a module
@@ -414,7 +428,9 @@ A change is BREAKING only if it removes functionality that users depend on.
 - Tool refactoring (restructuring how tools work internally)
 - Parameter changes (as long as same outcome achievable)
 - Return value restructuring (as long as data still accessible)
-- Tool renaming with clear migration path
+- Tool or parameter renaming; the retired name stays callable through the
+  alias tables described under
+  [Tool Consolidation](#tool-consolidation-and-module-size)
 
 **Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only flag CRITICAL when functionality is genuinely lost forever.
 

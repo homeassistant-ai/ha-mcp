@@ -890,8 +890,8 @@ class TestBugReportTool:
         result = await ha_report_issue_func()
 
         hint = result["missing_tool_hint"]
-        assert "refresh" in hint.lower()
-        assert "reconnect" in hint.lower()
+        assert "refresh" in hint.lower() and "disconnect and reconnect" in hint
+        assert "claude_desktop_config.json" in hint
         # Names the client-side cache as the cause, not a server bug.
         assert "tool list" in hint.lower()
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+import json
 import logging
 import os
 import stat
@@ -338,6 +339,53 @@ class TestParameterRedaction:
         assert result["data"]["entity_id"] == "lock.front"
         assert result["data"]["brightness"] == 255
 
+    def test_code_inside_a_json_string_redacted(self):
+        """A client that stringifies `data`, or an MQTT payload nested inside
+        it, carries the code as text the key match cannot see."""
+        result = _redact_parameters(
+            {
+                "data": '{"code": "4321", "entity_id": "lock.front"}',
+                "extra": {"payload": '{"code": "9876"}'},
+            }
+        )
+        dumped = json.dumps(result)
+        assert "4321" not in dumped and "9876" not in dumped
+        assert result["data"]["entity_id"] == "lock.front"
+
+    @pytest.mark.parametrize(
+        "truncated",
+        [
+            '{"code": "4321"',
+            '[{"code": "4321"}',
+            '[ [{"code": "4321"',
+            '[0, {"code": "4321"}',
+            '[{{"code":"4321"}]',
+            'note {\\"code\\": \\"4321\\"}',
+        ],
+    )
+    def test_code_inside_unparsed_json_text_left_out(self, truncated):
+        """Text that names a sensitive key as a JSON member but does not
+        parse, whatever is wrong with it, still shows the code."""
+        result = _redact_parameters({"data": truncated})
+        assert "4321" not in json.dumps(result)
+
+    def test_unparsed_json_without_a_sensitive_key_stays_readable(self):
+        """A broken payload is what a report reader debugs with; only one
+        that names a sensitive key has to go."""
+        params = {"data": '{"entity_id": "light.kitchen", "brightness": 255'}
+        assert _redact_parameters(params) == params
+
+    def test_templates_and_bracketed_text_stay_readable(self):
+        """A Jinja template and a "[tag] message" start like JSON but are not;
+        they are what a report reader debugs with."""
+        params = {
+            "template": "{{ states('sensor.x') }}",
+            "block": "{% if a %}b{% endif %}",
+            "list": "[{{ a }}, {{ b }}",
+            "message": "[Alert] front door open",
+        }
+        assert _redact_parameters(params) == params
+
     def test_top_level_sensitive_keys_redacted(self):
         result = _redact_parameters(
             {"token": "abc", "password": "hunter2", "secret": "s", "api_key": "k"}
@@ -416,8 +464,6 @@ class TestParameterRedaction:
     def test_secrets_not_persisted_to_jsonl(self, tmp_path):
         """The on-disk mcp_usage.jsonl must not contain raw secrets either — the
         redacted entry is what gets queued for the background disk write."""
-        import json
-
         log_path = tmp_path / "usage.jsonl"
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:

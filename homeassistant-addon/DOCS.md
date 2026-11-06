@@ -151,7 +151,9 @@ The **Webhook Proxy** app routes MCP traffic through your existing Home Assistan
 
 Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
 
-**Claude.ai:** **Customize** (left sidebar) → **Connectors** → **Add**, enter a name and the URL, click **Continue**, keep the detected settings (**Authentication: None** for the plain webhook URL; **Always required** + **Use Anthropic's hosted client metadata** if you enabled the proxy's `ha_auth` OAuth mode; **Use your own OAuth client** with the Client ID/Secret from the log for `legacy`), click **Add**, then **Connect** if a sign-in is required. After changing the proxy's OAuth mode, remove and re-add the connector.
+**Claude.ai:** **Settings** → **Customize** → **Add** → **Add custom connector** (the entry point can differ by browser; on accounts with the new Plugins page, **Customize** reads **Plugins**), enter a name and the URL, click **Continue**, and keep the settings Claude detects (**Authentication: No sign in** for the plain webhook URL; **Sign in now** or **Sign in when needed**, whichever is detected, + **Use Claude's published identity** if you enabled the proxy's `ha_auth` OAuth mode; **Use your own OAuth client** with the Client ID/Secret from the log for `legacy`). Click **Add**; if the connector then shows a **Connect** button, click it. After changing the proxy's OAuth mode, remove and re-add the connector.
+
+On a Team or Enterprise plan, an Owner or Primary Owner opens the form under **Organization settings** → **Connectors** → **Add** → **Custom** → **Web** instead and adds the connector the same way; members then find it under **Customize** → **Connectors** (under **Plugins** on accounts with the new Plugins page) and click **Connect**. With the plain webhook URL, the URL is the only credential, and in the proxy's `legacy` mode the Client ID and Secret the owner enters are, so every member who connects it gets this server's Home Assistant access without signing in. With the proxy's `ha_auth` OAuth mode each member signs in to Home Assistant, but any account that can sign in gets the same admin-equivalent access, not its own Home Assistant permissions.
 
 #### Option B: Cloudflared App (No existing reverse proxy needed)
 
@@ -277,8 +279,11 @@ The app has minimal configuration - most settings are automatic.
 > **cached** tool list until it re-fetches. Restarting the app or Home
 > Assistant does **not** refresh the client — you must reconnect or refresh
 > the MCP server in your AI client (e.g. in ChatGPT open **Settings**, then
-> the plugin settings, select the connector and click **Refresh tools**; or
-> close and reopen Claude Desktop). Symptom if you skip this:
+> the plugin settings, select the connector and click **Refresh tools**;
+> disconnect and reconnect a Claude Desktop custom connector; refresh the
+> tools list of a claude.ai connector; or quit and reopen Claude Desktop
+> for a server in `claude_desktop_config.json`), then start a new
+> conversation. Symptom if you skip this:
 > newly enabled tools don't appear in the client at all, and tools the
 > server no longer exposes still show as available but return `Unknown
 > tool` when called. ChatGPT sometimes keeps serving the stale list even

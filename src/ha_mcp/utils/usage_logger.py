@@ -7,6 +7,7 @@ import errno
 import json
 import logging
 import os
+import re
 import stat
 import threading
 import time
@@ -348,6 +349,11 @@ _SENSITIVE_PARAM_KEYS = frozenset(
 _SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_password", "_passwd")
 _REDACTED_VALUE = "[REDACTED]"
 _MAX_REDACT_DEPTH = 6
+_JSON_CONTAINER_START = re.compile(r"\s*[\[{]")
+# A name written as a JSON member, as in "code": or, inside an escaped
+# string, \"code\":
+_QUOTED_MEMBER_NAME = re.compile(r"""\\*["']([A-Za-z_]\w*)\\*["']\s*:""")
+_UNPARSED_VALUE = "[text naming a sensitive key omitted]"
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -366,9 +372,24 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
     dicts/lists/tuples so secrets nested under non-sensitive keys are caught
     (a tuple is returned as a list). Fails closed past ``_MAX_REDACT_DEPTH`` —
     a subtree too deep to walk is masked wholesale rather than returned verbatim.
+
+    A JSON object or array sent as a string (a stringified ``data``, an MQTT
+    payload) hides its keys from the match, so it is parsed and masked like
+    the container it encodes. Any other text that names a sensitive key as a
+    JSON member, such as a truncated or otherwise malformed object, is left
+    out whole, because its value cannot be told apart from the rest.
     """
     if _depth > _MAX_REDACT_DEPTH:
         return _REDACTED_VALUE
+    if isinstance(value, str):
+        if _JSON_CONTAINER_START.match(value):
+            try:
+                return _redact_parameters(json.loads(value), _depth + 1)
+            except (ValueError, RecursionError):
+                pass
+        if any(_is_sensitive_key(name) for name in _QUOTED_MEMBER_NAME.findall(value)):
+            return _UNPARSED_VALUE
+        return value
     if isinstance(value, dict):
         return {
             key: (
@@ -380,7 +401,7 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [_redact_parameters(item, _depth + 1) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     # Entries are dumped as JSON (log file, ha_report_issue); keep odd objects
     # from breaking that.
