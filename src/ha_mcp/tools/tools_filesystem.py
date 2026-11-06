@@ -556,6 +556,11 @@ async def _assert_mcp_tools_available(client: Any) -> None:
         _raise_tools_entry_not_set_up()
 
 
+def _write_mode_is_invalid(kwargs: dict[str, Any]) -> bool:
+    """A call without exactly one of content and edits cannot write, so skip its snapshot."""
+    return (kwargs.get("content") is None) == (kwargs.get("edits") is None)
+
+
 class FilesystemTools:
     """Filesystem access tools for Home Assistant."""
 
@@ -779,7 +784,12 @@ class FilesystemTools:
             open_world=False,
         ),
     )
-    @with_auto_backup(domain="file", id_param="path", mandatory=True)
+    @with_auto_backup(
+        domain="file",
+        id_param="path",
+        mandatory=True,
+        skip_fn=_write_mode_is_invalid,
+    )
     @log_tool_usage
     async def ha_write_file(
         self,
@@ -871,9 +881,6 @@ class FilesystemTools:
         EXAMPLE: ha_write_file(path="www/card.js", edits=[{"old": "const REFRESH = 30000;", "new": "const REFRESH = 10000;"}])
         """
         try:
-            # Check if custom component is available
-            await _assert_mcp_tools_available(self._client)
-
             if (content is None) == (edits is None):
                 raise_tool_error(
                     create_error_response(
@@ -882,6 +889,9 @@ class FilesystemTools:
                         context={"path": path},
                     )
                 )
+
+            # Check if custom component is available
+            await _assert_mcp_tools_available(self._client)
 
             service: str
             service_data: dict[str, Any]
