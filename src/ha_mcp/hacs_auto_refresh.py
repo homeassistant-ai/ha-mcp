@@ -1,12 +1,11 @@
 """Ask HACS to surface the paired component update after a server update (opt-in).
 
-HACS refreshes a *custom* repository's release data from GitHub only about
-every 48 hours, and the Marketplace that replaces it in Home Assistant 2026.11
-only when a GitHub account is connected. The ha_mcp_tools component ships in
-lockstep with each server release, so a component update can go unnoticed for
-days, or for good. This module closes that gap for every install, the embedded
-server included. It goes away once ha-mcp is in the default catalog, which the
-Marketplace refreshes every 6 hours.
+The main repository is already in the HACS and Marketplace default catalog.
+An external server can update before the store's next scheduled metadata
+refresh, leaving its paired integration update undiscovered. This optional
+startup nudge asks for fresh repository information sooner, for installed
+main-repository entries and existing legacy-mirror entries alike. It is not
+required for catalog installation and never installs an update itself.
 
 On startup, when the server version changed since the last recorded nudge (the
 just-updated case) or a newer release is pending, it sends the store's "Update

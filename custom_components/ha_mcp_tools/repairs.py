@@ -1,4 +1,4 @@
-"""Repair flows for the HA-MCP Custom Component."""
+"""Repair flows for the HA-MCP integration."""
 
 from __future__ import annotations
 

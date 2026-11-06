@@ -580,7 +580,7 @@ class TestCallMcpToolsServiceInjectsToken:
         assert "Add entry" in msg
         assert "too old" not in msg
         # The Add-entry step leads; the HACS install is the fallback.
-        assert msg.index("Add entry") < msg.index("add_repository")
+        assert msg.index("Add entry") < msg.index("ha_manage_hacs")
         client.call_service.assert_not_called()
 
     @pytest.mark.asyncio

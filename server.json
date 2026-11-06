@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.homeassistant-ai/ha-mcp",
-  "description": "Comprehensive Model Context Protocol server for managing Home Assistant through AI assistants.",
+  "description": "Configure and automate Home Assistant with Claude, ChatGPT, and other AI assistants.",
   "repository": {
     "url": "https://github.com/homeassistant-ai/ha-mcp.git",
     "source": "github"

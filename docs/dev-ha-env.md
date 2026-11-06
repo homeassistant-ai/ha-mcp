@@ -7,7 +7,8 @@ and without touching your own instance. It boots HA with the E2E suite's own
 bring-up and config (user `mcp` / `mcp`, token `TEST_TOKEN` in
 `tests/test_constants.py`). The E2E seed gives `mcp` a French interface; after
 logging in, change it under your profile (your name at the bottom of the
-sidebar) → **General** → **Language**. It is separate from the test suite:
+sidebar) → **Localisation** → **Language** on Home Assistant 2026.11
+(**General → Language** on older versions). It is separate from the test suite:
 nothing in CI runs it, and its runner script (`.github/dev-ha-env/hold.py`) is
 copied into the tracked branch's E2E directory only for the run.
 
@@ -147,7 +148,7 @@ Run it **from your fork only**. The job refuses to run in
    The job log's `STATUS` lines show the commit the run started from and any
    boot error. If the embedded server fails at boot, Home Assistant stays up
    but the server's own tools are gone: log in to `HA:` as `mcp` / `mcp`,
-   open the HA-MCP Custom Component integration's server entry under
+   open the HA-MCP integration's server entry under
    Settings → Devices & services, and put the fixed spec in Configure →
    "Developer: ha-mcp package override".
 

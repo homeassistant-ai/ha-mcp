@@ -1,4 +1,4 @@
-# HA-MCP Custom Component
+# HA-MCP — Manage Home Assistant with AI
 
 HACS distribution repository for the ha-mcp custom integration. The
 source of truth is the main repository -

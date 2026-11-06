@@ -261,7 +261,7 @@ def update_command_hint(current: str) -> str:
         # In-process (custom component) server: each component release
         # installs its own server build when Home Assistant restarts.
         return (
-            "Update the HA-MCP Custom Component in HACS (the Marketplace on "
+            "Update the HA-MCP integration in HACS (the Marketplace on "
             "Home Assistant 2026.11+), then restart Home Assistant."
         )
     if is_running_in_addon():

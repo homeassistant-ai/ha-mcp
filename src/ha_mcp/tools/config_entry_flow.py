@@ -738,8 +738,9 @@ COMPONENT_DOMAIN = "ha_mcp_tools"
 
 COMPONENT_ENTRY_SUGGESTIONS: tuple[str, ...] = (
     "Manage it in the Home Assistant UI: Settings > Devices & services > "
-    + "HA-MCP Custom Component (Configure for options; the entry's menu for "
-    + "enable/disable, delete and debug logging).",
+    + "“HA-MCP — Manage Home Assistant with AI” (listed as “HA-MCP Custom Component” "
+    + "on older installs). Choose Configure for options; use the entry's menu for "
+    + "enable/disable, delete and debug logging.",
     "Server settings and updates: with developer mode on, "
     + "ha_dev_manage_settings / ha_dev_manage_server.",
 )

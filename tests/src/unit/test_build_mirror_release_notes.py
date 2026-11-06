@@ -51,7 +51,7 @@ def test_format_release_notes_names_the_server_the_release_installs() -> None:
     # The component and its server share a version, so HACS users read which
     # server an update brings in the release they are offered.
     notes = build.format_release_notes("v7.9.0", "v7.10.0", [])
-    assert notes.startswith("## HA-MCP Custom Component 7.10.0")
+    assert notes.startswith("## HA-MCP — Manage Home Assistant with AI 7.10.0")
     assert "ha-mcp 7.10.0" in notes
 
 
@@ -116,7 +116,7 @@ def test_release_stamp_does_not_count_as_a_component_change(
         == 0
     )
     notes = output.read_text(encoding="utf-8")
-    assert notes.startswith("## HA-MCP Custom Component 9.0.1\n")
+    assert notes.startswith("## HA-MCP — Manage Home Assistant with AI 9.0.1\n")
     assert "- 9.0.1" not in notes
     assert ("- fix: behavior correction" in notes) is component_changed
     assert ("No changes to" in notes) is not component_changed
@@ -225,7 +225,7 @@ def test_dev_notes_list_the_commits_since_the_previous_dev_build(
     assert build.main(argv) == 0
     notes = output.read_text(encoding="utf-8")
     assert notes.startswith(
-        "## HA-MCP Custom Component 9.0.0 (development pre-release)\n"
+        "## HA-MCP — Manage Home Assistant with AI 9.0.0 (development pre-release)\n"
     )
     assert "from owner/repo@abc1234," in notes
     assert "Installs ha-mcp-test==9.0.0.dev2." in notes
@@ -245,7 +245,10 @@ def test_dev_notes_list_each_merged_pull_request() -> None:
             "feat(component): something (#2742)",
         ],
     )
-    assert "## HA-MCP Custom Component 9.0.0 (development pre-release)" in notes
+    assert (
+        "## HA-MCP — Manage Home Assistant with AI 9.0.0 (development pre-release)"
+        in notes
+    )
     assert "Installs ha-mcp-dev==9.0.0.dev3100." in notes
     assert "- deps(deps): bump cyclopts from 5.1.1 to 5.2.0 (#2779)" in notes
     assert "- feat(component): something (#2742)" in notes

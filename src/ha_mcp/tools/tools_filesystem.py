@@ -205,14 +205,12 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
             "second entry must be added to it.",
             suggestions=[
                 "In Home Assistant: Settings → Devices & Services → "
-                + 'HA-MCP Custom Component → "Add entry" → choose '
+                + '“HA-MCP — Manage Home Assistant with AI” (“HA-MCP Custom Component” on older installs) → "Add entry" → choose '
                 + '"HA-MCP File & YAML Tools" (NOT '
                 + '"HA-MCP Server", which starts a second in-process server '
                 + "this ha-mcp server does not need)",
                 "If the HA-MCP integration is not listed there, install it "
-                + 'first: ha_manage_hacs(action="add_repository", '
-                + 'repository="homeassistant-ai/ha-mcp", '
-                + 'category="integration"), then ha_manage_hacs('
+                + "from the default catalog: ha_manage_hacs("
                 + 'action="download", '
                 + 'repository_id="homeassistant-ai/ha-mcp"), '
                 + "then restart Home Assistant (ha_restart)",
@@ -231,7 +229,7 @@ def _raise_component_too_old(detail: str) -> NoReturn:
             f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
             "Update via HACS or the Marketplace and restart Home Assistant.",
             suggestions=[
-                "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
+                "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
             ],
@@ -1020,7 +1018,7 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
             f"(reported version: {reported or 'unknown'}; requires >= "
             f"{MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS}).",
             suggestions=[
-                "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
+                "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after the update completes",
                 # Parenthesised so this reads as one suggestion rather than
                 # a list entry with a missing comma (py/implicit-string-

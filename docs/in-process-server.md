@@ -1,6 +1,6 @@
 # Run the MCP server inside Home Assistant
 
-The **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp server
+The **HA-MCP integration** (`ha_mcp_tools`) can run the **full ha-mcp server
 in-process**, inside the Home Assistant application, and expose it remotely
 through a Home Assistant webhook. This is one of the ways to run ha-mcp — and the
 recommended one. It is a complete, standalone ha-mcp install — a replacement for
@@ -70,17 +70,24 @@ run current `ha-mcp` servers.
 
 The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
-1. **Install the component.** Install **HA-MCP Custom Component** from HACS,
+In the navigation paths below, older installed releases use **HA-MCP Custom
+Component** where the new release uses **HA-MCP — Manage Home Assistant with AI**.
+Searching for **HA-MCP** finds either name.
+
+1. **Install the component.** Install **HA-MCP — Manage Home Assistant with AI** from HACS,
    or on Home Assistant 2026.11+ from the built-in **Marketplace** after accepting
-   its first-run warning and connecting GitHub there (**Add from link**, as an
-   **Integration**) (custom repository `homeassistant-ai/ha-mcp`; an install from the earlier
+   its first-run warning and searching for **HA-MCP**. It is
+   in the default catalog, so Marketplace installs need no connected GitHub account
+   or custom repository. In HACS, search for **HA-MCP** and **Download**.
+   An install from the earlier
    `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same
-   releases, so it needs no change), or, without
+   releases; on the Marketplace, keep GitHub connected for background checks on
+   that custom repository. Or, without
    HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
    into your Home Assistant `config/custom_components/` directory (so you end up
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
-   Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
+   Add Integration**, search for **HA-MCP**, and — on the menu
    that appears — choose **HA-MCP Server**. The server acts with an
    administrator account's permissions, so the form asks for one of two
    things:
@@ -112,7 +119,7 @@ The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versi
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
    **HA-MCP Server** confirms it is running and points you to the URL. The
    connect URL itself is on the entry's **Configure** screen (**Settings →
-   Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**),
+   Devices & Services → “HA-MCP — Manage Home Assistant with AI” → HA-MCP Server → Configure**),
    which only administrators can open, because the URL is the credential. The
    notification and the Home Assistant log deliberately carry no URL:
    notifications are visible to every signed-in user, and the log reaches
@@ -120,7 +127,7 @@ The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versi
 4. **Connect your MCP client** to that URL.
 
 To pause the server, **disable** its config entry (**Settings → Devices &
-Services → HA-MCP Custom Component → HA-MCP Server → ⋮ → Disable**);
+Services → “HA-MCP — Manage Home Assistant with AI” → HA-MCP Server → ⋮ → Disable**);
 re-enable it to start it again. Removing the entry stops the server; the token
 you entered stays valid until you delete it from your profile.
 
@@ -236,7 +243,7 @@ uses **9583**, so an existing app install does not conflict.
 
 ## Options
 
-Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
+Open **Settings → Devices & Services → “HA-MCP — Manage Home Assistant with AI” → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
 the changes take effect; a change to the OAuth callback list alone applies to the
 next sign-in without a reload, and **Turn access off after a restart** applies at
 the next Home Assistant start. (The **HA-MCP File & YAML Tools** entry has no options — a
@@ -262,7 +269,7 @@ Configure there just reports that.)
 
 ### Server updates
 
-The server is part of the component release. Each HA-MCP Custom Component
+The server is part of the component release. Each HA-MCP integration
 release names the exact `ha-mcp` build it was released with as an integration
 requirement, and Home Assistant installs it like any integration's Python
 packages. For HACS- or Marketplace-managed installs, update the component from
@@ -271,15 +278,16 @@ installs can replace the component files with the new release. Either path
 carries the matching server, and restarting Home Assistant after the update
 installs both. The component never downloads or swaps the server on its own.
 
-HACS, and the Marketplace with GitHub connected, check a custom repository
-such as HA-MCP for updates every 48 hours (the Marketplace without GitHub does
-not check it in the background). To have a newly updated server ask for that
-check right away, turn on **Refresh the component in HACS after an update** in
+HA-MCP is in the default catalog, which the Marketplace refreshes every six
+hours without a GitHub connection. Custom repositories, including the legacy
+distribution mirror, still need a GitHub connection for the Marketplace's
+48-hour background checks. To have a newly updated server ask for a repository
+refresh right away, turn on **Refresh the component in HACS after an update** in
 the settings panel's Advanced settings (Operations); installs that already did
 this before it became optional keep it on.
 
 **Development builds** follow the main branch. Turn on the **Pre-release**
-switch of the HA-MCP Custom Component repository (in HACS, or on its Marketplace
+switch of the HA-MCP repository (in HACS, or on its Marketplace
 device, where the entity starts disabled, on Home Assistant 2026.11+) to receive them; each
 pre-release pins the exact `ha-mcp-dev` build published from the same commit.
 Turn the switch off to return to stable releases with the next stable update.
@@ -478,7 +486,7 @@ See [SECURITY.md](../SECURITY.md) for the full threat model.
 ## Relationship to the File & YAML services entry
 
 The in-process server entry and the **HA-MCP File & YAML Tools** entry are two
-config-entry types of the same **HA-MCP Custom Component** (`ha_mcp_tools`). They
+config-entry types of the same **HA-MCP integration** (`ha_mcp_tools`). They
 can be configured separately: the server works on its own, and most installs
 never need the File & YAML entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
 tools (feature flags, off by default) — those tools call the privileged services
@@ -545,8 +553,8 @@ listings. Pin a PyPI version instead (every PyPI build includes the skill
 content); the tarball override is only meant for quick pre-release testing.
 
 **Reporting a problem without a working connection.** `ha_report_issue` needs a
-working MCP session. Without one, open the **HA-MCP Custom Component**
-integration page, open the **⋮** menu of either entry and choose **Download
+working MCP session. Without one, open the **HA-MCP integration**
+page, open the **⋮** menu of either entry and choose **Download
 diagnostics** (the item appears only while the entry is loaded), then attach the
 file to your issue. It lists the component version and the installed server
 version, each entry's state, whether the server is running, the last startup
