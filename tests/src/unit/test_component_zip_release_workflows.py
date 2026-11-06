@@ -1,10 +1,114 @@
 """Consumers select the artifact built from the stamped release checkout."""
 
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.parametrize("matches_snapshot", [True, False])
+def test_the_verified_zip_digest_is_committed_with_its_snapshot(
+    tmp_path, matches_snapshot
+):
+    mirror = tmp_path / "mirror"
+    component = mirror / "custom_components/ha_mcp_tools"
+    component.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(mirror)], check=True)
+    for key, value in (("user.name", "test"), ("user.email", "test@example.invalid")):
+        subprocess.run(["git", "-C", str(mirror), "config", key, value], check=True)
+    source = component / "__init__.py"
+    source.write_text("VALUE = 1\n")
+    (component / "manifest.json").write_text(
+        json.dumps(
+            {
+                "domain": "ha_mcp_tools",
+                "version": "1.0.0",
+                "requirements": ["ha-mcp-dev==1.0.0.dev7"],
+            }
+        )
+    )
+    metadata = mirror / ".github/component-zip-source.json"
+    metadata.parent.mkdir()
+    metadata.write_text(
+        json.dumps({"repository": "upstream/repo", "tag": "v1.0.0.dev7"})
+    )
+    subprocess.run(["git", "-C", str(mirror), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(mirror), "commit", "-qm", "stamped snapshot"], check=True
+    )
+    if not matches_snapshot:
+        source.write_text("VALUE = 2\n")
+    payload = tmp_path / "upstream.zip"
+    subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "scripts/build_component_zip.py"),
+            "--component-dir",
+            str(component),
+            "--output",
+            str(payload),
+        ],
+        check=True,
+    )
+    source.write_text("VALUE = 1\n")
+    digest = "sha256:" + hashlib.sha256(payload.read_bytes()).hexdigest()
+    stub = (
+        'gh() { case "$1 $2" in "api repos/upstream/repo/releases/tags/v1.0.0.dev7")\n'
+        f'printf "%s\\n" {shlex.quote(digest)};;\n'
+        '"release download") while [ "$#" -gt 0 ]; do '
+        'if [ "$1" = --dir ]; then DEST="$2"; break; fi; shift; done\n'
+        'mkdir -p "$DEST"; cp "$PAYLOAD" "$DEST/ha_mcp_tools.zip";; '
+        "*) return 2;; esac; }\n"
+        "sleep() { :; }\n"
+    )
+    step = next(
+        s
+        for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+        if s.get("name") == "Wait for the upstream integration ZIP before tagging"
+    )
+    script = step["run"].replace("/tmp/mirror", mirror.as_posix())
+    script = script.replace(
+        "python3 ", shlex.quote(Path(sys.executable).as_posix()) + " "
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", stub + script],
+        cwd=_ROOT,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": tmp_path.as_posix(),
+            "PAYLOAD": payload.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is matches_snapshot, result.stdout + result.stderr
+    committed = json.loads(
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(mirror),
+                "show",
+                "HEAD:.github/component-zip-source.json",
+            ],
+            text=True,
+        )
+    )
+    if matches_snapshot:
+        assert committed["digest"] == digest
+    else:
+        assert "digest" not in committed
 
 
 def _steps(path: str, job: str) -> list[dict]:

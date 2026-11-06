@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -104,6 +105,53 @@ def test_file_timestamps_do_not_change_the_release_zip(component: Path) -> None:
         component, component.parent / "second.zip"
     ).read_bytes()
     assert first == second
+
+
+def test_verification_accepts_identical_files_in_a_different_zip_container(
+    component: Path,
+) -> None:
+    original = builder.build_component_zip(component, component.parent / "first.zip")
+    repacked = component.parent / "repacked.zip"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(repacked, "w") as target:
+        for name in reversed(source.namelist()):
+            target.writestr(name, source.read(name))
+    assert original.read_bytes() != repacked.read_bytes()
+    assert (
+        builder.verify_component_zip(component, repacked)
+        == "sha256:" + hashlib.sha256(repacked.read_bytes()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    "change", ["bytes", "missing", "extra", "duplicate", "symlink"]
+)
+def test_verification_refuses_a_zip_that_changes_the_installable_snapshot(
+    component: Path, change: str
+) -> None:
+    original = builder.build_component_zip(component, component.parent / "first.zip")
+    changed = component.parent / "changed.zip"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(changed, "w") as target:
+        for name in source.namelist():
+            data = source.read(name)
+            if name == "__init__.py":
+                if change == "missing":
+                    continue
+                if change == "bytes":
+                    data = b"VALUE = 2\n"
+                if change == "symlink":
+                    info = zipfile.ZipInfo(name)
+                    info.create_system = 3
+                    info.external_attr = 0o120777 << 16
+                    target.writestr(info, data)
+                    continue
+            target.writestr(name, data)
+        if change == "extra":
+            target.writestr("untracked.py", b"unexpected")
+        if change == "duplicate":
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                target.writestr("__init__.py", source.read("__init__.py"))
+    with pytest.raises(ValueError, match="ZIP"):
+        builder.verify_component_zip(component, changed)
 
 
 def test_missing_tracked_file_does_not_replace_a_previous_artifact(
