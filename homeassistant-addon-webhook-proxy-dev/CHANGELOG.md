@@ -16,9 +16,11 @@ history from before the fork.
   Connectors → Add custom connector, and notes that Customize reads
   Plugins on accounts with the new Plugins page. It also gives the Team or
   Enterprise path, where an Owner or Primary Owner adds the connector
-  under Organization settings → Connectors and members then connect it,
-  and warns that with OAuth off every member who connects it gets the
-  server's Home Assistant access without signing in.
+  under Organization settings → Connectors and members then connect it.
+  It warns that with OAuth off or in legacy mode every member who
+  connects it gets the server's Home Assistant access without signing
+  in, and that in ha_auth mode any account that can sign in gets the same
+  admin-equivalent access.
 
 ## v3.0.5.dev4 (2026-11-03)
 
