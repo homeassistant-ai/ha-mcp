@@ -375,10 +375,12 @@ callable for those clients without listing it: add a retired tool name to
 `src/ha_mcp/renamed_tools.py`. `RenamedToolAliasMiddleware` then serves the
 call under the current name, adds a warning with the refresh steps to the
 result and logs the first use. Never declare the old name in the tool's schema
-or register it as a second tool; either puts it back in `tools/list`. Only a
-pure rename belongs in those tables. A parameter whose meaning or format
-changed stays rejected, and the unknown-parameter rejection names a stale tool
-list as the likely cause.
+or register it as a second tool; either puts it back in `tools/list`. A tool
+folded into another goes in `RENAMED_TOOLS` as well, with an adapter in
+`_RETIRED_ARGUMENT_ADAPTERS` that maps its old arguments onto the tool that
+serves it now. `RENAMED_PARAMETERS` takes only a pure rename: a parameter
+whose meaning or format changed stays rejected, and the unknown-parameter
+rejection names a stale tool list as the likely cause.
 
 Module size is canonical in
 [`AGENTS.md` → Code Conventions](../AGENTS.md#code-conventions). Flag a module
