@@ -350,7 +350,9 @@ _SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_password", "_passwd")
 _REDACTED_VALUE = "[REDACTED]"
 _MAX_REDACT_DEPTH = 6
 _JSON_CONTAINER_START = re.compile(r"\s*[\[{]")
-_UNPARSED_OBJECT_START = re.compile(r"\s*{(?![{%#])")
+# An object, bare or inside arrays, that is not a Jinja template: only an
+# object can carry a secret under a key. "[tag] text" does not match.
+_UNPARSED_OBJECT_START = re.compile(r"\s*(?:\[\s*)*{(?![{%#])")
 _UNPARSED_VALUE = "[malformed JSON string omitted]"
 
 
@@ -373,8 +375,9 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
 
     A JSON object or array sent as a string (a stringified ``data``, an MQTT
     payload) hides its keys from the match, so it is parsed and masked like
-    the container it encodes. A string that starts like an object but does not
-    parse is left out whole; a Jinja template or ``[tag] text`` stays as it is.
+    the container it encodes. A string that starts like an object, or like an
+    array of objects, but does not parse is left out whole; a Jinja template
+    or ``[tag] text`` stays as it is.
     """
     if _depth > _MAX_REDACT_DEPTH:
         return _REDACTED_VALUE

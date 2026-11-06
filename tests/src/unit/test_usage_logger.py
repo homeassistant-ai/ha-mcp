@@ -352,9 +352,13 @@ class TestParameterRedaction:
         assert "4321" not in dumped and "9876" not in dumped
         assert result["data"]["entity_id"] == "lock.front"
 
-    def test_code_inside_a_truncated_json_string_left_out(self):
-        """A stringified object that does not parse still shows the code."""
-        result = _redact_parameters({"data": '{"code": "4321"'})
+    @pytest.mark.parametrize(
+        "truncated", ['{"code": "4321"', '[{"code": "4321"}', '[ [{"code": "4321"']
+    )
+    def test_code_inside_a_truncated_json_string_left_out(self, truncated):
+        """A stringified object, alone or in an array, that does not parse
+        still shows the code."""
+        result = _redact_parameters({"data": truncated})
         assert "4321" not in json.dumps(result)
 
     def test_templates_and_bracketed_text_stay_readable(self):
@@ -363,6 +367,7 @@ class TestParameterRedaction:
         params = {
             "template": "{{ states('sensor.x') }}",
             "block": "{% if a %}b{% endif %}",
+            "list": "[{{ a }}, {{ b }}",
             "message": "[Alert] front door open",
         }
         assert _redact_parameters(params) == params

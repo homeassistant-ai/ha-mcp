@@ -14,7 +14,7 @@ from ha_mcp.tools.validation_middleware import (
     ValidationErrorMiddleware,
     _closest_parameter,
 )
-from ha_mcp.utils.usage_logger import get_recent_logs
+from ha_mcp.utils.usage_logger import get_recent_logs, shutdown_usage_logger
 
 
 def _make_mcp() -> FastMCP:
@@ -588,6 +588,8 @@ async def test_a_rejected_call_does_not_log_a_secret_inside_a_json_string(
     ordinary call reaches the usage log parsed, where masking by key name
     covers the code; a call rejected for another argument must not put it in
     the log that ha_report_issue returns."""
+    # A fresh log: an entry left by another case must not stand in for this one.
+    shutdown_usage_logger()
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
 
@@ -598,13 +600,9 @@ async def test_a_rejected_call_does_not_log_a_secret_inside_a_json_string(
     with pytest.raises(ToolError):
         await mcp.call_tool("ha_test_rejected_secret", {"data": data, "bogus": 1})
 
-    entries = [
-        entry
-        for entry in get_recent_logs(50)
-        if entry["tool_name"] == "ha_test_rejected_secret"
-    ]
-    assert entries
-    assert "4711-secret" not in json.dumps(entries)
+    (entry,) = get_recent_logs(50)
+    assert entry["tool_name"] == "ha_test_rejected_secret"
+    assert "4711-secret" not in json.dumps(entry)
 
 
 @pytest.mark.asyncio
