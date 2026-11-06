@@ -415,3 +415,19 @@ def mock_client():
         client._admin_route_refused = False
         client._admin_route_lock = asyncio.Lock()
         return client
+
+
+@pytest.fixture(autouse=True)
+def opened_flows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, tuple[str, str | None]]:
+    """Start every test with no integration flow opened by this server.
+
+    A test that continues a flow by ``flow_id`` seeds it here, as
+    ``drive_flow`` would have when it opened the flow.
+    """
+    from ha_mcp.tools import integration_flow_steps
+
+    flows: dict[str, tuple[str, str | None]] = {}
+    monkeypatch.setattr(integration_flow_steps, "_opened_flows", flows)
+    return flows

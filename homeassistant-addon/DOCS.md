@@ -464,7 +464,7 @@ read_only_mode: true
 Redacts secrets from tool responses before they reach the AI assistant. When enabled:
 
 - **App (add-on) options** (`ha_get_app`, `ha_manage_app`): any option value whose app schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
-- **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
+- **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including each field's `current` value under `include_schema=True`. Stored option values are checked against the flow's first form only, so a password field that only a later form declares is not detected in them.
 - **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
 
 Redaction is schema-driven — fields not marked as passwords by their schema are not detected and are returned as-is until the value scrub has seen them. Two exceptions: app option values holding a private key, and app options named in [`redact_app_option_keys`](#redact_app_option_keys). The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_app` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
@@ -804,7 +804,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
-- `ha_set_integration` — Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
+- `ha_set_integration` — Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.
 
 ### Labels & Categories
 - `ha_config_get_category` — Get category info - list all categories for a scope or get a specific one by ID.

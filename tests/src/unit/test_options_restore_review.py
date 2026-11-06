@@ -88,6 +88,9 @@ async def test_restore_abort_cleanup_logs_safe_failure_context(
 
     assert caught.value.reason == "unsupported_fields"
     assert caught.value.apply_status == "not_applied"
+    # Not turned into a structured error, which would log its text.
+    assert caught.value.__cause__ is None
+    assert "Unclassified exception" not in caplog.text
     flow_client.submit_options_flow_step.assert_not_awaited()
     flow_client.abort_options_flow.assert_awaited_once_with("restore-flow")
     assert "PRIVATE_TEST_PAYLOAD" not in caplog.text

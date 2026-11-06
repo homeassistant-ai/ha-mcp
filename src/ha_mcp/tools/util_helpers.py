@@ -220,6 +220,39 @@ def is_credential_ws_command(
     return normalized.startswith(_CREDENTIAL_WS_PREFIXES)
 
 
+# WebSocket commands that stream events or reply in two phases (an initial ack
+# then the real payload as a follow-up event) rather than resolving to a single
+# terminal result. The ws_command of ha_call_service and ha_set_integration
+# only sends one-shot request/response commands, so these are rejected: the
+# "subscribe" substring catches subscription commands, and the set names known
+# two-phase / streaming commands whose names don't contain "subscribe". The set
+# is a floor, not an exhaustive list -- HA's WS command naming isn't consistent
+# enough for a name check alone to be fully reliable.
+_WS_COMMAND_EVENT_BLOCKLIST = frozenset(
+    {
+        "render_template",  # event-based; use ha_eval_template instead
+        "system_health/info",  # two-phase (see tools_system._fetch_health_info)
+        "assist_pipeline/run",  # streams pipeline events
+    }
+)
+
+# Substrings that mark a WS command as streaming / subscription-based even when
+# its name isn't in the blocklist above. Such commands ack once and then push
+# follow-up events on the same id; the one-shot send_command path returns the
+# ack and leaks the subscription. "subscribe" covers subscribe_* and */subscribe;
+# "stream" covers history/stream, logbook/event_stream, camera/stream, ...;
+# "start_preview" covers template/start_preview and the config-flow preview family.
+_WS_STREAMING_SUBSTRINGS = ("subscribe", "stream", "start_preview")
+
+
+def is_streaming_ws_command(command_type: str) -> bool:
+    """Return True for subscription / streaming / two-phase WS commands."""
+    lowered = command_type.lower()
+    if lowered in _WS_COMMAND_EVENT_BLOCKLIST:
+        return True
+    return any(sub in lowered for sub in _WS_STREAMING_SUBSTRINGS)
+
+
 class WsRefusal(NamedTuple):
     """Why a raw WebSocket surface refuses a command, and what to do instead."""
 

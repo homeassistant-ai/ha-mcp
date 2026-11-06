@@ -1,7 +1,6 @@
 """fetch_helper_flow_info: one-round-trip introspection of a helper's config flow.
 
-Split out of test_helper_schema_inline.py (issue #1186 tests, plus the step_id
-it now reports for #2632).
+Split out of test_helper_schema_inline.py (issue #1186 tests).
 """
 
 from __future__ import annotations
@@ -37,8 +36,7 @@ class TestFetchHelperFlowInfo:
 
         info = await fetch_helper_flow_info(client, "filter")
 
-        # step_id keys the step's field help text in HA's translations (#2632).
-        assert info == {"schema": intro_schema, "step_id": "user", "last_step": None}
+        assert info == {"schema": intro_schema}
         client.abort_config_flow.assert_called_once_with("intro-1")
 
     async def test_menu_flow_with_choice_submits_and_returns_branch_schema(
@@ -69,12 +67,7 @@ class TestFetchHelperFlowInfo:
 
         # menu_options is intentionally NOT surfaced when a choice was
         # picked — the caller already has it.
-        assert info == {
-            "schema": branch_schema,
-            "step_id": "sensor",
-            "last_step": None,
-            "branch": "sensor",
-        }
+        assert info == {"schema": branch_schema}
 
     async def test_menu_flow_without_choice_returns_menu_options(self) -> None:
         # ``template`` without a menu_choice can't be schema-fetched —

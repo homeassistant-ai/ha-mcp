@@ -2,7 +2,7 @@
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, extract_error_message
+from ...utilities.assertions import MCPAssertions, extract_error_message, safe_call_tool
 
 
 @pytest.mark.asyncio
@@ -638,6 +638,6 @@ async def test_python_transform_returns_authoritative_post_save_hash(
         assert chain_result["success"] is True
         assert chain_result["action"] == "python_transform"
     finally:
-        await mcp.call_tool_success(
-            "ha_config_delete_dashboard", {"url_path": url_path}
+        await safe_call_tool(
+            mcp_client, "ha_config_delete_dashboard", {"url_path": url_path}
         )

@@ -17,7 +17,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import tools_config_automations as automations_module
 from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.tools.tools_config_automations import (
@@ -119,6 +122,9 @@ class TestGetAutomation:
 
         assert result["automation_id"] == "orphaned_unique_id"
         assert result["entity"] is None
+        # The references warning points at related, which has nothing to show.
+        assert result["related"] is None
+        assert any(w.startswith("related unavailable") for w in result["warnings"])
 
     async def test_identifier_key_no_longer_in_response(self, tools):
         """Issue #1334: one canonical typed-id key, no raw input echo."""
@@ -139,8 +145,11 @@ class TestGetAutomation:
         self, tools, mock_client
     ):
         """The registry row and Core's repair issue stand in for the
-        component's lookup; references need the component and say so."""
+        component's lookup. References need the component; Core's broader
+        Related set stands in under its own key (#2967) and the warning
+        says which is which."""
         row = {"entity_id": "automation.morning_routine", "labels": ["kitchen"]}
+        related = {"entity": ["light.bedroom"], "integration": ["light"]}
         issues = [
             {
                 "domain": "automation",
@@ -157,6 +166,13 @@ class TestGetAutomation:
         async def ws(msg: dict[str, Any]) -> dict[str, Any]:
             if msg["type"] == "repairs/list_issues":
                 return {"success": True, "result": {"issues": issues}}
+            if msg["type"] == "search/related":
+                assert msg == {
+                    "type": "search/related",
+                    "item_type": "automation",
+                    "item_id": "automation.morning_routine",
+                }
+                return {"success": True, "result": related}
             return {"success": True, "result": row}
 
         mock_client.send_websocket_message = AsyncMock(side_effect=ws)
@@ -165,6 +181,7 @@ class TestGetAutomation:
             entity_id="automation.morning_routine"
         )
 
+        assert result["related"] == related
         assert result["entity"] == row
         assert result["validation"] == {
             "status": "failed_triggers",
@@ -173,6 +190,53 @@ class TestGetAutomation:
         assert result["references"] is None
         assert len(result["warnings"]) == 1
         assert "references" in result["warnings"][0]
+        assert "related" in result["warnings"][0]
+
+    async def test_without_the_component_a_lost_related_read_keeps_the_config(
+        self, tools, mock_client
+    ):
+        async def ws(msg: dict[str, Any]) -> dict[str, Any]:
+            if msg["type"] == "search/related":
+                raise HomeAssistantConnectionError("WebSocket closed")
+            if msg["type"] == "repairs/list_issues":
+                return {"success": True, "result": {"issues": []}}
+            return {"success": True, "result": {"entity_id": "automation.x"}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws)
+
+        result = await tools.ha_config_get_automation(
+            entity_id="automation.morning_routine"
+        )
+
+        assert result["config"] == STORED
+        assert result["related"] is None
+        assert any(
+            w.startswith("related unavailable") and "WebSocket closed" in w
+            for w in result["warnings"]
+        )
+
+    async def test_without_the_component_a_failed_related_read_says_so(
+        self, tools, mock_client
+    ):
+        async def ws(msg: dict[str, Any]) -> dict[str, Any]:
+            if msg["type"] == "search/related":
+                return {"success": False, "error": "Unknown command."}
+            if msg["type"] == "repairs/list_issues":
+                return {"success": True, "result": {"issues": []}}
+            return {"success": True, "result": {"entity_id": "automation.x"}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws)
+
+        result = await tools.ha_config_get_automation(
+            entity_id="automation.morning_routine"
+        )
+
+        assert result["references"] is None
+        assert result["related"] is None
+        assert any(
+            w.startswith("related unavailable") and "Unknown command." in w
+            for w in result["warnings"]
+        )
 
 
 class TestPythonTransform:

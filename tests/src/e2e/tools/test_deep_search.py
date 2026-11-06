@@ -101,7 +101,8 @@ async def test_deep_search_automation(mcp_client):
 
     finally:
         # Cleanup: Delete the test automation
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_config_remove_automation",
             {"entity_id": "automation.deep_search_test_automation"},
         )
@@ -256,7 +257,8 @@ async def test_deep_search_helper(mcp_client):
 
     finally:
         # Cleanup: Delete the test helper
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_select",
@@ -695,7 +697,8 @@ async def test_deep_search_default_surfaces_created_scene(mcp_client):
             f"✅ Default deep_search surfaced the created scene ({len(scenes)} total)"
         )
     finally:
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_config_remove_scene",
             {"scene_id": scene_id, "wait": False},
         )
