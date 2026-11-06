@@ -43,6 +43,7 @@ from .automation_errors import (
     raise_core_rejection,
     section_from_status,
 )
+from .automation_registry_details import core_related, registry_details
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -68,7 +69,6 @@ from .config_write_helpers import (
     augment_tool_error_with_skill_content,
     config_reload_waiter,
     entry_category,
-    fetch_registry_entry,
     merge_validation_meta,
     note_reload_outcome,
 )
@@ -117,15 +117,6 @@ _ROOT_LIST_KEYS = (
     "condition",
     "actions",
     "action",
-)
-
-_REFERENCES_NEED_COMPONENT = (
-    "references need the ha_mcp_tools component's automation_config bridge, "
-    "which is not available"
-)
-_REFERENCES_NOT_LOADED = (
-    "references unavailable: Home Assistant has not loaded this automation "
-    "(disabled, or it failed to load)"
 )
 
 
@@ -352,54 +343,6 @@ class AutomationConfigTools:
                 return None
             raise
 
-    async def _registry_details(
-        self, target: _Target, warnings: list[str]
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
-        """The automation's registry row, Core's validation verdict and references."""
-        lookup = target.lookup
-        if lookup is not None:
-            references = lookup.get("references")
-            if references is None and lookup.get("loaded") is False:
-                warnings.append(_REFERENCES_NOT_LOADED)
-            return lookup.get("entity"), lookup.get("validation"), references
-        warnings.append(_REFERENCES_NEED_COMPONENT)
-        if target.entity_id is None:
-            return None, None, None
-        entity = await fetch_registry_entry(self._client, target.entity_id, warnings)
-        return entity, await self._repair_validation(target.entity_id, warnings), None
-
-    async def _repair_validation(
-        self, entity_id: str, warnings: list[str]
-    ) -> dict[str, Any] | None:
-        """Core's validation verdict from the repair issue it raises for a failed load."""
-        try:
-            result = await self._client.send_websocket_message(
-                {"type": "repairs/list_issues"}
-            )
-        except HomeAssistantError as e:
-            warnings.append(f"validation status unavailable: {e}")
-            return None
-        if not result.get("success"):
-            reason = result.get("error") or "request failed"
-            warnings.append(f"validation status unavailable: {reason}")
-            return None
-        prefix = f"{entity_id}_validation_"
-        for issue in (result.get("result") or {}).get("issues") or []:
-            issue_id = issue.get("issue_id")
-            if (
-                issue.get("domain") != "automation"
-                or not isinstance(issue_id, str)
-                or not issue_id.startswith(prefix)
-            ):
-                continue
-            status = issue_id.removeprefix(prefix)
-            # Another remainder belongs to an automation whose entity_id
-            # extends this one (automation.x_validation_failed_y).
-            if status.startswith("failed_") and "_validation_" not in status:
-                placeholders = issue.get("translation_placeholders") or {}
-                return {"status": status, "error": placeholders.get("error")}
-        return None
-
     @tool(
         name="ha_config_get_automation",
         tags={"Automations"},
@@ -427,8 +370,11 @@ class AutomationConfigTools:
         areas, floors, labels and blueprint it uses. `references` is None
         without the ha_mcp_tools component's automation_config bridge and
         while Home Assistant has not loaded the automation (disabled, or it
-        failed to load); `warnings` says which. `automation_id` is the
-        resolved entity_id, falling back to the input.
+        failed to load); `warnings` says which. Without the bridge, `related`
+        holds Home Assistant's Related set for the automation instead, keyed
+        by item type: what it uses plus their devices, areas, floors and
+        integrations. `automation_id` is the resolved entity_id, falling back
+        to the input.
 
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
@@ -455,8 +401,8 @@ class AutomationConfigTools:
                 entity_id
             )
             warnings: list[str] = []
-            entity, validation, references = await self._registry_details(
-                target, warnings
+            entity, validation, references = await registry_details(
+                self._client, target.lookup, target.entity_id, warnings
             )
             # Injected after hashing, for the set round-trip.
             cat_id = entry_category(entity, "automation")
@@ -472,6 +418,10 @@ class AutomationConfigTools:
                 "validation": validation,
                 "references": references,
             }
+            if target.lookup is None:
+                response["related"] = await core_related(
+                    self._client, target.entity_id, warnings
+                )
             if warnings:
                 response["warnings"] = warnings
             return response

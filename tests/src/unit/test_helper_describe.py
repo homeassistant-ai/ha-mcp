@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.read_only import read_only_request
+from ha_mcp.tools import config_entry_flow_introspect
 from ha_mcp.tools.config_helpers import describe as mod
+
+from .test_flow_progress import _abort_recorder
 
 _SCHEDULE_CORE = [
     {"type": "string", "lengthMin": 1, "name": "name", "required": True},
@@ -18,6 +24,14 @@ _SCHEDULE_CORE = [
 
 def _fields(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {f["name"]: f for f in result["fields"]}
+
+
+def _form(step_id: str, schema: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"type": "form", "flow_id": "f1", "step_id": step_id, "data_schema": schema}
+
+
+def _menu(options: list[str]) -> dict[str, Any]:
+    return {"type": "menu", "flow_id": "f1", "step_id": "user", "menu_options": options}
 
 
 @pytest.fixture
@@ -142,21 +156,36 @@ async def test_unknown_storage_helper_is_an_error_not_a_field_list(
 )
 async def test_menu_choice_without_a_menu_is_refused_not_ignored(
     client: AsyncMock,
-    monkeypatch: pytest.MonkeyPatch,
     helper_type: str,
     kwargs: dict[str, Any],
 ) -> None:
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_flow_info",
-        AsyncMock(return_value={"step_id": "user", "schema": [{"name": "name"}]}),
-    )
+    client.start_config_flow.return_value = _form("user", [{"name": "name"}])
     client.get_config_entry.return_value = {"domain": helper_type}
 
     with pytest.raises(ToolError, match="menu_choice 'sensor' does not apply"):
         await mod.describe_helper(client, helper_type, menu_choice="sensor", **kwargs)
 
     client.start_options_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("helper_type", "suggestion"),
+    [
+        ("counter", "Drop menu_choice"),
+        ("template", "Drop menu_choice, or pass one of menu_options"),
+    ],
+    ids=["storage-helper", "choice-not-offered"],
+)
+async def test_a_refused_menu_choice_points_at_menu_options_only_with_a_menu(
+    client: AsyncMock, helper_type: str, suggestion: str
+) -> None:
+    client.start_config_flow.return_value = _menu(["sensor"])
+
+    with pytest.raises(ToolError) as exc_info:
+        await mod.describe_helper(client, helper_type, menu_choice="sensors")
+
+    assert json.loads(str(exc_info.value))["error"]["suggestion"] == suggestion
 
 
 @pytest.mark.asyncio
@@ -189,18 +218,35 @@ async def test_current_values_of_a_password_field_are_redacted(
 
 @pytest.mark.asyncio
 async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    client: AsyncMock,
 ) -> None:
     """A menu-rooted helper names its sub-types instead of failing."""
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_flow_info",
-        AsyncMock(return_value={"menu_options": ["sensor", "binary_sensor"]}),
-    )
+    client.start_config_flow.return_value = _menu(["sensor", "binary_sensor"])
 
     result = await mod.describe_helper(client, "template")
 
     assert result["menu_options"] == ["sensor", "binary_sensor"]
+    assert "fields" not in result
+    assert result["note"] == "Pass menu_choice to describe one of these sub-types."
+    client.abort_config_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_a_menu_choice_that_finishes_the_helper_flow_is_reported_as_saved(
+    client: AsyncMock,
+) -> None:
+    client.start_config_flow.return_value = _menu(["sensor"])
+    client.submit_config_flow_step.return_value = {
+        "type": "create_entry",
+        "flow_id": "f1",
+        "title": "Hall",
+    }
+
+    result = await mod.describe_helper(client, "template", menu_choice="sensor")
+
+    assert result["flow_type"] == "create_entry"
+    assert result["menu_choice"] == "sensor"
+    assert result["title"] == "Hall"
     assert "fields" not in result
 
 
@@ -211,23 +257,15 @@ async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
 )
 async def test_flow_helper_says_when_more_forms_follow(
     client: AsyncMock,
-    monkeypatch: pytest.MonkeyPatch,
     last_step: bool | None,
     more_forms: str | None,
 ) -> None:
     """A statistics helper asks for its characteristic on a second form; the
     agent learns that instead of taking the first form for all of it."""
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_flow_info",
-        AsyncMock(
-            return_value={
-                "step_id": "user",
-                "schema": [{"name": "entity_id"}],
-                "last_step": last_step,
-            }
-        ),
-    )
+    client.start_config_flow.return_value = {
+        **_form("user", [{"name": "entity_id"}]),
+        "last_step": last_step,
+    }
 
     client.send_websocket_message.return_value = {}
 
@@ -235,6 +273,11 @@ async def test_flow_helper_says_when_more_forms_follow(
 
     assert result.get("more_forms") == more_forms
     assert ("note" in result) is (more_forms is not None)
+    if more_forms is not None:
+        assert ("did not say whether more forms follow" in result["note"]) is (
+            last_step is None
+        )
+        assert ("asks for more fields" in result["note"]) is (last_step is False)
 
 
 @pytest.mark.asyncio
@@ -259,12 +302,12 @@ async def test_existing_flow_helper_with_a_later_options_form_says_so(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("menu", "expected"),
-    [(["a", 1, None], ["a"]), (None, None), ([2], None), ({"a": "Label"}, ["a"])],
+    [(["a", 1, None], ["a"]), (None, []), ([2], []), ({"a": "Label"}, ["a"])],
 )
 async def test_options_flow_menu_lists_only_string_choices(
-    client: AsyncMock, menu: Any, expected: list[str] | None
+    client: AsyncMock, menu: Any, expected: list[str]
 ) -> None:
-    """A malformed options-flow menu reports nothing rather than a None list."""
+    """A malformed options-flow menu reports no choices rather than a None list."""
     client.get_config_entry.return_value = {"domain": "group"}
     client.start_options_flow.return_value = {
         "type": "menu",
@@ -274,27 +317,81 @@ async def test_options_flow_menu_lists_only_string_choices(
 
     result = await mod.describe_helper(client, "group", helper_id="entry1")
 
-    assert result.get("menu_options") == expected
-    assert result["note"]
+    assert result["menu_options"] == expected
+    assert result["note"].startswith("This helper's options flow opens with a menu")
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
 @pytest.mark.asyncio
-async def test_flow_that_cannot_be_read_is_an_error_not_an_empty_field_list(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("menu_choice", "helper_id"),
+    [("sensor", None), (None, None), (None, "entry1")],
+    ids=["setup-menu", "setup", "existing"],
+)
+async def test_read_only_still_describes_a_flow_based_helper(
+    client: AsyncMock,
+    menu_choice: str | None,
+    helper_id: str | None,
 ) -> None:
-    """A mistyped menu_choice makes HA reject the branch; the agent must not be
-    told the helper has no fields."""
-    monkeypatch.setattr(mod, "fetch_helper_flow_info", AsyncMock(return_value={}))
+    client.get_config_entry.return_value = {"domain": "template"}
+    client.start_config_flow.return_value = _menu(["sensor"])
+    client.submit_config_flow_step.return_value = _form("sensor", [{"name": "state"}])
+    client.start_options_flow.return_value = _menu(["sensor"])
 
-    with pytest.raises(ToolError, match="menu_choice 'sensors'"):
-        await mod.describe_helper(client, "template", menu_choice="sensors")
-    with pytest.raises(ToolError, match="no setup form for derivative"):
-        await mod.describe_helper(client, "derivative")
+    with read_only_request():
+        result = await mod.describe_helper(
+            client, "template", menu_choice=menu_choice, helper_id=helper_id
+        )
+
+    if menu_choice:
+        assert [f["name"] for f in result["fields"]] == ["state"]
+    else:
+        assert result["menu_options"] == ["sensor"]
+    if helper_id is None:
+        client.start_config_flow.assert_awaited_once_with("template")
+    else:
+        client.start_options_flow.assert_awaited_once_with("entry1")
 
 
 @pytest.mark.asyncio
-async def test_options_flow_that_does_not_open_with_a_form_is_an_error(
+@pytest.mark.usefixtures("no_component")
+async def test_read_only_still_describes_a_storage_helper_type(
+    client: AsyncMock,
+) -> None:
+    with read_only_request():
+        result = await mod.describe_helper(client, "input_number")
+
+    assert result["source"] == "static_fallback"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("helper_type", "menu_choice", "failing", "match"),
+    [
+        ("template", "sensor", "submit_config_flow_step", "with menu_choice 'sensor'"),
+        ("derivative", None, "start_config_flow", "no setup form for derivative"),
+    ],
+    ids=["branch-rejected", "flow-not-started"],
+)
+async def test_flow_that_cannot_be_read_is_an_error_not_an_empty_field_list(
+    client: AsyncMock,
+    helper_type: str,
+    menu_choice: str | None,
+    failing: str | None,
+    match: str,
+) -> None:
+    """A mistyped menu_choice, or a flow HA does not open or answer, is an
+    error: the agent must not be told the helper has no fields."""
+    client.start_config_flow.return_value = _menu(["sensor"])
+    if failing:
+        getattr(client, failing).side_effect = RuntimeError("HA said no")
+
+    with pytest.raises(ToolError, match=match):
+        await mod.describe_helper(client, helper_type, menu_choice=menu_choice)
+
+
+@pytest.mark.asyncio
+async def test_an_options_flow_abort_is_reported_with_its_reason(
     client: AsyncMock,
 ) -> None:
     client.get_config_entry.return_value = {"domain": "group"}
@@ -304,7 +401,23 @@ async def test_options_flow_that_does_not_open_with_a_form_is_an_error(
         "reason": "not_loaded",
     }
 
-    with pytest.raises(ToolError, match="abort: not_loaded"):
+    result = await mod.describe_helper(client, "group", helper_id="entry1")
+
+    assert (result["flow_type"], result["aborted"]) == ("abort", "not_loaded")
+    assert "fields" not in result
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_an_options_flow_without_a_form_is_an_error(client: AsyncMock) -> None:
+    client.get_config_entry.return_value = {"domain": "group"}
+    client.start_options_flow.return_value = {
+        "type": "progress",
+        "flow_id": "f1",
+        "step_id": "wait",
+    }
+
+    with pytest.raises(ToolError, match="reached a 'progress' step"):
         await mod.describe_helper(client, "group", helper_id="entry1")
 
     client.abort_options_flow.assert_awaited_once_with("f1")
@@ -387,28 +500,20 @@ def test_collapsed_sections_are_described_inline() -> None:
 
 @pytest.mark.asyncio
 async def test_flow_fields_carry_ha_own_help_text_including_sections(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    client: AsyncMock,
 ) -> None:
     """The model sees the same per-field help the HA UI shows, with no doc to maintain."""
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_flow_info",
-        AsyncMock(
-            return_value={
-                "step_id": "sensor",
-                "branch": "sensor",
-                "schema": [
-                    {"name": "state", "selector": {"template": {}}},
-                    {
-                        "type": "expandable",
-                        "name": "additional_options",
-                        "schema": [
-                            {"name": "availability", "selector": {"template": {}}}
-                        ],
-                    },
-                ],
-            }
-        ),
+    client.start_config_flow.return_value = _menu(["sensor", "binary_sensor"])
+    client.submit_config_flow_step.return_value = _form(
+        "sensor",
+        [
+            {"name": "state", "selector": {"template": {}}},
+            {
+                "type": "expandable",
+                "name": "additional_options",
+                "schema": [{"name": "availability", "selector": {"template": {}}}],
+            },
+        ],
     )
     p = "component.template.config.step.sensor"
     client.send_websocket_message.return_value = {
@@ -419,10 +524,13 @@ async def test_flow_fields_carry_ha_own_help_text_including_sections(
         }
     }
 
-    fields = _fields(
-        await mod.describe_helper(client, "template", menu_choice="sensor")
-    )
+    result = await mod.describe_helper(client, "template", menu_choice="sensor")
+    fields = _fields(result)
 
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "f1", {"next_step_id": "sensor"}
+    )
+    assert result["menu_choice"] == "sensor"
     assert fields["state"]["description"] == "Template for the state."
     assert fields["additional_options"]["fields"][0]["description"] == "Avail."
 
@@ -434,14 +542,10 @@ async def test_flow_fields_carry_ha_own_help_text_including_sections(
     ids=["call-fails", "result-not-a-dict", "resources-not-a-dict"],
 )
 async def test_flow_fields_still_described_when_translations_fail(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch, reply: Any
+    client: AsyncMock, reply: Any
 ) -> None:
     """Help text is best-effort: a failed or malformed reply leaves it out."""
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_flow_info",
-        AsyncMock(return_value={"step_id": "user", "schema": [{"name": "source"}]}),
-    )
+    client.start_config_flow.return_value = _form("user", [{"name": "source"}])
     if isinstance(reply, Exception):
         client.send_websocket_message.side_effect = reply
     else:
@@ -454,14 +558,10 @@ async def test_flow_fields_still_described_when_translations_fail(
 
 @pytest.mark.asyncio
 async def test_flow_field_without_help_text_gets_its_ui_label(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    client: AsyncMock,
 ) -> None:
     """A field HA documents only by its label still says what it is."""
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_flow_info",
-        AsyncMock(return_value={"step_id": "user", "schema": [{"name": "source"}]}),
-    )
+    client.start_config_flow.return_value = _form("user", [{"name": "source"}])
     client.send_websocket_message.return_value = {
         "resources": {
             "component.utility_meter.config.step.user.data.source": "Input sensor"
@@ -492,3 +592,30 @@ async def test_core_fields_follow_a_stable_order_with_hints_first(
     result = await mod.describe_helper(client, "schedule")
 
     assert [f["name"] for f in result["fields"]] == ["name", "monday", "sunday"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_error_context_read_still_closes_its_flow(
+    client: AsyncMock,
+) -> None:
+    client.start_config_flow.return_value = _form("user", [])
+    sent, client.abort_config_flow.side_effect = _abort_recorder()
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await config_entry_flow_introspect.fetch_helper_flow_info(client, "group")
+
+    assert sent == ["f1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("quiet", "level"), [(False, "WARNING"), (True, "DEBUG")])
+async def test_a_failed_probe_abort_logs_at_debug_when_quiet(
+    quiet: bool, level: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    abort = AsyncMock(side_effect=RuntimeError("ws down"))
+
+    with caplog.at_level("DEBUG", logger="ha_mcp.tools.config_entry_flow_introspect"):
+        await config_entry_flow_introspect.abort_probe_flow(abort, "f1", quiet=quiet)
+
+    assert [r.levelname for r in caplog.records if "f1" in r.getMessage()] == [level]

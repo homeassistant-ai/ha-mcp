@@ -21,6 +21,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...utilities.assertions import (
+    MCPAssertions,
     parse_mcp_result,
     safe_call_tool,
     tool_error_to_result,
@@ -655,9 +656,10 @@ class TestHacsWriteOperations:
         """Test: the Marketplace on 2026.11+, HACS before; Marketplace gates hold.
 
         On the Marketplace an install waits until the connected user has
-        accepted its first-run warning, which the agent cannot do: the refusal
-        must name that step. Accepting it the way the Marketplace panel does
-        then lets the download/remove roundtrip below run on this lane too.
+        accepted its first-run warning, and Core keeps that per user: the
+        refusal must name the confirmed accept action, which accepts it for the
+        server's own user (Supervisor's on the in-app lane, which nobody can log
+        in as) and lets the download/remove roundtrip below run on every lane.
         """
         marketplace = await ha_client.send_websocket_message(
             {"type": "marketplace/info"}
@@ -669,21 +671,35 @@ class TestHacsWriteOperations:
         expected = "marketplace" if marketplace.get("success") else "hacs"
         assert search["store"]["api"] == expected
 
-        if expected == "hacs" or marketplace["result"]["warning_accepted"]:
+        if expected == "hacs":
             return
-        refused = await safe_hacs_call(
-            mcp_client,
-            "ha_manage_hacs",
-            {"action": "download", "repository_id": str(search["results"][0]["id"])},
-        )
-        assert refused.get("success") is not True, "Install ran without the warning"
-        assert "first-run warning" in str(refused), refused
-        accepted = await ha_client.send_websocket_message(
-            {"type": "marketplace/warning/accept"}
-        )
-        assert accepted.get("success"), accepted
+        # The server's user, not the test user, is the one the gate checks, and
+        # Core has no command to take an acceptance back.
+        if search["store"]["warning_accepted"]:
+            pytest.skip("The server's user already accepted the Marketplace warning")
+        if not search.get("results"):
+            pytest.skip("The Marketplace index returned no repository to install")
+        async with MCPAssertions(mcp_client) as mcp:
+            refused = await mcp.call_tool_failure(
+                "ha_manage_hacs",
+                {
+                    "action": "download",
+                    "repository_id": str(search["results"][0]["id"]),
+                },
+            )
+            assert refused.get("store_error") == "warning_not_accepted", refused
+            assert "first-run warning" in str(refused), refused
+            assert "accept_warning" in str(refused), refused
+            await mcp.call_tool_success(
+                "ha_manage_hacs", {"action": "accept_warning", "confirm": True}
+            )
+            readback = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "search", "max_results": 1}
+            )
+        store = readback["data"]["store"]
+        assert store["warning_accepted"] is True, store
 
-    async def test_download_then_remove_roundtrip(self, mcp_client, ha_client):
+    async def test_download_then_remove_roundtrip(self, mcp_client):
         """
         Test: Download a disposable repository, then remove it.
 
@@ -713,19 +729,19 @@ class TestHacsWriteOperations:
         if target is None:
             pytest.skip("No downloadable theme repository available")
         repo_id = str(target["id"])
-        # The Marketplace warning is per user: accept it for the test user
-        # (no-op on HACS) rather than relying on the gate test running first.
-        await ha_client.send_websocket_message({"type": "marketplace/warning/accept"})
+        # The Marketplace warning is per user: accept it for the server's user
+        # rather than relying on the gate test running first. HACS has none.
+        if search_data["store"]["api"] == "marketplace":
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_manage_hacs", {"action": "accept_warning", "confirm": True}
+                )
 
         download = await safe_hacs_call(
             mcp_client,
             "ha_manage_hacs",
             {"action": "download", "repository_id": repo_id},
         )
-        if download.get("store_error") == "warning_not_accepted":
-            # The in-add-on server connects as Supervisor's user, whose
-            # warning only that user can accept.
-            pytest.skip("The server's user has not accepted the Marketplace warning")
         if not download.get("success"):
             # Download needs GitHub content access; treat failure as an
             # environment limitation, mirroring the suite's skip policy.

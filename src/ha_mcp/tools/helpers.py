@@ -36,6 +36,7 @@ from ..errors import (
     create_timeout_error,
     create_validation_error,
 )
+from ..redaction import scrub_known_secrets
 from ..utils.usage_logger import log_tool_call
 from .coercion import UNSET, parse_json_param
 
@@ -732,9 +733,10 @@ def log_tool_usage(func: Any) -> Any:
         except BaseException as e:
             # BaseException, not Exception: a cancelled tool call must not be
             # recorded as a success. str() is empty on a bare CancelledError,
-            # so the class name stands in.
+            # so the class name stands in. RedactSecretsMiddleware scrubs the
+            # error only after this log entry is written.
             success = False
-            error_message = str(e) or type(e).__name__
+            error_message = scrub_known_secrets(str(e)) or type(e).__name__
             raise
         finally:
             execution_time_ms = (time.time() - start_time) * 1000

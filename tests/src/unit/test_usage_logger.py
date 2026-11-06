@@ -291,6 +291,33 @@ class TestLogToolUsageDecorator:
         assert entry["success"] is False
         assert entry["error_message"] == "CancelledError"
 
+    async def test_a_known_secret_in_the_error_is_scrubbed(self, monkeypatch):
+        """The usage log keeps the error text, which RedactSecretsMiddleware
+        only scrubs on its way to the client."""
+        from types import SimpleNamespace
+
+        from ha_mcp import redaction
+        from ha_mcp.tools.helpers import log_tool_usage
+
+        monkeypatch.setattr(
+            redaction,
+            "get_global_settings",
+            lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+        )
+        monkeypatch.setattr(redaction, "_known_secrets", {"hunter2-secret"})
+
+        @log_tool_usage
+        async def ha_failing_tool():
+            raise ValueError("login failed for hunter2-secret")
+
+        with pytest.raises(ValueError, match="hunter2-secret"):
+            await ha_failing_tool()
+
+        entry = next(
+            e for e in get_recent_logs(5) if e["tool_name"] == "ha_failing_tool"
+        )
+        assert entry["error_message"] == "login failed for <redacted>"
+
 
 class TestParameterRedaction:
     """Tests for secret masking at the logging chokepoint (GHSA-mc92-ww4q-6fg4)."""

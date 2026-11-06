@@ -14,7 +14,10 @@ surfaces stop returning operator secrets verbatim:
 2. **Integration options** (``ha_get_integration``): fields the
    options-flow schema marks with a password text selector are replaced the
    same way, on both the harvested options and the ``include_schema=True``
-   schema echo (whose ``suggested_value`` carries the live value).
+   fields (whose current value comes from the form's ``suggested_value``).
+   Stored option values are checked against the flow's first form only,
+   so a password field that only a later form declares is not detected
+   in them.
 3. **Every other tool response**: secret values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
    :class:`RedactSecretsMiddleware` (registered just outside the
@@ -24,7 +27,8 @@ surfaces stop returning operator secrets verbatim:
 The set/empty sentinel split keeps the genuinely useful diagnostic — "is
 this credential configured at all?" — answerable without disclosing the
 value. ``ha_manage_app`` and the config-entry flow writes reject
-submitted values that are (or contain) a sentinel — unconditionally, not
+submitted values that are (or contain) a sentinel, and the flow writes also
+reject the component's ``**redacted**`` placeholder — unconditionally, not
 only while the flag is on — so a redacted marker can never be round-tripped
 into a live config (add-on writes still merge from the real, unredacted
 current options server-side).
@@ -41,7 +45,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
@@ -397,34 +401,61 @@ def _collect_stored(value: Any, listed: frozenset[str], secret: bool) -> set[str
     return known_values_for_option_item(value) if secret else set()
 
 
-def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
+def sentinel_option_keys(options: Any) -> list[str]:
     """Dotted paths of submitted option values that equal a redaction sentinel.
 
     Used by ``ha_manage_app`` config mode to reject round-tripping a
     redacted read back into a live add-on config.
     """
+    return _matching_option_keys(options, carries_sentinel)
+
+
+#: What the ha_mcp_tools component writes over an option value equal to a
+#: ``secrets.yaml`` entry. Like a sentinel, it is no usable value to write.
+_COMPONENT_REDACTED = "**redacted**"
+
+
+def _is_placeholder(value: Any) -> bool:
+    return carries_sentinel(value) or value == _COMPONENT_REDACTED
+
+
+def placeholder_option_keys(options: Any) -> list[str]:
+    """Dotted paths of option values that are a redaction sentinel or the
+    component's ``**redacted**`` scrub.
+
+    For config-entry options, which the component may have served.
+    """
+    return _matching_option_keys(options, _is_placeholder)
+
+
+def _matching_option_keys(
+    options: Any, match: Callable[[Any], bool], prefix: str = ""
+) -> list[str]:
+    """Dotted paths of the values in an options dict that ``match`` accepts."""
     keys: list[str] = []
     if not isinstance(options, dict):
         return keys
     for name, value in options.items():
-        path = f"{_prefix}.{name}" if _prefix else str(name)
-        _collect_sentinel_paths(value, path, keys)
+        path = f"{prefix}.{name}" if prefix else str(name)
+        _collect_matching_paths(value, path, keys, match)
     return keys
 
 
-def _collect_sentinel_paths(value: Any, path: str, keys: list[str]) -> None:
-    """Append ``path`` (or deeper paths) for every sentinel-carrying value.
+def _collect_matching_paths(
+    value: Any, path: str, keys: list[str], match: Callable[[Any], bool]
+) -> None:
+    """Append ``path`` (or deeper paths) for every value ``match`` accepts.
 
-    Recurses through dicts AND lists at any nesting depth so a sentinel at
+    Recurses through dicts AND lists at any nesting depth so a marker at
     e.g. ``opt[0][0]`` cannot slip past the write guard.
     """
-    if carries_sentinel(value):
+    if match(value):
         keys.append(path)
     elif isinstance(value, dict):
-        keys.extend(sentinel_option_keys(value, path))
+        keys.extend(_matching_option_keys(value, match, path))
     elif isinstance(value, list):
         for idx, item in enumerate(value):
-            _collect_sentinel_paths(item, f"{path}[{idx}]", keys)
+            _collect_matching_paths(item, f"{path}[{idx}]", keys, match)
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +486,8 @@ def redact_flow_schema(data_schema: Any) -> Any:
 
     HA injects the persisted option into each field's
     ``description.suggested_value`` (and static defaults into ``default`` /
-    ``value``), so an ``include_schema=True`` echo carries the live secret.
+    ``value``), so a schema handed back to a caller (a describe's fields, a
+    form-error response) would carry the live secret.
     Harvests each replaced value into the known-secrets set first.
     """
     if not isinstance(data_schema, list):
@@ -629,6 +661,13 @@ def scrub_obj(obj: Any, secrets: Sequence[str]) -> Any:
     if isinstance(obj, list):
         return [scrub_obj(item, secrets) for item in obj]
     return obj
+
+
+def scrub_known_secrets(text: str) -> str:
+    """``text`` with every known secret value replaced, while the flag is on."""
+    if not redaction_enabled():
+        return text
+    return scrub_text(text, with_serialized_variants(known_secret_values()))
 
 
 class RedactSecretsMiddleware(Middleware):

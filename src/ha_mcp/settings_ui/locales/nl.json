@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "Integratie Instellen",
-      "description": "Beheer een integratie (configuratie-item): inschakelen/uitschakelen, toevoegen of opties bijwerken."
+      "description": "Beheer een integratie (config-entry): inschakelen/uitschakelen, toevoegen, opties bijwerken, herconfigureren of eigen commando's verzenden."
     },
     "ha_set_todo_item": {
       "title": "To-do Item Instellen",

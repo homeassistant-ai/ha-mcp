@@ -193,8 +193,8 @@ async def test_config_boot_roundtrip(mcp_client: Any) -> None:
         )
     finally:
         if original is not None:
-            await mcp_client.call_tool(
-                "ha_manage_app", {"slug": slug, "boot": original}
+            await safe_call_tool(
+                mcp_client, "ha_manage_app", {"slug": slug, "boot": original}
             )
 
 
@@ -226,8 +226,8 @@ async def test_config_auto_update_roundtrip(mcp_client: Any) -> None:
             f"{after.get('auto_update')!r}"
         )
     finally:
-        await mcp_client.call_tool(
-            "ha_manage_app", {"slug": slug, "auto_update": original}
+        await safe_call_tool(
+            mcp_client, "ha_manage_app", {"slug": slug, "auto_update": original}
         )
 
 
@@ -257,8 +257,8 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
             f"{after.get('watchdog')!r}"
         )
     finally:
-        await mcp_client.call_tool(
-            "ha_manage_app", {"slug": slug, "watchdog": original}
+        await safe_call_tool(
+            mcp_client, "ha_manage_app", {"slug": slug, "watchdog": original}
         )
 
 

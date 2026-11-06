@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "Ställ in integration",
-      "description": "Hantera en integration (konfigurationspost): aktivera/inaktivera, lägga till eller uppdatera alternativ."
+      "description": "Hantera en integration (konfigurationspost): aktivera/inaktivera, lägg till, uppdatera alternativ, omkonfigurera eller skicka dess egna kommandon."
     },
     "ha_set_todo_item": {
       "title": "Ställ in att-göra-objekt",

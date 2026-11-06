@@ -1878,14 +1878,7 @@ class HomeAssistantClient:
         return await self._list_registry("config/device_registry/list", "device")
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
-        """
-        Get config entry details.
-
-        Note: Home Assistant doesn't have a direct REST API endpoint for individual
-        config entries. This method lists all entries and filters by entry_id.
-
-        Args:
-            entry_id: Config entry ID
+        """Get one config entry; see :mod:`.config_entry_read` for the routes.
 
         Returns:
             Home Assistant's config-entry fragment (``ConfigEntry.as_json_fragment``):
@@ -1893,19 +1886,11 @@ class HomeAssistantClient:
             entry's connection settings and credentials are not in it.
 
         Raises:
-            HomeAssistantAPIError: If entry not found or API error
+            HomeAssistantAPIError: 404 if not found; Core's other errors
         """
-        logger.debug(f"Getting config entry: {entry_id}")
-        entries = await self.list_config_entries()
-        found: dict[str, Any] | None = next(
-            (entry for entry in entries if entry.get("entry_id") == entry_id), None
-        )
-        if found is None:
-            raise HomeAssistantAPIError(
-                f"Config entry not found: {entry_id}",
-                status_code=404,
-            )
-        return found
+        from .config_entry_read import read_config_entry
+
+        return await read_config_entry(self, entry_id)
 
     async def delete_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Delete a config entry via REST API.
@@ -1927,8 +1912,16 @@ class HomeAssistantClient:
         logger.debug(f"Deleting config entry: {entry_id}")
         return await self._request("DELETE", f"/config/config_entries/entry/{entry_id}")
 
-    async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self,
+        message: dict[str, Any],
+        *,
+        expected_error_codes: frozenset[str] = frozenset(),
+    ) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
+
+        A Home Assistant error whose code is in ``expected_error_codes`` is an
+        answer the caller handles, so it is logged at debug, not error.
 
         Uses a per-client WebSocket connection keyed to the client's own
         credentials (base_url + token). This ensures OAuth mode uses the
@@ -2036,7 +2029,11 @@ class HomeAssistantClient:
                 # Name the command in the log line: a bare "Command failed:
                 # Unknown command." is undiagnosable from a user's log
                 # (issue #1889 took a live reproduction to attribute).
-                logger.error(f"WebSocket message failed ({message.get('type')}): {e}")
+                code = getattr(e, "code", None)
+                logger.log(
+                    logging.DEBUG if code in expected_error_codes else logging.ERROR,
+                    f"WebSocket message failed ({message.get('type')}): {e}",
+                )
                 # Preserve HA's structured error code (e.g. ``not_found``) so callers
                 # can distinguish HA's authoritative verdict from a transient failure
                 # instead of only seeing the stringified message.

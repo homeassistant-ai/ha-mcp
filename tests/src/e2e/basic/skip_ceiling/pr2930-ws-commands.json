@@ -1,0 +1,7 @@
+{
+  "reason": "#2930 replaces the include_knx_project smoke test with tests/src/e2e/tools/test_integration_ws_commands.py, whose listing test is requires_component_surface: the ws_commands list comes from the component's integration_commands bridge, so it skips at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon) and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

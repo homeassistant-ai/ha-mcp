@@ -1,21 +1,24 @@
 """Unit tests for the config-entry reload-watch primitives.
 
-Exercises `_entry_fragments`, `_is_transient_reconfigure_state`, and
-`_observe_reload_settled` directly. The full `reconfigure_config_entry` path
-that drives this module end-to-end is covered in
+Exercises `_entry_fragments`, `_is_transient_reconfigure_state`,
+`_observe_reload_settled` and `watch_entry_reload` directly. How a reconfigure
+reports the watch's answer is covered, with the watch stubbed, in
 `test_integration_reconfigure.py`.
 """
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ha_mcp.tools import config_entry_reload_watch
 from ha_mcp.tools.config_entry_reload_watch import (
     _TRANSIENT_RECONFIGURE_STATES,
     _entry_fragments,
     _is_transient_reconfigure_state,
     _observe_reload_settled,
+    watch_entry_reload,
 )
 
 #: Timestamps bracketing a commit: the subscribe snapshot's baseline value,
@@ -366,7 +369,7 @@ async def test_the_commit_gate_reads_the_shape_home_assistant_actually_sends(
     """`as_json_fragment` emits `modified_at.timestamp()`, a JSON number.
 
     A str-only parser rejects every real fragment, so the baseline is never
-    established and the whole observation silently degrades to polling.
+    established and every reconfigure is reported unverified.
     """
     entry = {"entry_id": "e1", "state": "loaded", "modified_at": before}
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -391,7 +394,7 @@ async def test_the_commit_gate_reads_the_shape_home_assistant_actually_sends(
 async def test_an_unusable_modified_at_degrades_rather_than_guessing(
     raw: object,
 ) -> None:
-    """Nothing can be attributed to the commit, so the poll is the honest answer.
+    """Nothing can be attributed to the commit, so unverified is the honest answer.
 
     The stand-in commit and settle fragments behind the bad baseline are what
     make this bite: with a single fragment a parser that wrongly ACCEPTS the
@@ -409,3 +412,46 @@ async def test_an_unusable_modified_at_degrades_rather_than_guessing(
         queue.put_nowait({"event": [{"type": "updated", "entry": frag}]})
 
     assert await _observe_reload_settled(queue, "e1", timeout=0.25) is None
+
+
+@pytest.mark.asyncio
+async def test_watch_entry_reload_never_raises_and_always_unsubscribes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream that fails after the commit reads as unobserved, not an error,
+    and the subscription is released however the call ends."""
+    ws = MagicMock(release_subscription=AsyncMock())
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    monkeypatch.setattr(
+        config_entry_reload_watch,
+        "_subscribe_entry_changes",
+        AsyncMock(return_value=(ws, (7, queue))),
+    )
+    observe = AsyncMock(side_effect=RuntimeError("bad frame"))
+    monkeypatch.setattr(config_entry_reload_watch, "_observe_reload_settled", observe)
+
+    async with watch_entry_reload(MagicMock(), "e1") as settled:
+        assert await settled() is None
+    observe.assert_awaited_once_with(queue, "e1")
+    ws.release_subscription.assert_awaited_once_with(7)
+
+    async def failed_submit() -> None:
+        async with watch_entry_reload(MagicMock(), "e1"):
+            raise ValueError("the submit failed")
+
+    with pytest.raises(ValueError):
+        await failed_submit()
+    assert ws.release_subscription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_watch_entry_reload_without_a_stream_reads_as_unobserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        config_entry_reload_watch,
+        "_subscribe_entry_changes",
+        AsyncMock(return_value=None),
+    )
+    async with watch_entry_reload(MagicMock(), "e1") as settled:
+        assert await settled() is None

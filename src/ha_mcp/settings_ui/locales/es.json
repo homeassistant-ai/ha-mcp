@@ -918,7 +918,7 @@
     },
     "ha_set_integration": {
       "title": "Modificar integración",
-      "description": "Gestiona una integración (entrada de configuración): activarla o desactivarla, añadirla o actualizar sus opciones."
+      "description": "Gestionar una integración (entrada de configuración): habilitar/deshabilitar, agregar, actualizar opciones, reconfigurar o enviar sus propios comandos."
     },
     "ha_set_todo_item": {
       "title": "Definir tarea",

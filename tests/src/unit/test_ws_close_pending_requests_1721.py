@@ -35,8 +35,8 @@ from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.client.websocket_client import (
     MAX_WS_MESSAGE_BYTES,
     HomeAssistantWebSocketClient,
-    WebSocketConnectionState,
 )
+from ha_mcp.client.websocket_state import WebSocketConnectionState
 
 HA_VERSION = "2026.7.0"
 

@@ -395,6 +395,258 @@ async def test_positive_unaffected_by_ttl(monkeypatch) -> None:
     assert ws.send_command.await_count == 1
 
 
+def _fake_pool(monkeypatch, pool: dict[str, Any]) -> None:
+    """The pool holds ``pool[token]`` for ``_client()``'s URL with that token.
+
+    Nothing connects. Other URLs or TLS modes find no connection, so a lookup
+    with the wrong credentials reads as an empty slot and the re-probe tests
+    fail.
+    """
+
+    def pooled_client(**credentials: Any) -> Any:
+        if credentials["url"] != "http://ha.local:8123":
+            return None
+        if credentials["verify_ssl"] is not None:
+            return None
+        return pool.get(credentials["token"])
+
+    monkeypatch.setattr(component_api.websocket_manager, "pooled_client", pooled_client)
+
+
+@pytest.mark.asyncio
+async def test_positive_reprobes_once_the_pool_reconnects(monkeypatch) -> None:
+    """A Core restart replaces the pooled WS connection; caps probed over the old
+    one are re-probed, so a component upgraded across that restart is adopted
+    without restarting the server (#2967)."""
+    old_ws = _make_ws(info_result=_INFO_OK)
+    old_ws.is_connected = True
+    upgraded = {**_INFO_OK, "capabilities": ["search", "automation_config"]}
+    new_ws = _make_ws(info_result=upgraded)
+    new_ws.is_connected = True
+    pool = {"tok": old_ws}
+    _fake_pool(monkeypatch, pool)
+    client = _client()
+    with _patch_ws(old_ws):
+        first = await get_component_caps(client)
+    pool["tok"] = new_ws
+    with _patch_ws(new_ws):
+        second = await get_component_caps(client)
+        third = await get_component_caps(client)
+
+    assert not component_supports(first, "automation_config")
+    assert component_supports(second, "automation_config")
+    assert third is second
+    assert new_ws.send_command.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_positive_reprobes_when_its_connection_dropped(monkeypatch) -> None:
+    """The connection the caps came from closed (Core restarting) and the pool
+    has not replaced it yet; the next call re-probes rather than trusting caps
+    from the component that went away."""
+    ws = _make_ws(info_result=_INFO_OK)
+    ws.is_connected = True
+    _fake_pool(monkeypatch, {"tok": ws})
+    client = _client()
+    with _patch_ws(ws):
+        await get_component_caps(client)
+        ws.is_connected = False
+        await get_component_caps(client)
+
+    assert ws.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_positive_kept_while_its_connection_is_pooled(monkeypatch) -> None:
+    ws = _make_ws(info_result=_INFO_OK)
+    ws.is_connected = True
+    _fake_pool(monkeypatch, {"tok": ws})
+    client = _client()
+    with _patch_ws(ws):
+        first = await get_component_caps(client)
+        second = await get_component_caps(client)
+
+    assert first is second
+    assert ws.send_command.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reprobe_keeps_the_working_caps(monkeypatch) -> None:
+    """Right after a Core restart the re-probe can run before Core answers; the
+    caps that worked stay in place instead of a cached failure refusing strict
+    callers once Core is back."""
+    old_ws = _make_ws(info_result=_INFO_OK)
+    old_ws.is_connected = True
+    pool = {"tok": old_ws}
+    _fake_pool(monkeypatch, pool)
+    client = _client()
+    with _patch_ws(old_ws):
+        working = await get_component_caps(client)
+
+    old_ws.is_connected = False
+    down = AsyncMock(side_effect=HomeAssistantConnectionError("Core restarting"))
+    with patch.object(component_api, "get_websocket_client", down):
+        during = await get_component_caps(client, strict=True)
+    # The failed connect took the dead connection out of the pool; nothing
+    # has opened a new one yet when the next caller asks.
+    del pool["tok"]
+
+    upgraded = {**_INFO_OK, "capabilities": ["search", "automation_config"]}
+    back_ws = _make_ws(info_result=upgraded)
+    back_ws.is_connected = True
+    with _patch_ws(back_ws):
+        after = await get_component_caps(client, strict=True)
+
+    assert during is working
+    assert component_supports(after, "automation_config")
+
+
+@pytest.mark.asyncio
+async def test_a_component_still_starting_is_probed_again_soon(monkeypatch) -> None:
+    """After a Core restart Core answers before the component has registered
+    its commands; a re-probe of working caps that meets ``unknown_command``
+    there gets the short window, so the started component is found within it
+    instead of after the five-minute absence window."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    old_ws = _make_ws(info_result=_INFO_OK)
+    old_ws.is_connected = True
+    pool = {"tok": old_ws}
+    _fake_pool(monkeypatch, pool)
+    client = _client()
+    with _patch_ws(old_ws):
+        await get_component_caps(client)
+
+    starting = _make_ws(
+        info_exc=HomeAssistantCommandError("Unknown command.", "unknown_command")
+    )
+    starting.is_connected = True
+    pool["tok"] = starting
+    with _patch_ws(starting):
+        during = await get_component_caps(client)
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    started = _make_ws(info_result=_INFO_OK)
+    started.is_connected = True
+    pool["tok"] = started
+    with _patch_ws(started):
+        after = await get_component_caps(client)
+
+    assert during is None
+    assert isinstance(after, ComponentCaps)
+
+
+@pytest.mark.asyncio
+async def test_a_command_refused_while_starting_also_gets_the_short_window(
+    monkeypatch,
+) -> None:
+    """A component command sent in the same restart gap answers
+    ``unknown_command`` and drops the caps; the probe that follows, still in
+    the gap, gets the short window too rather than five minutes."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    with _patch_ws(_make_ws(info_result=_INFO_OK)):
+        await get_component_caps(client)
+    invalidate_caps(client)
+
+    starting = _make_ws(
+        info_exc=HomeAssistantCommandError("Unknown command.", "unknown_command")
+    )
+    with _patch_ws(starting):
+        assert await get_component_caps(client) is None
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    with _patch_ws(_make_ws(info_result=_INFO_OK)):
+        assert isinstance(await get_component_caps(client), ComponentCaps)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reprobe_never_hands_out_a_malformed_snapshot(
+    monkeypatch,
+) -> None:
+    """Caps parsed from a malformed ``info`` reply are not caps that worked: a
+    failed re-probe must not pass them to a strict caller."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    malformed = _make_ws(info_result={**_INFO_OK, "schema_version": "1"})
+    client = _client()
+    with _patch_ws(malformed):
+        await get_component_caps(client)
+
+    clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+    down = AsyncMock(side_effect=HomeAssistantConnectionError("down"))
+    with (
+        patch.object(component_api, "get_websocket_client", down),
+        pytest.raises(component_api.ComponentDiscoveryError),
+    ):
+        await get_component_caps(client, strict=True)
+
+
+class _OAuthProxy:
+    """The OAuth proxy's shape: one object naming each request's own client."""
+
+    def __init__(self, users: dict[str, _FakeClient]) -> None:
+        self.users = users
+        self.user = ""
+
+    def current_client(self) -> _FakeClient:
+        return self.users[self.user]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.current_client(), name)
+
+
+def _oauth_users(monkeypatch, infos: dict[str, Any]) -> tuple[_OAuthProxy, dict]:
+    """A proxy over one client per token, each with its own pooled connection."""
+    pool = {token: _make_ws(**info) for token, info in infos.items()}
+    for ws in pool.values():
+        ws.is_connected = True
+    _fake_pool(monkeypatch, pool)
+
+    async def connect(*, url: str, token: str, verify_ssl: Any) -> Any:
+        return pool[token]
+
+    monkeypatch.setattr(component_api, "get_websocket_client", connect)
+    return _OAuthProxy({token: _FakeClient(token=token) for token in infos}), pool
+
+
+@pytest.mark.asyncio
+async def test_alternating_oauth_users_each_probe_once(monkeypatch) -> None:
+    """The OAuth proxy is one object whose token changes per request; each
+    user's caps are their own, so switching users does not re-probe."""
+    ok = {"info_result": _INFO_OK}
+    proxy, pool = _oauth_users(monkeypatch, {"alice": ok, "bob": ok})
+
+    for user in ("alice", "bob", "alice", "bob", "alice"):
+        proxy.user = user
+        assert isinstance(await get_component_caps(proxy), ComponentCaps)
+
+    assert sum(ws.send_command.await_count for ws in pool.values()) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_non_admins_refused_probe_leaves_the_admins_caps(monkeypatch) -> None:
+    """``info`` is admin-only: a non-admin OAuth user's refused probe must not
+    replace an administrator's caps, or the administrator's strict reads fail
+    for the failure window."""
+    refused = HomeAssistantCommandError("Unauthorized", "unauthorized")
+    proxy, _pool = _oauth_users(
+        monkeypatch,
+        {"admin": {"info_result": _INFO_OK}, "viewer": {"info_exc": refused}},
+    )
+
+    proxy.user = "admin"
+    admin_caps = await get_component_caps(proxy, strict=True)
+    proxy.user = "viewer"
+    with pytest.raises(component_api.ComponentDiscoveryError):
+        await get_component_caps(proxy, strict=True)
+    proxy.user = "admin"
+
+    assert await get_component_caps(proxy, strict=True) is admin_caps
+    assert not component_api.component_probe_auth_failed(proxy)
+
+
 def test_component_supports() -> None:
     caps = ComponentCaps(
         schema_version=1,

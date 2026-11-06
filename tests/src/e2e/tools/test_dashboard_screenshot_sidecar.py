@@ -52,6 +52,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
 
+from ..utilities.assertions import safe_call_tool
+
 pytestmark = [pytest.mark.container_only]
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -484,8 +486,8 @@ async def test_structured_named_view_returns_ordered_responsive_images(
         assert all(request["params"]["lang"] == "de" for request in requests)
         assert all(request["params"]["wait"] == "17" for request in requests)
     finally:
-        await screenshot_mcp_client.call_tool(
-            "ha_config_delete_dashboard", {"url_path": url_path}
+        await safe_call_tool(
+            screenshot_mcp_client, "ha_config_delete_dashboard", {"url_path": url_path}
         )
 
 
@@ -633,8 +635,8 @@ async def test_get_dashboard_include_screenshot(
         )
         _png_dimensions(png)
     finally:
-        await screenshot_mcp_client.call_tool(
-            "ha_config_delete_dashboard", {"url_path": url_path}
+        await safe_call_tool(
+            screenshot_mcp_client, "ha_config_delete_dashboard", {"url_path": url_path}
         )
 
 
@@ -672,6 +674,6 @@ async def test_set_dashboard_return_screenshot(
         )
         _png_dimensions(png)
     finally:
-        await screenshot_mcp_client.call_tool(
-            "ha_config_delete_dashboard", {"url_path": url_path}
+        await safe_call_tool(
+            screenshot_mcp_client, "ha_config_delete_dashboard", {"url_path": url_path}
         )

@@ -918,7 +918,7 @@
     },
     "ha_set_integration": {
       "title": "Mettre à jour l'intégration",
-      "description": "Active, désactive, ajoute ou modifie les paramètres d'intégration."
+      "description": "Gérer une intégration (entrée de configuration) : activer/désactiver, ajouter, mettre à jour les options, reconfigurer ou envoyer ses propres commandes."
     },
     "ha_set_todo_item": {
       "title": "Créer/mettre à jour un élément de tâche",

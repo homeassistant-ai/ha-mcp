@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "Agordi Integriĝon",
-      "description": "Administri integriĝon (agorda eniro): ebligi/malŝalti, aldoni, aŭ ĝisdatigi opciojn."
+      "description": "Administri integriĝon (agordan eniron): ebligi/malebligi, aldoni, ĝisdatigi agordojn, reagordi aŭ sendi ties proprajn komandojn."
     },
     "ha_set_todo_item": {
       "title": "Agordi Farendaĵon",

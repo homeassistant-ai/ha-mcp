@@ -336,8 +336,8 @@ class TestDashboardLifecycle:
             )
             assert get_data["config"] == replacement
         finally:
-            await mcp.call_tool_success(
-                "ha_config_delete_dashboard", {"url_path": dashboard_id}
+            await safe_call_tool(
+                mcp_client, "ha_config_delete_dashboard", {"url_path": dashboard_id}
             )
 
         logger.info("Dashboard without config test completed successfully")
@@ -491,8 +491,10 @@ class TestDashboardIdentifierResolution:
             assert get_data["success"] is True
             assert get_data["config"]["views"][0]["cards"][0]["content"] == "hi"
         finally:
-            await mcp.call_tool_success(
-                "ha_config_delete_dashboard", {"url_path": "test-981-get-by-id"}
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_delete_dashboard",
+                {"url_path": "test-981-get-by-id"},
             )
 
     async def test_set_via_internal_id_pre_resolves(self, mcp_client):
@@ -536,8 +538,10 @@ class TestDashboardIdentifierResolution:
             )
             assert get_data["config"]["views"][0]["cards"][0]["content"] == "v2"
         finally:
-            await mcp.call_tool_success(
-                "ha_config_delete_dashboard", {"url_path": "test-981-set-by-id"}
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_delete_dashboard",
+                {"url_path": "test-981-set-by-id"},
             )
 
     async def test_mixed_identifier_optimistic_locking(self, mcp_client):
@@ -598,8 +602,10 @@ class TestDashboardIdentifierResolution:
                 "did not change — likely no-op save regression"
             )
         finally:
-            await mcp.call_tool_success(
-                "ha_config_delete_dashboard", {"url_path": "test-981-mixed-hash"}
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_delete_dashboard",
+                {"url_path": "test-981-mixed-hash"},
             )
 
 
@@ -663,7 +669,8 @@ class TestFindCard:
             logger.info("find_card by entity test passed")
 
         finally:
-            await mcp.call_tool_success(
+            await safe_call_tool(
+                mcp_client,
                 "ha_config_delete_dashboard",
                 {"url_path": "test-find-entity"},
             )
@@ -710,7 +717,8 @@ class TestFindCard:
             logger.info("find_card by type test passed")
 
         finally:
-            await mcp.call_tool_success(
+            await safe_call_tool(
+                mcp_client,
                 "ha_config_delete_dashboard",
                 {"url_path": "test-find-type"},
             )
@@ -795,7 +803,8 @@ class TestFindCard:
             logger.info("nested-card python_path round-trip test passed")
 
         finally:
-            await mcp.call_tool_success(
+            await safe_call_tool(
+                mcp_client,
                 "ha_config_delete_dashboard",
                 {"url_path": "test-find-roundtrip"},
             )

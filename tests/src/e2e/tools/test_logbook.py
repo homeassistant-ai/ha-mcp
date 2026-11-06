@@ -811,7 +811,8 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
         assert matching[0]["level"] == "DEBUG"
     finally:
         # Restore default
-        await mcp_client.call_tool(
+        await safe_call_tool(
+            mcp_client,
             "ha_call_service",
             {
                 "domain": "logger",

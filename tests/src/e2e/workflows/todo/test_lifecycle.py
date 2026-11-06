@@ -26,6 +26,7 @@ import pytest
 # Import test utilities
 from ...utilities.assertions import (
     MCPAssertions,
+    safe_call_tool,
 )
 
 # Set up logging
@@ -398,7 +399,8 @@ class TestTodoErrorHandling:
                     expected_error="at least one of",
                 )
             finally:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_remove_todo_item",
                     {"entity_id": todo_entity, "item": item_name},
                 )
