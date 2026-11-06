@@ -24,6 +24,7 @@ from ..._conftest_embedded import (
     _embedded_initialize_ok,
     _wait_for_embedded_webhook_ready,
 )
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.wait_helpers import wait_for_condition
 
 pytestmark = pytest.mark.embedded_only
@@ -110,12 +111,16 @@ async def test_switching_access_off_closes_the_server_until_switched_on(
             assert summary["bring_up_in_progress"] is False, summary
             assert summary["running"] is False, summary
         finally:
-            await ha_client.call_service("switch", "turn_on", {"entity_id": entity_id})
-            ready = await asyncio.to_thread(
-                _wait_for_embedded_webhook_ready, webhook_url, _READY_TIMEOUT_S
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                await ha_client.call_service(
+                    "switch", "turn_on", {"entity_id": entity_id}
+                )
+                ready = await asyncio.to_thread(
+                    _wait_for_embedded_webhook_ready, webhook_url, _READY_TIMEOUT_S
+                )
 
         assert ready
         assert (await ha_client.get_entity_state(entity_id))["state"] == "on"
     finally:
-        await _set_switch_enabled(ha_client, entity_id, False)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _set_switch_enabled(ha_client, entity_id, False)

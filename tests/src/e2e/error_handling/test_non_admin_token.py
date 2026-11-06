@@ -24,6 +24,7 @@ from ha_mcp.tools.smart_search import SmartSearchTools
 from tests.test_constants import NON_ADMIN_TEST_TOKEN
 
 from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ..utilities.cleanup import CleanupSteps
 
 _ADMIN_ONLY_PATH = "/config/automation/config/ha_mcp_e2e_absent"
 # Seeded in tests/initial_test_state/automations.yaml.
@@ -172,7 +173,8 @@ async def test_home_assistant_answers_non_admin_with_401(
     try:
         assert await _raw_status(ha_client, method, path, body) == expected
     finally:
-        await _dismiss_login_notification(ha_client)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _dismiss_login_notification(ha_client)
 
 
 @pytest.mark.asyncio
@@ -234,7 +236,8 @@ async def test_unanswered_probe_lets_one_service_401_reach_home_assistant(
             return_exceptions=True,
         )
     finally:
-        await _dismiss_login_notification(ha_client)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _dismiss_login_notification(ha_client)
     assert all(isinstance(r, HomeAssistantAdminRequiredError) for r in results), results
     assert sent == ["/api/services/automation/reload"]
 
@@ -249,7 +252,8 @@ async def test_a_pre_gate_response_does_not_mark_the_token_admin(
         with pytest.raises(HomeAssistantError):
             await non_admin_client._request("GET", "/error_log")
     finally:
-        await _dismiss_login_notification(ha_client)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _dismiss_login_notification(ha_client)
     assert non_admin_client.known_is_admin is not True
 
 
@@ -273,7 +277,8 @@ async def test_unanswered_probe_lets_one_concurrent_request_reach_home_assistant
             return_exceptions=True,
         )
     finally:
-        await _dismiss_login_notification(ha_client)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _dismiss_login_notification(ha_client)
     assert all(isinstance(r, HomeAssistantAuthError) for r in results), results
     assert len(sent) == 1
 
@@ -295,7 +300,8 @@ async def test_config_body_search_warns_about_the_token(
             "E2E Seed Automation", search_types=["automation"], limit=10
         )
     finally:
-        await _dismiss_login_notification(ha_client)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _dismiss_login_notification(ha_client)
     assert result.get("partial") is True, result
     assert NON_ADMIN_TOKEN_WARNING in result.get("warnings", []), result
 

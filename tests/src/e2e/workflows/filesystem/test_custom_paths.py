@@ -6,7 +6,7 @@ LIVE (no HA restart), and the non-overridable deny floor still blocks
 ``.storage`` even when a malicious entry tries to add it.
 
 Cross-lane (no backend marker). The component services are driven directly
-over HA REST with the admin token (mirrors ``test_ha_mcp_tools_refusal.py``);
+over HA REST with the admin token (``utilities/component_services.py``);
 the file tools are driven via the MCP client. The custom allowlist lives in
 the component (HA process), so a set over REST is visible to the file handlers
 the MCP client invokes — the same HA instance backs both.
@@ -21,6 +21,11 @@ import uuid
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.cleanup import CleanupSteps
+from ...utilities.component_services import (
+    bootstrap_caller_token,
+    set_allowed_paths,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,49 +64,6 @@ async def mcp_client_fs(
         yield client
 
 
-async def _bootstrap_token(base_url: str) -> str:
-    """Fetch the caller token via the admin-gated bootstrap service."""
-    import httpx
-
-    from tests.test_constants import TEST_TOKEN
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/services/ha_mcp_tools/get_caller_token",
-            headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            params={"return_response": ""},
-            json={},
-        )
-    assert resp.status_code == 200, f"get_caller_token failed: {resp.text!r}"
-    service_response = resp.json().get("service_response", {})
-    assert service_response.get("success") is True, f"bootstrap failed: {resp.text!r}"
-    return service_response["token"]
-
-
-async def _set_allowed_paths(base_url: str, token: str, paths: list[str]) -> dict:
-    """Call set_allowed_paths with the admin token + caller token; return the
-    structured service response."""
-    import httpx
-
-    from tests.test_constants import TEST_TOKEN
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/services/ha_mcp_tools/set_allowed_paths",
-            headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            params={"return_response": ""},
-            json={"_ha_mcp_token": token, "paths": paths},
-        )
-    assert resp.status_code == 200, f"set_allowed_paths failed: {resp.text!r}"
-    return resp.json().get("service_response", {})
-
-
 @pytest.mark.filesystem
 class TestCustomFilesystemPaths:
     """The custom-directory allowlist applies live and respects the floor."""
@@ -110,11 +72,10 @@ class TestCustomFilesystemPaths:
         self, mcp_client_fs, ha_container_with_fresh_config
     ):
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         fname = f"pyscript/e2e_{uuid.uuid4().hex}.py"
         try:
-            sr = await _set_allowed_paths(base_url, token, ["pyscript"])
-            assert sr.get("success") is True, sr
+            sr = await set_allowed_paths(base_url, token, ["pyscript"])
             assert "pyscript" in sr.get("paths", []), sr
 
             async with MCPAssertions(mcp_client_fs) as mcp:
@@ -126,20 +87,24 @@ class TestCustomFilesystemPaths:
                 read = await mcp.call_tool_success("ha_read_file", {"path": fname})
                 assert "# 1567 test" in read.get("content", ""), read
         finally:
-            await safe_call_tool(
-                mcp_client_fs, "ha_delete_file", {"path": fname, "confirm": True}
-            )
-            await _set_allowed_paths(base_url, token, [])
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client_fs,
+                        "ha_delete_file",
+                        {"path": fname, "confirm": True},
+                    )
+                with cleanup.step():
+                    await set_allowed_paths(base_url, token, [])
 
     async def test_exact_file_grants_root_read_write_live(
         self, mcp_client_fs, ha_container_with_fresh_config
     ):
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         fname = "sensor.yaml"
         try:
-            sr = await _set_allowed_paths(base_url, token, [fname])
-            assert sr.get("success") is True, sr
+            sr = await set_allowed_paths(base_url, token, [fname])
             assert sr.get("paths") == [fname], sr
 
             async with MCPAssertions(mcp_client_fs) as mcp:
@@ -155,20 +120,25 @@ class TestCustomFilesystemPaths:
                 read = await mcp.call_tool_success("ha_read_file", {"path": fname})
                 assert "# 2268 exact-file test" in read.get("content", ""), read
         finally:
-            await safe_call_tool(
-                mcp_client_fs, "ha_delete_file", {"path": fname, "confirm": True}
-            )
-            await _set_allowed_paths(base_url, token, [])
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client_fs,
+                        "ha_delete_file",
+                        {"path": fname, "confirm": True},
+                    )
+                with cleanup.step():
+                    await set_allowed_paths(base_url, token, [])
 
     async def test_deny_floor_blocks_storage_even_with_custom_dir(
         self, mcp_client_fs, ha_container_with_fresh_config
     ):
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         try:
             # Mixed batch: a deny-floor entry (dropped), a valid entry, and a
             # duplicate-after-normalization of it ("pyscript/" -> "pyscript").
-            sr = await _set_allowed_paths(
+            sr = await set_allowed_paths(
                 base_url, token, [".storage", "pyscript", "pyscript/"]
             )
             # The deny floor drops .storage; the valid entry is kept once (the
@@ -186,4 +156,5 @@ class TestCustomFilesystemPaths:
                 f"allowlist; got: {data!r}"
             )
         finally:
-            await _set_allowed_paths(base_url, token, [])
+            with CleanupSteps() as cleanup, cleanup.step():
+                await set_allowed_paths(base_url, token, [])

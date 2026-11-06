@@ -8,6 +8,7 @@ import pytest
 from ha_mcp.config import get_global_settings
 from ha_mcp.utils.data_paths import get_data_dir
 
+from ..utilities.cleanup import CleanupSteps
 from .test_readonly_mode import _build_readonly_server
 
 
@@ -97,14 +98,16 @@ async def test_readonly_endpoint_with_real_ha(
                 assert body.get("read_only_mode", False) is expected, body
             assert get_global_settings().read_only_mode is False
     finally:
-        try:
-            if original_state is not None:
-                await ha_client.call_service(
-                    "light", f"turn_{original_state}", {"entity_id": entity}
-                )
-        finally:
-            await ha_client.close()
-            get_data_dir.cache_clear()
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                if original_state is not None:
+                    await ha_client.call_service(
+                        "light", f"turn_{original_state}", {"entity_id": entity}
+                    )
+            with cleanup.step():
+                await ha_client.close()
+            with cleanup.step():
+                get_data_dir.cache_clear()
 
 
 @pytest.mark.embedded_only

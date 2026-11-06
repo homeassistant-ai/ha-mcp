@@ -6,11 +6,66 @@ and ensuring tests don't interfere with each other.
 """
 
 import logging
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from types import TracebackType
 from typing import Any
+
+import pytest
 
 from .assertions import parse_mcp_result
 
 logger = logging.getLogger(__name__)
+
+
+class CleanupSteps:
+    """Run a ``finally`` block's cleanup so one failed step neither skips the
+    next nor replaces the test's own failure.
+
+    Enter it as the first statement of the ``finally`` block and wrap each step
+    in ``with cleanup.step():``. A step that raises an ``Exception`` or calls
+    ``pytest.fail()`` or ``pytest.skip()`` is logged and the next step runs.
+    On exit the failures raise one ``AssertionError`` naming all of them, but
+    only when the body passed: after a failed or skipped body they stay in the
+    log, and the body's own failure is the one pytest reports.
+
+    ``pytest.fail()`` counts as a failed step because some wait helpers in the
+    tests use it. A skip in a step is a failed step too, so it cannot report a
+    failed body as skipped. Any other ``BaseException`` (``KeyboardInterrupt``,
+    ``asyncio.CancelledError``) ends the cleanup and propagates unchanged. So
+    does the per-test timeout when it fires while an async step awaits: it is
+    raised in the event loop, outside the step.
+
+    Entering reads the body's outcome from ``sys.exception()``. Read while
+    another exception is handled, for example inside an ``except`` in the
+    ``finally`` block, it would return that exception and mistake it for a
+    failed body.
+    """
+
+    def __enter__(self) -> "CleanupSteps":
+        self._body_failed = sys.exception() is not None
+        self._failures: list[BaseException] = []
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        if exc is None and self._failures and not self._body_failed:
+            raise AssertionError(
+                f"Cleanup failed: {self._failures!r}"
+            ) from self._failures[0]
+
+    @contextmanager
+    def step(self) -> Iterator[None]:
+        try:
+            yield
+        except (Exception, pytest.fail.Exception, pytest.skip.Exception) as error:
+            logger.exception("Cleanup step failed")
+            self._failures.append(error)
 
 
 class TestEntityCleaner:

@@ -19,6 +19,7 @@ import os
 import pytest
 
 from ..utilities.assertions import safe_call_tool
+from ..utilities.cleanup import CleanupSteps
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1831,8 +1832,8 @@ class TestCodeModeProxyLaunderingBlocked:
 class TestCodeModeSavePersistenceFailure:
     """Companion to the unit tests in ``test_saved_tools_persistence.py``
     — verifies the user-facing E2E shape of the save_warning rollback.
-    Reaches the persistence-failure path by ``chmod``-ing the addon's
-    ``/data/saved_tools.json`` unwriteable mid-test via the SSH-addon
+    Reaches the persistence-failure path by replacing the addon's
+    ``/data/saved_tools.json`` with a directory mid-test via the SSH-addon
     docker-exec helper.
     """
 
@@ -1844,12 +1845,12 @@ class TestCodeModeSavePersistenceFailure:
         returned to MCP clients against the real addon container.
 
         Mechanism: SSH into HAOS via the bake-installed Advanced SSH
-        addon and ``docker exec`` ``chmod 444`` on the dev addon's
-        ``/data/saved_tools.json``. The addon's persistence write then
-        fails with EACCES, ``_save_saved_tools`` returns False, and the
+        addon, then ``docker exec`` replaces the dev addon's
+        ``/data/saved_tools.json`` with a directory. The addon's persistence write then
+        fails with EISDIR, ``_save_saved_tools`` returns False, and the
         ``ha_manage_custom_tool`` response surfaces the rollback shape.
-        Restoration via ``chmod 644`` runs in the test's ``finally``
-        regardless of outcome.
+        The test's ``finally`` puts an empty file back regardless of
+        outcome.
 
         Uses the session-scoped ``mcp_client`` fixture (HTTP transport
         to the addon) rather than ``mcp_client_with_code_mode`` (an
@@ -1953,13 +1954,10 @@ class TestCodeModeSavePersistenceFailure:
             )
         finally:
             # Always restore writeability so the rest of the session
-            # (and any retry) sees a usable persistence path. Wrap in
-            # its own try/except so a flaky SSH session here doesn't
-            # mask the original test exception — log the restore
-            # failure and re-raise, leaving the directory poisoned so
-            # the next test fails loudly instead of cascading on a
-            # stale 444/EISDIR.
-            try:
+            # (and any retry) sees a usable persistence path. A failed
+            # restore leaves the directory poisoned, so later tests
+            # cascade on its EISDIR.
+            with CleanupSteps() as cleanup, cleanup.step():
                 docker_exec_in_addon(
                     HA_MCP_DEV_ADDON_SLUG,
                     [
@@ -1968,13 +1966,6 @@ class TestCodeModeSavePersistenceFailure:
                         f"rm -rf {saved_tools_path} && touch {saved_tools_path}",
                     ],
                 )
-            except Exception:
-                logger.exception(
-                    "Failed to restore %s; subsequent tests in this session "
-                    "may cascade on the leftover directory",
-                    saved_tools_path,
-                )
-                raise
 
         # Second save (after restore): proves the restore worked and
         # that the same code path now persists cleanly. Uses a distinct
