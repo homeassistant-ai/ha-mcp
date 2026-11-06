@@ -385,6 +385,41 @@ class TestServiceDiscovery:
 
         logger.info("Pagination limit/offset test passed")
 
+    async def test_pagination_walk_covers_every_service_once(self, mcp_client):
+        """A paged walk returns every service exactly once, in a stable order.
+
+        The catalog has more services than one page, so two different page sizes
+        must produce the same concatenated sequence. Duplicates or gaps would
+        make a paged discovery miss a service or call it twice.
+        """
+
+        async def _walk(limit: int) -> tuple[list[str], int]:
+            seen: list[str] = []
+            offset = 0
+            pages = 0
+            while True:
+                page = await mcp_client.call_tool(
+                    "ha_list_services", {"limit": limit, "offset": offset}
+                )
+                data = assert_mcp_success(page, f"pagination walk limit={limit}")
+                keys = list(data["services"])
+                assert data["count"] == len(keys)
+                seen.extend(keys)
+                pages += 1
+                assert pages < 100, "pagination walk did not terminate"
+                if not data.get("has_more"):
+                    return seen, data["total_count"]
+                assert data["next_offset"] == offset + data["count"]
+                offset = data["next_offset"]
+
+        small, total = await _walk(50)
+        large, total_large = await _walk(200)
+
+        assert total == total_large
+        assert len(small) == total, f"walk returned {len(small)} of {total} services"
+        assert len(set(small)) == len(small), "a paged walk returned a service twice"
+        assert small == large, "page size changed the service order"
+
     async def test_detail_level_full_includes_fields(self, mcp_client):
         """Test that detail_level='full' includes field schemas."""
         logger.info("Testing: detail_level=full")
