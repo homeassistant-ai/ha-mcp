@@ -318,29 +318,16 @@ async def test_single_entry_not_found_via_component_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_capsless_falls_back_to_legacy() -> None:
-    """Old component -> legacy REST get + OptionsFlow probe."""
+    """Old component -> legacy REST get."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
-    client = RoutingClient(
-        single_entry=_rest_entry("cfg1", supports_options=True),
-        options_flow={
-            "type": "form",
-            "flow_id": "f1",
-            "step_id": "init",
-            "data_schema": [
-                {"name": "discovery", "description": {"suggested_value": True}}
-            ],
-        },
-    )
+    client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=True))
     resp = await _get(ws, client, entry_id="cfg1")
 
     assert resp["entry"]["entry_id"] == "cfg1"
-    # The legacy path served it: REST get + one OptionsFlow probe.
     assert client.get_config_entry_calls == 1
-    assert client.start_options_flow_calls == 1
-    assert resp["entry"]["options"] == {"discovery": True}
     assert not _ce_calls(ws)
 
 
@@ -555,13 +542,13 @@ async def test_ignored_entry_legacy_single_is_not_probed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_not_loaded_entry_that_is_not_ignored_is_still_probed() -> None:
+async def test_not_loaded_entry_that_is_not_ignored_keeps_its_schema_read() -> None:
     # Control for the ignored-entry tests: the gate keys on ``source``, not on
-    # the entry state, so a not-loaded user entry keeps its options probe.
+    # the entry state, so a not-loaded user entry's options form is still read.
     ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
     entry = _rest_entry("nl1", "unifi", state="not_loaded")
     client = RoutingClient(single_entry=entry)
-    resp = await _get(ws, client, entry_id="nl1")
+    resp = await _get(ws, client, entry_id="nl1", include_schema=True)
 
     assert client.start_options_flow_calls == 1
     assert resp["entry"]["supports_options"] is True

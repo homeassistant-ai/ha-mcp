@@ -114,20 +114,38 @@ async def _options_form_schema(client: Any, entry_id: Any) -> list[Any] | None:
     return data_schema
 
 
+def withhold_component_options(entry: dict[str, Any]) -> bool:
+    """Replace every option value of an entry with an options flow by a
+    set/empty sentinel; True when it did (#2157).
+
+    The component row carries raw persisted options with no schema, and the
+    password markers exist only in the options flow's form. Without that form
+    the password fields cannot be told apart, so this fails closed. Entries
+    without an options flow carry no password markers anywhere (the
+    documented metadata limit of the toggle); their options pass through and
+    the known-value scrub remains the only line for them.
+    """
+    options = entry.get("options")
+    if not isinstance(options, dict) or not options:
+        return False
+    if not entry.get("supports_options"):
+        return False
+    entry["options"] = {
+        key: sentinel_replacement(value) for key, value in options.items()
+    }
+    return True
+
+
 async def redact_component_options(
     client: Any, entry_id: Any, entry: dict[str, Any], warnings: list[str]
 ) -> None:
-    """Redact password-marked fields on component-served options (#2157).
+    """Redact the fields the options flow's form marks as passwords (#2157).
 
-    The component row carries raw persisted options with no schema, so
-    the password markers must come from a live options-flow probe. When
-    the entry supports an options flow but no form schema could be read
-    (probe failed, or the flow opens with a menu), every option value is
-    replaced with a set/empty sentinel — without the schema the password
-    fields cannot be told apart, so this fails closed. Entries without
-    an options flow carry no password markers anywhere (the documented
-    metadata limit of the toggle); their options pass through and the
-    known-value scrub remains the only line for them.
+    Opens the entry's options flow, which runs the integration's own code
+    (#2987), so only a read that asks for that form (include_schema) calls
+    this; every other read uses :func:`withhold_component_options`. When no
+    form schema could be read (the flow raised, or opens with a menu), every
+    option value is withheld the same way.
     """
     options = entry.get("options")
     if not isinstance(options, dict) or not options:
@@ -137,15 +155,53 @@ async def redact_component_options(
     data_schema = await _options_form_schema(client, entry_id)
     if isinstance(data_schema, list):
         entry["options"] = redact_options_by_flow_schema(options, data_schema)
-    else:
-        entry["options"] = {
-            key: sentinel_replacement(value) for key, value in options.items()
-        }
+    elif withhold_component_options(entry):
         warnings.append(
             f"redact_secrets: no options schema readable for {entry_id} — "
             "every option value was redacted conservatively (the password "
             "fields cannot be told apart without the schema)"
         )
+
+
+async def redact_entry_options(
+    client: Any, entry_id: str, entry: dict[str, Any], *, open_flow: bool | None
+) -> list[str]:
+    """Redact one component-served entry's options; the warnings to report.
+
+    ``open_flow`` is set by a read that asks for the options form
+    (include_schema): only then is the flow opened to tell the password
+    fields apart. Any other read withholds every value (#2987).
+    """
+    warnings: list[str] = []
+    if open_flow and entry.get("supports_options"):
+        await redact_component_options(client, entry_id, entry, warnings)
+    elif withhold_component_options(entry):
+        warnings.append(options_withheld_warning(entry_id))
+    return warnings
+
+
+_OPTIONS_FLOW_NOTE = (
+    "ha_get_integration(entry_id=..., include_schema=True) opens the entry's "
+    "options flow, which runs the integration's own code"
+)
+
+
+def options_unread_warning(subject: str) -> str:
+    """Why a read without the ha_mcp_tools component carries no ``options``."""
+    return (
+        f"options of {subject} not read: Home Assistant has no read API for "
+        "them, so they are read through the ha_mcp_tools custom component. "
+        f"Without it, {_OPTIONS_FLOW_NOTE} and reads them from its form."
+    )
+
+
+def options_withheld_warning(subject: str) -> str:
+    """Why redact_secrets replaced every option value of ``subject``."""
+    return (
+        f"redact_secrets: every option value of {subject} was redacted, since "
+        "only the options flow's form tells the password fields apart. "
+        f"{_OPTIONS_FLOW_NOTE} and redacts only those fields."
+    )
 
 
 def _entry_domain(entry: dict[str, Any] | None) -> str | None:
