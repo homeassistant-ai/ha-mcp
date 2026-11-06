@@ -469,7 +469,7 @@ async def _assert_file_edits_supported(client: Any) -> None:
             "ha_write_file(edits=...) needs a newer ha_mcp_tools custom component: "
             f"the installed one has no {EDIT_FILE_SERVICE} service.",
             suggestions=[
-                "Settings → System → Updates → HA-MCP Custom Component → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
+                "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after the update completes",
                 "Or send the whole file with content= instead of edits",
             ],
