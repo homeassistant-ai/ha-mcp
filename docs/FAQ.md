@@ -571,7 +571,7 @@ The version should match the [latest release](https://github.com/homeassistant-a
 
 ChatGPT (web, including Codex Work Mode) caches a connector's tool list and keeps serving it until the connector is refreshed. Enabling new tools on the server, updating ha-mcp, or restarting it does not change what ChatGPT has stored. Newly enabled tools (for example the beta filesystem/YAML tools) never appear in ChatGPT's tool list, even though the server logs show them registered, and other tools on the stale connection may fail with MCP internal errors. After an ha-mcp update that renames a tool parameter, ChatGPT keeps calling the tool with the old name and the server rejects it with `VALIDATION_FAILED` and `unknown parameter`.
 
-**Solution:** refresh the connector's tool list. The steps are the same for the app (add-on) and the embedded server (custom component):
+**Solution:** refresh the connector's tool list. If you enabled tools or changed a setting, restart the ha-mcp server first; the refresh only fetches the tools the server exposes at that moment. The steps are the same for the app (add-on) and the embedded server (custom component):
 
 1. In ChatGPT, open **Settings**, then the plugin settings.
 2. Find your ha-mcp connector and select it.
