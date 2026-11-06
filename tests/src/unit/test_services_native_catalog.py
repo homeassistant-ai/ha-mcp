@@ -10,6 +10,7 @@ per-field ``filter`` and the service's ``response`` shape.
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Any
 
 import pytest
@@ -219,23 +220,31 @@ async def test_legacy_translations_request_uses_configured_language() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unreadable_config_uses_english_and_warns() -> None:
+async def test_unreadable_config_uses_english_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     client = _LegacyClient(raise_on_config=True)
 
-    result = await _build_list_services(client)()
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_services"):
+        result = await _build_list_services(client)()
 
     assert client.translation_messages[0]["language"] == "en"
     assert any("language" in warning for warning in result.get("warnings", []))
+    assert "Could not read the configured language" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_config_without_a_language_uses_english_and_warns() -> None:
+async def test_config_without_a_language_uses_english_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     client = _LegacyClient(config={"time_zone": "UTC"})
 
-    result = await _build_list_services(client)()
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_services"):
+        result = await _build_list_services(client)()
 
     assert client.translation_messages[0]["language"] == "en"
     assert any("language" in warning for warning in result.get("warnings", []))
+    assert "no usable language" in caplog.text
 
 
 def test_null_core_description_normalizes_to_empty_string() -> None:
