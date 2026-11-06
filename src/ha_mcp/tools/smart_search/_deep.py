@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 from ha_mcp._vendor.fastmcp import Context
@@ -12,14 +11,11 @@ from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
 from ..dashboard_read_errors import CONFIG_NOT_FOUND_CODE, NO_STORED_CONFIG_MESSAGES
-from ..helper_flows import helper_flow_types
 from ..helpers import exception_to_structured_error, safe_progress
-from ..ignored_entries import normalize_ignored_entry
 from ..tools_config_dashboards import (
     _dashboards_via_component,
     fetch_dashboards_list,
 )
-from ..tools_integrations import fetch_entry_options_with_status
 from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
     DEFAULT_CONCURRENCY_LIMIT,
@@ -32,6 +28,7 @@ from ._fetch import (
     is_timeout_error,
     record_first_failure,
 )
+from ._flow_helpers import FlowHelperSearchMixin
 from ._graph import (
     GraphResult,
     _graph_applies,
@@ -103,7 +100,7 @@ async def _phase_finished(
     return phase_done
 
 
-class DeepSearchMixin(SceneSearchMixin):
+class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
     """deep_search orchestration + per-type automation/script/helper/dashboard/flow search."""
 
     async def _consult_reference_graph(
@@ -257,7 +254,7 @@ class DeepSearchMixin(SceneSearchMixin):
             script_skipped = script_failed = 0
             script_yaml_skipped = script_timeout = 0
             script_failed_sample: str | None = None
-            helper_failed = dashboard_failed = 0
+            helper_failed = helper_unsearched = dashboard_failed = 0
 
             if "automation" in search_types:
                 (
@@ -334,6 +331,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 (
                     results["helpers"],
                     helper_failed,
+                    helper_unsearched,
                 ) = await self._deep_search_helpers(
                     query_lower,
                     exact_match,
@@ -396,6 +394,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 script_timeout=script_timeout,
                 script_failed_sample=script_failed_sample,
                 helper_failed=helper_failed,
+                helper_unsearched=helper_unsearched,
                 dashboard_failed=dashboard_failed,
                 graph_consulted=related is not None,
                 graph_dropped=related.dropped if related else None,
@@ -898,22 +897,24 @@ class DeepSearchMixin(SceneSearchMixin):
         include_config: bool,
         *,
         prefetched_registry: Any = None,
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int, int]:
         """Deep-search helpers: parallel input_* WS lists plus flow-based helpers.
 
-        Returns ``(results, failed_type_count)`` — ``failed_type_count`` counts
-        each helper backend that failed: an ``input_*`` ``<type>/list`` fetch
-        that raised or returned a non-success response, plus the flow-helper
-        surface when its config-entries or helper-flow read fails or the entries
-        come back in an unexpected shape, plus each per-entry flow-helper
-        options-flow probe that failed (the flow raised or returned a non-form
-        first step — the config body was then never searched). Per-entry
-        flow-helper *scoring* failures (a code bug processing a response the
-        backend did return) stay tolerated inside ``_search_flow_helpers`` (one
-        bad entry must not sink the gather) and don't surface here. Helpers run
-        on every default ``ha_search`` call, so silent failures here mean the
-        caller cannot tell "no helpers match" from "helper backend partially
-        down" — surfaced via ``partial: True``.
+        Returns ``(results, failed_type_count, unsearched)`` —
+        ``failed_type_count`` counts each helper backend that failed: an
+        ``input_*`` ``<type>/list`` fetch that raised or returned a non-success
+        response, plus the flow-helper surface when its config-entries or
+        helper-flow read fails or the entries come back in an unexpected shape,
+        plus each per-entry flow-helper options-flow probe that failed (the flow
+        raised or returned a non-form first step — the config body was then
+        never searched); ``unsearched`` counts the flow-helper entries whose
+        body was not probed because the flow is not Home Assistant's own (see
+        ``_search_flow_helpers``). Per-entry flow-helper *scoring* failures (a
+        code bug processing a response the backend did return) stay tolerated
+        inside ``_search_flow_helpers`` and don't surface here. Helpers run on
+        every default ``ha_search`` call, so silent gaps here mean the caller
+        cannot tell "no helpers match" from "helper backend partially down" —
+        surfaced via ``partial: True``.
 
         ``prefetched_registry`` is the orchestrator's already-fetched
         ``config/entity_registry/list`` response, reused (never re-fetched
@@ -970,7 +971,7 @@ class DeepSearchMixin(SceneSearchMixin):
         # /config/config_entries/entry REST surface and probe each entry's
         # options flow so the helper's current config is searchable alongside
         # the input_* helpers above.
-        flow_results, flow_failed_count = await self._search_flow_helpers(
+        flow_results, flow_failed_count, unsearched = await self._search_flow_helpers(
             query_lower,
             exact_match,
             semaphore,
@@ -978,7 +979,7 @@ class DeepSearchMixin(SceneSearchMixin):
         )
         results.extend(flow_results)
         failed_type_count += flow_failed_count
-        return results, failed_type_count
+        return results, failed_type_count, unsearched
 
     async def _search_dashboards_surface(
         self,
@@ -1251,6 +1252,7 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_failed_sample: str | None = None,
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
+        helper_unsearched: int = 0,
         dashboard_failed: int = 0,
         graph_consulted: bool = False,
         graph_dropped: dict[str, set[str]] | None = None,
@@ -1330,6 +1332,7 @@ class DeepSearchMixin(SceneSearchMixin):
             automation_failed_sample=automation_failed_sample,
             script_failed_sample=script_failed_sample,
             helper_failed=helper_failed,
+            helper_unsearched=helper_unsearched,
             dashboard_failed=dashboard_failed,
             graph_consulted=graph_consulted,
             graph_dropped=graph_dropped,
@@ -1362,6 +1365,7 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_failed_sample: str | None = None,
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
+        helper_unsearched: int = 0,
         dashboard_failed: int = 0,
         graph_consulted: bool = False,
         graph_dropped: dict[str, set[str]] | None = None,
@@ -1532,6 +1536,14 @@ class DeepSearchMixin(SceneSearchMixin):
                 "flow-entries list, or flow-entry options: the OptionsFlow could not be read)"
                 " — their match status is unknown; this result is not exhaustive."
             )
+        if helper_unsearched:
+            reasons.append(
+                f"{helper_unsearched} custom helper integration entr"
+                f"{'y' if helper_unsearched == 1 else 'ies'} not scanned (a search "
+                "opens no options flow for a helper flow that is not Home "
+                "Assistant's own, so their config was not searched) — their match "
+                "status is unknown; this result is not exhaustive."
+            )
         if dashboard_failed:
             reasons.append(
                 f"{dashboard_failed} dashboard(s) not scanned (config or list "
@@ -1544,178 +1556,3 @@ class DeepSearchMixin(SceneSearchMixin):
         existing = response.get("partial_reason", "")
         separator = " ; " if existing else ""
         response["partial_reason"] = existing + separator + " ; ".join(reasons)
-
-    async def _search_flow_helpers(
-        self,
-        query_lower: str,
-        exact_match: bool,
-        semaphore: asyncio.Semaphore,
-        *,
-        include_config: bool,
-    ) -> tuple[list[dict[str, Any]], int]:
-        """Search UI-created flow-based helpers (template, group, …).
-
-        Flow-helpers live as config entries (not storage records) and have
-        no ``<type>/list`` endpoint. Lists them via the standard config
-        entries REST endpoint, then probes each entry's options flow so the
-        helper's current config — template body, group members, source
-        entity, etc. — is searchable. An entry without an options flow (otp)
-        is matched on its title and domain.
-
-        Cost: the entries call, the cached helper-flow list, and one
-        options-flow probe per entry with an options flow, parallelised under
-        ``semaphore``. The probe is skipped when the title alone already
-        scores the maximum (a deeper config match can only raise the total,
-        never lower it); any title that leaves headroom is still probed for
-        accurate scoring and ``match_in_config``.
-
-        Returns ``(results, failed_count)``. ``failed_count`` counts flow-
-        helper backend failures so the caller can route them to ``partial``:
-        the whole surface unreachable (the config-entries or helper-flow read
-        raised, or the entries came back in an unexpected shape) counts as 1;
-        otherwise it is the number of per-entry options-flow probes that failed
-        (the flow raised or returned a non-form first step), so a helper whose
-        config body could not be read is reported as incomplete rather than a
-        silent clean non-match. Per-entry *scoring* failures (a bug processing a
-        response the backend did return) are logged at warning and dropped
-        without counting — one bad entry must not sink the gather, and a code
-        bug is not a backend outage.
-        """
-        try:
-            response = await self.client._request("GET", "/config/config_entries/entry")
-            flows = await helper_flow_types(self.client)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(f"flow-helper search: entries or flows read failed: {exc}")
-            return [], 1
-
-        if not isinstance(response, list):
-            logger.debug(
-                "flow-helper search: list_entries returned unexpected shape "
-                f"({type(response).__name__}); treating as backend failure"
-            )
-            return [], 1
-
-        flow_entries = [
-            e for e in response if isinstance(e, dict) and e.get("domain") in flows
-        ]
-        if not flow_entries:
-            return [], 0
-
-        scored = await asyncio.gather(
-            *(
-                self._score_flow_entry(
-                    e, query_lower, exact_match, semaphore, include_config
-                )
-                for e in flow_entries
-            ),
-            return_exceptions=True,
-        )
-        out: list[dict[str, Any]] = []
-        probe_failures = 0
-        for item in scored:
-            if isinstance(item, BaseException) and not isinstance(item, Exception):
-                # Never swallow cancellation/shutdown into a probe-failure log.
-                raise item
-            if isinstance(item, tuple):
-                result, probe_failed = item
-                if result is not None:
-                    out.append(result)
-                if probe_failed:
-                    probe_failures += 1
-            elif isinstance(item, Exception):
-                # A scoring/extraction bug (e.g. a shape assumption breaking on
-                # a future HA version) — the backend DID respond, our code
-                # failed to score it. Log at warning so it's discoverable; do
-                # not count it toward partial (it is a code bug, not a backend
-                # outage, and the partial_reason wording is backend-specific).
-                # One bad entry must not sink the whole multi-source deep_search.
-                logger.warning(f"flow-helper scoring failed: {item!r}")
-        return out, probe_failures
-
-    async def _score_flow_entry(
-        self,
-        entry: dict[str, Any],
-        query_lower: str,
-        exact_match: bool,
-        semaphore: asyncio.Semaphore,
-        include_config: bool,
-    ) -> tuple[dict[str, Any] | None, bool]:
-        """Score one flow-helper config entry, probing its options flow as needed.
-
-        Returns ``(match | None, probe_failed)``. ``probe_failed`` is True when
-        the options-flow probe could not read this entry's config body (the
-        flow raised or returned a non-form first step) — distinct from a
-        genuinely-empty options form. It is reported even when the entry does
-        not match (``None``): a probe failure means the config body was never
-        searched, so a non-match is a *false* "no match" the caller must
-        surface as ``partial`` rather than a clean zero. A malformed entry
-        (no string ``entry_id``) is skipped before the probe and is not a
-        probe failure.
-        """
-        entry_id = entry.get("entry_id")
-        if not isinstance(entry_id, str):
-            return None, False
-        domain = entry.get("domain", "")
-        title = entry.get("title") or entry_id
-
-        # Score the name against a title-derived slug, never the opaque
-        # config-entry ULID: a random ULID substring would otherwise produce
-        # false-positive name matches (e.g. a 3-char query that happens to occur
-        # inside the base32 id). The slug mirrors the storage-helper path, which
-        # scores a name-derived id rather than an opaque key. entry_id is still
-        # returned to the caller; it just isn't a search target.
-        title_slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-        title_pseudo_eid = f"{domain}.{title_slug}" if title_slug else domain
-        name_score = self.fuzzy_searcher._calculate_entity_score(
-            title_pseudo_eid, title, domain, query_lower
-        )
-
-        options: dict[str, Any] = {}
-        probe_failed = False
-        # Only an entry with an options flow (an ignored one has none) has a
-        # body to probe. The probe can only raise the score, so a perfect title
-        # match (100) skips it unless include_config asks for the body.
-        normalize_ignored_entry(entry)
-        need_probe = bool(entry.get("supports_options")) and (
-            include_config
-            or self._score_deep_match(
-                title_pseudo_eid, title, name_score, 0, query_lower, exact_match
-            )[0]
-            < 100
-        )
-        if need_probe:
-            async with semaphore:
-                options, probe_ok = await fetch_entry_options_with_status(
-                    self.client, entry_id, quiet=True
-                )
-                probe_failed = not probe_ok
-
-        # Search the title, domain, and probed options — but not the opaque
-        # entry_id (it would match random ULID substrings; it is returned in the
-        # result for the caller regardless).
-        haystack: dict[str, Any] = {
-            "title": title,
-            "domain": domain,
-            "options": options,
-        }
-        config_score = self._search_in_dict(haystack, query_lower, exact_match)
-        total_score, threshold, match_in_name = self._score_deep_match(
-            title_pseudo_eid, title, name_score, config_score, query_lower, exact_match
-        )
-        if total_score < threshold:
-            return None, probe_failed
-
-        result: dict[str, Any] = {
-            "entry_id": entry_id,
-            "helper_type": domain,
-            "name": title,
-            "score": total_score,
-            "match_in_name": match_in_name,
-            "match_in_config": config_score >= threshold,
-            # See the collection-helper builder: always False for helpers,
-            # emitted so the key is present on every config record.
-            "match_in_references": False,
-        }
-        if include_config:
-            result["config"] = options
-        return result, probe_failed

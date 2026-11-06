@@ -233,8 +233,12 @@ chooses Configure: the flow's first step is the integration's own code and may
 act (#2987). Only that form marks which fields are passwords, so under
 `redact_secrets` a read that does not ask for it withholds every option value
 of an entry that has an options flow. That is an HA-MCP policy, not a Core
-rule. `ha_search` still reads a flow helper's config through its options flow
-on an installation without the component.
+rule. On an installation without the component, `ha_search` reads a flow
+helper's config through its options flow only for Home Assistant's own helper
+flows, the `core.helper` domains of `integration/descriptions`; a custom helper
+integration's entry is matched on its title, its config is withheld as
+`options_withheld: custom_integration` (the component's own marker), and the
+result is `partial`.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
