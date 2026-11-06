@@ -70,6 +70,10 @@ run current `ha-mcp` servers.
 
 The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
+In the navigation paths below, older installed releases use **HA-MCP Custom
+Component** where the new release uses **HA-MCP — Manage Home Assistant with AI**.
+Searching for **HA-MCP** finds either name.
+
 1. **Install the component.** Install **HA-MCP — Manage Home Assistant with AI** from HACS,
    or on Home Assistant 2026.11+ from the built-in **Marketplace** after accepting
    its first-run warning and searching for **HA-MCP**. It is

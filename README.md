@@ -43,7 +43,7 @@ The recommended way to run ha-mcp is the **HA-MCP integration**. It installs int
 
 > The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
-1. Install the **HA-MCP integration**. On **Home Assistant 2026.10 or older**, open HACS — click the badge above, or open **Integrations**, search for **HA-MCP**, then **Download**.
+1. Install the **HA-MCP integration** (requires **Home Assistant 2026.8.0 or newer**; see [compatibility details](docs/in-process-server.md#requirements)). On **Home Assistant 2026.8–2026.10**, open HACS — click the badge above, or open **Integrations**, search for **HA-MCP**, then **Download**.
    On **Home Assistant 2026.11 or newer**, open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
    Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases. On the Marketplace, keep GitHub connected for its background checks on that custom repository.
    Older installed releases may still appear as **HA-MCP Custom Component**; searching for **HA-MCP** matches both names.
@@ -315,7 +315,7 @@ Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP integratio
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
 
-To add manually on Home Assistant 2026.10 or older: open **HACS** > **Integrations**, search for **HA-MCP**, and **Download**. On 2026.11 or newer: open **Marketplace**, accept the first-run warning, search for **HA-MCP**, and **Install**. The main repository is in the default catalog for both. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
+Requires **Home Assistant 2026.8.0 or newer** through HACS or the Marketplace; see [compatibility details](docs/in-process-server.md#requirements) for manual installs. On Home Assistant 2026.8–2026.10: open **HACS** > **Integrations**, search for **HA-MCP**, and **Download**. On 2026.11 or newer: open **Marketplace**, accept the first-run warning, search for **HA-MCP**, and **Install**. The main repository is in the default catalog for both. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
 After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP**, and add the **HA-MCP File & YAML Tools** entry.
 

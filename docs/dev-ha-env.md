@@ -7,7 +7,8 @@ and without touching your own instance. It boots HA with the E2E suite's own
 bring-up and config (user `mcp` / `mcp`, token `TEST_TOKEN` in
 `tests/test_constants.py`). The E2E seed gives `mcp` a French interface; after
 logging in, change it under your profile (your name at the bottom of the
-sidebar) → **General** → **Language**. It is separate from the test suite:
+sidebar) → **Localisation** → **Language** on Home Assistant 2026.11
+(**General → Language** on older versions). It is separate from the test suite:
 nothing in CI runs it, and its runner script (`.github/dev-ha-env/hold.py`) is
 copied into the tracked branch's E2E directory only for the run.
 
