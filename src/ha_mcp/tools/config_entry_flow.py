@@ -11,26 +11,29 @@ for every helper flow Home Assistant lists (``helper_flows.helper_flow_types``).
 The tool description tells callers to leave `otp` to the user in the HA UI,
 since its secret is a credential they enroll in an authenticator app.
 
-The same flow walkers drive every other config-entry surface, not just
-helpers: ``ha_set_integration`` creates entries for arbitrary domains through
-``create_config_entry`` and edits them through ``update_config_entry_options``;
+The same flow walkers serve other config-entry surfaces, not just helpers:
+backup restore re-applies an entry's options through
+``update_config_entry_options``, and
 ``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
-through ``set_config_subentry``. Changing a live entry's connection settings is
-a different problem — it commits in place and Home Assistant reloads afterwards
-— and lives in ``config_entry_reconfigure``, which depends on this module for
-the shared flow-abort and sentinel-rejection helpers.
+through ``set_config_subentry``. ``ha_set_integration`` does not walk: it
+answers one step per call (``integration_flow_steps``).
 
-The step machinery those entry points drive lives in three sibling modules,
-imported in one direction only (menu <- form <- walker <- here):
+The step machinery those entry points drive lives in six sibling modules.
+Each imports only modules upstream of it in these chains, so no import runs
+the other way: menu <- form <- walker <- here, and
+introspect <- errors <- progress <- walker.
 
+- ``config_entry_flow_introspect``: the flow-type vocabulary, the shielded
+  flow aborts, and the read-only helper flow introspection
+- ``config_entry_flow_errors``: Home Assistant's flow answers as structured
+  errors, and the reconfigure outcome vocabulary
 - ``config_entry_flow_menu``: menu selection keys and menu-step handling
 - ``config_entry_flow_form``: form-step schema consumption and reuse tracking
-- ``config_entry_flow_walker``: step submission, HA error translation, flow
-  introspection, and the two flow walkers
+- ``config_entry_flow_progress``: waiting out a progress step within a budget
+- ``config_entry_flow_walker``: step submission and the two flow walkers
 """
 
 import asyncio
-import json
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -38,27 +41,31 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantError,
 )
 from ..errors import ErrorCode, create_error_response
-from ..redaction import sentinel_option_keys
+from ..redaction import placeholder_option_keys
+from .config_entry_flow_errors import FlowRef
 from .config_entry_flow_form import _extract_schema_field_names
+from .config_entry_flow_introspect import (
+    abort_failed_flow,
+    abort_failed_flow_type_only,
+    shielded_abort,
+)
 from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
-    POST_COMMIT_STATUSES,
     _FlowType,
     _handle_config_subentry_flow_steps,
     _handle_flow_steps,
+    leaves_flow_open,
 )
 from .helpers import raise_tool_error
+from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
-
 
 OptionsRestoreReason = Literal[
     "unsupported_form",
@@ -385,6 +392,8 @@ async def _create_snapshot_helper(
             submit_fn=partial(progress.submit, client),
             helper_type=helper_type,
             complete_snapshot=True,
+            flow=None,
+            refuse_progress=True,
         )
         entry = result["entry"].get("result", {})
         return {
@@ -408,17 +417,13 @@ async def _cleanup_snapshot_creation(
     if not progress.flow_id:
         return
     if failure.apply_status == "not_applied":
-        try:
-            await asyncio.wait_for(
-                client.abort_config_flow(progress.flow_id), timeout=5
-            )
-        except Exception as err:  # noqa: BLE001
-            logger.warning(
-                "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
-                progress.flow_id,
-                failure.reason,
-                type(err).__name__,
-            )
+        await abort_failed_flow_type_only(
+            client.abort_config_flow,
+            progress.flow_id,
+            "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
+            progress.flow_id,
+            failure.reason,
+        )
     else:
         logger.warning(
             "Helper recreation flow %s was not aborted "
@@ -426,26 +431,6 @@ async def _cleanup_snapshot_creation(
             progress.flow_id,
             failure.apply_status,
             failure.reason,
-        )
-
-
-async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a still-pending flow without hiding the original failure."""
-    try:
-        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-    except Exception as abort_err:  # noqa: BLE001
-        logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
-
-
-async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
-    """Abort a pending subentry flow without hiding the original failure."""
-    try:
-        await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
-    except Exception as abort_err:  # noqa: BLE001
-        logger.warning(
-            "Failed to abort config subentry flow %s after error: %s",
-            flow_id,
-            abort_err,
         )
 
 
@@ -459,13 +444,13 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
     redaction was on must not overwrite a credential after the operator
     turns it off.
     """
-    sentinel_keys = sentinel_option_keys(config_dict)
-    if sentinel_keys:
+    placeholder_keys = placeholder_option_keys(config_dict)
+    if placeholder_keys:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "config contains redaction placeholder values for: "
-                f"{', '.join(sentinel_keys)}. These came from a redacted "
+                f"{', '.join(placeholder_keys)}. These came from a redacted "
                 "read, not real values — omit these keys to keep the "
                 "current values, or submit the real value.",
                 context={"parameter": "config"},
@@ -589,22 +574,15 @@ async def _run_config_subentry_flow(
             config_dict,
             is_reconfigure=subentry_id is not None,
             keep_current_values=subentry_id is not None,
+            flow=FlowRef(None, f"config_subentries.{subentry_type}", entry_id),
         )
-    except asyncio.CancelledError:
-        await _abort_subentry_flow_best_effort(client, flow_id)
-        raise
-    except Exception as flow_error:
-        payload: dict[str, Any] = {}
-        if isinstance(flow_error, ToolError):
-            try:
-                parsed_payload = json.loads(str(flow_error))
-            except (TypeError, ValueError):
-                parsed_payload = {}
-            if isinstance(parsed_payload, dict):
-                payload = parsed_payload
-        post_commit_status = payload.get("status") in POST_COMMIT_STATUSES
-        if payload.get("flow_budget_exhausted") or not post_commit_status:
-            await _abort_subentry_flow_best_effort(client, flow_id)
+    except (Exception, asyncio.CancelledError) as flow_error:
+        if not leaves_flow_open(flow_error):
+            await abort_failed_flow(
+                client.abort_config_subentry_flow,
+                flow_id,
+                kind="config subentry flow",
+            )
         raise
 
     if before is not None and result["operation"] == "created":
@@ -652,12 +630,12 @@ async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] |
         return None
     finally:
         if flow_id:
-            try:
-                await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    f"Failed to abort introspection flow {flow_id}: {abort_err}"
-                )
+            # Shielded: a cancelled helper write still closes this flow.
+            await shielded_abort(
+                client.abort_config_flow,
+                flow_id,
+                failure=f"Failed to abort introspection flow {flow_id}",
+            )
 
 
 async def update_config_entry_options(
@@ -673,8 +651,8 @@ async def update_config_entry_options(
     """Update an existing config entry via its options flow.
 
     When ``expected_domain`` is provided, verifies the entry's domain matches
-    it first (the helper path passes the helper_type; the generic
-    ``ha_set_integration`` path passes ``None`` to accept any domain). Starts
+    it first (the helper path passes the helper_type, backup restore the
+    entry's domain; ``None`` accepts any domain). Starts
     an options flow, walks the flow steps, and returns the result. ``noun``
     only affects response wording.
 
@@ -697,8 +675,8 @@ async def update_config_entry_options(
     ensure the integration replaces its options only when its flow returns
     CREATE_ENTRY. The restore requires authoritative forms and raises
     ``OptionsFlowError`` with apply knowledge on failure; uncertain or
-    completed restores are not aborted. Ordinary edits retain their existing
-    error/abort behavior.
+    completed restores are not aborted. An ordinary edit aborts the flow on
+    error, unless Home Assistant's answer was lost (applied_but_unverified).
     """
     progress = (
         None
@@ -816,6 +794,9 @@ async def _update_config_entry_options(
     refuse_component_entry(
         actual_domain, action="change the options of", entry_id=entry_id
     )
+    refuse_ignored_entry(
+        config_entry, action="change the options of", entry_id=entry_id
+    )
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")
@@ -851,20 +832,26 @@ async def _update_config_entry_options(
             helper_type=expected_domain,
             keep_current_values=progress is None,
             complete_snapshot=progress is not None,
+            # A restore reports its own refusal, never the flow's text, and
+            # refuses a progress step: its tracker sees submits, not polls.
+            flow=FlowRef(actual_domain, "options") if progress is None else None,
+            refuse_progress=progress is not None,
         )
-    except Exception as flow_err:
-        if progress is None or progress.apply_status == "not_applied":
-            try:
-                await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
-            except Exception as abort_err:  # noqa: BLE001
-                logger.warning(
-                    "Failed to abort options flow %s for entry %s "
-                    "(stage=abort_cleanup, reason=%s, error_type=%s)",
-                    flow_id,
-                    entry_id,
-                    flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
-                    type(abort_err).__name__,
-                )
+    except (Exception, asyncio.CancelledError) as flow_err:
+        if progress is not None:
+            should_abort = progress.apply_status == "not_applied"
+        else:
+            should_abort = not leaves_flow_open(flow_err)
+        if should_abort:
+            await abort_failed_flow_type_only(
+                client.abort_options_flow,
+                flow_id,
+                "Failed to abort options flow %s for entry %s "
+                "(stage=abort_cleanup, reason=%s, error_type=%s)",
+                flow_id,
+                entry_id,
+                flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
+            )
         raise
 
     entry = result["entry"].get("result", {})
@@ -890,7 +877,8 @@ async def update_flow_helper(
     """Update an existing flow-based helper via its options flow.
 
     Verifies the entry domain matches helper_type, starts an options flow,
-    walks the flow steps, and returns the result. Aborts the flow on error.
+    walks the flow steps, and returns the result. Aborts the flow on error,
+    unless Home Assistant's answer was lost (applied_but_unverified).
     """
     return await update_config_entry_options(
         client,
@@ -911,8 +899,9 @@ async def create_config_entry(
     """Create a config entry by driving ``domain``'s config flow.
 
     Starts a config flow, walks the flow steps (menus and multi-step forms),
-    and returns the result. Aborts the flow on error. ``noun`` only affects
-    response wording.
+    and returns the result. Aborts the flow on error, unless Home Assistant's
+    answer was lost (applied_but_unverified). ``noun`` only affects response
+    wording.
     """
     _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_flow(domain)
@@ -937,14 +926,11 @@ async def create_config_entry(
             flow_result,
             config_dict,
             helper_type=domain,
+            flow=FlowRef(domain, "config"),
         )
-    except Exception:
-        try:
-            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-        except Exception as abort_err:  # noqa: BLE001
-            logger.warning(
-                f"Failed to abort config flow {flow_id} after error: {abort_err}"
-            )
+    except (Exception, asyncio.CancelledError) as flow_error:
+        if not leaves_flow_open(flow_error):
+            await abort_failed_flow(client.abort_config_flow, flow_id)
         raise
 
     entry = result["entry"].get("result", {})
@@ -970,9 +956,10 @@ async def create_flow_helper(
     """Create a new flow-based helper via the config flow.
 
     Starts a config flow, walks the flow steps, and returns the result.
-    Ordinary creation aborts the flow on error.
-    Complete snapshots require all options in the selected form and preserve
-    uncertain or completed creation flows for reconciliation.
+    Ordinary creation aborts the flow on error, unless Home Assistant's answer
+    was lost (applied_but_unverified). Complete snapshots require all options
+    in the selected form and preserve uncertain or completed creation flows
+    for reconciliation.
     """
     if complete_snapshot:
         return await _create_snapshot_helper(client, helper_type, config_dict)

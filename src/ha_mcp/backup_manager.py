@@ -54,7 +54,7 @@ import time
 import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cached_property, partial
@@ -273,6 +273,15 @@ class _FlowHelperReadError(HomeAssistantError):
 class _FlowHelperBackupSkip(_FlowHelperReadError):
     """Nothing to back up: no stored or disclosed options, or no helper flow Core
     lists. Best-effort capture logs it at INFO."""
+
+
+def _restore_is_flow_driven(domain: str) -> bool:
+    """A snapshot domain whose restore drives a Core flow, which can apply it
+    partly: a flow helper, a config subentry or an integration entry."""
+    return _is_flow_helper_domain(domain) or domain in (
+        "helper_config_subentry",
+        "integration",
+    )
 
 
 def _is_flow_helper_domain(domain: str) -> bool:
@@ -1514,18 +1523,17 @@ class BackupManager:
                         safety_backup=None,
                     ) from err
                 data["entity_id"] = entity_id
-                async with self.config_entry_write_guard(entity_id, exclusive=True):
-                    return await self._restore_snapshot_data(
-                        name, data, take_safety_backup=take_safety_backup
-                    )
-            if data["domain"] == "entity":
-                async with restore_locks(self._client, data["config"]):
-                    return await self._restore_snapshot_data(
-                        name, data, take_safety_backup=take_safety_backup
-                    )
-            return await self._restore_snapshot_data(
-                name, data, take_safety_backup=take_safety_backup
-            )
+                guard: Any = self.config_entry_write_guard(entity_id, exclusive=True)
+            elif data["domain"] == "entity":
+                guard = restore_locks(self._client, data["config"])
+            elif data["domain"] == "integration":  # its restore drives an options flow
+                guard = self.config_entry_write_guard(data["entity_id"])
+            else:
+                guard = nullcontext()
+            async with guard:
+                return await self._restore_snapshot_data(
+                    name, data, take_safety_backup=take_safety_backup
+                )
         finally:
             self._unprotect_snapshot(name)
 
@@ -1567,11 +1575,10 @@ class BackupManager:
         step = "safety_preflight"
         try:
             needs_safety = await self._restore_needs_safety(handler, entity_id, config)
-            # Existing flow helpers and subentries always require a fresh
-            # recovery point: their flows can apply a restore partly.
-            is_flow = _is_flow_helper_domain(domain)
-            flow_driven = is_flow or domain == "helper_config_subentry"
-            if needs_safety and (flow_driven or take_safety_backup):
+            # Existing flow helpers, subentries and integration entries always
+            # require a fresh recovery point: their flows can apply a restore
+            # partly.
+            if needs_safety and (_restore_is_flow_driven(domain) or take_safety_backup):
                 step = "safety_backup"
                 safety_path = await self._capture_restore_safety(
                     domain, entity_id, outcome, config
@@ -1643,7 +1650,7 @@ class BackupManager:
     ) -> Path | None:
         """Take a restore's recovery point; a failed capture raises and blocks it."""
         is_flow = _is_flow_helper_domain(domain)
-        flow_driven = is_flow or domain == "helper_config_subentry"
+        flow_driven = _restore_is_flow_driven(domain)
         if not flow_driven and not getattr(self._settings, "enable_auto_backup", False):
             return None  # auto-backup off: no safety backup is promised
         # The restore overwrites the current state, so the throttle that a
@@ -2780,7 +2787,7 @@ def _flow_label(helper_type: str) -> str:
 
 def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
     """Require persisted flow-helper options that can safely be restored."""
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
 
     label = _flow_label(helper_type)
     if not isinstance(config, dict):
@@ -2792,22 +2799,14 @@ def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
             f"{label} helper has no stored options to back up or restore",
             "invalid_options",
         )
-    # The component's resolved-!secret scrub predates the server sentinels.
-    # Neither kind of placeholder is a usable recovery value.
-    if sentinel_option_keys(config) or _contains_redacted_leaf(config):
+    # Neither a server sentinel nor the component's scrub is a usable
+    # recovery value.
+    if placeholder_option_keys(config):
         raise _FlowHelperReadError(
             f"{label} helper options contain redacted values; capture is incomplete",
             "redacted_options",
         )
     return config
-
-
-def _contains_redacted_leaf(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(_contains_redacted_leaf(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_redacted_leaf(item) for item in value)
-    return isinstance(value, str) and value == "**redacted**"
 
 
 async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> Any:
@@ -3309,13 +3308,13 @@ def _subentry_target(entity_id: str) -> tuple[str, str]:
 
 
 def _subentry_data(data: Any) -> dict[str, Any]:
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
 
     if not isinstance(data, dict):
         raise _FlowHelperReadError(
             "Config subentry data must be an object", "invalid_data"
         )
-    if sentinel_option_keys(data) or _contains_redacted_leaf(data):
+    if placeholder_option_keys(data):
         raise _FlowHelperReadError(
             "Config subentry data contains redacted values; capture is incomplete",
             "redacted_data",

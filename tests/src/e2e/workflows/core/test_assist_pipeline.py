@@ -232,7 +232,8 @@ class TestAssistPipeline:
         finally:
             # cleanup_tracker only logs; the helper has to be removed by hand,
             # as the other suites that create one do.
-            await mcp_client.call_tool(
+            await safe_call_tool(
+                mcp_client,
                 "ha_remove_helpers_integrations",
                 {
                     "helper_type": "input_boolean",

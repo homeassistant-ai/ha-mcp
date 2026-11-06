@@ -41,6 +41,7 @@ from .component_api import (
 )
 from .config_entry_flow import COMPONENT_DOMAIN
 from .config_entry_flow_form import _MISSING_DEFAULT, _step_owned_submission_value
+from .config_entry_flow_introspect import abort_probe_flow
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -275,7 +276,7 @@ def _field_prefill(item: dict[str, Any]) -> Any:
     fields carry their value there rather than as a schema ``default`` (a
     ``default`` equal to the value would make the field impossible to clear).
     Falls back to ``default`` then ``value`` for the dropdown/toggle fields.
-    Mirrors ``tools_integrations.options_from_form_flow``.
+    Mirrors ``integration_schema.options_from_form_flow``.
     """
     description = item.get("description")
     if isinstance(description, dict) and description.get("suggested_value") is not None:
@@ -475,13 +476,8 @@ async def find_server_config_entry(
 
 async def abort_options_flow_quietly(client: Any, flow: dict[str, Any]) -> None:
     """Abort an open options flow, ignoring failures."""
-    flow_id = flow.get("flow_id")
-    if not flow_id:
-        return
-    try:
-        await client.abort_options_flow(flow_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Options-flow abort failed: %s", exc)
+    if flow_id := flow.get("flow_id"):
+        await abort_probe_flow(client.abort_options_flow, flow_id, quiet=True)
 
 
 def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:

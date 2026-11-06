@@ -197,6 +197,7 @@ def _config_entries_schema() -> dict[Any, Any]:
         vol.Optional("entry_id"): vol.Any(str, None),
         vol.Optional("domain"): vol.Any(str, None),
         vol.Optional("include_subentry_data", default=False): bool,
+        vol.Optional("type_filter"): [str],
     }
 
 

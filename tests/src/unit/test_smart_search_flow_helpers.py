@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.tools import helper_flows, tools_integrations
+from ha_mcp.tools import helper_flows, integration_schema
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
@@ -533,7 +533,7 @@ async def test_custom_helper_flow_options_are_probed_with_passwords_redacted(
         "_fetch_helper_flow_types",
         AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
     )
-    monkeypatch.setattr(tools_integrations, "redaction_enabled", lambda: True)
+    monkeypatch.setattr(integration_schema, "redaction_enabled", lambda: True)
     client = MagicMock()
     client._request = AsyncMock(
         return_value=[

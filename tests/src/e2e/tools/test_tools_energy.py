@@ -13,7 +13,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -368,13 +368,14 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
         )
     finally:
         # Restore original device_consumption under a fresh per-key hash.
-        cleanup_initial = await mcp_client.call_tool(
-            "ha_manage_energy_prefs", {"mode": "get"}
+        cleanup_initial = await safe_call_tool(
+            mcp_client, "ha_manage_energy_prefs", {"mode": "get"}
         )
-        if cleanup_initial.data.get("success"):
-            cleanup_per_key = cleanup_initial.data.get("config_hash_per_key", {})
+        if cleanup_initial.get("success"):
+            cleanup_per_key = cleanup_initial.get("config_hash_per_key", {})
             if "device_consumption" in cleanup_per_key:
-                await mcp_client.call_tool(
+                await safe_call_tool(
+                    mcp_client,
                     "ha_manage_energy_prefs",
                     {
                         "mode": "set",
@@ -433,12 +434,8 @@ async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
         assert "statistics_metadata" not in result["config"]
     finally:
         if added:
-            assert_mcp_success(
-                await mcp_client.call_tool(
-                    "ha_manage_energy_prefs",
-                    {
-                        "mode": "remove_device",
-                        "stat_consumption": statistic_id,
-                    },
-                )
+            await safe_call_tool(
+                mcp_client,
+                "ha_manage_energy_prefs",
+                {"mode": "remove_device", "stat_consumption": statistic_id},
             )

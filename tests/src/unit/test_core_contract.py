@@ -139,7 +139,12 @@ async def test_defaults_discovery_failure_keeps_unconfigured_prefs_readable(
 
 
 @pytest.mark.parametrize(
-    "command", ["ha_mcp_tools/core_contract", "ha_mcp_tools/statistics_units"]
+    "command",
+    [
+        "ha_mcp_tools/core_contract",
+        "ha_mcp_tools/statistics_units",
+        "ha_mcp_tools/integration_commands",
+    ],
 )
 @pytest.mark.parametrize(
     "is_admin,has_user", [(False, True), (True, False), (True, True)]
@@ -168,11 +173,14 @@ def test_contract_commands_require_admin_before_preparation(
             FakeHass(), wsapi._build_handler(schema, execute, prep)
         )
     connection = _FakeConnection(is_admin=is_admin, has_user=has_user)
-    params = (
-        {"command": "history/history_during_period"}
-        if command == "ha_mcp_tools/core_contract"
-        else {"statistic_ids": ["sensor.energy"], "units": {"energy": "kWh"}}
-    )
+    params = {
+        "ha_mcp_tools/core_contract": {"command": "history/history_during_period"},
+        "ha_mcp_tools/statistics_units": {
+            "statistic_ids": ["sensor.energy"],
+            "units": {"energy": "kWh"},
+        },
+        "ha_mcp_tools/integration_commands": {"domain": "knx"},
+    }[command]
 
     def call() -> None:
         fake.registered[command](

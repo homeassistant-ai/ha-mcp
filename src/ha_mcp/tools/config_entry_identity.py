@@ -1,17 +1,15 @@
 """Config-entry identity: what a reconfigure must not silently change.
 
-A reconfigure edits connection settings in place, so the check that it still
-points at the same physical thing is the whole safety story. This module owns
-reading that identity from the registries (and, for ``unique_id``, from the
-ha_mcp_tools component, since Home Assistant's own API never exposes it),
-classifying entries related through a shared device, and comparing before
-against after.
+A reconfigure edits connection settings in place, so before each call that
+may answer the entry's reconfigure flow (``integration_flow_steps``) the
+caller's identity anchors are checked against what the registries say now.
+This module reads that identity from the registries (and, for ``unique_id``,
+from the ha_mcp_tools component, since Home Assistant's own API never exposes
+it), classifies entries related through a shared device, and compares both
+with the anchors.
 
 Every read here raises rather than producing a half-filled identity: an empty
 list means "the entry has none", never "we could not tell".
-
-The manual rollback metadata a reconfigure reports alongside that identity is
-built here too.
 """
 
 import logging
@@ -25,20 +23,19 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
-from .component_config_entries import (
-    fetch_config_entry_unique_id,
-)
+from .component_config_entries import fetch_config_entry_unique_id
 from .component_devices import fetch_device_list_via_component
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
-from .config_entry_flow_walker import ReconfigureStatus
+from .config_entry_flow import refuse_component_entry
 from .helpers import raise_tool_error
+from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ReconfigureIdentity:
-    """Registry identity of one config entry, read before and after a flow.
+    """Registry identity of one config entry, read before each flow step.
 
     Every field is a real registry read: a registry that cannot be read raises
     rather than producing a half-filled instance, so an empty list means "the
@@ -56,10 +53,6 @@ class ReconfigureIdentity:
     entity_ids: list[str] = field(default_factory=list)
     macs: list[str] = field(default_factory=list)
     related_entry_ids: list[str] = field(default_factory=list)
-
-    def as_payload(self) -> dict[str, Any]:
-        """Render for an error context or a tool response."""
-        return asdict(self)
 
 
 # Domains whose entries Home Assistant deliberately attaches to another
@@ -82,8 +75,6 @@ _KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset(
 
 
 _DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
-# Read-back attempts and the backoff between them. A network integration's
-# reload does real I/O, so the budget has to outlast a slow probe.
 
 
 def _normalise_identity_value(value: Any) -> str:
@@ -153,9 +144,7 @@ async def _device_registry_rows(client: Any, entry_id: str) -> list[dict[str, An
 
 
 async def _collect_reconfigure_identity(
-    client: Any,
-    entry: dict[str, Any],
-    entry_id: str,
+    client: Any, entry_id: str
 ) -> ReconfigureIdentity:
     """Collect registry identity without requiring the physical device online."""
     entity_rows = await _entry_entity_rows(client, entry_id)
@@ -221,7 +210,6 @@ async def _classify_related_entries(
     *,
     entry_id: str,
     domain: str,
-    entries: list[dict[str, Any]] | None = None,
 ) -> RelatedEntries:
     """Split the entries sharing this entry's device into blocking and auxiliary.
 
@@ -238,15 +226,12 @@ async def _classify_related_entries(
 
     Returns the classification rather than writing it back through
     ``identity``, so nothing mutates an argument the signature calls an input.
-    ``entries`` lets a caller that already read the config-entry list pass it
-    in rather than paying for a second list-all.
     """
     related_entry_ids = set(identity.related_entry_ids) - {entry_id}
     if not related_entry_ids:
         return RelatedEntries()
 
-    if entries is None:
-        entries = await _validated_config_entry_rows(client, entry_id)
+    entries = await _validated_config_entry_rows(client, entry_id)
     entries_by_id = {
         item.get("entry_id"): item
         for item in entries
@@ -334,56 +319,19 @@ async def _registry_rows(
     return result
 
 
-def _has_reconfigure_identity_anchor(
-    identity: ReconfigureIdentity, expected_identity: dict[str, Any]
-) -> bool:
-    """Return whether preflight has stable or caller-supplied identity evidence."""
-    return bool(
-        (identity.unique_id if identity.unique_id_known else None)
-        or identity.device_ids
-        or identity.entity_ids
-        or identity.macs
-        or expected_identity.get("device_id")
-        or expected_identity.get("unique_id")
-        or expected_identity.get("mac")
-        or expected_identity.get("entity_ids")
-    )
-
-
-def _verification_state(before_present: bool, after_present: bool) -> str:
-    """Describe what happened to one identity value across the flow."""
-    if before_present and after_present:
-        return "preserved"
-    if after_present:
-        return "gained_during_change"
-    if before_present:
-        return "lost_during_change"
-    return "absent"
-
-
 def _raise_identity_mismatch(
     entry_id: str,
     message: str,
     *,
     before: ReconfigureIdentity,
-    after: ReconfigureIdentity,
     expected: dict[str, Any],
-    status: str | None = None,
 ) -> NoReturn:
-    """Raise for an identity anchor that does not hold.
-
-    ``status`` is supplied by the post-commit callers so the outcome survives
-    :func:`_raise_post_commit_verification_error`; pre-flow callers leave it
-    unset, because nothing was applied.
-    """
+    """Raise for an identity anchor that does not hold; nothing was applied."""
     context: dict[str, Any] = {
         "entry_id": entry_id,
         "expected_identity": expected,
-        "before_identity": before.as_payload(),
-        "after_identity": after.as_payload(),
+        "before_identity": asdict(before),
     }
-    if status is not None:
-        context["status"] = status
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -397,149 +345,149 @@ def _raise_identity_mismatch(
     )
 
 
-def _verify_reconfigure_identity_fields(
-    *,
-    entry_id: str,
-    before: dict[str, Any],
-    before_identity: ReconfigureIdentity,
-    after: dict[str, Any],
-    after_identity: ReconfigureIdentity,
-    expected_identity: dict[str, Any],
+async def check_reconfigure_identity(
+    client: Any, entry_id: str, expected_identity: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """The entry and its cross-domain warnings, once it may be reconfigured.
+
+    Read-only: the entry exists, it implements ``async_step_reconfigure``, the
+    caller's identity anchors match what the registries currently say, no
+    second entry in the same domain shares the device, and some identity
+    anchor exists at all.
+    """
+    entry = await client.get_config_entry(entry_id)
+    domain = entry.get("domain")
+    if not isinstance(domain, str) or not domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_UNEXPECTED,
+                "Home Assistant returned a config entry without a valid domain",
+                context={"entry_id": entry_id, "entry": entry},
+            )
+        )
+    refuse_component_entry(domain, action="reconfigure", entry_id=entry_id)
+    refuse_ignored_entry(entry, action="reconfigure", entry_id=entry_id)
+    if not entry.get("supports_reconfigure", False):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Integration '{domain}' does not support the official reconfigure flow",
+                suggestions=[
+                    "Use ha_get_integration(entry_id=...) to inspect the entry; "
+                    "only integrations implementing async_step_reconfigure can be changed this way.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "supports_reconfigure": False,
+                },
+            )
+        )
+
+    identity = await _collect_reconfigure_identity(client, entry_id)
+    _check_identity_anchors(entry_id, identity, expected_identity)
+    related = await _classify_related_entries(
+        client, identity, entry_id=entry_id, domain=domain
+    )
+    if related.blocking:
+        _raise_identity_mismatch(
+            entry_id,
+            "A second config entry in the same domain shares this entry's "
+            "registered device",
+            before=identity,
+            expected=expected_identity,
+        )
+    # Every anchor the caller passed matched a non-empty registry value above,
+    # so only the registries themselves can still be empty here.
+    if not (
+        identity.unique_id
+        or identity.device_ids
+        or identity.entity_ids
+        or identity.macs
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Cannot safely reconfigure an entry without an identity anchor",
+                suggestions=[
+                    "Provide expected_device_id, expected_mac or "
+                    "expected_entity_ids, or choose an entry with stable "
+                    "registry identity. (expected_unique_id needs the "
+                    "ha_mcp_tools custom component: Home Assistant does not "
+                    "expose a config entry's unique_id.)"
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "available_identity": {
+                        "unique_id": identity.unique_id,
+                        "device_ids": identity.device_ids,
+                        "entity_ids": identity.entity_ids,
+                        "macs": identity.macs,
+                    },
+                    "expected_identity": expected_identity,
+                },
+            )
+        )
+    return entry, cross_domain_warnings(related.cross_domain)
+
+
+def _check_identity_anchors(
+    entry_id: str, identity: ReconfigureIdentity, expected_identity: dict[str, Any]
 ) -> None:
-    """Verify the identity anchors that must survive a reconfigure flow.
-
-    ``prepare_reconfigure_request`` has already proved ``expected == before``
-    for device_id and entity_ids, and the guards below prove ``after ==
-    before`` for them, so an expected-vs-after check on those two could never
-    fire and is deliberately absent.
-
-    unique_id and MAC are different, and both checks below are reachable.
-    unique_id may legitimately change (an integration re-keying on
-    reconfigure), so only LOSING it raises on its own and
-    ``expected_unique_id`` is what pins the value. ``expected_mac``'s pre-flow
-    comparison ran against the BEFORE MACs, so comparing it to the after MACs
-    is a real check.
-    """
-    # Read from the identity objects: Home Assistant's config-entry fragment
-    # has no unique_id, so before/after would both be None here forever and
-    # this guard would never fire.
-    comparable = before_identity.unique_id_known and after_identity.unique_id_known
-    before_unique_id = before_identity.unique_id if comparable else None
-    after_unique_id = after_identity.unique_id if comparable else None
-    # LOSING a unique_id is the hazard: the entry becomes indistinguishable to
-    # HA's discovery, which then creates a duplicate. CHANGING it is not — an
-    # integration may legitimately re-key on reconfigure via
-    # async_update_reload_and_abort(unique_id=...); `filesize` does exactly
-    # that, since its unique_id is the file path being reconfigured. A caller
-    # who needs the value pinned says so with expected_unique_id, checked next.
-    if comparable and before_unique_id is not None and after_unique_id is None:
+    """Raise unless every anchor the caller passed matches the registries."""
+    if expected_identity.get("unique_id") is not None and not identity.unique_id_known:
+        # Not a mismatch — nothing could read the value. Home Assistant omits
+        # unique_id from every config-entry endpoint, so only the ha_mcp_tools
+        # custom component can supply it. Say that, rather than letting the
+        # generic "registries report none" below imply the entry has none.
         _raise_identity_mismatch(
             entry_id,
-            "Reconfigure flow cleared the entry unique_id, which lets the next "
-            "discovery create a duplicate entry",
-            before=before_identity,
-            after=after_identity,
+            "Cannot verify expected_unique_id: Home Assistant does not expose a "
+            "config entry's unique_id, and the ha_mcp_tools custom component "
+            "(which does) is not installed or is too old. Anchor on "
+            "expected_device_id, expected_mac or expected_entity_ids instead, "
+            "or install/update the component.",
+            before=identity,
             expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
         )
-    expected_unique_id = expected_identity.get("unique_id")
-    if (
-        expected_unique_id is not None
-        and comparable
-        and after_unique_id != expected_unique_id
-    ):
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure result does not match expected unique_id",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-    before_device_ids = set(before_identity.device_ids)
-    after_device_ids = set(after_identity.device_ids)
-    if before_device_ids and after_device_ids != before_device_ids:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow changed the associated device_id",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-    before_entity_ids = set(before_identity.entity_ids)
-    after_entity_ids = set(after_identity.entity_ids)
-    if before_entity_ids and after_entity_ids != before_entity_ids:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow changed the associated entity set",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-    expected_mac = expected_identity.get("mac")
-    before_macs = set(before_identity.macs)
-    after_macs = set(after_identity.macs)
-    # Unlike the device and entity guards, this one requires BOTH sets to be
-    # non-empty, so losing every MAC passes unless expected_mac was supplied.
-    # Deliberate: MACs come from a device's registry `connections`, which some
-    # integrations re-register with `identifiers` only after a reload. A device
-    # swap is already caught by the device guard above, so treating an emptied
-    # set as a mismatch would raise a POST-COMMIT identity error on a perfectly
-    # good reconfigure. A MAC that changes to a different one still fails here.
-    if before_macs and after_macs and before_macs != after_macs:
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure flow changed the associated MAC/IEEE identity",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-    if expected_mac is not None and (
-        not after_macs or _normalise_identity_value(expected_mac) not in after_macs
-    ):
-        _raise_identity_mismatch(
-            entry_id,
-            "Reconfigure result does not match expected MAC",
-            before=before_identity,
-            after=after_identity,
-            expected=expected_identity,
-            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
-        )
-
-
-def build_reconfigure_rollback_metadata(
-    entry_id: str,
-    domain: str,
-) -> dict[str, Any]:
-    """Describe the manual rollback path for an existing config entry.
-
-    The snapshot the auto-backup layer captures is Home Assistant's config
-    entry fragment (``config_entries/get`` over WebSocket, which serializes
-    ``ConfigEntry.as_json_fragment``). That fragment carries no ``data`` key,
-    so the entry's connection settings are not in it: the snapshot is audit
-    evidence, not an automatic endpoint rollback. An operator must repeat the
-    official reconfigure flow with the known previous values.
-    """
-    return {
-        "strategy": "official_reconfigure_flow",
-        "automatic": False,
-        "operator_action_required": True,
-        "manual_required": True,
-        "manual_reason": "previous_config_unavailable",
-        "entry_id": entry_id,
-        "domain": domain,
-        "previous_config": None,
-        "backup_scope": "edits",
-        "backup_restore_supported": False,
-        "backup_restore_note": (
-            "The generic integration snapshot is audit evidence only; its shared "
-            "restore handler does not restore connection settings. Use the official "
-            "reconfigure flow instead."
+    checks = (
+        (expected_identity.get("device_id"), identity.device_ids, "device_id"),
+        (
+            expected_identity.get("unique_id"),
+            [identity.unique_id] if identity.unique_id is not None else [],
+            "unique_id",
         ),
-    }
+        (expected_identity.get("mac"), identity.macs, "MAC"),
+        (
+            expected_identity.get("entity_ids") or None,
+            identity.entity_ids,
+            "entity_ids",
+        ),
+    )
+    for expected, available, key in checks:
+        if expected is None:
+            continue
+        if not available:
+            _raise_identity_mismatch(
+                entry_id,
+                f"Cannot compare expected {key}: the registries report none for "
+                "this entry",
+                before=identity,
+                expected=expected_identity,
+            )
+        if key == "MAC":
+            matched = _normalise_identity_value(expected) in {
+                _normalise_identity_value(value) for value in available
+            }
+        elif key == "entity_ids":
+            matched = set(expected) == set(available)
+        else:
+            matched = expected in set(available)
+        if not matched:
+            _raise_identity_mismatch(
+                entry_id,
+                f"The entry does not match expected {key} before reconfigure",
+                before=identity,
+                expected=expected_identity,
+            )

@@ -10,8 +10,7 @@ the few fields whose Core validator does not serialize (e.g. schedule days).
 
 from __future__ import annotations
 
-import asyncio
-import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -20,16 +19,26 @@ from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
-from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
+from ..config_entry_flow_errors import (
+    FlowRef,
+    abort_reason_text,
+    progress_action_text,
+)
+from ..config_entry_flow_introspect import abort_probe_flow, menu_choices
+from ..flow_translations import (
+    fetch_flow_strings,
+    field_help,
+    strings_unread_warning,
+)
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
 from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
 
-logger = logging.getLogger(__name__)
-
 # Long select lists (units, device classes) are truncated: the first few
 # values show the format, and HA reports the full list if a value is rejected.
 MAX_OPTIONS = 12
+
+_Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 _SELECTOR_KEYS = (
     "min",
@@ -60,20 +69,27 @@ def _option_values(options: list[Any]) -> list[Any]:
     return [*values[:MAX_OPTIONS], f"...{len(values) - MAX_OPTIONS} more"]
 
 
+def _compact_selector(selector: dict[str, Any]) -> dict[str, Any]:
+    kind, cfg = next(iter(selector.items()))
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out: dict[str, Any] = {"type": kind}
+    # A text selector's own type (password, email, url) is kept: it is how a
+    # secret field stays recognisable.
+    if isinstance(cfg.get("type"), str):
+        out["input_type"] = cfg["type"]
+    if isinstance(cfg.get("options"), list | tuple):
+        out["options"] = _option_values(cfg["options"])
+    out.update({k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)})
+    return out
+
+
 def compact_field(field: dict[str, Any]) -> dict[str, Any]:
     """One HA schema field (flow selector or serialized voluptuous) in brief."""
     out: dict[str, Any] = {"name": field.get("name")}
     if field.get("required"):
         out["required"] = True
     if isinstance(field.get("selector"), dict) and field["selector"]:
-        kind, cfg = next(iter(field["selector"].items()))
-        cfg = cfg if isinstance(cfg, dict) else {}
-        out["type"] = kind
-        if isinstance(cfg.get("options"), list | tuple):
-            out["options"] = _option_values(cfg["options"])
-        out.update(
-            {k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)}
-        )
+        out.update(_compact_selector(field["selector"]))
     elif field.get("type") in {"expandable", "grid"}:
         out["type"] = "section"
         out["fields"] = [compact_field(f) for f in field.get("schema", [])]
@@ -127,105 +143,223 @@ def _with_static_hints(
     return merged
 
 
-async def _field_help(
-    client: Any, handler: str, category: str, step_id: str | None
-) -> dict[str, str]:
-    """HA's own help text for a flow step's fields, keyed by field name.
-
-    These are the strings the UI shows under each field; every integration
-    ships and maintains them. Best-effort: missing strings leave no help.
-    """
-    if not step_id:
-        return {}
-    try:
-        result = await client.send_websocket_message(
-            {
-                "type": "frontend/get_translations",
-                "language": "en",
-                "category": category,
-                "integration": [handler],
-            }
-        )
-    except Exception as err:  # noqa: BLE001
-        logger.debug("describe: translations for %s failed: %s", handler, err)
-        return {}
-    if not isinstance(result, dict):
-        return {}
-    payload = result.get("result") or result
-    resources = payload.get("resources") if isinstance(payload, dict) else None
-    if not isinstance(resources, dict):
-        return {}
-    prefix = f"component.{handler}.{category}.step.{step_id}."
-    descriptions: dict[str, str] = {}
-    labels: dict[str, str] = {}
-    for key, text in resources.items():
-        if not key.startswith(prefix) or not isinstance(text, str):
-            continue
-        # [sections.<section>.]data_description.<field> is the help text;
-        # [sections.<section>.]data.<field> the field's label, used when a
-        # field has no help text of its own.
-        parts = key[len(prefix) :].split(".")
-        if len(parts) >= 2 and parts[-2] == "data_description":
-            descriptions[parts[-1]] = text
-        elif len(parts) >= 2 and parts[-2] == "data":
-            labels[parts[-1]] = text
-    return {**labels, **descriptions}
-
-
-def _with_help(fields: list[dict[str, Any]], help_text: dict[str, str]) -> None:
+def _with_help(
+    fields: list[dict[str, Any]], help_text: dict[str, str], prefix: str = ""
+) -> None:
     for field in fields:
-        if field["name"] in help_text and "description" not in field:
-            field["description"] = help_text[field["name"]]
-        _with_help(field.get("fields", []), help_text)
+        key = f"{prefix}{field['name']}"
+        if key in help_text and "description" not in field:
+            field["description"] = help_text[key]
+        _with_help(field.get("fields", []), help_text, f"{field['name']}.")
 
 
-async def _describe_form(
-    client: Any, helper_type: str, category: str, step: dict[str, Any]
-) -> list[dict[str, Any]]:
-    fields = compact_schema(step.get("schema") or step.get("data_schema") or [])
-    _with_help(
-        fields, await _field_help(client, helper_type, category, step.get("step_id"))
-    )
-    return fields
+async def describe_form(
+    client: Any, domain: str | None, path: str, step: dict[str, Any]
+) -> dict[str, Any]:
+    """A flow form in brief: ``fields`` with HA's help text for each,
+    ``more_forms``/``note`` unless the form is the flow's last, and
+    ``warnings`` when Core's strings could not be read.
+
+    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
+    or ``config_subentries.<type>``. Without a ``domain`` there is no help
+    text to read.
+    """
+    fields = compact_schema(step.get("data_schema") or [])
+    described: dict[str, Any] = {"fields": fields, **_later_forms(step)}
+    step_id = step.get("step_id")
+    if step_id and domain:
+        strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
+        if strings is None:
+            described["warnings"] = [strings_unread_warning(domain)]
+        else:
+            _with_help(fields, field_help(strings, domain, path, step_id))
+    return described
 
 
-_MORE_FORMS = {False: "yes", None: "depends_on_answers"}
+_LATER_FORM_TAIL = (
+    "Pass them in the same config; a missing one comes back in the error with "
+    "that form's fields."
+)
+# ``last_step`` is False when a later form follows and None when the flow does
+# not say, which many flows do, single-form ones included.
+_MORE_FORMS = {
+    False: (
+        "yes",
+        "Home Assistant asks for more fields on a later form, whose fields can "
+        "depend on these answers. ",
+    ),
+    None: (
+        "depends_on_answers",
+        "Home Assistant did not say whether more forms follow. If one does, its "
+        "fields can depend on these answers. ",
+    ),
+}
 
 
 def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
-    """Say when HA asks for more fields on a later form of the same flow."""
+    """Say whether HA asks for more fields on a later form, or leaves it open."""
     more = _MORE_FORMS.get(step.get("last_step"))
     if more is None:
         return {}
+    answer, lead = more
+    return {"more_forms": answer, "note": lead + _LATER_FORM_TAIL}
+
+
+def refuse_menu_choice(menu_choice: str, why: str, **context: Any) -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"menu_choice {menu_choice!r} does not apply: {why}.",
+            context={"menu_choice": menu_choice, **context},
+            suggestions=[
+                "Drop menu_choice"
+                + (", or pass one of menu_options" if "menu_options" in context else "")
+            ],
+        )
+    )
+
+
+async def _progress_context(
+    client: Any, flow: FlowRef, step: dict[str, Any]
+) -> dict[str, Any]:
+    """A progress step's ``progress_action`` and its text; else nothing."""
+    if step.get("type") != "progress":
+        return {}
     return {
-        "more_forms": more,
-        "note": "Home Assistant asks for more fields on a later form, whose "
-        "fields can depend on these answers. Pass them in the same config; "
-        "a missing one comes back in the error with that form's fields.",
+        "progress_action": step.get("progress_action"),
+        **await progress_action_text(client, flow, step),
     }
+
+
+async def describe_step(
+    client: Any,
+    step: dict[str, Any],
+    *,
+    flow: FlowRef,
+    menu_choice: str | None,
+    submit: _Submit,
+    abort: Callable[[str], Awaitable[Any]],
+    menu_note: str,
+) -> dict[str, Any]:
+    """Describe a flow's first step, or the form behind ``menu_choice``, then
+    abort the flow, also when describing it fails.
+
+    A step that is not a form, menu or abort raises, except a
+    ``create_entry`` reached through ``menu_choice``, which is reported.
+    """
+    flow_id = step.get("flow_id")
+    try:
+        chosen: dict[str, Any] = {}
+        if step.get("type") == "menu":
+            choices = menu_choices(step)
+            if menu_choice is None:
+                return {
+                    "flow_type": "menu",
+                    "step_id": step.get("step_id"),
+                    "menu_options": choices,
+                    "note": menu_note,
+                }
+            if menu_choice not in choices:
+                refuse_menu_choice(
+                    menu_choice,
+                    "the flow's menu does not offer it",
+                    menu_options=choices,
+                )
+            step = await submit(step["flow_id"], {"next_step_id": menu_choice})
+            chosen = {"menu_choice": menu_choice}
+        elif menu_choice is not None and step.get("type") not in (
+            "abort",
+            "create_entry",
+        ):
+            # Not refused: an abort is reported below, and a finished flow
+            # gets the no-form error.
+            refuse_menu_choice(
+                menu_choice, f"the flow opens with a {step.get('type')}, not a menu"
+            )
+        step_type = step.get("type")
+        if step_type == "abort":
+            return {
+                "flow_type": "abort",
+                **chosen,
+                "aborted": step.get("reason"),
+                **await abort_reason_text(client, flow, step),
+            }
+        if step_type == "menu":
+            return {
+                "flow_type": "menu",
+                "step_id": step.get("step_id"),
+                **chosen,
+                "menu_options": menu_choices(step),
+            }
+        if step_type == "create_entry" and chosen:
+            # Core saved what the menu choice selected.
+            return {"flow_type": "create_entry", **chosen, "title": step.get("title")}
+        if step_type != "form":
+            progress = await _progress_context(client, flow, step)
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"The flow reached a {step_type!r} step, which has no form to "
+                    "describe; the flow is being aborted",
+                    suggestions=[
+                        "Run this flow in the Home Assistant UI "
+                        "(Settings > Devices & Services)."
+                    ],
+                    context={"step_id": step.get("step_id"), **chosen, **progress},
+                )
+            )
+        return {
+            "flow_type": "form",
+            "step_id": step.get("step_id"),
+            **chosen,
+            **await describe_form(client, flow.domain, flow.path, step),
+        }
+    finally:
+        if flow_id:
+            await abort_probe_flow(abort, flow_id)
 
 
 async def _describe_flow(
     client: Any, helper_type: str, menu_choice: str | None, entry_id: str | None
 ) -> dict[str, Any]:
-    if entry_id is None:
-        info = await fetch_helper_flow_info(client, helper_type, menu_choice)
-        if menu_choice and "schema" in info and "branch" not in info:
-            _reject_menu_choice(
-                helper_type, menu_choice, f"{helper_type} opens with a form, not a menu"
+    if entry_id is not None:
+        if menu_choice:
+            refuse_menu_choice(
+                menu_choice,
+                "an existing helper is described by its options",
+                helper_type=helper_type,
             )
-        if "schema" in info:
-            return {
-                "source": "config_flow",
-                "fields": await _describe_form(client, helper_type, "config", info),
-                **_later_forms(info),
-            }
-        if "menu_options" in info:
-            return {
-                "source": "config_flow",
-                "menu_options": info["menu_options"],
-                "note": "Pass menu_choice to describe one of these sub-types.",
-            }
+        await config_entry_of_domain(client, entry_id, helper_type)
+        return {
+            "source": "options_flow",
+            **await describe_step(
+                client,
+                await client.start_options_flow(entry_id),
+                flow=FlowRef(helper_type, "options", entry_id),
+                menu_choice=None,
+                submit=client.submit_options_flow_step,
+                abort=client.abort_options_flow,
+                menu_note="This helper's options flow opens with a menu; its "
+                "forms are not described.",
+            ),
+        }
+
+    try:
+        return {
+            "source": "config_flow",
+            **await describe_step(
+                client,
+                await client.start_config_flow(helper_type),
+                flow=FlowRef(helper_type, "config"),
+                menu_choice=menu_choice,
+                submit=client.submit_config_flow_step,
+                abort=client.abort_config_flow,
+                menu_note="Pass menu_choice to describe one of these sub-types.",
+            ),
+        }
+    except ToolError:
+        raise
+    except Exception:  # noqa: BLE001
         # The flow could not be started or read: a menu_choice HA rejects, an
         # integration that fails to load, a timeout. Never "no fields".
         raise_tool_error(
@@ -245,55 +379,6 @@ async def _describe_flow(
                 else ["Check the Home Assistant log for the integration's setup"],
             )
         )
-
-    if menu_choice:
-        _reject_menu_choice(
-            helper_type, menu_choice, "an existing helper is described by its options"
-        )
-    await config_entry_of_domain(client, entry_id, helper_type)
-    flow_id: str | None = None
-    try:
-        result = await client.start_options_flow(entry_id)
-        flow_id = result.get("flow_id")
-        if result.get("type") == "menu":
-            choices = menu_choices(result)
-            return {
-                "source": "options_flow",
-                **({"menu_options": choices} if choices else {}),
-                "note": "This helper's options flow opens with a menu; its forms "
-                "are not described.",
-            }
-        if result.get("type") != "form":
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"The options flow of {entry_id} did not open with a form "
-                    f"({result.get('type')}: {result.get('reason')}).",
-                    context={"helper_type": helper_type, "helper_id": entry_id},
-                )
-            )
-        return {
-            "source": "options_flow",
-            "fields": await _describe_form(client, helper_type, "options", result),
-            **_later_forms(result),
-        }
-    finally:
-        if flow_id:
-            try:
-                await asyncio.wait_for(client.abort_options_flow(flow_id), 5.0)
-            except Exception as err:  # noqa: BLE001
-                logger.debug("describe: options flow %s abort failed: %s", flow_id, err)
-
-
-def _reject_menu_choice(helper_type: str, menu_choice: str, why: str) -> NoReturn:
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"menu_choice {menu_choice!r} does not apply: {why}.",
-            context={"helper_type": helper_type, "menu_choice": menu_choice},
-            suggestions=["Drop menu_choice"],
-        )
-    )
 
 
 async def _stored_item(
@@ -378,8 +463,10 @@ async def describe_helper(
         described = await _describe_flow(client, helper_type, menu_choice, helper_id)
     else:
         if menu_choice:
-            _reject_menu_choice(
-                helper_type, menu_choice, f"{helper_type} is a storage helper"
+            refuse_menu_choice(
+                menu_choice,
+                f"{helper_type} is a storage helper",
+                helper_type=helper_type,
             )
         described = await _describe_simple(client, helper_type, helper_id)
     return {"helper_type": helper_type, **described}

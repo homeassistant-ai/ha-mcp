@@ -18,12 +18,14 @@ OptionsFlow-derived shape that injects schema defaults.
 
 from __future__ import annotations
 
+import sys
+import types
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.tools import component_api, tools_integrations
+from ha_mcp.tools import component_api, component_config_entries
 from ha_mcp.tools.tools_integrations import options_from_form_flow
 
 from ._component_routing_helpers import patch_ws
@@ -119,7 +121,7 @@ async def test_single_entry_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     assert resp["success"] is True
@@ -159,7 +161,7 @@ async def test_single_entry_include_subentries_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1", include_subentries=True)
 
     assert resp["subentry_count"] == 1
@@ -193,7 +195,7 @@ async def test_list_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(include_options=True)
 
     by_id = {e["entry_id"]: e for e in resp["entries"]}
@@ -217,7 +219,7 @@ async def test_list_domain_filter_contract(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(domain="mqtt")
 
     assert [e["entry_id"] for e in resp["entries"]] == ["c1"]
@@ -240,7 +242,7 @@ async def test_options_secret_scrub_end_to_end(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     assert resp["entry"]["options"] == {"password": "**redacted**", "keep": 1}
@@ -261,7 +263,7 @@ async def test_options_shape_caveat_raw_persisted(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     component_options = resp["entry"]["options"]
@@ -312,7 +314,7 @@ async def test_single_entry_returns_stored_options_unchanged(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(entry_id="cfg1")
 
     assert resp["entry"]["options"] == _NESTED_OPTIONS
@@ -330,8 +332,81 @@ async def test_list_returns_stored_options_unchanged(tmp_path) -> None:
     client = RoutingClient()
     get_integration = _build_get_integration(client)
 
-    with patch_ws(ws, tools_integrations):
+    with patch_ws(ws, component_config_entries):
         resp = await get_integration(include_options=True)
 
     assert resp["entries"][0]["options"] == _NESTED_OPTIONS
     _no_dance(client)
+
+
+_CORE_CONFIG_ENTRIES = "homeassistant.components.config.config_entries"
+
+
+def _stub_core_type_matcher(
+    monkeypatch: pytest.MonkeyPatch, integration_types: dict[str, str]
+) -> list[tuple[list[str], str | None]]:
+    """Stand in for Core's ``?type=`` matcher; returns the calls it receives."""
+    calls: list[tuple[list[str], str | None]] = []
+
+    async def _match(hass: Any, type_filter: list[str], domain: str | None) -> Any:
+        calls.append((type_filter, domain))
+        return [
+            e.as_json_fragment
+            for e in hass.config_entries.async_entries()
+            if domain in (None, e.domain)
+            and integration_types.get(e.domain) in type_filter
+        ]
+
+    module = types.ModuleType(_CORE_CONFIG_ENTRIES)
+    module._async_matching_config_entries_json_fragments = _match  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, _CORE_CONFIG_ENTRIES, module)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("domain", [None, "sun"])
+async def test_list_type_filter_contract(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, domain: str | None
+) -> None:
+    """The component filters by type with Core's matcher: one read, no REST list."""
+    calls = _stub_core_type_matcher(
+        monkeypatch, {"mqtt": "hub", "sun": "service", "hue": "hub"}
+    )
+    hass = FakeHass(
+        config_entries=[
+            _entry("m1", domain="mqtt"),
+            _entry("s1", domain="sun", options={"elevation": 1}),
+            _entry("h1", domain="hue"),
+        ]
+    )
+    hass.config = FakeConfig(tmp_path)
+    ws = _real_component_ws(hass)
+    client = RoutingClient()
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, component_config_entries):
+        resp = await get_integration(
+            domain=domain, integration_type="service", include_options=True
+        )
+
+    assert [e["entry_id"] for e in resp["entries"]] == ["s1"]
+    assert resp["entries"][0]["options"] == {"elevation": 1}
+    assert calls == [(["service"], domain)]
+    _no_dance(client)
+
+
+@pytest.mark.asyncio
+async def test_single_entry_read_skips_the_type_match(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``entry_id`` selects one entry; a type sent beside it is not matched."""
+    calls = _stub_core_type_matcher(monkeypatch, {"mqtt": "hub"})
+    hass = FakeHass(config_entries=[_entry("m1", domain="mqtt")])
+    hass.config = FakeConfig(tmp_path)
+
+    extra = await wsapi._config_entries_prep(
+        hass, {"entry_id": "m1", "type_filter": ["service"]}
+    )
+
+    assert "type_matched_ids" not in extra
+    assert calls == []

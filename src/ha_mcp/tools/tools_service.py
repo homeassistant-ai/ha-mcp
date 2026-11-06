@@ -63,6 +63,7 @@ from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
     is_single_entity_target,
+    is_streaming_ws_command,
     raw_ws_refusal,
 )
 from .ws_waiters import wait_for_state_change
@@ -674,30 +675,6 @@ _COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
 # confirmation hint.
 
 
-# WebSocket commands that stream events or reply in two phases (an initial ack
-# then the real payload as a follow-up event) rather than resolving to a single
-# terminal result. ha_call_service's ws_command escape hatch only supports
-# one-shot request/response commands, so these are rejected: the "subscribe"
-# substring catches subscription commands, and the set names known two-phase /
-# streaming commands whose names don't contain "subscribe". The set is a floor,
-# not an exhaustive list -- HA's WS command naming isn't consistent enough for a
-# name check alone to be fully reliable.
-_WS_COMMAND_EVENT_BLOCKLIST = frozenset(
-    {
-        "render_template",  # event-based; use ha_eval_template instead
-        "system_health/info",  # two-phase (see tools_system._fetch_health_info)
-        "assist_pipeline/run",  # streams pipeline events
-    }
-)
-
-# Substrings that mark a WS command as streaming / subscription-based even when
-# its name isn't in the blocklist above. Such commands ack once and then push
-# follow-up events on the same id; the one-shot send_command path returns the
-# ack and leaks the subscription. "subscribe" covers subscribe_* and */subscribe;
-# "stream" covers history/stream, logbook/event_stream, camera/stream, ...;
-# "start_preview" covers template/start_preview and the config-flow preview family.
-_WS_STREAMING_SUBSTRINGS = ("subscribe", "stream", "start_preview")
-
 # One-shot WS commands that re-enter Home Assistant's service invocation. Routing
 # them through the escape hatch would bypass the service-mode guards (notably the
 # reserved ha_mcp_tools domain block), so they are rejected -- use the
@@ -708,14 +685,6 @@ _WS_COMMAND_SERVICE_INVOKERS = frozenset({"call_service", "execute_script"})
 # would let a caller override the validated command type (defeating every check
 # below) or collide with the transport's message id, so they are rejected.
 _WS_RESERVED_ENVELOPE_KEYS = frozenset({"type", "id"})
-
-
-def _is_streaming_ws_command(command_type: str) -> bool:
-    """Return True for subscription / streaming / two-phase WS commands."""
-    lowered = command_type.lower()
-    if lowered in _WS_COMMAND_EVENT_BLOCKLIST:
-        return True
-    return any(sub in lowered for sub in _WS_STREAMING_SUBSTRINGS)
 
 
 def _build_service_suggestions(
@@ -1260,7 +1229,7 @@ class ServiceTools(EventCallMixin):
                     parameter="ws_command",
                 )
             )
-        if _is_streaming_ws_command(command_type):
+        if is_streaming_ws_command(command_type):
             raise_tool_error(
                 create_validation_error(
                     f"ws_command '{command_type}' is a streaming or two-phase "

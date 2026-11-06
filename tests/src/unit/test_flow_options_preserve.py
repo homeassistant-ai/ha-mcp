@@ -26,17 +26,15 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET
 from ha_mcp.tools.config_entry_flow import update_config_entry_options
+from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
 from ha_mcp.tools.config_entry_flow_form import (
     _handle_form_step,
     _ignored_keys_warnings,
     _ReuseState,
     validate_step_values,
 )
-from ha_mcp.tools.config_entry_flow_walker import (
-    ReconfigureStatus,
-    _handle_config_subentry_flow_steps,
-    _handle_flow_steps,
-)
+
+from ._flow_walks import _handle_config_subentry_flow_steps, _handle_flow_steps
 
 
 def _workday_options_step() -> dict[str, Any]:
@@ -81,7 +79,6 @@ class TestOptionsStepBackfill:
         remaining: dict[str, Any] = {"days_offset": 3}
 
         form_data = _handle_form_step(
-            "flow-2254",
             _workday_options_step(),
             remaining,
             reuse_state=_ReuseState(),
@@ -110,7 +107,6 @@ class TestOptionsStepBackfill:
         remaining: dict[str, Any] = {"days_offset": 3}
 
         form_data = _handle_form_step(
-            "flow-2254",
             _workday_options_step(),
             remaining,
             reuse_state=_ReuseState(),
@@ -129,7 +125,6 @@ class TestOptionsStepBackfill:
         }
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5"},
             reuse_state=_ReuseState(),
@@ -143,7 +138,6 @@ class TestOptionsStepBackfill:
         step = _workday_options_step()
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"days_offset": 3},
             reuse_state=_ReuseState(),
@@ -158,7 +152,6 @@ class TestOptionsStepBackfill:
         remaining: dict[str, Any] = {"province": "BY", "workdays": ["sat"]}
 
         form_data = _handle_form_step(
-            "flow-2254",
             _workday_options_step(),
             remaining,
             reuse_state=_ReuseState(),
@@ -177,7 +170,6 @@ class TestExplicitClear:
         consumed: set[str] = set()
 
         form_data = _handle_form_step(
-            "flow-2254",
             _workday_options_step(),
             remaining,
             None,
@@ -207,7 +199,6 @@ class TestExplicitClear:
         consumed: set[str] = set()
 
         form_data = _handle_form_step(
-            "flow-2254",
             _workday_options_step(),
             remaining,
             None,
@@ -237,7 +228,6 @@ class TestExplicitClear:
         }
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": None},
             reuse_state=_ReuseState(),
@@ -248,7 +238,6 @@ class TestExplicitClear:
 
     def test_create_flow_still_submits_an_explicit_null(self) -> None:
         form_data = _handle_form_step(
-            "flow-2254",
             _workday_options_step(),
             {"province": None},
             reuse_state=_ReuseState(),
@@ -300,7 +289,6 @@ class TestRedactionSentinelIsNeverBackfilled:
         }
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5"},
             reuse_state=_ReuseState(),
@@ -346,7 +334,6 @@ class TestSectionBackfill:
         )
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5"},
             reuse_state=_ReuseState(),
@@ -376,7 +363,6 @@ class TestSectionBackfill:
         )
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5"},
             reuse_state=_ReuseState(),
@@ -412,7 +398,6 @@ class TestSectionBackfill:
         )
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5", "advanced": {"timeout": None}},
             reuse_state=_ReuseState(),
@@ -442,7 +427,6 @@ class TestSectionBackfill:
         )
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5"},
             reuse_state=_ReuseState(),
@@ -460,7 +444,6 @@ class TestSectionBackfill:
         )
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5", "advanced": {"timeout": 90}},
             reuse_state=_ReuseState(),
@@ -519,7 +502,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"host": None}
 
         first = _handle_form_step(
-            "flow-2254",
             step("one"),
             remaining,
             None,
@@ -528,7 +510,6 @@ class TestRequiredFieldPathsUnchanged:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             step("two"),
             remaining,
             None,
@@ -613,7 +594,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"province": None}
 
         first = _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("one"),
             remaining,
             None,
@@ -622,7 +602,6 @@ class TestRequiredFieldPathsUnchanged:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("two"),
             remaining,
             None,
@@ -642,7 +621,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"province": "BY"}
 
         first = _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("one"),
             remaining,
             None,
@@ -651,7 +629,6 @@ class TestRequiredFieldPathsUnchanged:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("two"),
             remaining,
             None,
@@ -701,7 +678,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"workdays": None}
 
         first = _handle_form_step(
-            "flow-2254",
             self._defaulted_step(first_step),
             remaining,
             None,
@@ -710,7 +686,6 @@ class TestRequiredFieldPathsUnchanged:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             self._defaulted_step(second_step),
             remaining,
             None,
@@ -736,7 +711,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"province": "BY"}
 
         _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("one"),
             remaining,
             None,
@@ -745,7 +719,6 @@ class TestRequiredFieldPathsUnchanged:
             keep_current_values=True,
         )
         _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("two"),
             remaining,
             None,
@@ -784,7 +757,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"workdays": ["sat"]}
         payloads = [
             _handle_form_step(
-                "flow-2254",
                 dict(step),
                 remaining,
                 None,
@@ -810,7 +782,6 @@ class TestRequiredFieldPathsUnchanged:
         remaining: dict[str, Any] = {"province": "BY"}
 
         _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("one"),
             remaining,
             None,
@@ -818,7 +789,6 @@ class TestRequiredFieldPathsUnchanged:
             reuse_state,
         )
         second = _handle_form_step(
-            "flow-2254",
             self._redeclaring_step("two"),
             remaining,
             None,
@@ -840,7 +810,6 @@ class TestRequiredFieldPathsUnchanged:
         }
 
         form_data = _handle_form_step(
-            "flow-2254",
             step,
             {"host": "10.0.0.5"},
             reuse_state=_ReuseState(),
@@ -872,7 +841,6 @@ class TestPerStepValues:
         reuse_state = _ReuseState()
         remaining = dict(config)
         first = _handle_form_step(
-            "flow-2254",
             self._step("one"),
             remaining,
             None,
@@ -881,7 +849,6 @@ class TestPerStepValues:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             self._step("two"),
             remaining,
             None,
@@ -921,7 +888,6 @@ class TestPerStepValues:
         ignored: set[str] = set()
         remaining: dict[str, Any] = {"step_values": {"one": {"province": "TX"}}}
         payload = _handle_form_step(
-            "flow-2254",
             self._step("one"),
             remaining,
             ignored,
@@ -946,7 +912,6 @@ class TestPerStepValues:
         remaining: dict[str, Any] = {"step_values": {"two": {"province": "TX"}}}
         seen = [
             _handle_form_step(
-                "flow-2254",
                 self._step(sid),
                 remaining,
                 None,
@@ -999,7 +964,6 @@ class TestPerStepValues:
             "step_values": {"one": {"connection": {"province": "TX"}}}
         }
         first = _handle_form_step(
-            "flow-2254",
             step("one"),
             remaining,
             None,
@@ -1008,7 +972,6 @@ class TestPerStepValues:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             step("two"),
             remaining,
             None,
@@ -1057,7 +1020,6 @@ class TestPerStepValues:
         reuse_state = _ReuseState()
         remaining: dict[str, Any] = {"step_values": {"one": {"province": "TX"}}}
         first = _handle_form_step(
-            "flow-2254",
             step("one"),
             remaining,
             None,
@@ -1066,7 +1028,6 @@ class TestPerStepValues:
             keep_current_values=True,
         )
         second = _handle_form_step(
-            "flow-2254",
             step("two"),
             remaining,
             None,
@@ -1097,7 +1058,6 @@ class TestPerStepValues:
         }
         seen = [
             _handle_form_step(
-                "flow-2254",
                 self._step("init"),
                 remaining,
                 None,
@@ -1118,7 +1078,6 @@ class TestPerStepValues:
         }
         seen = [
             _handle_form_step(
-                "flow-2254",
                 self._step("init"),
                 remaining,
                 None,
@@ -1150,7 +1109,6 @@ class TestPerStepValues:
         }
         seen = [
             _handle_form_step(
-                "flow-2254",
                 self._step("init"),
                 remaining,
                 None,
@@ -1179,7 +1137,6 @@ class TestPerStepValues:
             "step_values": {"init": [{"province": "TX"}, {"province": "NY"}]}
         }
         _handle_form_step(
-            "flow-2254",
             self._step("init"),
             remaining,
             None,
@@ -1204,7 +1161,6 @@ class TestPerStepValues:
             "step_values": {"one": {"provinse": "TX"}},
         }
         _handle_form_step(
-            "flow-2254",
             self._step("one"),
             remaining,
             ignored,
@@ -1226,7 +1182,6 @@ class TestPerStepValues:
             "step_values": {"typo_step": {"province": "TX"}},
         }
         _handle_form_step(
-            "flow-2254",
             self._step("one"),
             remaining,
             None,
@@ -1242,7 +1197,6 @@ class TestPerStepValues:
     def test_a_consumed_step_entry_is_not_reported(self) -> None:
         remaining: dict[str, Any] = {"step_values": {"one": {"province": "TX"}}}
         _handle_form_step(
-            "flow-2254",
             self._step("one"),
             remaining,
             None,
@@ -1259,7 +1213,6 @@ class TestPerStepValues:
             "step_values": {"one": {"province": "TX"}},
         }
         payload = _handle_form_step(
-            "flow-2254",
             {"type": "form", "step_id": "one"},
             remaining,
             None,

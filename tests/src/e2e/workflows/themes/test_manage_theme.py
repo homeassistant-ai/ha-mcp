@@ -160,11 +160,13 @@ class TestManageTheme:
         finally:
             # Cleanup: restore container to clean state for sibling tests.
             # Reset light mode to 'default' and clear dark override with 'none'.
-            await mcp_client.call_tool(
+            await safe_call_tool(
+                mcp_client,
                 "ha_manage_theme",
                 {"action": "set", "theme_name": "default"},
             )
-            await mcp_client.call_tool(
+            await safe_call_tool(
+                mcp_client,
                 "ha_manage_theme",
                 {"action": "set", "theme_name": "none", "mode": "dark"},
             )

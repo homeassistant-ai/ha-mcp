@@ -14,6 +14,7 @@ from ..component_api import component_supports, get_component_caps
 from ..dashboard_read_errors import CONFIG_NOT_FOUND_CODE, NO_STORED_CONFIG_MESSAGES
 from ..helper_flows import helper_flow_types
 from ..helpers import exception_to_structured_error, safe_progress
+from ..ignored_entries import normalize_ignored_entry
 from ..tools_config_dashboards import (
     _dashboards_via_component,
     fetch_dashboards_list,
@@ -1528,8 +1529,8 @@ class DeepSearchMixin(SceneSearchMixin):
         if helper_failed:
             reasons.append(
                 f"{helper_failed} helper backend(s) not scanned (per-type list, "
-                "flow-entries list, or a flow-entry options-probe failed) — "
-                "their match status is unknown; this result is not exhaustive."
+                "flow-entries list, or flow-entry options: the OptionsFlow could not be read)"
+                " — their match status is unknown; this result is not exhaustive."
             )
         if dashboard_failed:
             reasons.append(
@@ -1671,11 +1672,10 @@ class DeepSearchMixin(SceneSearchMixin):
 
         options: dict[str, Any] = {}
         probe_failed = False
-        # Only an entry with an options flow has a body to probe. Among those,
-        # only a perfect title match (score 100) makes the probe redundant — it
-        # can only raise the total, never lower it, so anything below 100 is
-        # worth probing (in both exact and fuzzy modes) for accurate scoring
-        # and ``match_in_config``.
+        # Only an entry with an options flow (an ignored one has none) has a
+        # body to probe. The probe can only raise the score, so a perfect title
+        # match (100) skips it unless include_config asks for the body.
+        normalize_ignored_entry(entry)
         need_probe = bool(entry.get("supports_options")) and (
             include_config
             or self._score_deep_match(

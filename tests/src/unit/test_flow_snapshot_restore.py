@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -83,7 +84,6 @@ async def test_explicit_empty_section_completes_without_false_key_error() -> Non
 )
 def test_ordinary_edit_section_backfill_and_clear_unchanged(values, expected) -> None:
     payload = _handle_form_step(
-        "restore-flow",
         _step(),
         values,
         reuse_state=_ReuseState(),
@@ -168,7 +168,8 @@ async def test_acknowledged_completion_survives_local_response_error() -> None:
     [
         (401, "not_applied", HomeAssistantAuthError),
         (403, "not_applied", HomeAssistantAPIError),
-        (504, "unknown", HomeAssistantAPIError),
+        # The walker reports a lost answer as possibly applied (a ToolError).
+        (504, "unknown", ToolError),
     ],
 )
 async def test_http_submit_failure_preserves_application_knowledge(

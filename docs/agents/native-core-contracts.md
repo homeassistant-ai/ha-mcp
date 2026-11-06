@@ -209,6 +209,14 @@ the `enabled` and `category` parameters out of the stored config, blueprint
 empty-list stripping, the best-practice checker and the reference
 validator.
 
+An integration's own `<domain>/` WebSocket commands, the API its panel uses,
+are listed through the component, which reads Core's registry
+(`hass.data["websocket_api"]`) and serializes each command's registered request
+schema; a command registered without fields (schema `False`) is described with
+Core's `BASE_COMMAND_MESSAGE_SCHEMA`. A call is sent over WebSocket as given:
+Core validates it against that schema before the handler runs, so the tool
+passes Core's error through instead of validating first.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative

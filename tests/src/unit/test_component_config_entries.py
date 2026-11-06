@@ -1,4 +1,4 @@
-"""The component-gated config-entry ``unique_id`` read.
+"""The component-gated config-entry reads, chiefly ``unique_id``.
 
 Home Assistant withholds a config entry's ``unique_id`` from every endpoint it
 has, so this helper is the only source — and the value it returns is
@@ -234,62 +234,74 @@ async def test_the_client_tls_override_reaches_the_pooled_client(
 
 
 @pytest.mark.asyncio
-async def test_domain_map_returns_the_unique_ids_for_the_domain(
+@pytest.mark.parametrize(
+    ("extra", "degraded"),
+    [
+        pytest.param({"secret_scrub_degraded": True}, True, id="degraded"),
+        pytest.param({}, False, id="absent"),
+    ],
+)
+async def test_reader_carries_the_scrub_degraded_flag(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: dict[str, Any],
+    degraded: bool,
+) -> None:
+    """The component sends the key only when its secrets scrub did not run."""
+    row = {"entry_id": "e1", "options": {"token": "x"}}
+    _arrange(
+        monkeypatch,
+        send=AsyncMock(return_value={"result": {"entries": [row], **extra}}),
+    )
+
+    read = await mod.fetch_config_entries(client, entry_id="e1")
+
+    assert read == mod.ComponentEntries(rows=[row], secret_scrub_degraded=degraded)
+
+
+@pytest.mark.asyncio
+async def test_reader_refuses_a_payload_with_a_non_dict_row(
     client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Every caller indexes rows as dicts, so one bad row sends it to legacy."""
     _arrange(
         monkeypatch,
         send=AsyncMock(
-            return_value={
-                "result": {
-                    "entries": [
-                        {"entry_id": "a", "unique_id": "u-a"},
-                        {"entry_id": "b", "unique_id": "u-b"},
-                        # A genuinely absent unique_id is the ONE valid omission.
-                        {"entry_id": "c", "unique_id": None},
-                    ]
-                }
-            }
+            return_value={"result": {"entries": [{"entry_id": "e1"}, "nope"]}}
         ),
     )
 
-    assert await mod.fetch_domain_unique_ids(client, "shelly") == {
-        "a": "u-a",
-        "b": "u-b",
-    }
+    assert await mod.fetch_config_entries(client, domain="mqtt") is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "entries",
+    ("caps", "frame", "filtered"),
     [
-        pytest.param(["not-a-dict"], id="non_dict_row"),
-        pytest.param([{"entry_id": 7, "unique_id": "u"}], id="non_string_entry_id"),
-        pytest.param([{"entry_id": "a", "unique_id": 7}], id="non_string_unique_id"),
-        pytest.param([{"entry_id": "a"}], id="row_predating_the_field"),
         pytest.param(
-            [{"entry_id": "a", "unique_id": "u"}, {"entry_id": "b"}],
-            id="one_good_one_pre_field",
+            {"config_entries", "config_entries_type_filter"},
+            {"domain": "sun", "type_filter": ["service"]},
+            True,
+            id="capability",
         ),
+        pytest.param({"config_entries"}, {"domain": "sun"}, False, id="fallback"),
     ],
 )
-async def test_domain_map_is_unusable_rather_than_incomplete(
-    client: Any, monkeypatch: pytest.MonkeyPatch, entries: Any
+async def test_reader_sends_the_type_only_to_a_component_that_filters_by_it(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caps: set[str],
+    frame: dict[str, Any],
+    filtered: bool,
 ) -> None:
-    """A partial map would be read as a COMPLETED duplicate scan.
+    """An older component would ignore the type, so it is not sent there."""
+    ws = _arrange(monkeypatch, send=AsyncMock(return_value={"result": {"entries": []}}))
+    monkeypatch.setattr(mod, "component_supports", lambda _caps, name: name in caps)
 
-    Dropping a malformed row could drop the very duplicate the scan exists to
-    catch, so incomplete must be indistinguishable from unreadable.
-    """
-    _arrange(monkeypatch, send=AsyncMock(return_value={"result": {"entries": entries}}))
+    read = await mod.fetch_config_entries(
+        client, domain="sun", integration_type="service"
+    )
 
-    assert await mod.fetch_domain_unique_ids(client, "shelly") is None
-
-
-@pytest.mark.asyncio
-async def test_domain_map_is_none_without_the_capability(
-    client: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _arrange(monkeypatch, supported=False)
-
-    assert await mod.fetch_domain_unique_ids(client, "shelly") is None
+    assert ws.send_command.await_args.kwargs == frame
+    assert read is not None
+    assert read.type_filtered is filtered
