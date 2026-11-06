@@ -332,6 +332,7 @@ class TestComponentLookup:
         assert result["entity"] == _LOOKUP["entity"]
         assert result["validation"] == _LOOKUP["validation"]
         assert result["references"] == _LOOKUP["references"]
+        assert "related" not in result
         assert result["config"]["category"] == "lighting"
         assert "warnings" not in result
         # The body still comes from Core's REST read, never the component.

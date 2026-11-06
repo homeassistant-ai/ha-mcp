@@ -1875,7 +1875,7 @@ class TestPendingFutureCancelGuards:
 
     @staticmethod
     def _state():
-        from ha_mcp.client.websocket_client import WebSocketConnectionState
+        from ha_mcp.client.websocket_state import WebSocketConnectionState
 
         return WebSocketConnectionState()
 

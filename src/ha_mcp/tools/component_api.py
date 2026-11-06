@@ -44,7 +44,7 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..client.websocket_client import get_websocket_client
+from ..client.websocket_client import get_websocket_client, websocket_manager
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +75,11 @@ DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime
 # (the cache key is the process-lifetime REST client — see ``_CAPS_CACHE``).
-# Valid positive entries never expire on this timer; they are dropped only by
-# ``invalidate_caps`` (a supposedly-supported command coming back
-# ``unknown_command``). This ABSENT-negative window covers a definitive
+# Valid positive entries never expire on this timer; they hold while the WS
+# connection they were probed over is the pool's live one (see
+# ``_PROBED_OVER``) and are dropped by ``invalidate_caps`` (a
+# supposedly-supported command coming back ``unknown_command``). This
+# ABSENT-negative window covers a definitive
 # "component responded, no usable surface" verdict (``unknown_command`` /
 # unsupported schema_version). Inconclusive failures use the short window below.
 _NEGATIVE_CACHE_TTL_S = 300.0
@@ -126,9 +128,11 @@ class ComponentCaps:
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
 # garbage-collected. The key is the process-lifetime REST client, NOT the WS
-# connection: an HA restart drops the socket but reuses the same pooled client,
-# so a valid positive entry persists for the whole process (dropped only by
-# ``invalidate_caps`` on an ``unknown_command``). A ``None`` value is a cached
+# connection: an HA restart drops the socket but reuses the same REST client.
+# A valid positive entry is re-probed once the connection it came from is gone
+# (``_PROBED_OVER``), since the restart may have loaded another component
+# version (#2967), and dropped by ``invalidate_caps`` on an
+# ``unknown_command``. A ``None`` value is a cached
 # *negative* ("probed, no usable WS surface"); absence means "not yet probed".
 # A negative carries an expiry in EXACTLY ONE of the two timestamp maps below —
 # ``_NEGATIVE_CACHE_TS`` (definitive absent, long) or ``_TRANSIENT_NEGATIVE_TS``
@@ -148,6 +152,18 @@ _NEGATIVE_CACHE_TS: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDicti
 _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
     weakref.WeakKeyDictionary()
 )
+# The pooled WS connection a positive entry was probed over. A Core restart
+# closes it and the pool replaces it; the component on the far side may then be
+# another version (an app keeps running while the component updates through the
+# Marketplace and Core restarts), so the entry is re-probed rather than kept.
+_PROBED_OVER: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+# Recorded in place of a connection when a re-probe failed but kept the caps
+# that worked: the next check re-probes even if the pool is empty by then.
+_CONNECTION_LOST = object()
+# Clients whose caps worked until ``invalidate_caps`` dropped them. A command
+# Core refuses right after a restart, before the component has set up, lands
+# here; the next probe treats an ``unknown_command`` like a working re-probe.
+_DROPPED_WORKING: weakref.WeakSet[Any] = weakref.WeakSet()
 # Preserve failed discovery separately so write callers can refuse a downgrade
 # even when a best-effort read populated the negative cache first. Store only
 # text, not exceptions whose traceback would retain clients through weak keys.
@@ -160,12 +176,12 @@ _PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDicti
 
 def component_probe_auth_failed(client: Any) -> bool:
     """True when the latest capability probe was rejected as unauthorized."""
-    return client in _PROBE_AUTH_REJECTED
+    return _per_user(client) in _PROBE_AUTH_REJECTED
 
 
 def component_probe_auth_kind(client: Any) -> str | None:
     """``permission`` or ``token`` for the latest probe rejection, else None."""
-    return _PROBE_AUTH_REJECTED.get(client)
+    return _PROBE_AUTH_REJECTED.get(_per_user(client))
 
 
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
@@ -186,7 +202,7 @@ def _checked_caps(
 
     ``cause`` is the exception that failed this call's own probe; a strict caller
     gets it as ``__cause__``. A failure cached by an earlier call gets no cause:
-    the OAuth proxy client is one cache key for every user's token.
+    each OAuth user's caps are keyed on their own client (``_per_user``).
     """
     if strict and (failure := _PROBE_FAILURES.get(client)):
         raise ComponentDiscoveryError(failure) from cause
@@ -202,10 +218,45 @@ def _get_caps_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
+def _per_user(client: Any) -> Any:
+    """The client the caller's requests run on, which every cache here keys on.
+
+    The OAuth proxy is one object whose token changes per request; it names
+    the requesting user's own client, so one user's probe (an unauthorized one
+    from a non-admin included) never stands in for another's.
+    """
+    current_client = getattr(type(client), "current_client", None)
+    return client.current_client() if current_client is not None else client
+
+
+def _probed_connection_current(client: Any) -> bool:
+    """False once the connection a positive entry came from closed or was replaced.
+
+    Reads the pool without connecting. An empty pool slot (a loop change
+    cleared it) says nothing about the component, so the entry holds until a
+    connection exists to compare, unless a failed re-probe marked the
+    connection lost.
+    """
+    probed = _PROBED_OVER.get(client)
+    if probed is None:
+        return True
+    if probed is _CONNECTION_LOST:
+        return False
+    current = websocket_manager.pooled_client(
+        url=client.base_url,
+        token=client.token,
+        verify_ssl=getattr(client, "verify_ssl", None),
+    )
+    if current is None:
+        return True
+    return bool(current.is_connected) and current is probed
+
+
 def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
     """Return ``(hit, caps)`` for a still-valid cache entry, else ``(False, None)``.
 
-    A valid positive entry is a hit for the process lifetime. Malformed replies
+    A valid positive entry is a hit while the connection it was probed over
+    is the pool's live one. Malformed replies
     retained for permissive readers expire like transient failures. A negative (``None``)
     entry is a hit only within its window of when it was stored (monotonic clock):
     ``_NEGATIVE_CACHE_TTL_S`` for a definitive absent-negative, the shorter
@@ -217,7 +268,9 @@ def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
         return False, None
     cached = _CAPS_CACHE[client]
     if cached is not None and client not in _PROBE_FAILURES:
-        return True, cached
+        if _probed_connection_current(client):
+            return True, cached
+        return False, None
     now = _monotonic()
     stored_at = _NEGATIVE_CACHE_TS.get(client)
     if stored_at is not None and (now - stored_at) < _NEGATIVE_CACHE_TTL_S:
@@ -322,13 +375,50 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     )
 
 
+def _after_failed_probe(
+    client: Any,
+    exc: Exception,
+    working: ComponentCaps | None,
+    strict: bool,
+    *,
+    had_working: bool,
+) -> ComponentCaps | None:
+    """Cache what a failed ``info`` probe establishes and answer its caller."""
+    if is_unknown_command(exc):
+        if not had_working:
+            _store_caps(client, None)
+        else:
+            # Right after a Core restart Core answers before the component has
+            # registered its commands; the short window finds it once it has.
+            _store_transient_negative(client)
+        return _checked_caps(client, None, strict, cause=exc)
+    if working is not None:
+        _PROBED_OVER[client] = _CONNECTION_LOST
+        return working
+    if isinstance(exc, HomeAssistantCommandError):
+        message = f"{INFO_COMMAND} failed: {exc}"
+    elif isinstance(exc, HomeAssistantConnectionError | HomeAssistantCommandTimeout):
+        logger.debug("%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=exc)
+        message = f"{INFO_COMMAND} probe could not reach Home Assistant"
+    else:
+        # Read callers retain best-effort fallback; strict write callers
+        # must not confuse an unexpected fault with capability absence.
+        logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=exc)
+        message = f"{INFO_COMMAND} probe failed unexpectedly"
+    _store_probe_failure(client, exc, message)
+    return _checked_caps(client, None, strict, cause=exc)
+
+
 async def get_component_caps(
     client: Any, *, strict: bool = False
 ) -> ComponentCaps | None:
     """Return the cached (or freshly probed) capabilities of the component.
 
-    One ``ha_mcp_tools/info`` probe per client, cached. ``None`` means "no
-    usable component WS surface" — the caller falls back to its legacy path.
+    One ``ha_mcp_tools/info`` probe per client, cached; usable caps are
+    probed again once the pooled WS connection they came from was replaced,
+    since the Core restart behind that may have loaded another component.
+    ``None`` means "no usable component WS surface" — the caller falls back
+    to its legacy path.
 
     With ``strict=True``, failed or malformed discovery raises
     ``ComponentDiscoveryError``, including failures cached by earlier read tools.
@@ -338,12 +428,17 @@ async def get_component_caps(
     retains best-effort read behavior. Inconclusive failures expire after 30
     seconds for both readers and writers.
 
-    Cache-on-failure semantics follow the error taxonomy:
+    Cache-on-failure semantics follow the error taxonomy. A re-probe of caps
+    that worked keeps them on any failure but ``unknown_command`` and caches
+    nothing, so the next call probes again; its ``unknown_command`` gets the
+    short window, since Core answers before the component has set up, as does
+    the probe after ``invalidate_caps`` dropped caps that worked:
 
     - ``HomeAssistantCommandError`` with ``unknown_command`` (old or absent
-      component): cache ``None`` with an expiry. The negative is re-probed after ``_NEGATIVE_CACHE_TTL_S`` so a component
-      installed / upgraded mid-session (the REST client — the cache key — is not
-      recreated on an HA restart) is eventually adopted instead of pinned absent.
+      component): cache ``None`` with an expiry. The negative is re-probed
+      after ``_NEGATIVE_CACHE_TTL_S`` so a component installed / upgraded
+      mid-session (the REST client — the cache key — is not recreated on an HA
+      restart) is eventually adopted instead of pinned absent.
     - ``HomeAssistantConnectionError`` / ``HomeAssistantCommandTimeout`` (WS
       down or slow, including the failed-connect raise from
       ``WebSocketManager``): cache a SHORT transient
@@ -361,6 +456,7 @@ async def get_component_caps(
     treated as no-caps (cached negative, logged once): the server can't trust
     command payloads shaped for a different wire-format generation.
     """
+    client = _per_user(client)
     hit, caps = _live_cache_entry(client)
     if hit:
         return _checked_caps(client, caps, strict)
@@ -381,6 +477,13 @@ async def get_component_caps(
         # silently unreachable on an HTTPS + verify_ssl=False install. ``None`` is
         # the pool's settings default, so a client without the attr is unchanged.
         verify_ssl = getattr(client, "verify_ssl", None)
+        # A re-probe of caps that worked (their connection was replaced) that
+        # fails without saying the component is gone keeps them: right after a
+        # Core restart it can run before Core answers, and a cached failure
+        # would refuse strict callers for its window once Core is back.
+        working = None if client in _PROBE_FAILURES else _CAPS_CACHE.get(client)
+        had_working = working is not None or client in _DROPPED_WORKING
+        _DROPPED_WORKING.discard(client)
         # This probe alone decides the auth marker; never carry a stale one.
         _PROBE_AUTH_REJECTED.pop(client, None)
 
@@ -389,28 +492,10 @@ async def get_component_caps(
                 url=base_url, token=token, verify_ssl=verify_ssl
             )
             response = await ws.send_command(INFO_COMMAND)
-        except HomeAssistantCommandError as exc:
-            if is_unknown_command(exc):
-                _store_caps(client, None)
-            else:
-                _store_probe_failure(client, exc, f"{INFO_COMMAND} failed: {exc}")
-            return _checked_caps(client, None, strict, cause=exc)
-        except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as exc:
-            logger.debug(
-                "%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=True
+        except Exception as exc:  # noqa: BLE001 - classified and logged below
+            return _after_failed_probe(
+                client, exc, working, strict, had_working=had_working
             )
-            _store_probe_failure(
-                client, exc, f"{INFO_COMMAND} probe could not reach Home Assistant"
-            )
-            return _checked_caps(client, None, strict, cause=exc)
-        except Exception as exc:
-            # Read callers retain best-effort fallback; strict write callers
-            # must not confuse an unexpected fault with capability absence.
-            logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
-            _store_probe_failure(
-                client, exc, f"{INFO_COMMAND} probe failed unexpectedly"
-            )
-            return _checked_caps(client, None, strict, cause=exc)
 
         caps = _parse_caps(response)
         if caps is not None and caps.schema_version != SUPPORTED_SCHEMA_VERSION:
@@ -422,6 +507,7 @@ async def get_component_caps(
             )
             caps = None
         _store_caps(client, caps)
+        _PROBED_OVER[client] = ws
         result = response.get("result") if isinstance(response, dict) else None
         if (
             not isinstance(response, dict)
@@ -460,9 +546,13 @@ def invalidate_caps(client: Any) -> None:
     ``unknown_command`` (e.g. the component was downgraded mid-session), so the
     stale positive doesn't keep routing to a dead command.
     """
+    client = _per_user(client)
+    if client not in _PROBE_FAILURES and _CAPS_CACHE.get(client) is not None:
+        _DROPPED_WORKING.add(client)
     _PROBE_FAILURES.pop(client, None)
     _PROBE_AUTH_REJECTED.pop(client, None)
     _CAPS_CACHE.pop(client, None)
+    _PROBED_OVER.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
 
@@ -472,10 +562,9 @@ async def read_info(client: Any) -> InfoResult | None:
 
     For callers that show a field which can change while the client lives:
     the bug report's component version and webhook auth mode. Routing and
-    gating keep the ``get_component_caps`` snapshot, which lasts as long as the
-    client (for a server running outside HA, an HA restart does not end it),
-    while a component update changes the version and an options change the
-    mode. Only a component whose ``info`` the snapshot accepted is asked. The
+    gating keep the ``get_component_caps`` snapshot, which holds until its
+    WebSocket connection is replaced, while an options change alters the mode
+    without one. Only a component whose ``info`` the snapshot accepted is asked. The
     call goes to ``send_command`` on the pooled WebSocket directly, as the
     probe does, bypassing ``send_websocket_message``'s ERROR log (a report
     quotes its log sections); an ``unknown_command`` drops the snapshot so the
