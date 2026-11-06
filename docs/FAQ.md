@@ -569,9 +569,18 @@ The version should match the [latest release](https://github.com/homeassistant-a
 
 ### ChatGPT doesn't show new or newly enabled tools (stale tool list)
 
-ChatGPT (web, including Codex Work Mode) caches a connector's tool list and sometimes keeps serving the stale list even after you enable new tools on the server, restart it, and remove and re-add the connector under the same name. Newly enabled tools (for example the beta filesystem/YAML tools) simply never appear in ChatGPT's tool list, even though the server logs show them registered — and other tools on the stale connection may fail with MCP internal errors.
+ChatGPT (web, including Codex Work Mode) caches a connector's tool list and keeps serving it until the connector is refreshed. Enabling new tools on the server, updating ha-mcp, or restarting it does not change what ChatGPT has stored. Newly enabled tools (for example the beta filesystem/YAML tools) never appear in ChatGPT's tool list, even though the server logs show them registered, and other tools on the stale connection may fail with MCP internal errors. After an ha-mcp update that renames a tool parameter, ChatGPT keeps calling the tool with the old name and the server rejects it with `VALIDATION_FAILED` and `unknown parameter`.
 
-**Solution:** delete the connector and create a new one with a **different name** — ChatGPT then fetches a fresh tool list. Re-adding it under the original name is not enough; the cached list survives the re-add.
+**Solution:** refresh the connector's tool list. If you enabled tools or changed a setting, restart the ha-mcp server first; the refresh only fetches the tools the server exposes at that moment. The steps are the same for the app (add-on) and the embedded server (custom component):
+
+1. In ChatGPT, open **Settings**, then the plugin settings.
+2. Find your ha-mcp connector and select it.
+3. Click **Refresh tools**.
+4. Start a new conversation.
+
+If the refresh returns an error, start a new conversation first. ChatGPT then prompts you to reconnect and sign in to the connector again; once that is done, go back and click **Refresh tools**.
+
+If the old tool list is still there after a refresh, delete the connector on that same screen and create a new one with a **different name**. Re-adding it under the original name is not enough; ChatGPT can keep the cached list across the re-add.
 
 ### Antigravity client troubleshooting
 
