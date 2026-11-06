@@ -733,16 +733,15 @@ class TestEmbeddedUpdatePath:
         if update_path_ha["component_zip"]:
             # Reinstall the distribution artifact over a configured instance,
             # then prove the selected server build and config entry survive HA restart.
+            reinstall_code = (
+                "from pathlib import Path; import zipfile; "
+                "p=Path('/config/custom_components/ha_mcp_tools/__init__.py'); "
+                "before=p.read_bytes(); p.unlink(); "
+                "zipfile.ZipFile('/config/ha_mcp_tools.zip').extractall(p.parent); "
+                "assert p.read_bytes() == before"
+            )
             installed = container.get_wrapped_container().exec_run(
-                [
-                    "python3",
-                    "-c",
-                    "from pathlib import Path; import zipfile; "
-                    "p=Path('/config/custom_components/ha_mcp_tools/__init__.py'); "
-                    "before=p.read_bytes(); p.unlink(); "
-                    "zipfile.ZipFile('/config/ha_mcp_tools.zip').extractall(p.parent); "
-                    "assert p.read_bytes() == before",
-                ]
+                ["python3", "-c", reinstall_code]
             )
             assert installed.exit_code == 0, installed.output.decode()
             previous_url = base_url
@@ -776,15 +775,14 @@ class TestEmbeddedUpdatePath:
             assert any(
                 e["entry_id"] == _ENTRY_ID and e["state"] == "loaded" for e in entries
             )
+            read_server_entries_code = (
+                "import json; "
+                "entries=json.load(open('/config/.storage/core.config_entries'))['data']['entries']; "
+                "print(json.dumps([e['entry_id'] for e in entries "
+                "if e['domain']=='ha_mcp_tools' and e['data'].get('entry_type')=='server']))"
+            )
             stored = container.get_wrapped_container().exec_run(
-                [
-                    "python3",
-                    "-c",
-                    "import json; "
-                    "entries=json.load(open('/config/.storage/core.config_entries'))['data']['entries']; "
-                    "print(json.dumps([e['entry_id'] for e in entries "
-                    "if e['domain']=='ha_mcp_tools' and e['data'].get('entry_type')=='server']))",
-                ]
+                ["python3", "-c", read_server_entries_code]
             )
             assert stored.exit_code == 0, stored.output.decode()
             assert json.loads(stored.output) == [_ENTRY_ID]
