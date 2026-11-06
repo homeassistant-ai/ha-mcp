@@ -88,6 +88,35 @@ async def test_exactly_one_of_content_and_edits_is_required(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "modes",
+    [{}, {"content": "x", "edits": EDITS}],
+    ids=["neither", "both"],
+)
+async def test_invalid_write_mode_is_refused_before_backup_and_component_checks(
+    modes: dict[str, Any],
+) -> None:
+    """A call that cannot write must not take a snapshot, which could rotate out
+    an older restore point, or hide its own mistake behind another error."""
+    capture = AsyncMock(return_value=None)
+    available = AsyncMock()
+    settings = MagicMock(enable_auto_backup=True)
+    with (
+        patch.object(auto_backup, "get_global_settings", return_value=settings),
+        patch.object(auto_backup, "_capture_pre_write_snapshot", capture),
+        patch.object(tools_filesystem, "_assert_mcp_tools_available", available),
+        pytest.raises(ToolError) as excinfo,
+    ):
+        await FilesystemTools(_client("edit_file")).ha_write_file(
+            path="www/a.css", **modes
+        )
+
+    assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
+    capture.assert_not_awaited()
+    available.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_component_without_edit_file_gets_an_update_prompt() -> None:
     """Asks the registry, not a version: an unreleased component reports the
     previous release's number and still has the service."""
