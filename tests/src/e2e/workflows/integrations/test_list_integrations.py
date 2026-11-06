@@ -296,7 +296,6 @@ class TestListIntegrations:
         logger.info(f"All {data['total_count']} entries have valid structure")
 
 
-@pytest.mark.integrations
 def _assert_options_or_unread_warning(data: dict) -> None:
     """Every listed entry has ``options``, or the response warns they were not read."""
     missing = [e for e in data["entries"] if "options" not in e]
@@ -305,6 +304,7 @@ def _assert_options_or_unread_warning(data: dict) -> None:
         assert any("ha_mcp_tools" in w for w in data.get("warnings", [])), data
 
 
+@pytest.mark.integrations
 class TestIntegrationFiltering:
     """Test integration domain filtering and options inclusion."""
 
