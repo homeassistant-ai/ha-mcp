@@ -85,8 +85,8 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
 
 
 def withhold_component_options(entry: dict[str, Any]) -> bool:
-    """Replace every option value of an entry with an options flow by a
-    set/empty sentinel; True when it did (#2157).
+    """For an entry that has an options flow, replace every option value with
+    a set/empty sentinel; True when it did (#2157).
 
     The component row carries raw persisted options with no schema, and the
     password markers exist only in the options flow's form. Without that form
@@ -136,10 +136,9 @@ def redact_options_by_form(
         )
 
 
-_OPTIONS_FLOW_NOTE = (
-    "ha_get_integration(entry_id=..., include_schema=True) opens the entry's "
-    "options flow, which runs the integration's own code"
-)
+def entry_count(count: int) -> str:
+    """``count`` as the subject of a list warning: "1 entry", "3 entries"."""
+    return f"{count} entr{'y' if count == 1 else 'ies'}"
 
 
 def options_unread_warning(subject: str) -> str:
@@ -147,7 +146,9 @@ def options_unread_warning(subject: str) -> str:
     return (
         f"options of {subject} not read: Home Assistant has no read API for "
         "them, so they are read through the ha_mcp_tools custom component. "
-        f"Without it, {_OPTIONS_FLOW_NOTE} and reads them from its form."
+        "Without it, ha_get_integration(entry_id=..., include_schema=True) "
+        "reads them from the entry's options flow form; opening that flow runs "
+        "the integration's own code."
     )
 
 
@@ -156,7 +157,9 @@ def options_withheld_warning(subject: str) -> str:
     return (
         f"redact_secrets: every option value of {subject} was redacted, since "
         "only the options flow's form tells the password fields apart. "
-        f"{_OPTIONS_FLOW_NOTE} and redacts only those fields."
+        "ha_get_integration(entry_id=..., include_schema=True) reads that form "
+        "and redacts only those fields; opening the flow runs the "
+        "integration's own code."
     )
 
 
@@ -184,23 +187,25 @@ async def fetch_options_schema(
     """Describe the entry's options flow as ``resp["options_schema"]``.
 
     Also populates ``resp["entry"]["options"]`` from a first-step form so
-    callers requesting both schema and options don't pay for two round-trips.
-    Pass ``populate_options=False`` on the component-served path, where
-    ``options`` already carry the raw persisted values and must NOT be
-    overwritten by the OptionsFlow-derived suggested-value shape.
+    callers requesting both schema and options don't pay for two round-trips;
+    when the step is no form, or the flow fails, the entry carries no
+    ``options`` and a warning says they were not read. Pass
+    ``populate_options=False`` on the component-served path, where ``options``
+    already carry the raw persisted values and must NOT be overwritten by the
+    OptionsFlow-derived suggested-value shape; under redact_secrets they are
+    then redacted by the step opened here, and every value is withheld when
+    no form is readable.
     """
     entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
     # Component-served options are raw persisted values (the component only
     # scrubs resolved !secret references). The step opened here is also the
-    # one that names the password fields, so the flow is opened once, and
-    # every way out of this function leaves the options redacted.
+    # one that names the password fields, so the flow is opened once, and the
+    # one redaction call sits at the exit every path passes through.
     redact = entry is not None and not populate_options and redaction_enabled()
-    redaction_warnings: list[str] = []
+    opened: dict[str, Any] | None = None
     try:
         flow_result = await client.start_options_flow(entry_id)
-        if redact and entry is not None:
-            redact_options_by_form(entry, flow_result, entry_id, redaction_warnings)
-            redact = False
+        opened = flow_result
         described = await describe_step(
             client,
             flow_result,
@@ -216,10 +221,10 @@ async def fetch_options_schema(
         elif populate_options and entry is not None:
             # A branch form behind a menu holds that branch's fields, not
             # the entry's options.
+            entry.pop("options", None)
             resp.setdefault("warnings", []).append(
-                f"options for {entry_id} could not be read: the options "
-                f"flow opens with a {flow_result.get('type')!r} step, not a "
-                "form, so empty 'options' does not mean the entry has none"
+                f"options of {entry_id} not read: the options flow opens "
+                f"with a {flow_result.get('type')!r} step, not a form"
             )
         _put_payload(resp, "options_schema", described)
     except ToolError:
@@ -230,17 +235,21 @@ async def fetch_options_schema(
             f"{type(schema_err).__name__}: {schema_err}",
             exc_info=True,
         )
-        schema_warnings: list[str] = resp.setdefault("warnings", [])
-        schema_warnings.append(
+        unread = ""
+        if populate_options and entry is not None:
+            entry.pop("options", None)
+            unread = " and 'options' were not read"
+        resp.setdefault("warnings", []).append(
             f"options schema probe failed for {entry_id}: "
             f"{type(schema_err).__name__}: {schema_err} — 'options_schema' is "
-            "missing and 'options' may be incomplete"
+            f"missing{unread}"
         )
     finally:
         if redact and entry is not None:
-            redact_options_by_form(entry, None, entry_id, redaction_warnings)
-        if redaction_warnings:
-            resp.setdefault("warnings", []).extend(redaction_warnings)
+            redaction_warnings: list[str] = []
+            redact_options_by_form(entry, opened, entry_id, redaction_warnings)
+            if redaction_warnings:
+                resp.setdefault("warnings", []).extend(redaction_warnings)
 
 
 async def fetch_config_subentry_schema(

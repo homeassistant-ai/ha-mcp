@@ -66,6 +66,7 @@ from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_flow_steps import run_integration_step
 from .integration_schema import (
     describe_flow_form,
+    entry_count,
     fetch_config_subentry_schema,
     fetch_options_schema,
     options_from_form_flow,
@@ -197,13 +198,10 @@ async def fetch_entry_options_with_status(
       raised, or its first step was not a form (a menu / abort / create_entry),
       so no options could be harvested.
 
-    The flag lets callers surface degraded reads instead of passing ``{}``
+    The flag lets the caller surface degraded reads instead of passing ``{}``
     off as real options: ``smart_search`` flips ``partial`` when a probe
-    fails mid-search. ``ha_get_integration`` does not call this: a read
-    there opens an options flow only for include_schema (#2987). The abort
-    in ``finally``
-    is cleanup; a failed abort does not flip ``ok`` (the options were
-    already harvested).
+    fails mid-search. The abort in ``finally`` is cleanup; a failed abort does
+    not flip ``ok`` (the options were already harvested).
 
     Home Assistant does not expose ``ConfigEntry.options`` through any
     read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
@@ -214,13 +212,12 @@ async def fetch_entry_options_with_status(
     :func:`options_from_form_flow` prefers over the static schema
     ``default`` (issue #1575).
 
-    Probe failures log at ``warning`` (so breakage of a deliberate
-    single-entry probe is discoverable) unless ``quiet=True``, which demotes
-    them to ``debug`` for bulk fan-out callers (e.g. ``smart_search`` probes
-    one entry per flow-helper on every ``ha_search``; a per-entry
-    warning there would spam the log on routine searches).
+    Probe failures log at ``warning`` unless ``quiet=True``, which demotes
+    them to ``debug`` for a bulk fan-out: ``smart_search`` probes one entry
+    per flow helper on every ``ha_search``, and a per-entry warning there
+    would spam the log on routine searches.
 
-    Exposed at module level (not as a method) so non-class callers such as
+    Exposed at module level (not as a method) so
     ``smart_search._search_flow_helpers`` can probe flow-helper config
     without instantiating ``IntegrationTools``.
     """
@@ -370,11 +367,12 @@ class IntegrationTools:
                 "For UI-created flow-based helpers (template, group, "
                 "utility_meter, derivative, ...), the current config — "
                 "template body, group members, source entity, etc. — is "
-                "here. Needs the ha_mcp_tools custom component; without it the "
-                "entries come back without options and a warning. Prefer this over "
-                "include_schema when you only need to read the current values; "
-                "use include_schema when you also need the field types or "
-                "selector metadata.",
+                "here. Read through the ha_mcp_tools custom component; without "
+                "it an entry that has an options flow comes back without options "
+                "and a warning, and only include_schema on that entry reads them. "
+                "With the component, prefer this over include_schema when you "
+                "only need the current values; use include_schema when you also "
+                "need the field types or selector metadata.",
                 default=False,
             ),
         ] = False,
@@ -389,8 +387,9 @@ class IntegrationTools:
                 "Assistant aborts gives aborted, plus reason_text when Home "
                 "Assistant has a string for the reason. Only applies "
                 "when supports_options=true. The flow is started, described "
-                "and aborted; starting it runs the integration's own code, "
-                "which can have side effects. For an integration's setup form, use "
+                "and aborted; starting it runs the integration's own flow code, "
+                "and some integrations act there (Sonoff LAN signs in to its "
+                "cloud). For an integration's setup form, use "
                 "ha_set_integration(domain=...).",
                 default=False,
             ),
@@ -606,20 +605,16 @@ class IntegrationTools:
         - Only service integrations: ha_get_integration(integration_type="service")
         - An entry's panel commands: ha_get_integration(entry_id="abc123", include_ws_commands=True)
 
-        OPTIONS: ``options`` are the entry's persisted values, read through the
-        ha_mcp_tools custom component: the stored mapping as-is, so a field
-        never set may be absent and a section's fields stay nested under the
-        section key (e.g. a template helper's ``additional_options``). Values
-        that match a ``secrets.yaml`` entry are returned as ``"**redacted**"``.
-        Without the component an entry that has an options flow comes back
-        without ``options`` and with a warning: Home Assistant has no read API
-        for them. include_schema=True opens the entry's options flow, which
-        runs the integration's own code, and without the component also reads
-        ``options`` from that form: unset fields at their schema default, a
+        OPTIONS: with the component, ``options`` are the stored mapping as-is,
+        so a field never set may be absent and a section's fields stay nested
+        under the section key (e.g. a template helper's ``additional_options``);
+        values that match a ``secrets.yaml`` entry are returned as
+        ``"**redacted**"``. Without it, include_schema=True reads ``options``
+        from the options form: unset fields at their schema default, a
         section's fields at the top level. With redact_secrets on, every
         option value of an entry that has an options flow is redacted unless
-        include_schema=True reads the form that names the password fields.
-        An entry without an options flow has no such form, so its option
+        include_schema=True reads the form that names the password fields;
+        an entry without an options flow has no such form, so its option
         values come back as stored.
 
         Each entry carries ``log_level``: the canonical Python logger level name
@@ -885,9 +880,9 @@ class IntegrationTools:
             # Core's entry fragment has no `options`, and only the entry's
             # options flow form shows them. With include_schema,
             # `fetch_options_schema` below fills them from that form.
-            probe_warnings: list[str] = []
+            options_warnings: list[str] = []
             self._note_unread_legacy_options(
-                result, entry_id, include_schema, probe_warnings
+                result, entry_id, include_schema, options_warnings
             )
 
             resp: dict[str, Any] = {
@@ -895,8 +890,8 @@ class IntegrationTools:
                 "entry_id": entry_id,
                 "entry": result,
             }
-            if probe_warnings:
-                resp["warnings"] = probe_warnings
+            if options_warnings:
+                resp["warnings"] = options_warnings
 
             # Surface the effective Python logger level for this integration
             # so users can confirm log level changes took effect.
@@ -958,15 +953,16 @@ class IntegrationTools:
         """Warn that a legacy REST entry's ``options`` were not read (#2987).
 
         Opening the options flow runs the integration's own code, so a read
-        does it only for ``include_schema``, which asks for the flow's form.
-        An entry without an options flow keeps an empty ``options``.
+        does it only for ``include_schema``, which asks for the flow's form
+        and fills ``options`` from it. An entry without an options flow gets
+        an empty ``options``: Core's fragment has none.
         """
         if not isinstance(result, dict):
             return
-        if result.get("supports_options") and not include_schema:
-            warnings.append(options_unread_warning(entry_id))
-        else:
+        if not result.get("supports_options"):
             result.setdefault("options", {})
+        elif not include_schema:
+            warnings.append(options_unread_warning(entry_id))
 
     async def _single_entry_from_component(
         self,
@@ -1173,9 +1169,7 @@ class IntegrationTools:
                 entry.pop("options", None)
             if unread:
                 result.setdefault("warnings", []).append(
-                    options_unread_warning(
-                        f"{len(unread)} entr{'y' if len(unread) == 1 else 'ies'}"
-                    )
+                    options_unread_warning(entry_count(len(unread)))
                 )
         return result
 
@@ -1233,14 +1227,13 @@ class IntegrationTools:
         # Component options are raw persisted values — under redact_secrets
         # every RETURNED row must be redacted (#2157).
         if include_opts and redaction_enabled():
-            withheld = sum(
-                withhold_component_options(formatted) for formatted in result["entries"]
-            )
+            withheld = 0
+            for formatted in result["entries"]:
+                if withhold_component_options(formatted):
+                    withheld += 1
             if withheld:
                 result.setdefault("warnings", []).append(
-                    options_withheld_warning(
-                        f"{withheld} entr{'y' if withheld == 1 else 'ies'}"
-                    )
+                    options_withheld_warning(entry_count(withheld))
                 )
         return result
 

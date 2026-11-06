@@ -171,10 +171,14 @@ class RoutingClient:
         return {"success": True, "result": list(self._subentries)}
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        # Only logger/log_info is reached (get_logger_levels enrichment); it fails
-        # soft, so an empty result yields log_level DEFAULT on both paths.
+        # logger/log_info (get_logger_levels enrichment) fails soft, so an empty
+        # result yields log_level DEFAULT on both paths; a schema read asks for
+        # Core's flow strings, and an empty catalog describes the form without
+        # help text.
         if msg.get("type") == "logger/log_info":
             return {"success": True, "result": []}
+        if msg.get("type") == "frontend/get_translations":
+            return {"success": True, "result": {"resources": {}}}
         raise AssertionError(f"unexpected ws message {msg.get('type')!r}")
 
 

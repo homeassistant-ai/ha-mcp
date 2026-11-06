@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -484,7 +483,8 @@ async def test_a_flow_that_aborts_at_once_returns_cores_reason_text(
     assert schema["flow_type"] == "abort"
     assert schema["aborted"] == "not_supported"
     assert schema["reason_text"] == "X1 has no options."
-    assert resp["entry"]["options"] == {}
+    # An aborted options flow read no options; a subentry flow never touches them.
+    assert ("options" in resp["entry"]) is (kind == "subentry")
     client.send_websocket_message.assert_awaited_once_with(
         {
             "type": "frontend/get_translations",
