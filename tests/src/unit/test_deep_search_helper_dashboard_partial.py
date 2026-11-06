@@ -880,3 +880,15 @@ class TestHelperDashboardPartialThroughDeepSearch:
             f"a clean dashboard instance must not report partial; "
             f"got {result.get('partial')!r} / {result.get('partial_reason')!r}"
         )
+
+
+def test_unsearched_custom_helper_bodies_mark_the_search_partial() -> None:
+    """A custom helper integration's config is not searched (its options flow
+    is not opened), and the caller must not read that as a clean non-match."""
+    tools = _make_tools(MagicMock())
+    response: dict = {"success": True}
+
+    tools._apply_per_type_partial_flag(response, helper_unsearched=2)
+
+    assert response["partial"] is True
+    assert "2 custom helper" in response["partial_reason"]

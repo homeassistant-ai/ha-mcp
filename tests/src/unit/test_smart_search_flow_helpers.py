@@ -10,14 +10,13 @@ storage-based helpers.
 """
 
 import asyncio
-import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.tools import helper_flows, integration_schema
+from ha_mcp.tools import helper_flows
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
@@ -75,7 +74,7 @@ class TestFlowHelperDeepSearch:
 
         tools = _make_tools(client)
         semaphore = asyncio.Semaphore(8)
-        results, _ = await tools._search_flow_helpers(
+        results, _, _ = await tools._search_flow_helpers(
             "weather", exact_match=True, semaphore=semaphore, include_config=False
         )
 
@@ -111,7 +110,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
+        results, _, _ = await tools._search_flow_helpers(
             "outside_temperature",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -142,7 +141,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
+        results, _, _ = await tools._search_flow_helpers(
             "comfort",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -178,7 +177,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
+        results, _, _ = await tools._search_flow_helpers(
             "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -205,7 +204,7 @@ class TestFlowHelperDeepSearch:
         )
         client.start_options_flow = AsyncMock()
         tools = _make_tools(client)
-        results, failed = await tools._search_flow_helpers(
+        results, failed, _ = await tools._search_flow_helpers(
             "router",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -223,7 +222,7 @@ class TestFlowHelperDeepSearch:
         client = MagicMock()
         client._request = AsyncMock(side_effect=RuntimeError("REST down"))
         tools = _make_tools(client)
-        results, failed = await tools._search_flow_helpers(
+        results, failed, _ = await tools._search_flow_helpers(
             "anything",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -239,7 +238,7 @@ class TestFlowHelperDeepSearch:
         client = MagicMock()
         client._request = AsyncMock(return_value={"error": "boom"})
         tools = _make_tools(client)
-        results, failed = await tools._search_flow_helpers(
+        results, failed, _ = await tools._search_flow_helpers(
             "anything",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -255,7 +254,7 @@ class TestFlowHelperDeepSearch:
         client = MagicMock()
         client._request = AsyncMock(return_value=[])
         tools = _make_tools(client)
-        results, failed = await tools._search_flow_helpers(
+        results, failed, _ = await tools._search_flow_helpers(
             "anything",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -285,7 +284,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
+        results, _, _ = await tools._search_flow_helpers(
             "weather",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -319,7 +318,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
+        results, _, _ = await tools._search_flow_helpers(
             "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -361,7 +360,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results, failed = await tools._search_flow_helpers(
+        results, failed, _ = await tools._search_flow_helpers(
             "outside_temperature",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -399,7 +398,7 @@ class TestFlowHelperDeepSearch:
         # Force a mid-range title score (matches at threshold 60, below the
         # perfect-100 probe-skip), so the entry matches AND the probe runs.
         with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
-            results, failed = await tools._search_flow_helpers(
+            results, failed, _ = await tools._search_flow_helpers(
                 "kitchen",
                 exact_match=False,
                 semaphore=asyncio.Semaphore(8),
@@ -446,7 +445,7 @@ class TestFlowHelperDeepSearch:
             patch.object(tools, "_score_deep_match", side_effect=scorer),
             caplog.at_level(logging.WARNING, logger="ha_mcp.tools.smart_search"),
         ):
-            results, failed = await tools._search_flow_helpers(
+            results, failed, _ = await tools._search_flow_helpers(
                 "good",
                 exact_match=True,
                 semaphore=asyncio.Semaphore(8),
@@ -478,7 +477,7 @@ class TestFlowHelperDeepSearch:
         tools = _make_tools(client)
 
         with patch.object(tools, "_score_deep_match", return_value=(50, 100, False)):
-            results, _ = await tools._search_flow_helpers(
+            results, _, _ = await tools._search_flow_helpers(
                 "x",
                 exact_match=True,
                 semaphore=asyncio.Semaphore(8),
@@ -511,7 +510,7 @@ class TestFlowHelperDeepSearch:
         tools = _make_tools(client)
         # Force a mid-range title score: above fuzzy_threshold (60), below 100.
         with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
-            results, _ = await tools._search_flow_helpers(
+            results, _, _ = await tools._search_flow_helpers(
                 "weather",
                 exact_match=False,
                 semaphore=asyncio.Semaphore(8),
@@ -522,18 +521,23 @@ class TestFlowHelperDeepSearch:
 
 
 @pytest.mark.asyncio
-async def test_custom_helper_flow_options_are_probed_with_passwords_redacted(
+async def test_a_search_opens_no_options_flow_for_a_custom_helper_integration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without the component, a helper flow outside Core's built-in list is
-    probed like a built-in one: a plain field is searchable and returned, a
-    password field leaves redacted, and its value is no config match."""
+    """Without the component, a helper flow outside Home Assistant's own is not
+    probed (#2987): its first step is the integration's own code. The entry is
+    still found by its title, its config is withheld, and the search says its
+    body was not searched."""
     monkeypatch.setattr(
         helper_flows,
         "_fetch_helper_flow_types",
         AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
     )
-    monkeypatch.setattr(integration_schema, "redaction_enabled", lambda: True)
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_core_helper_domains",
+        AsyncMock(return_value=frozenset({"template"})),
+    )
     client = MagicMock()
     client._request = AsyncMock(
         return_value=[
@@ -545,49 +549,61 @@ async def test_custom_helper_flow_options_are_probed_with_passwords_redacted(
             }
         ]
     )
-    client.start_options_flow = AsyncMock(
-        return_value={
-            "flow_id": "flow-1",
-            "type": "form",
-            "step_id": "init",
-            "data_schema": [
-                {
-                    "name": "api_key",
-                    "selector": {"text": {"type": "password"}},
-                    "description": {"suggested_value": "hunter2-gate-key"},
-                },
-                {
-                    "name": "host",
-                    "selector": {"text": {}},
-                    "description": {"suggested_value": "gate-controller.lan"},
-                },
-            ],
-        }
-    )
-    client.abort_options_flow = AsyncMock()
+    client.start_options_flow = AsyncMock()
     tools = _make_tools(client)
 
-    found, failed = await tools._search_flow_helpers(
-        "gate-controller.lan",
+    found, failed, unsearched = await tools._search_flow_helpers(
+        "gate",
         exact_match=True,
         semaphore=asyncio.Semaphore(8),
         include_config=True,
     )
-    assert failed == 0
-    [match] = found
-    assert match["helper_type"] == "my_custom_helper"
-    assert match["match_in_config"] is True
-    assert match["config"]["host"] == "gate-controller.lan"
-    assert "hunter2-gate-key" not in json.dumps(match)
 
-    by_secret, failed = await tools._search_flow_helpers(
-        "hunter2-gate-key",
+    client.start_options_flow.assert_not_awaited()
+    assert (failed, unsearched) == (0, 1)
+    [match] = found
+    assert match["config"] is None
+    assert match["options_withheld"] == "custom_integration"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_integration_list_opens_no_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Home Assistant's own helper list cannot be read, no entry can be
+    told apart from a custom one, so none is probed and all count as unsearched."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_core_helper_domains",
+        AsyncMock(side_effect=RuntimeError("descriptions down")),
+    )
+    client = MagicMock()
+    client._request = AsyncMock(
+        return_value=[
+            {
+                "entry_id": "01HXTEMPLATEA",
+                "domain": "template",
+                "title": "Anything",
+                "supports_options": True,
+            }
+        ]
+    )
+    client.start_options_flow = AsyncMock()
+    tools = _make_tools(client)
+
+    results, failed, unsearched = await tools._search_flow_helpers(
+        "anything",
         exact_match=True,
         semaphore=asyncio.Semaphore(8),
         include_config=True,
     )
-    assert failed == 0
-    assert all(not result["match_in_config"] for result in by_secret)
+
+    client.start_options_flow.assert_not_awaited()
+    assert ([r["entry_id"] for r in results], failed, unsearched) == (
+        ["01HXTEMPLATEA"],
+        0,
+        1,
+    )
 
 
 @pytest.mark.asyncio
@@ -613,10 +629,10 @@ async def test_a_failed_helper_flow_read_after_the_entries_is_one_failure(
         ]
     )
     tools = _make_tools(client)
-    results, failed = await tools._search_flow_helpers(
+    results, failed, _ = await tools._search_flow_helpers(
         "anything",
         exact_match=True,
         semaphore=asyncio.Semaphore(8),
         include_config=False,
     )
-    assert (results, failed) == ([], 1)
+    assert (results, failed, _) == ([], 1, 0)
