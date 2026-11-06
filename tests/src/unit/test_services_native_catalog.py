@@ -375,12 +375,3 @@ def _build_list_services(client: Any) -> Any:
     mcp = type("MCP", (), {"add_tool": staticmethod(capture_add_tool)})()
     register_services_tools(mcp, client)
     return registered["ha_list_services"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
