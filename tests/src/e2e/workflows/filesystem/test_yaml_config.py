@@ -1614,8 +1614,7 @@ async def _bootstrap_caller_token(base_url: str) -> str:
 
 
 async def _set_extra_yaml_keys(base_url: str, token: str, keys: list[str]) -> dict:
-    """Call set_extra_yaml_keys with the admin token + caller token; return the
-    structured service response (``{success, keys, rejected}``)."""
+    """Call set_extra_yaml_keys as admin; assert success, return the response."""
     import httpx
 
     from tests.test_constants import TEST_TOKEN
@@ -1631,7 +1630,9 @@ async def _set_extra_yaml_keys(base_url: str, token: str, keys: list[str]) -> di
             json={"_ha_mcp_token": token, "keys": keys},
         )
     assert resp.status_code == 200, f"set_extra_yaml_keys failed: {resp.text!r}"
-    return resp.json().get("service_response", {})
+    sr = resp.json().get("service_response", {})
+    assert sr.get("success") is True, f"set_extra_yaml_keys failed: {sr!r}"
+    return sr
 
 
 @pytest.mark.filesystem
@@ -1671,7 +1672,6 @@ class TestExtraYamlKeysStorePathLive:
         fname = f"packages/_e2e_store_key_{uuid.uuid4().hex[:8]}.yaml"
         try:
             sr = await _set_extra_yaml_keys(base_url, token, ["alert2_store"])
-            assert sr.get("success") is True, sr
             assert sr.get("keys") == ["alert2_store"], sr
             assert not sr.get("rejected"), sr
 

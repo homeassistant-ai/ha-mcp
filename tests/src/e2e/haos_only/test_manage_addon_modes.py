@@ -346,15 +346,20 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
             await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
         finally:
             # Restore the app's original run state so sibling tests (and reruns)
-            # see the baked baseline regardless of how this test exited.
-            with CleanupSteps() as cleanup, cleanup.step():
-                detail = await mcp.call_tool_success("ha_get_app", {"slug": slug})
-                current = (detail.get("addon") or {}).get("state")
+            # see the baked baseline regardless of how this test exited. A
+            # state that could not be read counts as changed, so the restore
+            # is still attempted.
+            with CleanupSteps() as cleanup:
+                current = None
+                with cleanup.step():
+                    detail = await mcp.call_tool_success("ha_get_app", {"slug": slug})
+                    current = (detail.get("addon") or {}).get("state")
                 if current != original:
-                    restore_action = "start" if original == "started" else "stop"
-                    await mcp.call_tool_success(
-                        "ha_manage_app", {"slug": slug, "action": restore_action}
-                    )
+                    with cleanup.step():
+                        restore_action = "start" if original == "started" else "stop"
+                        await mcp.call_tool_success(
+                            "ha_manage_app", {"slug": slug, "action": restore_action}
+                        )
 
 
 # ---------------------------------------------------------------------------

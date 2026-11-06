@@ -83,8 +83,7 @@ async def _bootstrap_token(base_url: str) -> str:
 
 
 async def _set_allowed_paths(base_url: str, token: str, paths: list[str]) -> dict:
-    """Call set_allowed_paths with the admin token + caller token; return the
-    structured service response."""
+    """Call set_allowed_paths as admin; assert success, return the response."""
     import httpx
 
     from tests.test_constants import TEST_TOKEN
@@ -100,7 +99,9 @@ async def _set_allowed_paths(base_url: str, token: str, paths: list[str]) -> dic
             json={"_ha_mcp_token": token, "paths": paths},
         )
     assert resp.status_code == 200, f"set_allowed_paths failed: {resp.text!r}"
-    return resp.json().get("service_response", {})
+    sr = resp.json().get("service_response", {})
+    assert sr.get("success") is True, f"set_allowed_paths failed: {sr!r}"
+    return sr
 
 
 @pytest.mark.filesystem
@@ -115,7 +116,6 @@ class TestCustomFilesystemPaths:
         fname = f"pyscript/e2e_{uuid.uuid4().hex}.py"
         try:
             sr = await _set_allowed_paths(base_url, token, ["pyscript"])
-            assert sr.get("success") is True, sr
             assert "pyscript" in sr.get("paths", []), sr
 
             async with MCPAssertions(mcp_client_fs) as mcp:
@@ -145,7 +145,6 @@ class TestCustomFilesystemPaths:
         fname = "sensor.yaml"
         try:
             sr = await _set_allowed_paths(base_url, token, [fname])
-            assert sr.get("success") is True, sr
             assert sr.get("paths") == [fname], sr
 
             async with MCPAssertions(mcp_client_fs) as mcp:
