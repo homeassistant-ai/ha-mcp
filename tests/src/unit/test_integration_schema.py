@@ -412,6 +412,30 @@ async def test_a_menu_choice_that_finishes_the_flow_is_reported_as_saved() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("readable", ["menu", "flow-raises"])
+async def test_a_component_read_without_a_readable_form_withholds_every_option(
+    monkeypatch: pytest.MonkeyPatch, readable: str
+) -> None:
+    # Without the form the password fields cannot be told apart.
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
+    client = _client(dict(_MENU))
+    if readable == "flow-raises":
+        client.start_options_flow.side_effect = RuntimeError("down")
+    resp = _resp()
+    resp["entry"].update(
+        supports_options=True, options={"host": "10.0.0.9", "api_key": "sk-LIVE"}
+    )
+
+    await fetch_options_schema(client, "e1", resp, populate_options=False)
+
+    assert resp["entry"]["options"] == {"host": REDACTED_SET, "api_key": REDACTED_SET}
+    assert any("no options schema readable" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
 async def test_component_read_keeps_its_options_and_redacts_the_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
