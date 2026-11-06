@@ -180,6 +180,7 @@ class TestMirrorSyncShape:
                     "repos/o/r/releases/latest) echo v1.1.0;;\n"
                     'repos/o/r/git/ref/tags/stable) echo "$STABLE_OBJECT";;\n'
                     "repos/o/r/git/ref/tags/v1.0.0) echo finalized-object;;\n"
+                    "repos/o/r/git/ref/tags/v1.1.0) echo newest-object;;\n"
                     "*) return 2;; esac; }\n"
                 )
                 + resolve["run"],
@@ -189,9 +190,13 @@ class TestMirrorSyncShape:
                 **os.environ,
                 "CHANNEL": "stable",
                 "FINALIZED_TAG": trigger,
-                "STABLE_OBJECT": "finalized-object"
-                if matches_alias
-                else "other-object",
+                "STABLE_OBJECT": (
+                    "newest-object"
+                    if not trigger
+                    else "finalized-object"
+                    if matches_alias
+                    else "other-object"
+                ),
                 "GITHUB_REPOSITORY": "o/r",
                 "RUNNER_TEMP": tmp_path.as_posix(),
                 "GITHUB_OUTPUT": output.as_posix(),
@@ -204,7 +209,11 @@ class TestMirrorSyncShape:
         if expected is None:
             assert not (tmp_path / "release-src").exists()
         else:
-            assert f"version={expected}" in output.read_text().splitlines()
+            values = dict(
+                line.split("=", 1) for line in output.read_text().splitlines()
+            )
+            assert values["version"] == expected
+            assert git("-C", values["src"], "rev-parse", "HEAD") == shas[1]
 
     @pytest.mark.parametrize("finalized", ["", "v1.0.0"])
     def test_manual_stable_recovery_requires_the_publishers_marker(
