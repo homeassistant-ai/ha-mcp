@@ -9,6 +9,13 @@ history from before the fork.
 -->
 
 
+## v3.0.5.dev5 (2026-11-06)
+
+- The Claude.ai connector step in DOCS.md names the path Customize →
+  Connectors → + Add → Add custom connector instead of Settings →
+  Connectors → Add custom connector, and notes that Customize reads
+  Plugins on accounts with the new Plugins page.
+
 ## v3.0.5.dev4 (2026-11-03)
 
 - The webhook also serves `/catalog/full` and `/catalog/search`, alone or
