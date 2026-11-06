@@ -205,11 +205,12 @@ class TestIntegrationManagement:
             assert update_data.get("updated") is True
             assert update_data.get("entry_id") == entry_id
 
-            # Verify the option persisted (single-entry mode probes options)
+            # Verify the option persisted. include_schema reads it from the
+            # options form where no custom component serves the stored value.
             verify_data = await wait_for_tool_result(
                 mcp_client,
                 tool_name="ha_get_integration",
-                arguments={"entry_id": entry_id},
+                arguments={"entry_id": entry_id, "include_schema": True},
                 predicate=lambda d: (
                     d.get("entry", {}).get("options", {}).get("hide_members") is True
                 ),
@@ -336,7 +337,7 @@ class TestIntegrationManagement:
                 await wait_for_tool_result(
                     mcp_client,
                     tool_name="ha_get_integration",
-                    arguments={"entry_id": entry_id},
+                    arguments={"entry_id": entry_id, "include_schema": True},
                     predicate=lambda d: (
                         d.get("entry", {}).get("options", {}).get("ignore_non_numeric")
                         is True
@@ -355,7 +356,7 @@ class TestIntegrationManagement:
                 verify_data = await wait_for_tool_result(
                     mcp_client,
                     tool_name="ha_get_integration",
-                    arguments={"entry_id": entry_id},
+                    arguments={"entry_id": entry_id, "include_schema": True},
                     predicate=lambda d: (
                         d.get("entry", {}).get("options", {}).get("type") == "min"
                     ),

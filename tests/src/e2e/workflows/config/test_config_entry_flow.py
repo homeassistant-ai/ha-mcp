@@ -253,10 +253,10 @@ class TestConfigEntryFlow:
             async with MCPAssertions(mcp_client) as mcp:
                 integration_data = await mcp.call_tool_success(
                     "ha_get_integration",
-                    {"entry_id": entry_id, "include_options": True},
+                    {"entry_id": entry_id, "include_schema": True},
                 )
             options = (integration_data.get("entry") or {}).get("options") or {}
-            # Stored options keep the section nested; the options-flow read
+            # Stored options keep the section nested; the options-form read
             # (no custom component) lists its fields at the top level.
             section = options.get("additional_options", options)
             assert section.get("availability") == availability, (
@@ -348,10 +348,10 @@ class TestConfigEntryFlow:
             ha_get_integration(entry_id,
                                include_options=True)  -> template body
 
-        Covers the two read paths that previously had only unit coverage:
-        ``ha_get_entity`` surfacing ``config_entry_id``, and
-        ``include_options`` surfacing a UI template helper's body via
-        ``description.suggested_value``.
+        ``ha_get_entity`` surfaces ``config_entry_id`` and the entry read
+        surfaces a UI template helper's body. Without the custom component
+        that read opens no options flow (#2987): it warns, and
+        ``include_schema=True`` reads the body from the options form.
         """
         body_marker = "optimalpathtemplatebody8829"
         name = "e2e optimal path template"
@@ -385,15 +385,19 @@ class TestConfigEntryFlow:
                 "ha_get_entity must surface the parent config_entry_id"
             )
 
-            # Optimal read path: include_options surfaces the template body via
-            # the options-flow probe (description.suggested_value).
             async with MCPAssertions(mcp_client) as mcp:
                 gi_data = await mcp.call_tool_success(
                     "ha_get_integration",
                     {"entry_id": entry_id, "include_options": True},
                 )
-            assert body_marker in str(gi_data), (
-                "include_options should surface the template body for a "
+                if "options" not in gi_data["entry"]:
+                    assert "ha_mcp_tools" in gi_data["warnings"][0], gi_data
+                    gi_data = await mcp.call_tool_success(
+                        "ha_get_integration",
+                        {"entry_id": entry_id, "include_schema": True},
+                    )
+            assert body_marker in str(gi_data["entry"]["options"]), (
+                "the entry read should surface the template body for a "
                 "UI-created template helper"
             )
             logger.info("✅ optimal read sequence verified end-to-end")
@@ -409,7 +413,7 @@ class TestConfigEntryFlow:
 
         A group helper created with ``hide_members=True`` exposes BOTH
         ``default: False`` and ``description.suggested_value: True`` on the
-        same options-flow field; ``include_options`` must report the stored
+        same options-flow field; the entry read must report the stored
         ``True``, not the static default the buggy precedence used to pick.
         """
         config = {
@@ -426,14 +430,14 @@ class TestConfigEntryFlow:
             async with MCPAssertions(mcp_client) as mcp:
                 gi_data = await mcp.call_tool_success(
                     "ha_get_integration",
-                    {"entry_id": entry_id, "include_options": True},
+                    {"entry_id": entry_id, "include_schema": True},
                 )
             options = (gi_data.get("entry") or {}).get("options") or {}
             assert options.get("hide_members") is True, (
-                "include_options must report the stored hide_members=True, "
+                "the entry read must report the stored hide_members=True, "
                 f"not the schema default False (issue #1575); got {options!r}"
             )
-            logger.info("✅ stored hide_members=True surfaced via include_options")
+            logger.info("✅ stored hide_members=True surfaced by the entry read")
         finally:
             await safe_call_tool(
                 mcp_client,
