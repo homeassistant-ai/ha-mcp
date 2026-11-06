@@ -34,7 +34,6 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 from ..errors import create_validation_error
 from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
 from ..utils.usage_logger import log_tool_call
-from .coercion import loads_if_json_container_str
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -218,20 +217,6 @@ def _rejection_suggestions(
     return suggestions
 
 
-def _loggable_argument(value: Any) -> Any:
-    """A rejected argument in the form the usage log's masking can read.
-
-    The log masks secrets by key name. An ordinary call reaches it after the
-    JSON-string coercion, so a ``code`` inside a stringified ``data`` is a dict
-    key by then; a rejected call's arguments are still as the client sent them.
-    A string that looks like JSON but does not parse is left out whole.
-    """
-    try:
-        return loads_if_json_container_str(value)
-    except ValueError:
-        return "[malformed JSON string omitted]"
-
-
 def _record_rejection(
     tool_name: str | None, arguments: dict[str, Any], message: str
 ) -> None:
@@ -244,9 +229,7 @@ def _record_rejection(
     if tool_name:
         log_tool_call(
             tool_name=tool_name,
-            parameters={
-                name: _loggable_argument(value) for name, value in arguments.items()
-            },
+            parameters=dict(arguments),
             execution_time_ms=0.0,
             success=False,
             error_message=message,

@@ -7,6 +7,7 @@ import errno
 import json
 import logging
 import os
+import re
 import stat
 import threading
 import time
@@ -348,6 +349,9 @@ _SENSITIVE_PARAM_KEYS = frozenset(
 _SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_password", "_passwd")
 _REDACTED_VALUE = "[REDACTED]"
 _MAX_REDACT_DEPTH = 6
+_JSON_CONTAINER_START = re.compile(r"\s*[\[{]")
+_UNPARSED_OBJECT_START = re.compile(r"\s*{(?![{%#])")
+_UNPARSED_VALUE = "[malformed JSON string omitted]"
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -366,9 +370,19 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
     dicts/lists/tuples so secrets nested under non-sensitive keys are caught
     (a tuple is returned as a list). Fails closed past ``_MAX_REDACT_DEPTH`` —
     a subtree too deep to walk is masked wholesale rather than returned verbatim.
+
+    A JSON object or array sent as a string (a stringified ``data``, an MQTT
+    payload) hides its keys from the match, so it is parsed and masked like
+    the container it encodes. A string that starts like an object but does not
+    parse is left out whole; a Jinja template or ``[tag] text`` stays as it is.
     """
     if _depth > _MAX_REDACT_DEPTH:
         return _REDACTED_VALUE
+    if isinstance(value, str) and _JSON_CONTAINER_START.match(value):
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError):
+            return _UNPARSED_VALUE if _UNPARSED_OBJECT_START.match(value) else value
     if isinstance(value, dict):
         return {
             key: (
