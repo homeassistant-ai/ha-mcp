@@ -918,7 +918,7 @@
     },
     "ha_set_integration": {
       "title": "Imposta un'integrazione",
-      "description": "Gestisce un'integrazione (voce di configurazione): la attiva o disattiva, la aggiunge oppure ne aggiorna le opzioni."
+      "description": "Gestisci un'integrazione (config entry): abilita/disabilita, aggiungi, aggiorna le opzioni, riconfigura o invia i suoi comandi."
     },
     "ha_set_todo_item": {
       "title": "Imposta una voce delle cose da fare",

@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "Nastavit integraci",
-      "description": "Spravovat integraci (položku konfigurace): povolit/zakázat, přidat nebo aktualizovat možnosti."
+      "description": "Správa integrace (konfigurační položka): zapnutí/vypnutí, přidání, aktualizace možností, rekonfigurace nebo odeslání vlastních příkazů."
     },
     "ha_set_todo_item": {
       "title": "Nastavit položku úkolu",

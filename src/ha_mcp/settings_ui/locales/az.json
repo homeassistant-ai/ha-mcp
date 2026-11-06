@@ -918,7 +918,7 @@
     },
     "ha_set_integration": {
       "title": "İnteqrasiyanı təyin et",
-      "description": "İnteqrasiyanı (konfiqurasiya qeydini) idarə edin: aktivləşdirin/söndürün, əlavə edin, seçimlərini yeniləyin və ya yenidən konfiqurasiya edin."
+      "description": "İnteqrasiyanı idarə edin (konfiqurasiya girişini): aktivləşdirin/deaktiv edin, əlavə edin, seçimləri yeniləyin, yenidən konfiqurasiya edin və ya öz əmrlərini göndərin."
     },
     "ha_set_todo_item": {
       "title": "Tapşırığı təyin et",

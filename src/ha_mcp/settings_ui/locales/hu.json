@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "Integráció beállítása",
-      "description": "Integráció (konfigurációs bejegyzés) kezelése: engedélyezés/letiltás, hozzáadás, beállítások frissítése vagy újrakonfigurálás."
+      "description": "Integráció kezelése (konfigurációs bejegyzés): engedélyezés/letiltás, hozzáadás, beállítások frissítése, újrakonfigurálás vagy saját parancsok küldése."
     },
     "ha_set_todo_item": {
       "title": "Teendő elem beállítása",

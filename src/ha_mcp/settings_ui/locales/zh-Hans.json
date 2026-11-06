@@ -918,7 +918,7 @@
     },
     "ha_set_integration": {
       "title": "设置集成",
-      "description": "管理集成（配置条目）：启用/禁用、添加或更新选项。"
+      "description": "管理集成（配置条目）：启用/禁用、添加、更新选项、重新配置或发送其自身的命令。"
     },
     "ha_set_todo_item": {
       "title": "设置待办条目",

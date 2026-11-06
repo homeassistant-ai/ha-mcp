@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "設定整合",
-      "description": "管理整合（設定項目）：啟用/停用、新增、更新選項或重新設定。"
+      "description": "管理整合（設定項目）：啟用/停用、新增、更新選項、重新設定，或傳送其自己的指令。"
     },
     "ha_set_todo_item": {
       "title": "設定待辦事項",

@@ -918,7 +918,7 @@
     },
     "ha_set_integration": {
       "title": "Integration aktualisieren",
-      "description": "Aktiviert, deaktiviert, fügt hinzu oder ändert Integrationsparameter."
+      "description": "Verwalte eine Integration (Konfigurationseintrag): aktivieren/deaktivieren, hinzufügen, Optionen aktualisieren, neu konfigurieren oder eigene Befehle senden."
     },
     "ha_set_todo_item": {
       "title": "To-do-Element erstellen/aktualisieren",

@@ -887,7 +887,7 @@
     },
     "ha_set_integration": {
       "title": "Ustaw integrację",
-      "description": "Zarządzaj integracją (wpisem konfiguracyjnym): włącz/wyłącz, dodaj lub zaktualizuj opcje."
+      "description": "Zarządzaj integracją (wpisem konfiguracji): włączaj/wyłączaj, dodawaj, aktualizuj opcje, rekonfiguruj lub wysyłaj jej własne polecenia."
     },
     "ha_set_todo_item": {
       "title": "Ustaw element listy zadań",
