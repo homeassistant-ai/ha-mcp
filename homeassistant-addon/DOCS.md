@@ -276,14 +276,17 @@ The app has minimal configuration - most settings are automatic.
 > enabled/disabled/pinned tools, etc.), your AI client keeps serving its
 > **cached** tool list until it re-fetches. Restarting the app or Home
 > Assistant does **not** refresh the client — you must reconnect or refresh
-> the MCP server in your AI client (e.g. re-add/refresh the connector in
-> ChatGPT, or close and reopen Claude Desktop). Symptom if you skip this:
+> the MCP server in your AI client (e.g. in ChatGPT open **Settings**, then
+> the plugin settings, select the connector and click **Refresh tools**; or
+> close and reopen Claude Desktop). Symptom if you skip this:
 > newly enabled tools don't appear in the client at all, and tools the
 > server no longer exposes still show as available but return `Unknown
 > tool` when called. ChatGPT sometimes keeps serving the stale list even
 > after the connector is removed and re-added under the same name — if
-> tools are still missing after re-adding, delete the connector and create
-> a new one with a **different name**.
+> tools are still missing after a refresh, delete the connector and create
+> a new one with a **different name**. The
+> [FAQ](https://homeassistant-ai.github.io/ha-mcp/faq/#chatgpt-stale-tools)
+> has the full steps.
 
 ### enable_snapshot_actions
 
