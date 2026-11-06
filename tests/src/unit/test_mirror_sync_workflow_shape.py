@@ -427,6 +427,7 @@ class TestMirrorReleaseOnTag:
             '    printf "sha256:%s\\n" "$ZIP_DIGEST";;\n'
             '  "release download") mkdir -p dist/integration; cp payload.zip dist/integration/ha_mcp_tools.zip;;\n'
             '  "release create")\n'
+            '    case "$*" in *--draft*) return 1;; esac\n'
             '    [ "$4" = dist/integration/ha_mcp_tools.zip ] && [ -s "$4" ] || return 1\n'
             "    touch mirror-uploaded;;\n"
             '  "release upload")\n'
