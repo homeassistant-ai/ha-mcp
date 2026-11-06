@@ -1340,12 +1340,14 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
             graph_unavailable=graph_unavailable,
         )
         # Keyed on the client, not the failure sample, which names only the
-        # first error.
+        # first error. The own-helper catalog is admin-only, so a refused read
+        # leaves every flow helper unsearched.
         if (
             automation_failed
             or script_failed
             or scene_stats.get("failed")
             or helper_failed
+            or helper_unsearched
         ) and self.client.admin_route_refused is True:
             response.setdefault("warnings", []).append(NON_ADMIN_TOKEN_WARNING)
         return response
