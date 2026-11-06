@@ -12,7 +12,7 @@ def call_kwargs(**overrides: Any) -> dict[str, Any]:
         "source": "logbook",
         "limit": None,
         "search": None,
-        "hours_back": 1,
+        "hours_back": None,
         "entity_id": None,
         "device_id": None,
         "context_id": None,

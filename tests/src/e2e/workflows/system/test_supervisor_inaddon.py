@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 import pytest
 from haos_runtime import HA_MCP_DEV_ADDON_SLUG
@@ -89,6 +90,48 @@ class TestGetLogsSystemServiceReal:
             f"Expected total_lines >= 1 for service={service!r}, "
             f"got total_lines={result.get('total_lines')!r}"
         )
+
+
+def _entry_times(log_text: str) -> list[datetime]:
+    """Timestamps of the verbose entries (``<date> <time+offset> <host> ...``)."""
+    stamps = []
+    for line in log_text.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) < 3:
+            continue
+        try:
+            stamps.append(datetime.fromisoformat(f"{parts[0]} {parts[1]}"))
+        except ValueError:
+            continue  # a continuation line of a multi-line entry
+    return stamps
+
+
+@pytest.mark.system
+class TestGetLogsHoursBackReal:
+    """hours_back pages the real journal back through Supervisor's cursors."""
+
+    @pytest.mark.parametrize(
+        ("source", "slug"),
+        [
+            ("system_service", "host"),
+            ("system_service", "supervisor"),
+            ("supervisor", HA_MCP_DEV_ADDON_SLUG),
+        ],
+    )
+    async def test_no_entry_older_than_the_window_is_returned(
+        self, mcp_client, source: str, slug: str
+    ) -> None:
+        """An hours_back read stays inside its window and covers it whole."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_logs",
+                {"source": source, "slug": slug, "hours_back": 1, "limit": 500},
+            )
+
+        stamps = _entry_times(result["log"])
+        assert stamps, f"Expected timestamped entries, got {result['log'][:200]!r}"
+        assert min(stamps) >= datetime.fromisoformat(result["window_start"])
+        assert result["window_complete"] is True, result.get("warnings")
 
 
 @pytest.mark.system

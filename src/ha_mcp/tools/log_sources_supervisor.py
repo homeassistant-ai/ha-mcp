@@ -9,11 +9,14 @@ Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
 Consolidation and Module Size.
 """
 
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
+from ..client.journal_window import lines_since, read_logs_since
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -39,12 +42,57 @@ class SupervisorLogSourcesMixin:
 
     _client: Any
 
+    async def _journal_window(
+        self, path: str, hours_back: int, now: datetime | None
+    ) -> tuple[list[str], dict[str, Any]]:
+        """The last ``hours_back`` hours of entries, and fields describing the read.
+
+        A read that stopped before the cutoff says so, so that a short window
+        is not mistaken for a quiet one.
+        """
+        cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours_back)
+        read = await read_logs_since(self._client, path, cutoff)
+        oldest = read.oldest.isoformat(timespec="seconds") if read.oldest else None
+        fields: dict[str, Any] = {
+            "hours_back": hours_back,
+            "window_start": cutoff.isoformat(timespec="seconds"),
+            "window_complete": read.reached_cutoff,
+            "line_format": "verbose",
+        }
+        if read.journal_start:
+            fields["warnings"] = [
+                f"The log begins at {oldest}, inside the {hours_back}-hour "
+                "window; nothing older is kept."
+            ]
+        elif not read.reached_cutoff:
+            fields["warnings"] = [
+                f"Read {read.pages} blocks of the journal back to {oldest} without "
+                f"reaching the {hours_back}-hour cutoff, so older entries in the "
+                "window were not read. Use a smaller hours_back."
+            ]
+        return lines_since(read.lines, cutoff), fields
+
+    async def _log_lines(
+        self,
+        path: str,
+        hours_back: int | None,
+        now: datetime | None,
+        read_tail: Callable[[], Awaitable[str]],
+    ) -> tuple[list[str], dict[str, Any]]:
+        """The newest lines from ``read_tail``, or the ``hours_back`` window."""
+        if hours_back is not None:
+            return await self._journal_window(path, hours_back, now)
+        log_text = await read_tail()
+        return (log_text.splitlines() if log_text else []), {}
+
     async def _get_supervisor_log(
         self,
         slug: str,
         limit: int | None = None,
         search: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
+        hours_back: int | None = None,
+        now: datetime | None = None,
     ) -> dict[str, Any]:
         """Fetch app (add-on) container logs.
 
@@ -70,9 +118,12 @@ class SupervisorLogSourcesMixin:
         )
 
         try:
-            log_text = await self._client.get_addon_logs(slug, lines=fetch_lines)
-
-            lines = log_text.splitlines() if log_text else []
+            lines, window = await self._log_lines(
+                f"addons/{slug}",
+                hours_back,
+                now,
+                lambda: self._client.get_addon_logs(slug, lines=fetch_lines),
+            )
 
             filters_applied: dict[str, str] = {}
 
@@ -100,6 +151,7 @@ class SupervisorLogSourcesMixin:
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
+            data.update(window)
 
             return data
 
@@ -267,6 +319,8 @@ class SupervisorLogSourcesMixin:
         limit: int | None = None,
         search: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
+        hours_back: int | None = None,
+        now: datetime | None = None,
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
 
@@ -291,11 +345,14 @@ class SupervisorLogSourcesMixin:
         )
 
         try:
-            log_text = await self._client._get_system_service_logs(
-                service, lines=fetch_lines
+            lines, window = await self._log_lines(
+                service,
+                hours_back,
+                now,
+                lambda: self._client._get_system_service_logs(
+                    service, lines=fetch_lines
+                ),
             )
-
-            lines = log_text.splitlines() if log_text else []
 
             filters_applied: dict[str, str] = {}
             if search:
@@ -322,6 +379,7 @@ class SupervisorLogSourcesMixin:
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
+            data.update(window)
 
             return data
 

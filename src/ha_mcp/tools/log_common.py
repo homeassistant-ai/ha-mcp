@@ -108,8 +108,14 @@ def _collect_log_warnings(
     slug: str | None,
     order: Literal["newest", "oldest"],
     offset: int | str,
+    hours_back: int | None = None,
 ) -> list[str]:
     warnings: list[str] = []
+    if source not in ("logbook", "supervisor", "system_service") and hours_back:
+        warnings.append(
+            "Parameter 'hours_back' only applies to source='logbook', "
+            f"'supervisor' or 'system_service'; ignored for source='{source}'"
+        )
     if source == "logger" and order != "newest":
         warnings.append(
             "Parameter 'order' does not apply to source='logger' "
