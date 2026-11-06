@@ -1,5 +1,7 @@
 {
   "name": "HA-MCP Custom Component",
   "homeassistant": "2026.8.0",
+  "zip_release": true,
+  "filename": "ha_mcp_tools.zip",
   "render_readme": true
 }

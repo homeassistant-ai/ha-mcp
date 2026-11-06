@@ -248,10 +248,10 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |
 | `sync-integration-mirror.yml` | `workflow_run` after SemVer Release or Publish Dev Channel; docs pushes; manual | HACS mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), tagged once PyPI serves the pinned build. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
-| `semver-release.yml` | Biweekly or manual; this repository only | Stable version tag and GitHub release. |
-| `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable container images and MCP registry. |
+| `semver-release.yml` | Biweekly or manual; this repository only | Stable version tag and draft GitHub release with its integration ZIP. |
+| `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable PyPI package, container images and MCP registry; after PyPI and the required ZIP are ready, advance `stable` and publish the GitHub release. |
 | `addon-publish.yml` | Called by `semver-release.yml`, or manual | Home Assistant app publishing. |
-| `deploy.yml` | `workflow_run` after SemVer Release; push to `master` touching the workflow; weekly; or manual with a `ref` | Build the docs site from the `stable` tag (or the dispatched `ref`) and deploy it to GitHub Pages. |
+| `deploy.yml` | `workflow_run` after Release Publish; push to `master` touching the workflow; weekly; or manual with a `ref` | Build the docs site from the `stable` tag (or the dispatched `ref`) and deploy it to GitHub Pages. |
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py`, or manual; this repository only | Regenerate `tools.json`, README, and app `DOCS.md`. |
 | `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual; this repository only | Lower the module-size and duplicate-code baselines, which pull requests only check. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |

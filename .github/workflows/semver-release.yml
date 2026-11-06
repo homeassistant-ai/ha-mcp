@@ -213,13 +213,27 @@ jobs:
           echo "Release v${VERSION}" > release_notes.md
         fi
 
-        # A draft until the last step of this job publishes it.
+        # Release Publish finalizes this draft only after PyPI is ready.
         gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
           --title "$TAG" \
           --notes-file release_notes.md \
           --draft
 
         echo "✓ Created draft release $TAG"
+
+    - name: Record this run's release tag
+      if: steps.semantic.outputs.released == 'true'
+      env:
+        VERSION: ${{ steps.semantic.outputs.version }}
+      run: printf 'v%s\n' "$VERSION" > release-tag.txt
+
+    - name: Pass the exact release tag to Release Publish
+      if: steps.semantic.outputs.released == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: stable-release-tag
+        path: release-tag.txt
+        if-no-files-found: error
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
@@ -250,31 +264,8 @@ jobs:
         exit 1
 
 
-    - name: Update stable git tag
-      if: steps.semantic.outputs.released == 'true'
-      run: |
-        # Move the 'stable' tag to point to the new release
-        VERSION="${{ steps.semantic.outputs.version }}"
-        echo "Updating 'stable' tag to point to v$VERSION"
-
-        # Delete existing stable tag (local and remote)
-        git tag -d stable 2>/dev/null || true
-        git push origin :refs/tags/stable 2>/dev/null || true
-
-        # Create new stable tag pointing to the release commit
-        git tag stable "v$VERSION"
-        git push origin stable
-
-        echo "✓ 'stable' tag now points to v$VERSION"
-
-    - name: Publish GitHub release
-      if: steps.semantic.outputs.released == 'true'
-      env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-      run: |
-        # Last, so a failed changelog push or stable-tag update leaves a draft
-        # instead of a public release with no PyPI or Docker publish behind it.
-        gh release edit "v${{ steps.semantic.outputs.version }}" --draft=false
+    # The draft and stable alias are finalized by Release Publish after PyPI.
+    # Waiting for PyPI here would deadlock its workflow_run trigger.
 
   # Build and push addon Docker images
   build-addon:

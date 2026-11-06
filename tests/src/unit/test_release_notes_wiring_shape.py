@@ -83,23 +83,24 @@ def test_manual_force_requests_a_patch_release() -> None:
     assert semantic["with"]["force"] == "${{ inputs.force && 'patch' || '' }}"
 
 
-def test_release_publish_uses_the_same_releasable_commit_matcher() -> None:
+def test_release_publish_consumes_its_producing_run_instead_of_moving_master() -> None:
     publish = yaml.safe_load(
         (_WORKFLOW_DIR / "release-publish.yml").read_text(encoding="utf-8")
     )
     steps = publish["jobs"]["prepare"]["steps"]
-    matches = [step for step in steps if step.get("id") == "version"]
-    assert len(matches) == 1, (
-        "release-publish.yml must have exactly one 'version' step in job 'prepare'"
+    source = next(step for step in steps if step.get("id") == "source")
+    version = next(step for step in steps if step.get("id") == "version")
+    assert "github.event.workflow_run.id" in source["env"]["TRIGGER_RUN_ID"]
+    assert 'gh run download "$TRIGGER_RUN_ID"' in source["run"]
+    assert version["env"]["RELEASE_TAG"] == "${{ steps.source.outputs.tag }}"
+    assert 'git show "$RELEASE_TAG:pyproject.toml"' in version["run"]
+    semver = yaml.safe_load((_WORKFLOW_DIR / "semver-release.yml").read_text())
+    produced = next(
+        step["with"]["name"]
+        for step in semver["jobs"]["semantic-release"]["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
     )
-
-    run = matches[0]["run"]
-    for pattern in (
-        "^(feat|fix|perf|refactor)(\\(.+\\))?!?:",
-        "^[a-z]+(\\(.+\\))?!:",
-        "^BREAKING[ -]CHANGE:",
-    ):
-        assert f"--grep='{pattern}'" in run
+    assert f"--name {produced}" in source["run"]
 
 
 def test_the_extractor_the_workflow_calls_exists() -> None:
