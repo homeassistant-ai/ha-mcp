@@ -26,7 +26,8 @@ the old parameter name callable for a client that has not re-listed, and
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import json
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 # Retired tool name -> the name that serves it today.
@@ -143,3 +144,36 @@ def retired_parameters_used(
         for old, new in renames.items()
         if old in arguments and new not in arguments
     }
+
+
+def add_stale_list_warning(result: Any, renames: Sequence[tuple[str, str]]) -> None:
+    """Tell the caller of a call served through an old name that its list is stale.
+
+    ``renames`` holds each old name with its current one. The warning joins the
+    result's top-level ``warnings`` in both representations: the structured
+    content and the JSON text a client without it reads.
+    """
+    listed = ", ".join(f"`{old}` is now `{new}`" for old, new in renames)
+    warning = (
+        f"This call used a name from before an ha-mcp update ({listed}). It "
+        "was served, but your tool list is a stale copy. Ask the user to "
+        f"refresh it ({CLIENT_TOOL_LIST_REFRESH_STEPS}), then start a new "
+        "conversation."
+    )
+    structured = getattr(result, "structured_content", None)
+    if isinstance(structured, dict):
+        result.structured_content = {
+            **structured,
+            "warnings": [*(structured.get("warnings") or []), warning],
+        }
+    for block in getattr(result, "content", None) or []:
+        text = getattr(block, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            parsed["warnings"] = [*(parsed.get("warnings") or []), warning]
+            block.text = json.dumps(parsed)

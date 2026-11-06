@@ -25,7 +25,6 @@ Registering the old name as a second, disabled tool would not work:
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -36,46 +35,15 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 )
 
 from ..renamed_tools import (
-    CLIENT_TOOL_LIST_REFRESH_STEPS,
     RENAMED_TOOLS,
     adapt_retired_arguments,
+    add_stale_list_warning,
     retired_parameters_used,
 )
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["RENAMED_TOOLS", "RenamedToolAliasMiddleware"]
-
-
-def _stale_list_warning(renames: list[tuple[str, str]]) -> str:
-    listed = ", ".join(f"`{old}` is now `{new}`" for old, new in renames)
-    return (
-        f"This call used a name from before an ha-mcp update ({listed}). It "
-        "was served, but your tool list is a stale copy. Ask the user to "
-        f"refresh it ({CLIENT_TOOL_LIST_REFRESH_STEPS}), then start a new "
-        "conversation."
-    )
-
-
-def _add_warning(result: Any, warning: str) -> None:
-    """Append ``warning`` to the result's ``warnings``, in both representations."""
-    structured = getattr(result, "structured_content", None)
-    if isinstance(structured, dict):
-        result.structured_content = {
-            **structured,
-            "warnings": [*(structured.get("warnings") or []), warning],
-        }
-    for block in getattr(result, "content", None) or []:
-        text = getattr(block, "text", None)
-        if not isinstance(text, str):
-            continue
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            parsed["warnings"] = [*(parsed.get("warnings") or []), warning]
-            block.text = json.dumps(parsed)
 
 
 class RenamedToolAliasMiddleware(Middleware):
@@ -145,5 +113,5 @@ class RenamedToolAliasMiddleware(Middleware):
                 )
             )
         )
-        _add_warning(result, _stale_list_warning(renames))
+        add_stale_list_warning(result, renames)
         return result

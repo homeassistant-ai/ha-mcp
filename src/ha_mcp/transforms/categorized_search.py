@@ -34,7 +34,11 @@ from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
-from ..renamed_tools import adapt_retired_arguments, current_tool_name
+from ..renamed_tools import (
+    adapt_retired_arguments,
+    add_stale_list_warning,
+    current_tool_name,
+)
 from ..server_tool_text import SKILL_TOOL_NAME
 from ..tool_catalog import tool_search_active
 from .compact_params import compact_params, summary
@@ -793,6 +797,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # and the alias covers both call shapes.
             requested = name
             name = current_tool_name(name)
+            # The middleware only sees the resolved name on the re-dispatch,
+            # so the stale-list warning for a retired one is added here.
+            renames = [(requested, name)] if name != requested else []
 
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
@@ -828,6 +835,8 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 requested_inner = arguments["name"]
                 inner_name = current_tool_name(requested_inner)
                 if inner_name in all_known:
+                    if inner_name != requested_inner:
+                        renames.append((requested_inner, inner_name))
                     logger.warning(
                         "Detected double-wrapped proxy call for '%s' via %s"
                         " — unwrapping",
@@ -850,7 +859,10 @@ class CategorizedSearchTransform(BM25SearchTransform):
             if not _admits(transform, category, name, arguments):
                 _raise_wrong_category_error(name, transform, proxy_name)
 
-            return await ctx.fastmcp.call_tool(name, arguments)
+            result = await ctx.fastmcp.call_tool(name, arguments)
+            if renames:
+                add_stale_list_warning(result, renames)
+            return result
 
         return Tool.from_function(
             fn=categorized_call,
