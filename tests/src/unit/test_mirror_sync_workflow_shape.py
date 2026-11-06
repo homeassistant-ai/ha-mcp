@@ -7,8 +7,10 @@ stamping script against a scratch copy of the component.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -277,6 +279,148 @@ _OLD_DEV_TAGS = ["v2.2.3-dev.423", "v9.0.0-dev.996", "v9.0.0-dev.997"]
 
 
 class TestMirrorReleaseOnTag:
+    @pytest.mark.parametrize(
+        "scenario",
+        [
+            "new",
+            "bad-digest",
+            "upstream-replaced",
+            "mirror-replaced",
+            "draft-replaced-before-publish",
+            "upstream-pruned",
+            "incomplete-upload",
+            "draft-empty",
+            "draft-incomplete",
+            "draft-complete-upstream-pruned",
+        ],
+    )
+    def test_only_verified_or_already_uploaded_zips_can_be_published(
+        self, tmp_path: Path, scenario: str
+    ) -> None:
+        """A retry recovers drafts and preserves uploaded assets after pruning."""
+        marker = tmp_path / ".github"
+        marker.mkdir()
+        payload = tmp_path / "payload.zip"
+        payload.write_bytes(b"the upstream integration artifact")
+        digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+        (marker / "component-zip-source.json").write_text(
+            json.dumps(
+                {
+                    "repository": "upstream/repo",
+                    "tag": "v9.1.0-dev.1",
+                    "digest": "sha256:"
+                    + ("0" * 64 if scenario == "bad-digest" else digest),
+                }
+            )
+        )
+        if scenario == "upstream-replaced":
+            payload.write_bytes(b"a replacement artifact with its own valid digest")
+            digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        calls = tmp_path / "calls"
+        fake_gh = (
+            'gh() { printf "%s\\n" "$*" >> calls\n'
+            'case "$1 $2" in\n'
+            '  "api repos/mirror/repo/releases/tags/v9.1.0-dev.1")\n'
+            '    case "$SCENARIO" in draft-*) return 1;; esac\n'
+            '    [ "$SCENARIO" = upstream-pruned ] && printf "sha256:%s\\n" "$ZIP_DIGEST"; return 0;;\n'
+            '  "api repos/mirror/repo/releases/73")\n'
+            '    case "$SCENARIO" in mirror-replaced) printf "sha256:%064d\\n" 0;;\n'
+            '      draft-replaced-before-publish) if [ -f mirror-looked-up ]; then printf "sha256:%064d\\n" 0; else touch mirror-looked-up; fi;;\n'
+            "    esac\n"
+            '    case "$SCENARIO" in upstream-pruned|draft-complete-upstream-pruned)\n'
+            '      printf "sha256:%s\\n" "$ZIP_DIGEST";; esac\n'
+            "    return 0;;\n"
+            '  "release view")\n'
+            '    case "$SCENARIO" in upstream-pruned|incomplete-upload|mirror-replaced|draft-*) ;; *) return 1;; esac\n'
+            '    case "$*" in *databaseId*) echo 73;; *isDraft*)\n'
+            '      case "$SCENARIO" in draft-*) echo true;; *) echo false;; esac;;\n'
+            "      *) echo ha_mcp_tools.zip;; esac;;\n"
+            '  "api repos/upstream/repo/releases/tags/v9.1.0-dev.1")\n'
+            '    case "$SCENARIO" in *upstream-pruned) return 1;; esac\n'
+            '    printf "sha256:%s\\n" "$ZIP_DIGEST";;\n'
+            '  "release download") mkdir -p dist/integration; cp payload.zip dist/integration/ha_mcp_tools.zip;;\n'
+            '  "release create")\n'
+            '    case "$*" in *--draft*) return 1;; esac\n'
+            '    [ "$4" = dist/integration/ha_mcp_tools.zip ] && [ -s "$4" ] || return 1\n'
+            "    touch mirror-uploaded;;\n"
+            '  "release upload")\n'
+            '    case "$SCENARIO" in *incomplete*)\n'
+            '      case "$*" in *--clobber*) ;; *) return 1;; esac;; esac\n'
+            "    touch mirror-uploaded;;\n"
+            '  "release edit")\n'
+            '    [ "$SCENARIO" = draft-complete-upstream-pruned ] || [ -f mirror-uploaded ] || return 1\n'
+            "    touch draft-published;;\n"
+            "  *) return 2;;\nesac\n}\nsleep() { :; }\n"
+        )
+        if sys.platform == "win32":
+            # Native Git Bash needs the test interpreter, not Windows' Store alias.
+            (bin_dir / "python3").write_text(
+                f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
+                newline="\n",
+            )
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "SCENARIO": scenario,
+            "ZIP_DIGEST": "0" * 64 if scenario == "bad-digest" else digest,
+            "GITHUB_REF_NAME": "v9.1.0-dev.1",
+            "GITHUB_REPOSITORY": "mirror/repo",
+        }
+        for step in ("Copy the upstream integration ZIP", "Create release for tag"):
+            result = subprocess.run(
+                [
+                    shutil.which("bash") or "bash",
+                    "-e",
+                    "-c",
+                    fake_gh + _release_on_tag_step(step)["run"],
+                ],
+                cwd=tmp_path,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=45,
+            )
+            if result.returncode != 0:
+                break
+        assert calls.exists(), result.stderr
+        attempted = calls.read_text().splitlines()
+        if scenario in {
+            "bad-digest",
+            "upstream-replaced",
+            "mirror-replaced",
+            "draft-replaced-before-publish",
+        }:
+            assert result.returncode != 0
+            assert not any(
+                c.startswith(("release create", "release edit", "release upload"))
+                for c in attempted
+            )
+        else:
+            assert result.returncode == 0, result.stderr
+            if scenario.endswith("upstream-pruned"):
+                assert not any(
+                    c.startswith(
+                        ("api repos/upstream/", "release download", "release upload")
+                    )
+                    for c in attempted
+                )
+            else:
+                expected = (
+                    "release upload"
+                    if scenario
+                    in {"incomplete-upload", "draft-empty", "draft-incomplete"}
+                    else "release create"
+                )
+                assert any(c.startswith(expected) for c in attempted)
+                assert (
+                    tmp_path / "dist/integration/ha_mcp_tools.zip"
+                ).read_bytes() == payload.read_bytes()
+            if scenario.startswith("draft-"):
+                assert (tmp_path / "draft-published").exists()
+
     def test_keeps_as_many_dev_pre_releases_as_the_main_repository(self) -> None:
         # Past HACS's 30-release window a stable release behind the dev
         # builds is no longer seen, so the mirror prunes like publish-dev.yml.

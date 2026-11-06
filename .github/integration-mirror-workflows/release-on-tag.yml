@@ -61,17 +61,81 @@ jobs:
             echo "Component snapshot synced from homeassistant-ai/ha-mcp." > /tmp/notes.md
           fi
 
+      - name: Copy the upstream integration ZIP
+        if: hashFiles('.github/component-zip-source.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          EXPECTED_DIGEST=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['digest'])")
+          [[ "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+          # gh's lookup includes drafts left by interrupted uploads; the REST
+          # tag endpoint only guarantees published releases.
+          MIRROR_DIGEST=""
+          if MIRROR_RELEASE_ID=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId --jq .databaseId 2>/dev/null); then
+            MIRROR_DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${MIRROR_RELEASE_ID}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest')
+          fi
+          if [[ "$MIRROR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            if [ "$MIRROR_DIGEST" != "$EXPECTED_DIGEST" ]; then
+              echo "::error::The counted mirror asset differs from the tagged ZIP digest."
+              exit 1
+            fi
+            echo "The mirror already has the uploaded ZIP; preserving its download history."
+            exit 0
+          fi
+          SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['repository'])")
+          SOURCE_TAG=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['tag'])")
+          mkdir -p dist/integration
+          # The stable publisher may still be finalizing its draft after PyPI
+          # becomes available. Copy the published asset; never rebuild it here.
+          for attempt in $(seq 1 40); do
+            DIGEST=$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip") | .digest' 2>/dev/null || true)
+            if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              if [ "$DIGEST" != "$EXPECTED_DIGEST" ]; then
+                echo "::error::The upstream ZIP changed after snapshot verification."
+                exit 1
+              fi
+              gh release download "$SOURCE_TAG" --repo "$SOURCE_REPOSITORY" \
+                --pattern ha_mcp_tools.zip --dir dist/integration --clobber
+              echo "${EXPECTED_DIGEST#sha256:}  dist/integration/ha_mcp_tools.zip" | sha256sum --check -
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::The upstream integration ZIP was not published with a digest."
+          exit 1
+
       - name: Create release for tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           VER="${GITHUB_REF_NAME#v}"
           # Check existence explicitly instead of `|| echo "release exists"`:
           # that pattern treated EVERY create failure (auth, rate limit, bad
           # notes file) as already-exists and reported green with no release
           # published (review finding). Now only a genuine duplicate no-ops;
           # a real create failure fails the job visibly.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if MIRROR_RELEASE_ID=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId --jq .databaseId 2>/dev/null); then
+            # Backfill a missing asset on recovery without replacing one that
+            # already has a download history.
+            DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${MIRROR_RELEASE_ID}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest')
+            if [ -f .github/component-zip-source.json ] && [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              EXPECTED_DIGEST=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['digest'])")
+              [ "$DIGEST" = "$EXPECTED_DIGEST" ] || { echo "::error::The mirror asset differs from the tagged ZIP digest."; exit 1; }
+            fi
+            if [ -f dist/integration/ha_mcp_tools.zip ] && ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              # Replace only an incomplete upload, never a usable counted asset.
+              gh release upload "$GITHUB_REF_NAME" dist/integration/ha_mcp_tools.zip --repo "$GITHUB_REPOSITORY" --clobber
+            fi
+            if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+            fi
             echo "release exists"
             exit 0
           fi
@@ -83,7 +147,13 @@ jobs:
           case "$GITHUB_REF_NAME" in
             *-dev.*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          ASSETS=()
+          if [ -f dist/integration/ha_mcp_tools.zip ]; then
+            ASSETS+=(dist/integration/ha_mcp_tools.zip)
+          fi
+          # With an asset, gh stages the upload before publishing and attempts
+          # cleanup on failure; explicit --draft would disable that cleanup.
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
             --title "$VER" -F /tmp/notes.md $PRERELEASE_FLAG
 
       - name: Retire superseded dev pre-releases

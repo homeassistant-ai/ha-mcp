@@ -219,6 +219,15 @@ jobs:
             --version "${VERSION%.dev*}" --pin "$VERSION" --dist ha-mcp-dev
           git commit --quiet -am "chore(internal): stamp the component for dev build ${VERSION} [skip ci]"
 
+      - name: Install uv for the integration artifact
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          version: "0.13.4"
+
+      - name: Build the stamped integration ZIP
+        run: uv run -s scripts/build_component_zip.py --output dist/integration/ha_mcp_tools.zip
+
       - name: Create pre-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,7 +259,8 @@ jobs:
           # fetch, and the remote one stays if its deletion above failed.
           git tag -f "$TAG" HEAD
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
-          gh release create "$TAG" \
+          # Passing the asset lets gh stage, upload and publish with cleanup.
+          gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
             --verify-tag \
             --title "Dev Build $VERSION" \
             --notes-file release_notes.md \

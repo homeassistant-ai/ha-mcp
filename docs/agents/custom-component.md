@@ -5,6 +5,46 @@ server feature that depends on the component. The HACS component and the
 `ha-mcp` server ship through separate installation paths, so compatibility
 must hold in both update directions.
 
+## Release ZIP
+
+Releases provide `ha_mcp_tools.zip` for integration installation. Its root
+contains the integration files (`manifest.json`, `__init__.py`, translations,
+and the remaining tracked component files), without a repository or domain
+folder. Build it with `uv run -s scripts/build_component_zip.py`. The builder
+reads tracked **working-tree** files so release-time version/server stamps
+are included; it excludes untracked files and bytecode.
+
+Stable and dev publishing build the ZIP after stamping and attach it while
+the GitHub release is a draft. The mirror copies and verifies the upstream
+asset instead of rebuilding it. Before tagging, sync compares every ZIP member
+and its bytes with the committed, stamped component snapshot, then commits the
+verified asset digest alongside its source metadata. Copying requires that pinned
+digest, so a replaced dev release cannot silently change a mirror tag's payload.
+Do not replace an existing asset just to refresh
+its download count; that count is downloads of one release asset, not users.
+
+Dev and mirror creation pass the ZIP to `gh release create`, which stages the
+upload before publishing and attempts cleanup on failure. Mirror retries resolve their
+own releases by database ID so leftover drafts are recoverable. A complete
+mirror asset matching the tag's digest is reused even if its upstream dev release was pruned; incomplete
+uploads are replaced before a recovered draft is published. The upstream
+source lookup still requires a published release.
+
+This first rollout does not enable `zip_release`: HACS/Marketplace continue
+their existing archive installation. Activation is a separate change, after
+assets exist and the stable publisher guarantees the pinned PyPI build is
+available before exposing the GitHub release. The present stable sequencing
+is not changed by artifact publication alone.
+
+The container E2E fixture installs this artifact before HA boots, so existing
+component scenarios exercise the ZIP. The existing update-path scenarios retain
+their released-component case and install the working-tree case from the ZIP.
+That case also reinstalls the ZIP over configured HA, restarts HA, and checks
+entry preservation, the selected server version and a real MCP read. It does
+not claim an old-version component migration or a Marketplace UI click test.
+For a focused GitHub runner execution, dispatch `e2e-tests.yml` on a test fork
+with `update_path_only=true`.
+
 ## Version cycle
 
 The component shares the server's version and pins the server build it runs

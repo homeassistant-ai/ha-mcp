@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -377,6 +378,7 @@ def _install_custom_component(
     title: str,
     *,
     seed_entry: bool = True,
+    component_zip: Path | None = None,
 ) -> bool:
     """Install a custom component into the test HA config.
 
@@ -394,7 +396,13 @@ def _install_custom_component(
 
     dest = config_path / "custom_components" / domain
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(component_src, dest, dirs_exist_ok=True)
+    if component_zip is None:
+        shutil.copytree(component_src, dest, dirs_exist_ok=True)
+    else:
+        # The release builder emits flat, tracked integration files. Do not
+        # fall back to source when the artifact is missing or invalid.
+        with zipfile.ZipFile(component_zip) as archive:
+            archive.extractall(dest)
 
     # Inject config entry if not already present
     storage_file = config_path / ".storage" / "core.config_entries"

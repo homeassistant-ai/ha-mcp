@@ -183,6 +183,17 @@ jobs:
         # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
 
+    - name: Install uv for the integration artifact
+      if: steps.semantic.outputs.released == 'true'
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        # renovate: datasource=github-releases depName=astral-sh/uv
+        version: "0.13.4"
+
+    - name: Build the stamped integration ZIP
+      if: steps.semantic.outputs.released == 'true'
+      run: uv run -s scripts/build_component_zip.py --output dist/integration/ha_mcp_tools.zip
+
     - name: Create draft GitHub release
       if: steps.semantic.outputs.released == 'true'
       env:
@@ -203,7 +214,7 @@ jobs:
         fi
 
         # A draft until the last step of this job publishes it.
-        gh release create "$TAG" \
+        gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
           --title "$TAG" \
           --notes-file release_notes.md \
           --draft

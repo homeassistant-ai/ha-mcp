@@ -37,6 +37,8 @@ on:
       - "README.md"
       - ".github/integration-mirror-readme-prefix.md"
       - "scripts/build_mirror_readme.py"
+      - "scripts/build_component_zip.py"
+      - "scripts/build_component_zip.py.lock"
       - ".github/integration-mirror-workflows/**"
   workflow_run:
     workflows: ["SemVer Release", "Publish Dev Channel"]
@@ -263,6 +265,7 @@ jobs:
 
       - name: Stage snapshot
         env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
           VER: ${{ steps.release.outputs.version }}
           PIN: ${{ steps.release.outputs.pin }}
           DIST: ${{ steps.release.outputs.dist }}
@@ -297,6 +300,20 @@ jobs:
           # carries no hand-made changes, so its release-on-tag.yml is
           # synced from here too rather than hand-edited in the mirror.
           mkdir -p /tmp/mirror/.github/workflows
+          if [ "$CHANNEL" != none ]; then
+            if [ -f "$SRC/scripts/build_component_zip.py" ]; then
+              python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/mirror/.github/component-zip-source.json').write_text(json.dumps({
+              'repository': os.environ['SOURCE_REPOSITORY'],
+              'tag': 'v' + os.environ['PIN'],
+          }) + '\n')
+          PY
+            else
+              rm -f /tmp/mirror/.github/component-zip-source.json
+            fi
+          fi
           cp .github/integration-mirror-workflows/release-on-tag.yml \
             /tmp/mirror/.github/workflows/release-on-tag.yml
 
@@ -351,6 +368,68 @@ jobs:
           echo "::error::PyPI never served ${DIST} ${PIN}; not tagging a component that pins it."
           exit 1
 
+      - name: Wait for the upstream integration ZIP before tagging
+        if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+          VER: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # A retry may outlive the upstream asset. The tag step rechecks
+          # these refs to cover changes during verification.
+          existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -n "$existing" ]; then
+            echo "mirror tag ${TAG} exists - skipping ZIP wait"
+            echo "SKIP_MIRROR_TAG=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$CHANNEL" = dev ]; then
+            stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+            if [ -n "$stable_exists" ]; then
+              echo "v${VER} is already stable - skipping ZIP wait"
+              echo "SKIP_MIRROR_TAG=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          fi
+          MARKER=/tmp/mirror/.github/component-zip-source.json
+          [ -f "$MARKER" ] || exit 0
+          SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('$MARKER'))['repository'])")
+          SOURCE_TAG=$(python3 -c "import json; print(json.load(open('$MARKER'))['tag'])")
+          for attempt in $(seq 1 40); do
+            DIGEST=$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
+            if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              ZIP_DIR="$RUNNER_TEMP/upstream-integration-zip"
+              mkdir -p "$ZIP_DIR"
+              gh release download "$SOURCE_TAG" --repo "$SOURCE_REPOSITORY" \
+                --pattern ha_mcp_tools.zip --dir "$ZIP_DIR" --clobber
+              echo "${DIGEST#sha256:}  $ZIP_DIR/ha_mcp_tools.zip" | sha256sum --check -
+              git -C /tmp/mirror diff --exit-code HEAD -- custom_components/ha_mcp_tools
+              VERIFIED_DIGEST=$(python3 scripts/build_component_zip.py \
+                --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
+                --verify "$ZIP_DIR/ha_mcp_tools.zip")
+              [ "$VERIFIED_DIGEST" = "$DIGEST" ]
+              python3 - "$MARKER" "$VERIFIED_DIGEST" <<'PY'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          metadata = json.loads(path.read_text())
+          metadata['digest'] = sys.argv[2]
+          path.write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+              # Keep main unstamped; only this local release commit is tagged.
+              git -C /tmp/mirror add .github/component-zip-source.json
+              if ! git -C /tmp/mirror diff --cached --quiet; then
+                git -C /tmp/mirror commit -m "Bind integration ZIP to verified snapshot"
+              fi
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::The upstream ZIP is unavailable; not creating a mirror tag."
+          exit 1
+
       - name: Tag the mirror
         if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
         env:
@@ -359,6 +438,10 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
+          if [ "${SKIP_MIRROR_TAG:-false}" = true ]; then
+            echo "No mirror tag needed at ZIP verification; skipping tag creation."
+            exit 0
+          fi
           # Captures instead of `| grep -q .`: without pipefail a FAILED
           # ls-remote looks identical to "tag absent"; a bare assignment under
           # set -e aborts loud instead. Every release is a new shared version,
