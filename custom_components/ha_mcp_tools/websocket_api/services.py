@@ -83,7 +83,11 @@ async def _services_list_prep(
     the prep via the seam wrappers below and :func:`_do_services_list` stays a pure
     reshape/filter.
     """
-    language = msg.get("language") or "en"
+    language = (
+        msg.get("language")
+        or getattr(getattr(hass, "config", None), "language", None)
+        or "en"
+    )
     descriptions = await _fetch_service_descriptions(hass)
     translations = await _fetch_service_translations(hass, language)
     return {"descriptions": descriptions, "translations": translations}

@@ -4066,12 +4066,12 @@
         "detail_level": {
           "type": "Literal['summary', 'full']",
           "default": "summary",
-          "description": "'summary': name, description, domain, service, and target when the service has one. 'full': additionally include parameter field schemas."
+          "description": "'summary': name, description, domain, service, target and response when the service returns data. 'full': additionally include parameter field schemas."
         },
         "service_fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records. Unknown keys yield empty records. Available keys: name, description, domain, service, target (when present), fields (full mode only)."
+          "description": "Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records. Unknown keys yield empty records. Available keys: name, description, domain, service, target (when present), response (when present), fields (full mode only)."
         },
         "fields": {
           "type": "str | list[str] | None",
