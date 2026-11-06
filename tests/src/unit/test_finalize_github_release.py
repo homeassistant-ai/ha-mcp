@@ -89,7 +89,7 @@ def _world(
 
     monkeypatch.setattr(publisher, "_push_stable_ref", push)
 
-    def gh(endpoint, *, method="GET", fields=None):
+    def gh(endpoint, *, method="GET", fields=None, paginate=False):
         calls.append((endpoint, method, fields))
         if method != "GET":
             if fail_publish and "/releases/" in endpoint:
@@ -109,8 +109,8 @@ def _world(
                     "sha": endpoint.rsplit("/", 1)[1] + "-commit",
                 }
             }
-        if "/releases/tags/" in endpoint:
-            return {
+        if endpoint.endswith("/releases?per_page=100"):
+            release = {
                 "id": 123,
                 "tag_name": "v9.1.1",
                 "draft": draft,
@@ -126,6 +126,8 @@ def _world(
                 if asset
                 else [],
             }
+            assert paginate
+            return [[release]]
         if "/git/ref/tags/" in endpoint:
             return {
                 "object": {
@@ -155,7 +157,7 @@ def _world(
 
 def test_missing_pypi_performs_no_github_write(monkeypatch):
     calls = _world(monkeypatch, ready=False)
-    with pytest.raises(TimeoutError, match="release stays draft"):
+    with pytest.raises(TimeoutError):
         _finalize("o/r", "v9.1.1", _HACS, _COMPONENT, attempts=1, delay=0)
     assert calls == []
 
@@ -260,6 +262,27 @@ def test_recovery_of_an_already_published_release_is_idempotent(monkeypatch):
     assert all(method == "GET" for _, method, _ in calls)
 
 
+def test_draft_lookup_uses_all_pages_when_the_tag_endpoint_cannot_find_it(monkeypatch):
+    calls = _world(monkeypatch)
+    original = publisher._gh_json
+    draft = {"id": 123, "tag_name": "v9.1.1", "draft": True, "prerelease": False}
+    pages = [[{"tag_name": "another-release"}] * 100 for _ in range(10)] + [[draft]]
+
+    def gh(endpoint, *, method="GET", fields=None, paginate=False):
+        if "/releases/tags/" in endpoint:
+            raise subprocess.CalledProcessError(1, ["gh", "api"], stderr="HTTP 404")
+        if endpoint.endswith("/releases?per_page=100"):
+            assert paginate
+            return pages
+        return original(endpoint, method=method, fields=fields)
+
+    monkeypatch.setattr(publisher, "_gh_json", gh)
+    _finalize("o/r", "v9.1.1", {}, {})
+    assert any(
+        method == "PATCH" and fields == {"draft": False} for _, method, fields in calls
+    )
+
+
 def test_legacy_archive_release_does_not_require_a_new_zip(monkeypatch):
     calls = _world(monkeypatch, asset=False, missing_ref=True)
     result = _finalize("o/r", "v9.1.1", {}, {})
@@ -306,8 +329,6 @@ def test_finalization_is_downstream_of_pypi_without_a_semver_wait_cycle():
 
 
 def test_both_hacs_manifests_select_the_published_component_asset():
-    import json
-
     for name in ("hacs.json", "custom_components/ha_mcp_tools/hacs.json"):
         manifest = json.loads((_ROOT / name).read_text())
         assert manifest["zip_release"]

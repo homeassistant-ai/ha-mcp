@@ -23,8 +23,16 @@ from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 from packaging.version import Version
 
 
-def _gh_json(endpoint: str, *, method: str = "GET", fields: dict | None = None) -> Any:
+def _gh_json(
+    endpoint: str,
+    *,
+    method: str = "GET",
+    fields: dict | None = None,
+    paginate: bool = False,
+) -> Any:
     command = ["gh", "api", "--method", method, endpoint]
+    if paginate:
+        command += ["--paginate", "--slurp"]
     if fields is not None:
         command += ["--input", "-"]
     result = subprocess.run(
@@ -146,7 +154,9 @@ def _wait_for_pypi(
         if attempt + 1 < attempts:
             print(f"Waiting for ha-mcp=={version} on PyPI ({attempt + 1}/{attempts})")
             time.sleep(delay)
-    raise TimeoutError(f"PyPI does not serve ha-mcp=={version}; release stays draft")
+    raise TimeoutError(
+        f"PyPI is not ready for ha-mcp=={version}; no GitHub writes performed"
+    )
 
 
 def _commit_sha(repository: str, git_object: dict) -> str:
@@ -176,8 +186,11 @@ def finalize_release(
     filename = _required_zip(hacs, component, version)
     _wait_for_pypi(version, _supported_pythons(project), attempts, delay)
 
-    release = _gh_json(
-        f"repos/{repository}/releases/tags/{urllib.parse.quote(tag, safe='')}"
+    # The tag endpoint only guarantees published releases. Authenticated release
+    # lists also contain drafts; paginate without a fixed release-count limit.
+    pages = _gh_json(f"repos/{repository}/releases?per_page=100", paginate=True)
+    release: dict = next(
+        (r for page in pages for r in page if r.get("tag_name") == tag), {}
     )
     if release.get("tag_name") != tag or release.get("prerelease"):
         raise ValueError("The requested stable release was not found")
@@ -190,7 +203,9 @@ def finalize_release(
             or not asset.get("size")
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", asset.get("digest") or "")
         ):
-            raise ValueError("The integration ZIP is not ready; release stays draft")
+            raise ValueError(
+                "The integration ZIP is not ready; no GitHub writes performed"
+            )
 
     target_object = _gh_json(
         f"repos/{repository}/git/ref/tags/{urllib.parse.quote(tag, safe='')}"

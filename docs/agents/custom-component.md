@@ -35,6 +35,9 @@ then publishes the draft and advances `stable`. Do not wait for PyPI inside
 SemVer: the PyPI workflow starts only after SemVer completes. The site deploy
 and the mirror consume the finalized-tag artifact from Release Publish, even
 if a later Docker or MCP Registry job fails. They ignore a superseded marker.
+Find drafts through the authenticated, paginated release list: GitHub's
+release-by-tag endpoint only guarantees published releases. Keep the lookup
+unbounded by a fixed release count so older recovery targets remain reachable.
 
 Release Publish takes the exact tag artifact from the triggering SemVer run;
 gated runs provide none. Moving master cannot change its selection. Runs are
@@ -47,9 +50,11 @@ that its release is still current before promotion. Independent manual release
 publication must not race this workflow; historical workflow revisions do not
 inherit new concurrency controls. Recover through the current publisher.
 
-If a prerequisite or publication fails, the draft stays private. If publication
-succeeds but the alias lease fails, the verified, installable release stays
-public, this run leaves the alias alone, and Docker publishing is skipped.
+Prerequisite failures perform no GitHub writes. An unconfirmed publication
+response stops before the alias write; inspect the release and retry to
+reconcile its state. If publication succeeds but the alias lease fails, the
+verified, installable release stays public, this run leaves the alias alone,
+and Docker publishing is skipped.
 Inspect the operator's change before retrying the current publisher. Returning
 the release to draft cannot undo downloads or publication events and is not a
 transactional rollback. A public release with the correct alias is a no-op, and
