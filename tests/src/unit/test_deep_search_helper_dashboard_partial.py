@@ -26,6 +26,9 @@ from ha_mcp.client.rest_client import NON_ADMIN_TOKEN_WARNING
 from ha_mcp.tools import helper_flows
 from ha_mcp.tools.smart_search import SmartSearchTools
 
+# The real catalog read, before the autouse conftest stub replaces it.
+_REAL_FETCH_CORE_HELPER_DOMAINS = helper_flows._fetch_core_helper_domains
+
 
 def _make_tools(client) -> SmartSearchTools:
     """Construct SmartSearchTools without loading global settings."""
@@ -672,11 +675,10 @@ class TestHelperDashboardPartialThroughDeepSearch:
         refused there, every flow helper stays unsearched and the search says
         the token is why."""
         monkeypatch.setattr(
-            helper_flows,
-            "_fetch_core_helper_domains",
-            AsyncMock(side_effect=RuntimeError("Command failed: Unauthorized")),
+            helper_flows, "_fetch_core_helper_domains", _REAL_FETCH_CORE_HELPER_DOMAINS
         )
         client = MagicMock()
+        client.token_is_admin = AsyncMock(return_value=False)
         client.admin_route_refused = True
         client.get_states = AsyncMock(return_value=[])
         client.send_websocket_message = AsyncMock(

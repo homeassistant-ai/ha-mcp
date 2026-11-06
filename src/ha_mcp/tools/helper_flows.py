@@ -17,7 +17,10 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAdminRequiredError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helpers import exception_to_structured_error, raise_tool_error
@@ -44,7 +47,17 @@ async def _fetch_helper_flow_types(client: Any) -> frozenset[str]:
 
 async def _fetch_core_helper_domains(client: Any) -> frozenset[str]:
     """Core's own helper flows: the ``core.helper`` domains of
-    ``integration/descriptions``, the frontend's integration catalog."""
+    ``integration/descriptions``, the frontend's integration catalog.
+
+    The command is admin-only, and only a REST 401 latches the client's
+    refused-admin-route flag, so the token is checked first: a non-admin
+    token is refused here, which is what tells the search to name the token.
+    """
+    if await client.token_is_admin() is False:
+        raise HomeAssistantAdminRequiredError(
+            "integration/descriptions is admin-only in Home Assistant and this "
+            "token's user is not an administrator"
+        )
     answer = await client.send_websocket_message({"type": "integration/descriptions"})
     result = answer.get("result") if isinstance(answer, dict) else None
     helpers = (
