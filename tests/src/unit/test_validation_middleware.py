@@ -9,6 +9,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.validation_middleware import (
     ValidationErrorMiddleware,
     _closest_parameter,
@@ -479,9 +480,10 @@ async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
 
 @pytest.mark.asyncio
 async def test_renamed_parameter_names_a_stale_client_tool_list() -> None:
-    """A parameter an update renamed (`identifier` -> `entity_id` in 9.1.0)
-    arrives from a client still serving its old tool list; the rejection
-    names that cause and the reconnect that fixes it (#2968, #2978)."""
+    """A parameter an update renamed, with no alias kept for the old name
+    (`identifier` -> `entity_id` in 9.1.0), arrives from a client still
+    serving its old tool list; the rejection names that cause and the
+    reconnect that fixes it (#2968, #2978)."""
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
 
@@ -506,6 +508,7 @@ async def test_renamed_parameter_names_a_stale_client_tool_list() -> None:
         ("claude_desktop_config.json", "reopen Claude Desktop"),
         ("claude.ai", "tools list"),
         ("Claude Code", "/mcp"),
+        ("ChatGPT", "Refresh tools"),
     )
     for setup, step in steps:
         assert re.search(rf"{re.escape(setup)}[^;]*{re.escape(step)}", hint)
@@ -520,7 +523,8 @@ async def test_misplaced_config_key_gets_no_stale_tool_list_hint() -> None:
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
 
-    assert not any("stale" in s for s in _suggestions(json.loads(str(exc_info.value))))
+    (only,) = _suggestions(json.loads(str(exc_info.value)))
+    assert "Move `alias` inside the `config` argument" in only
 
 
 @pytest.mark.asyncio
@@ -531,7 +535,39 @@ async def test_type_error_alone_gets_no_stale_tool_list_hint() -> None:
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool("ha_test_dict_param", {"config": '{"a": 1}'})
 
-    assert not any("stale" in s for s in _suggestions(json.loads(str(exc_info.value))))
+    assert (
+        _suggestions(json.loads(str(exc_info.value)))
+        == DEFAULT_SUGGESTIONS[ErrorCode.VALIDATION_FAILED]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_call_is_recorded_for_the_issue_report(monkeypatch) -> None:
+    """A rejected call never reaches the tool, so its usage-log wrapper never
+    runs. Without an entry here, a report filed from a client with a stale
+    tool list shows no trace of the call or of the name the client sent."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "ha_mcp.tools.validation_middleware.log_tool_call",
+        lambda **entry: recorded.append(entry),
+    )
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_config_get_automation(entity_id: str) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError):
+        await mcp.call_tool(
+            "ha_config_get_automation", {"identifier": "automation.morning"}
+        )
+
+    (entry,) = recorded
+    assert entry["tool_name"] == "ha_config_get_automation"
+    assert entry["success"] is False
+    assert entry["parameters"] == {"identifier": "automation.morning"}
+    assert "`identifier`: unknown parameter" in entry["error_message"]
 
 
 @pytest.mark.asyncio
