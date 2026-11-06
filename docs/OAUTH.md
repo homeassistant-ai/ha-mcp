@@ -97,6 +97,8 @@ uvx --from=ha-mcp@latest ha-mcp-oauth
 
 ### 4. Connect in Claude.ai
 
+On a Team or Enterprise plan, an Owner or Primary Owner first adds the connector under **Organization settings** → **Connectors** → **Add** → **Custom** → **Web** with the remaining steps below; members then find it under **Customize** → **Connectors** and click **Connect**.
+
 1. Go to **Customize** (left sidebar) → **Connectors** → **Add** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there)
 2. Enter a name and the URL `https://your-tunnel.com/mcp`, then click **Continue**
 3. Keep the detected settings — **Authentication: Always required**, **OAuth client: No client ID — register one automatically (DCR)** — and click **Add**

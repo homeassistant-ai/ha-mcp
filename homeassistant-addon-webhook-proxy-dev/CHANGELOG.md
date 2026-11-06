@@ -14,7 +14,9 @@ history from before the fork.
 - The Claude.ai connector step in DOCS.md names the path Customize →
   Connectors → + Add → Add custom connector instead of Settings →
   Connectors → Add custom connector, and notes that Customize reads
-  Plugins on accounts with the new Plugins page.
+  Plugins on accounts with the new Plugins page. It also says that on a
+  Team or Enterprise plan an Owner or Primary Owner adds the connector
+  under Organization settings → Connectors and members then connect it.
 
 ## v3.0.5.dev4 (2026-11-03)
 

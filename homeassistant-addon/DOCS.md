@@ -151,7 +151,7 @@ The **Webhook Proxy** app routes MCP traffic through your existing Home Assistan
 
 Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
 
-**Claude.ai:** **Customize** (left sidebar) → **Connectors** → **Add** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there), enter a name and the URL, click **Continue**, keep the detected settings (**Authentication: None** for the plain webhook URL; **Always required** + **Use Anthropic's hosted client metadata** if you enabled the proxy's `ha_auth` OAuth mode; **Use your own OAuth client** with the Client ID/Secret from the log for `legacy`), click **Add**, then **Connect** if a sign-in is required. After changing the proxy's OAuth mode, remove and re-add the connector.
+**Claude.ai:** **Customize** (left sidebar) → **Connectors** → **Add** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there), enter a name and the URL, click **Continue**, keep the detected settings (**Authentication: None** for the plain webhook URL; **Always required** + **Use Anthropic's hosted client metadata** if you enabled the proxy's `ha_auth` OAuth mode; **Use your own OAuth client** with the Client ID/Secret from the log for `legacy`), click **Add**, then **Connect** if a sign-in is required. After changing the proxy's OAuth mode, remove and re-add the connector. On a Team or Enterprise plan, an Owner or Primary Owner adds the connector this way under **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**; members then find it under **Customize** → **Connectors** and click **Connect**.
 
 #### Option B: Cloudflared App (No existing reverse proxy needed)
 
