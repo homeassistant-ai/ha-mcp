@@ -69,6 +69,13 @@ def test_the_mirror_copies_the_verified_upstream_artifact_without_rebuilding() -
     assert "component-zip-source.json" in stage
     assert "os.environ['PIN']" in stage
     assert "SOURCE_REPOSITORY" in stage
+    names = [
+        s.get("name")
+        for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+    ]
+    assert names.index(
+        "Wait for the upstream integration ZIP before tagging"
+    ) < names.index("Tag the mirror")
 
 
 def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:
@@ -77,8 +84,25 @@ def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:
     assert selector["type"] == "boolean" and selector["default"] is False
     for name, job in workflow["jobs"].items():
         if name != "e2e-tests-update-path":
-            assert "github.event_name != 'workflow_dispatch'" in job["if"]
-            assert "!inputs.update_path_only" in job["if"]
+            for event, focused, expected in [
+                ("push", False, True),
+                ("push", True, True),
+                ("workflow_dispatch", False, True),
+                ("workflow_dispatch", True, False),
+            ]:
+                condition = (
+                    job["if"]
+                    .replace(
+                        "github.event_name != 'workflow_dispatch'",
+                        str(event != "workflow_dispatch").lower(),
+                    )
+                    .replace("!inputs.update_path_only", str(not focused).lower())
+                )
+                actual = any(
+                    all(term.strip() == "true" for term in group.split("&&"))
+                    for group in condition.split("||")
+                )
+                assert actual is expected, (event, focused, job["if"])
     target = workflow["jobs"]["e2e-tests-update-path"]
     assert "if" not in target
     assert any(s.get("env", {}).get("E2E_UPDATE_PATH") == "1" for s in target["steps"])

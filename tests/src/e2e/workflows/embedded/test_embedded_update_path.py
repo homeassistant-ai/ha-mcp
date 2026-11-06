@@ -737,7 +737,11 @@ class TestEmbeddedUpdatePath:
                 [
                     "python3",
                     "-c",
-                    "import zipfile; zipfile.ZipFile('/config/ha_mcp_tools.zip').extractall('/config/custom_components/ha_mcp_tools')",
+                    "from pathlib import Path; import zipfile; "
+                    "p=Path('/config/custom_components/ha_mcp_tools/__init__.py'); "
+                    "before=p.read_bytes(); p.unlink(); "
+                    "zipfile.ZipFile('/config/ha_mcp_tools.zip').extractall(p.parent); "
+                    "assert p.read_bytes() == before",
                 ]
             )
             assert installed.exit_code == 0, installed.output.decode()
@@ -772,7 +776,18 @@ class TestEmbeddedUpdatePath:
             assert any(
                 e["entry_id"] == _ENTRY_ID and e["state"] == "loaded" for e in entries
             )
-            assert sum(e["entry_id"] == _ENTRY_ID for e in entries) == 1
+            stored = container.get_wrapped_container().exec_run(
+                [
+                    "python3",
+                    "-c",
+                    "import json; "
+                    "entries=json.load(open('/config/.storage/core.config_entries'))['data']['entries']; "
+                    "print(json.dumps([e['entry_id'] for e in entries "
+                    "if e['domain']=='ha_mcp_tools' and e['data'].get('entry_type')=='server']))",
+                ]
+            )
+            assert stored.exit_code == 0, stored.output.decode()
+            assert json.loads(stored.output) == [_ENTRY_ID]
             response = _mcp_post(
                 base_url,
                 {

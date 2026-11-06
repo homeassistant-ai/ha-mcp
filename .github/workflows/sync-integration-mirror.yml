@@ -368,6 +368,27 @@ jobs:
           echo "::error::PyPI never served ${DIST} ${PIN}; not tagging a component that pins it."
           exit 1
 
+      - name: Wait for the upstream integration ZIP before tagging
+        if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          MARKER=/tmp/mirror/.github/component-zip-source.json
+          [ -f "$MARKER" ] || exit 0
+          SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('$MARKER'))['repository'])")
+          SOURCE_TAG=$(python3 -c "import json; print(json.load(open('$MARKER'))['tag'])")
+          for attempt in $(seq 1 40); do
+            DIGEST=$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
+            if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::The upstream ZIP is unavailable; not creating a mirror tag."
+          exit 1
+
       - name: Tag the mirror
         if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
         env:

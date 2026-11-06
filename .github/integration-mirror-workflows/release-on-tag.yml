@@ -67,6 +67,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          MIRROR_DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
+          if [[ "$MIRROR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "The mirror already has the uploaded ZIP; preserving its download history."
+            exit 0
+          fi
           SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['repository'])")
           SOURCE_TAG=$(python3 -c "import json; print(json.load(open('.github/component-zip-source.json'))['tag'])")
           mkdir -p dist/integration
@@ -90,6 +96,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           VER="${GITHUB_REF_NAME#v}"
           # Check existence explicitly instead of `|| echo "release exists"`:
           # that pattern treated EVERY create failure (auth, rate limit, bad
@@ -99,9 +106,11 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # Backfill a missing asset on recovery without replacing one that
             # already has a download history.
-            if [ -f dist/integration/ha_mcp_tools.zip ] && ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --json assets --jq '.assets[].name' | grep -Fxq ha_mcp_tools.zip; then
-              gh release upload "$GITHUB_REF_NAME" dist/integration/ha_mcp_tools.zip --repo "$GITHUB_REPOSITORY"
+            DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+              --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest')
+            if [ -f dist/integration/ha_mcp_tools.zip ] && ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              # Replace only an incomplete upload, never a usable counted asset.
+              gh release upload "$GITHUB_REF_NAME" dist/integration/ha_mcp_tools.zip --repo "$GITHUB_REPOSITORY" --clobber
             fi
             if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
               gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
