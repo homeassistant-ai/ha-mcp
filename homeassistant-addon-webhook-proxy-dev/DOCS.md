@@ -40,9 +40,11 @@ automatically on the next clean start.
 
 ### Connecting from Claude.ai (web)
 
-On a Team or Enterprise plan, an Owner or Primary Owner first adds the connector under **Organization settings** → **Connectors** → **Add** → **Custom** → **Web** with the remaining steps below; members then find it under **Customize** → **Connectors** and click **Connect**.
+1. In Claude.ai, open the connector form for your plan:
+   - **Individual plan:** **Customize** (left sidebar) → **Connectors** → **+ Add** → **Add custom connector** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there).
+   - **Team or Enterprise plan:** an Owner or Primary Owner goes to **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**. Members then find the connector under **Customize** → **Connectors** and click **Connect** themselves. With OAuth off, the remote URL is the only credential, so every member who connects it gets this server's Home Assistant access without signing in; enable OAuth in `ha_auth` mode (see below) if each member should sign in to Home Assistant.
 
-1. In Claude.ai, go to **Customize** (left sidebar) → **Connectors** → **+ Add** → **Add custom connector** (on accounts with the new Plugins page, **Customize** reads **Plugins** and connectors are added there), give it a name, paste the remote URL, and click **Add**.
+   Give it a name, paste the remote URL, and click **Add**.
 2. **Click _Connect_ on the new connector.** This step is required — adding the connector does not connect it. With OAuth enabled this opens the consent page; click **Allow** to finish. (With OAuth off there is no consent page and it connects directly.)
 3. Claude.ai may briefly show *"Couldn't reach the MCP server"* — this is often a harmless artifact of the initial handshake. Check whether the connector actually shows as connected before assuming it failed.
 

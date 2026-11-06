@@ -63,9 +63,13 @@ export function pushUiClientSteps(ctx, instructions) {
     uiSteps = `<div class="instruction-block">
           <h3 class="instruction-title">Claude.ai Configuration</h3>
           <p class="text-slate-300 text-sm mb-3">Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. If you installed the embedded HA-MCP server, make sure you have <strong>restarted Home Assistant</strong> after installation so everything registers properly.</p>
-          <p class="text-slate-300 text-sm mb-3">On a Team or Enterprise plan, an Owner or Primary Owner first adds the connector under <strong>Organization settings</strong> → <strong>Connectors</strong> → <strong>Add</strong> → <strong>Custom</strong> → <strong>Web</strong> with the remaining steps below; members then find it under <strong>Customize</strong> → <strong>Connectors</strong> and click <strong>Connect</strong>.</p>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Open Claude.ai → <strong>Customize</strong> (left sidebar) → <strong>Connectors</strong> → <strong>Add</strong> (on accounts with the new Plugins page, <strong>Customize</strong> reads <strong>Plugins</strong> and connectors are added there)</li>
+            <li>Open Claude.ai and the connector form for your plan:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li><strong>Individual plan:</strong> <strong>Customize</strong> (left sidebar) → <strong>Connectors</strong> → <strong>Add</strong> (on accounts with the new Plugins page, <strong>Customize</strong> reads <strong>Plugins</strong> and connectors are added there)</li>
+                <li><strong>Team or Enterprise plan:</strong> an Owner or Primary Owner goes to <strong>Organization settings</strong> → <strong>Connectors</strong> → <strong>Add</strong> → <strong>Custom</strong> → <strong>Web</strong>. Members then find the connector under <strong>Customize</strong> → <strong>Connectors</strong> and click <strong>Connect</strong> themselves. ${oauthCapable ? 'With the secret URL, the URL is the only credential, so every member who connects it gets this server\'s Home Assistant access without signing in; use <code class="bg-slate-800 px-1 rounded">ha_auth</code> if each member should sign in to Home Assistant.' : 'The secret URL is the only credential here, so every member who connects it gets this server\'s Home Assistant access without signing in.'}</li>
+              </ul>
+            </li>
             <li>Enter a name (e.g. <code class="bg-slate-800 px-1 rounded">Home Assistant</code>) and the URL <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code>, then click <strong>Continue</strong>. Claude checks the server and pre-fills the next step; choices it worked out are tagged <em>Detected</em> — keep them.</li>
             <li>On the second step, confirm <strong>Authentication</strong> and <strong>OAuth client</strong> match your setup:${modeChoices}
             </li>

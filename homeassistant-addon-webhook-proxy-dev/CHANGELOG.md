@@ -14,9 +14,11 @@ history from before the fork.
 - The Claude.ai connector step in DOCS.md names the path Customize →
   Connectors → + Add → Add custom connector instead of Settings →
   Connectors → Add custom connector, and notes that Customize reads
-  Plugins on accounts with the new Plugins page. It also says that on a
-  Team or Enterprise plan an Owner or Primary Owner adds the connector
-  under Organization settings → Connectors and members then connect it.
+  Plugins on accounts with the new Plugins page. It also gives the Team or
+  Enterprise path, where an Owner or Primary Owner adds the connector
+  under Organization settings → Connectors and members then connect it,
+  and warns that with OAuth off every member who connects it gets the
+  server's Home Assistant access without signing in.
 
 ## v3.0.5.dev4 (2026-11-03)
 
