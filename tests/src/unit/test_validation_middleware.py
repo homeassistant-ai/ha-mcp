@@ -14,6 +14,7 @@ from ha_mcp.tools.validation_middleware import (
     ValidationErrorMiddleware,
     _closest_parameter,
 )
+from ha_mcp.utils.usage_logger import get_recent_logs
 
 
 def _make_mcp() -> FastMCP:
@@ -568,6 +569,38 @@ async def test_a_rejected_call_is_recorded_for_the_issue_report(monkeypatch) -> 
     assert entry["success"] is False
     assert entry["parameters"] == {"identifier": "automation.morning"}
     assert "`identifier`: unknown parameter" in entry["error_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    ['{"code": "4711-secret"}', '{"code": "4711-secret"'],
+    ids=["json_string", "malformed_json_string"],
+)
+async def test_a_rejected_call_does_not_log_a_secret_inside_a_json_string(
+    data: str,
+) -> None:
+    """A client that stringifies `data` sends an alarm code as raw text. An
+    ordinary call reaches the usage log parsed, where masking by key name
+    covers the code; a call rejected for another argument must not put it in
+    the log that ha_report_issue returns."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_rejected_secret(data: dict | None = None) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError):
+        await mcp.call_tool("ha_test_rejected_secret", {"data": data, "bogus": 1})
+
+    entries = [
+        entry
+        for entry in get_recent_logs(50)
+        if entry["tool_name"] == "ha_test_rejected_secret"
+    ]
+    assert entries
+    assert "4711-secret" not in json.dumps(entries)
 
 
 @pytest.mark.asyncio
