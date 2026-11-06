@@ -1,150 +1,125 @@
-"""Read a Supervisor journald log back to a point in time.
+"""Read a time window of a Supervisor journald log, cut by the journal itself.
 
-Supervisor addresses its logs by entry count, never by time, so ``hours_back``
-is honoured by paging back from the newest entry behind each block's
-``X-First-Cursor`` until a block reaches the cutoff. Pages use Supervisor's
-verbose format because only it carries the journal's own timestamp on every
-entry, whatever the app or service logs in its message.
+Supervisor passes a client's ``Range`` header to systemd-journal-gatewayd
+unchanged, and gatewayd (systemd 255 and later; HAOS ships 256) accepts a time
+range there: ``realtime=<since>:<until>[:<num_skip>:<num_entries>]``, in seconds
+since the epoch. With ``since`` it seeks to the first entry at or after it and
+reads forward, ending at the first entry after ``until``; without ``since`` and
+with a negative skip it seeks to ``until`` and steps back, the same way
+``entries=:-N:N`` steps back from the newest entry. So the window is the
+journal's own selection; nothing here parses timestamps or drops lines.
+
+A window is capped at ``MAX_ENTRIES`` entries. A one-entry probe past the cap
+says whether the window holds more; when it does, the newest ``MAX_ENTRIES``
+entries before ``until`` are read instead, because the tool shows the newest
+lines of what it reads, and the read reports itself incomplete.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from .._version import is_running_in_addon
-from .error_log_journald import (
-    JournaldFetch,
-    JournaldPage,
-    cursor_token,
-    first_cursor,
-    journald_page,
-)
-from .rest_client import HomeAssistantConnectionError
+from .rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 
-# Small blocks: #2279 measured one 20,000-entry slice taking 15+ minutes.
-PAGE_LINES = 1000
-MAX_PAGES = 10
+# #2279 measured one 20,000-entry slice taking 15+ minutes; the live test of
+# #2974 read 5,836 host entries in one window without trouble.
+MAX_ENTRIES = 10_000
 
-# journal_verbose_formatter: "<ISO timestamp> <hostname> <identifier>: <message>".
-# A multi-line message continues on lines without it.
-_JOURNAL_TIMESTAMP = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}) "
-)
-_VERBOSE_PARAMS = {"no_colors": "true", "verbose": "true"}
+_PARAMS = {"no_colors": "true"}
 
 
 @dataclass(frozen=True)
 class JournalWindow:
-    """The entries read back to a cutoff, and how far the read got."""
+    """The entries of a time window, and whether all of them were read."""
 
     lines: list[str]
-    reached_cutoff: bool
-    journal_start: bool
-    oldest: datetime | None
-    pages: int
+    complete: bool
+    cap: int
 
 
-def entry_time(line: str) -> datetime | None:
-    """The journal timestamp a verbose line starts with; None on a continuation."""
-    match = _JOURNAL_TIMESTAMP.match(line)
-    return datetime.fromisoformat(match.group(1)) if match else None
+def _epoch(moment: datetime) -> str:
+    """Whole seconds since the epoch, gatewayd's default unit for ``realtime=``."""
+    return str(int(moment.timestamp()))
 
 
-def oldest_time(lines: list[str]) -> datetime | None:
-    """The timestamp of the first entry in ``lines`` that carries one."""
-    for line in lines:
-        stamp = entry_time(line)
-        if stamp is not None:
-            return stamp
-    return None
+def window_range(since: datetime, until: datetime, skip: int, count: int) -> str:
+    """``count`` entries from the ``skip``-th entry at or after ``since``."""
+    return f"realtime={_epoch(since)}:{_epoch(until)}:{skip}:{count}"
 
 
-def lines_since(lines: list[str], cutoff: datetime) -> list[str]:
-    """Keep the entries at or after ``cutoff``, each with its continuation lines.
+def newest_range(until: datetime, count: int) -> str:
+    """The ``count`` newest entries at or before ``until``.
 
-    Leading lines with no timestamp are the tail of an entry from an earlier
-    block, of unknown time, and are dropped.
+    ``num_entries`` is always given: from systemd 256 until a 2025 fix,
+    gatewayd rejected a Range without it (systemd#37172).
     """
-    kept: list[str] = []
-    keep = False
-    for line in lines:
-        stamp = entry_time(line)
-        if stamp is not None:
-            keep = stamp >= cutoff
-        if keep:
-            kept.append(line)
-    return kept
+    return f"realtime=:{_epoch(until)}:{-(count - 1)}:{count}"
 
 
-async def read_since(
-    fetch: JournaldFetch,
-    cutoff: datetime,
-    page_lines: int = PAGE_LINES,
-    max_pages: int = MAX_PAGES,
-) -> JournalWindow:
-    """Page back from the newest entry until a block reaches ``cutoff``."""
-    page = await journald_page(page_lines, 0, fetch)
-    collected = page.text.splitlines()
-    pages = 1
-    while True:
-        oldest = oldest_time(collected)
-        if oldest is not None and oldest <= cutoff:
-            return JournalWindow(collected, True, False, oldest, pages)
-        if not page.has_more:
-            return JournalWindow(collected, True, True, oldest, pages)
-        if pages >= max_pages or not page.first_cursor:
-            return JournalWindow(collected, False, False, oldest, pages)
-        page = await journald_page(
-            page_lines, cursor_token(page.first_cursor, 0), fetch
-        )
-        collected = page.text.splitlines() + collected
-        pages += 1
+async def _fetch(client: Any, path: str, range_header: str) -> str:
+    """One ``/<path>/logs`` read with ``range_header``, direct or via Core's proxy.
 
-
-def supervisor_fetch(client: Any, path: str) -> JournaldFetch:
-    """A verbose block fetcher for ``/<path>/logs``, direct or via Core's proxy.
-
-    ``path`` is ``addons/<slug>`` for an app or a system-service name.
+    ``path`` is ``addons/<slug>`` for an app or a system-service name. Core's
+    hassio proxy forwards ``Range`` on its log paths.
     """
+    headers = {"Accept": "text/plain", "Range": range_header}
     if is_running_in_addon():
-
-        async def direct(range_header: str) -> JournaldPage:
-            response = await client._supervisor_logs_response(
-                path,
-                {"Accept": "text/plain", "Range": range_header},
-                dict(_VERBOSE_PARAMS),
-            )
-            return JournaldPage(response.text, first_cursor(response))
-
-        return direct
-
-    async def proxied(range_header: str) -> JournaldPage:
+        response = await client._supervisor_logs_response(path, headers, dict(_PARAMS))
+    else:
         response = await client._raw_request(
-            "GET",
-            f"/hassio/{path}/logs",
-            headers={"Accept": "text/plain", "Range": range_header},
-            params=dict(_VERBOSE_PARAMS),
+            "GET", f"/hassio/{path}/logs", headers=headers, params=dict(_PARAMS)
         )
-        return JournaldPage(response.text, first_cursor(response))
-
-    return proxied
+    return str(response.text)
 
 
-async def read_logs_since(client: Any, path: str, cutoff: datetime) -> JournalWindow:
-    """``read_since`` against Supervisor under one deadline for the whole walk.
+async def read_window(
+    client: Any,
+    path: str,
+    since: datetime,
+    until: datetime,
+    max_entries: int | None = None,
+) -> JournalWindow:
+    """The entries of ``/<path>/logs`` from ``since`` to ``until``.
 
-    ``httpx`` timeouts are per I/O operation and each block costs two requests,
-    so only an overall deadline bounds the read (as in ``get_error_log``).
+    Every entry prints at least one line, so fewer lines than ``max_entries``
+    means the window is whole and needs no probe.
     """
+    if max_entries is None:
+        max_entries = MAX_ENTRIES
+    text = await _fetch(client, path, window_range(since, until, 0, max_entries))
+    lines = text.splitlines()
+    if len(lines) < max_entries:
+        return JournalWindow(lines, True, max_entries)
+    beyond = await _fetch(client, path, window_range(since, until, max_entries, 1))
+    if not beyond.strip():
+        return JournalWindow(lines, True, max_entries)
+    text = await _fetch(client, path, newest_range(until, max_entries))
+    return JournalWindow(text.splitlines(), False, max_entries)
+
+
+async def read_logs_window(
+    client: Any, path: str, since: datetime, until: datetime
+) -> JournalWindow:
+    """``read_window`` under one deadline for all of its requests."""
     try:
         async with asyncio.timeout(client.timeout):
-            return await read_since(supervisor_fetch(client, path), cutoff)
+            return await read_window(client, path, since, until)
     except TimeoutError as e:
         raise HomeAssistantConnectionError(
-            f"Timeout reading /{path}/logs back to {cutoff.isoformat()} "
+            f"Timeout reading /{path}/logs from {since.isoformat()} "
             f"after {client.timeout}s"
         ) from e
+    except HomeAssistantAPIError as e:
+        if e.status_code == 400:
+            raise HomeAssistantAPIError(
+                f"{e} -- a time window needs systemd 255 or later on the host "
+                "(Home Assistant OS ships 256); without hours_back the newest "
+                "lines can still be read",
+                status_code=e.status_code,
+                response_data=e.response_data,
+            ) from e
+        raise

@@ -16,7 +16,7 @@ from typing import Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
-from ..client.journal_window import lines_since, read_logs_since
+from ..client.journal_window import read_logs_window
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -47,30 +47,26 @@ class SupervisorLogSourcesMixin:
     ) -> tuple[list[str], dict[str, Any]]:
         """The last ``hours_back`` hours of entries, and fields describing the read.
 
-        A read that stopped before the cutoff says so, so that a short window
-        is not mistaken for a quiet one.
+        The journal selects the window (``realtime=`` Range); a window too
+        large to read whole says so, so that a partial window is not mistaken
+        for a whole one.
         """
-        cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours_back)
-        read = await read_logs_since(self._client, path, cutoff)
-        oldest = read.oldest.isoformat(timespec="seconds") if read.oldest else None
+        until = now or datetime.now(UTC)
+        since = until - timedelta(hours=hours_back)
+        read = await read_logs_window(self._client, path, since, until)
         fields: dict[str, Any] = {
             "hours_back": hours_back,
-            "window_start": cutoff.isoformat(timespec="seconds"),
-            "window_complete": read.reached_cutoff,
-            "line_format": "verbose",
+            "window_start": since.isoformat(timespec="seconds"),
+            "window_end": until.isoformat(timespec="seconds"),
+            "window_complete": read.complete,
         }
-        if read.journal_start:
+        if not read.complete:
             fields["warnings"] = [
-                f"The log begins at {oldest}, inside the {hours_back}-hour "
-                "window; nothing older is kept."
+                f"The {hours_back}-hour window holds more than {read.cap} "
+                f"entries; only the newest {read.cap} were read, so older "
+                "entries in the window are missing. Use a smaller hours_back."
             ]
-        elif not read.reached_cutoff:
-            fields["warnings"] = [
-                f"Read {read.pages} blocks of the journal back to {oldest} without "
-                f"reaching the {hours_back}-hour cutoff, so older entries in the "
-                "window were not read. Use a smaller hours_back."
-            ]
-        return lines_since(read.lines, cutoff), fields
+        return read.lines, fields
 
     async def _log_lines(
         self,

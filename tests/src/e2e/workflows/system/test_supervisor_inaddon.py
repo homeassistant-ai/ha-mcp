@@ -108,30 +108,50 @@ def _entry_times(log_text: str) -> list[datetime]:
 
 @pytest.mark.system
 class TestGetLogsHoursBackReal:
-    """hours_back pages the real journal back through Supervisor's cursors."""
+    """hours_back sends the journal a realtime= Range through Supervisor."""
+
+    async def test_host_entries_all_fall_inside_the_window(self, mcp_client) -> None:
+        """Supervisor formats host logs verbosely, so each entry's time is checkable."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_logs",
+                {
+                    "source": "system_service",
+                    "slug": "host",
+                    "hours_back": 1,
+                    "limit": 500,
+                    "order": "oldest",
+                },
+            )
+
+        stamps = _entry_times(result["log"])
+        assert stamps, f"Expected timestamped entries, got {result['log'][:200]!r}"
+        assert min(stamps) >= datetime.fromisoformat(result["window_start"])
+        assert max(stamps) <= datetime.fromisoformat(result["window_end"])
+        assert result["window_complete"] is True, result.get("warnings")
 
     @pytest.mark.parametrize(
         ("source", "slug"),
         [
-            ("system_service", "host"),
             ("system_service", "supervisor"),
             ("supervisor", HA_MCP_DEV_ADDON_SLUG),
         ],
     )
-    async def test_no_entry_older_than_the_window_is_returned(
+    async def test_a_recent_window_is_read_whole(
         self, mcp_client, source: str, slug: str
     ) -> None:
-        """An hours_back read stays inside its window and covers it whole."""
+        """Supervisor and the dev app both log within the hour the lane started."""
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_success(
                 "ha_get_logs",
                 {"source": source, "slug": slug, "hours_back": 1, "limit": 500},
             )
 
-        stamps = _entry_times(result["log"])
-        assert stamps, f"Expected timestamped entries, got {result['log'][:200]!r}"
-        assert min(stamps) >= datetime.fromisoformat(result["window_start"])
+        assert result["log"], "Expected entries logged in the last hour"
         assert result["window_complete"] is True, result.get("warnings")
+        assert datetime.fromisoformat(result["window_start"]) < datetime.fromisoformat(
+            result["window_end"]
+        )
 
 
 @pytest.mark.system

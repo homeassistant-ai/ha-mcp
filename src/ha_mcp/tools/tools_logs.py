@@ -330,9 +330,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "How many hours back to read. Logbook (default 1), "
                     "supervisor and system_service. For the last two, only "
-                    "when given: lines then come in Supervisor's verbose "
-                    "format, each entry led by its timestamp, and "
-                    "window_complete says whether the read reached the cutoff."
+                    "when given: the journal returns that window, and "
+                    "window_complete says whether all of it was read."
                 ),
             ),
         ] = None,
