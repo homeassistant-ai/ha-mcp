@@ -574,11 +574,15 @@ async def test_a_rejected_call_is_recorded_for_the_issue_report(monkeypatch) -> 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "data",
-    ['{"code": "4711-secret"}', '{"code": "4711-secret"'],
-    ids=["json_string", "malformed_json_string"],
+    [
+        '{"code": "4711-secret"}',
+        '{"code": "4711-secret"',
+        {"payload": '{"code": "4711-secret"}'},
+    ],
+    ids=["json_string", "malformed_json_string", "nested_json_string"],
 )
 async def test_a_rejected_call_does_not_log_a_secret_inside_a_json_string(
-    data: str,
+    data: str | dict,
 ) -> None:
     """A client that stringifies `data` sends an alarm code as raw text. An
     ordinary call reaches the usage log parsed, where masking by key name

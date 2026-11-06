@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+import json
 import logging
 import os
 import stat
@@ -337,6 +338,34 @@ class TestParameterRedaction:
         assert result["data"]["code"] == _REDACTED_VALUE
         assert result["data"]["entity_id"] == "lock.front"
         assert result["data"]["brightness"] == 255
+
+    def test_code_inside_a_json_string_redacted(self):
+        """A client that stringifies `data`, or an MQTT payload nested inside
+        it, carries the code as text the key match cannot see."""
+        result = _redact_parameters(
+            {
+                "data": '{"code": "4321", "entity_id": "lock.front"}',
+                "extra": {"payload": '{"code": "9876"}'},
+            }
+        )
+        dumped = json.dumps(result)
+        assert "4321" not in dumped and "9876" not in dumped
+        assert result["data"]["entity_id"] == "lock.front"
+
+    def test_code_inside_a_truncated_json_string_left_out(self):
+        """A stringified object that does not parse still shows the code."""
+        result = _redact_parameters({"data": '{"code": "4321"'})
+        assert "4321" not in json.dumps(result)
+
+    def test_templates_and_bracketed_text_stay_readable(self):
+        """A Jinja template and a "[tag] message" start like JSON but are not;
+        they are what a report reader debugs with."""
+        params = {
+            "template": "{{ states('sensor.x') }}",
+            "block": "{% if a %}b{% endif %}",
+            "message": "[Alert] front door open",
+        }
+        assert _redact_parameters(params) == params
 
     def test_top_level_sensitive_keys_redacted(self):
         result = _redact_parameters(
