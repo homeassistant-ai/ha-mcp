@@ -76,7 +76,7 @@ async def test_read_only_options_probe_reads_the_options_flow() -> None:
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-def test_read_only_is_not_named_as_why_options_are_missing() -> None:
+def test_read_only_is_not_named_as_why_a_helper_search_is_partial() -> None:
     response: dict[str, Any] = {"success": True}
 
     with read_only_request():

@@ -431,3 +431,12 @@ def opened_flows(
     flows: dict[str, tuple[str, str | None]] = {}
     monkeypatch.setattr(integration_flow_steps, "_opened_flows", flows)
     return flows
+
+
+@pytest.fixture
+def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn the redact_secrets toggle on for one test."""
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )

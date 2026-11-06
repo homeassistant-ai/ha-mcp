@@ -46,14 +46,6 @@ def _clean_registry():
 
 
 @pytest.fixture
-def redact_on(monkeypatch):
-    monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
-    )
-
-
-@pytest.fixture
 def redact_off(monkeypatch):
     monkeypatch.setattr(
         "ha_mcp.redaction.get_global_settings",

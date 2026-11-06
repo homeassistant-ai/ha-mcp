@@ -124,9 +124,14 @@ async def test_options_are_withheld_until_the_options_form_is_asked_for(
             await client.call_tool("ha_get_integration", {"entry_id": entry_id})
         )
         assert plain.get("success") is True, plain
-        withheld = plain["entry"].get("options") or {}
-        assert all(is_sentinel(value) for value in withheld.values()), plain
-        assert plain.get("warnings"), plain
+        warnings = plain.get("warnings") or []
+        if "options" in plain["entry"]:
+            # The component served the options; every value is withheld.
+            assert all(is_sentinel(v) for v in plain["entry"]["options"].values())
+            assert any("redact_secrets" in w for w in warnings), plain
+        else:
+            # Without the component nothing was read.
+            assert any("ha_mcp_tools" in w for w in warnings), plain
 
         described = parse_mcp_result(
             await client.call_tool(

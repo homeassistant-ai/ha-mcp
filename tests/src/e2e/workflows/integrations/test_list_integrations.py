@@ -433,11 +433,11 @@ class TestIntegrationFiltering:
 
             _assert_options_or_unread_warning(data)
 
-            [probe] = [e for e in data["entries"] if e["entry_id"] == entry_id]
-            if "options" in probe:
-                assert probe["options"].get("after_time") == "08:00:00", (
+            [tod_entry] = [e for e in data["entries"] if e["entry_id"] == entry_id]
+            if "options" in tod_entry:
+                assert tod_entry["options"].get("after_time") == "08:00:00", (
                     "The read returned no options for an entry that "
-                    f"has them (regression of #1245): {probe}"
+                    f"has them (regression of #1245): {tod_entry}"
                 )
         finally:
             await ha_client.delete_config_entry(entry_id)
@@ -463,11 +463,12 @@ class TestIntegrationFiltering:
         )
         list_data = assert_mcp_success(list_result, "list with options")
 
-        target_entry = next(
-            (e for e in list_data["entries"] if e.get("options")), None
-        ) or next((e for e in list_data["entries"] if e.get("supports_options")), None)
-        if not target_entry:
-            pytest.skip("No integrations with options found")
+        entries = list_data["entries"]
+        target_entry = next((e for e in entries if e.get("options")), None)
+        if target_entry is None:
+            target_entry = next((e for e in entries if e.get("supports_options")), None)
+        if target_entry is None:
+            pytest.skip("No integrations with options or an options flow found")
 
         entry_id = target_entry["entry_id"]
 
@@ -483,10 +484,13 @@ class TestIntegrationFiltering:
         assert "entry_id" in entry
         assert "domain" in entry
 
-        # The specific entry carries what the list endpoint returned for it.
+        # The specific entry carries what the list endpoint returned for it;
+        # without the component neither read has options, and both say why.
         assert entry.get("options") == target_entry.get("options"), (
             "Options from specific entry should match list endpoint"
         )
+        if "options" not in target_entry:
+            assert any("ha_mcp_tools" in w for w in data.get("warnings", [])), data
 
         logger.info(f"Specific entry test passed: domain={entry.get('domain')}")
 

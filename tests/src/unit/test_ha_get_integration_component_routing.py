@@ -8,7 +8,6 @@ falls back to the legacy REST read; a WS-down ConnectionError falls back too
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -318,16 +317,28 @@ async def test_single_entry_not_found_via_component_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_capsless_falls_back_to_legacy() -> None:
-    """Old component -> legacy REST get."""
+    """Old component -> legacy REST get; include_schema reads options from the form."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
-    client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=True))
-    resp = await _get(ws, client, entry_id="cfg1")
+    client = RoutingClient(
+        single_entry=_rest_entry("cfg1", supports_options=True),
+        options_flow={
+            "type": "form",
+            "flow_id": "f1",
+            "step_id": "init",
+            "data_schema": [
+                {"name": "discovery", "description": {"suggested_value": True}}
+            ],
+        },
+    )
+    resp = await _get(ws, client, entry_id="cfg1", include_schema=True)
 
     assert resp["entry"]["entry_id"] == "cfg1"
     assert client.get_config_entry_calls == 1
+    assert resp["entry"]["options"] == {"discovery": True}
+    assert "warnings" not in resp
     assert not _ce_calls(ws)
 
 
@@ -632,12 +643,8 @@ async def test_listing_options_without_the_component_opens_no_options_flow() -> 
     "call", [{"entry_id": "cfg1"}, {"include_options": True}], ids=["single", "list"]
 )
 async def test_redact_secrets_withholds_options_without_opening_the_options_flow(
-    call: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    call: dict[str, Any], redact_on: None
 ) -> None:
-    monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
-    )
     options = {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"}
     ws = make_ws(
         WS_CONFIG_ENTRIES,
@@ -650,19 +657,42 @@ async def test_redact_secrets_withholds_options_without_opening_the_options_flow
     entry = resp["entry"] if "entry" in resp else resp["entries"][0]
     assert client.start_options_flow_calls == 0
     assert entry["options"] == {"api_key": REDACTED_SET, "host": REDACTED_SET}
-    assert "include_schema" in resp["warnings"][0]
+    assert "redact_secrets" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_redact_secrets_leaves_the_options_of_an_entry_without_a_flow(
+    redact_on: None,
+) -> None:
+    # Only an options flow's form marks password fields, so an entry without
+    # one has nothing to withhold; the warning counts the entries that had.
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={
+            "entries": [
+                _row("flow", "sonoff", options={"api_key": "sk-LIVEFLOWSECRET"}),
+                _row(
+                    "plain", "mqtt", options={"discovery": True}, supports_options=False
+                ),
+            ]
+        },
+    )
+    client = RoutingClient()
+    resp = await _get(ws, client, include_options=True)
+
+    by_id = {e["entry_id"]: e for e in resp["entries"]}
+    assert by_id["plain"]["options"] == {"discovery": True}
+    assert by_id["flow"]["options"] == {"api_key": REDACTED_SET}
+    assert "1 entry" in resp["warnings"][0]
 
 
 @pytest.mark.asyncio
 async def test_a_schema_read_under_redact_secrets_opens_the_options_flow_once(
-    monkeypatch: pytest.MonkeyPatch,
+    redact_on: None,
 ) -> None:
     # The flow's first step may act, so the form that is described is also the
     # one that names the password fields.
-    monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
-    )
     options = {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"}
     ws = make_ws(
         WS_CONFIG_ENTRIES,

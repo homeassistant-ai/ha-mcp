@@ -18,7 +18,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
-from ha_mcp.tools import config_entry_flow_introspect
+from ha_mcp.tools import config_entry_flow_introspect, integration_schema
 from ha_mcp.tools.config_helpers import describe as flow_describe
 from ha_mcp.tools.integration_schema import (
     fetch_config_subentry_schema,
@@ -284,6 +284,7 @@ async def test_a_failed_options_probe_keeps_cores_message_in_the_warning() -> No
     await fetch_options_schema(client, "e1", resp)
 
     assert "options_schema" not in resp
+    assert "options" not in resp["entry"]
     assert any("Config entry not loaded" in w for w in resp["warnings"])
 
 
@@ -295,8 +296,8 @@ async def test_options_behind_a_menu_are_reported_unread_on_the_legacy_read() ->
 
     await fetch_options_schema(client, "e1", resp)
 
-    assert resp["entry"]["options"] == {}
-    assert any("options for e1 could not be read" in w for w in resp["warnings"])
+    assert "options" not in resp["entry"]
+    assert any("options of e1 not read" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio
@@ -396,13 +397,9 @@ async def test_a_menu_choice_that_finishes_the_flow_is_reported_as_saved() -> No
 @pytest.mark.asyncio
 @pytest.mark.parametrize("readable", ["menu", "flow-raises"])
 async def test_a_component_read_without_a_readable_form_withholds_every_option(
-    monkeypatch: pytest.MonkeyPatch, readable: str
+    redact_on: None, readable: str
 ) -> None:
     # Without the form the password fields cannot be told apart.
-    monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
-    )
     client = _client(dict(_MENU))
     if readable == "flow-raises":
         client.start_options_flow.side_effect = RuntimeError("down")
@@ -418,13 +415,30 @@ async def test_a_component_read_without_a_readable_form_withholds_every_option(
 
 
 @pytest.mark.asyncio
-async def test_component_read_keeps_its_options_and_redacts_the_secret(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_a_redaction_error_still_closes_the_options_flow(
+    redact_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The flow's first step may act, so a bug in the redaction must not leave
+    # the flow it was opened for hanging; the error itself fails the read.
     monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+        integration_schema,
+        "redact_options_by_form",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("redaction bug")),
     )
+    client = _client(_form("init", _HOST, _API_KEY))
+    resp = _resp()
+    resp["entry"].update(supports_options=True, options={"api_key": "sk-LIVE"})
+
+    with pytest.raises(RuntimeError):
+        await fetch_options_schema(client, "e1", resp, populate_options=False)
+
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_component_read_keeps_its_options_and_redacts_the_secret(
+    redact_on: None,
+) -> None:
     live_key = {**_API_KEY, "description": {"suggested_value": "sk-LIVE"}}
     client = _client(_form("init", _HOST, live_key))
     resp = _resp()
