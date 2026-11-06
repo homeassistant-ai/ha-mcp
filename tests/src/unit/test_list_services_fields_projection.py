@@ -32,6 +32,7 @@ class TestHaListServicesFieldsProjection:
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": {"resources": {}}}
         )
+        client.get_config = AsyncMock(return_value={"language": "en"})
         return client
 
     @pytest.fixture
@@ -105,6 +106,7 @@ class TestHaListServicesServiceFieldsProjection:
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": {"resources": {}}}
         )
+        client.get_config = AsyncMock(return_value={"language": "en"})
         return client
 
     @pytest.fixture

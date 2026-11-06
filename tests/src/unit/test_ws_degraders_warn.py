@@ -484,7 +484,7 @@ class TestEnrichmentAbsenceIsNotAnAnswer:
         )
         warnings: list[str] = []
 
-        assert await _get_service_translations(client, warnings) == {}
+        assert await _get_service_translations(client, "en", warnings) == {}
         assert any("service descriptions unavailable" in w for w in warnings)
 
     @pytest.mark.asyncio

@@ -167,8 +167,8 @@ class TestServiceDiscovery:
         """
         Test: Service field details are properly returned in full detail mode.
 
-        Validates that detail_level='full' includes field definitions with
-        type information, descriptions, and requirements.
+        Validates that detail_level='full' includes Core's field schemas with
+        translated names, selector definitions and section entries.
         """
         logger.info("Testing: Service field details (full mode)")
 
@@ -189,10 +189,26 @@ class TestServiceDiscovery:
             assert len(fields) > 0, "Full mode should include fields"
             logger.info(f"light.turn_on has {len(fields)} fields")
 
-            # Check field structure
+            # Check field structure: Core's selector replaces the hand-derived type.
             for field_name, field_def in fields.items():
                 assert "name" in field_def, f"Field {field_name} should have name"
-                assert "type" in field_def, f"Field {field_name} should have type"
+                if "fields" in field_def:
+                    assert field_def["fields"], (
+                        f"Section {field_name} should carry nested fields"
+                    )
+                else:
+                    assert "selector" in field_def, (
+                        f"Field {field_name} should carry Core's selector"
+                    )
+                assert "type" not in field_def, (
+                    f"Field {field_name} should not carry a hand-derived type"
+                )
+
+            # The collapsed section Core serves for light.turn_on is preserved.
+            additional = fields.get("additional_fields", {})
+            if additional:
+                assert additional.get("collapsed") is True
+                assert "rgbw_color" in additional.get("fields", {})
 
             # Common light.turn_on fields to check
             expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
@@ -200,6 +216,43 @@ class TestServiceDiscovery:
             logger.info(f"Found expected fields: {found_fields}")
 
         logger.info("Service field details test passed")
+
+    async def test_service_text_and_response_come_from_core(self, mcp_client):
+        """Core's translated text and response shape reach the catalog.
+
+        A domain with a Core integration exposes translated names/descriptions;
+        a response-capable service reports its ``response`` block so an agent
+        knows it can ask ``ha_call_service`` for a return value.
+        """
+        logger.info("Testing: translated service text and response metadata")
+
+        light = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "light", "detail_level": "full"},
+        )
+        light_data = assert_mcp_success(light, "light service text")
+        turn_on = light_data.get("services", {}).get("light.turn_on")
+        assert turn_on is not None, "light.turn_on should be listed"
+        assert turn_on["name"].strip(), "Service name should not be empty"
+        assert turn_on["description"].strip(), (
+            "Core ships a translation for light.turn_on; the catalog must use it"
+        )
+        assert turn_on["description"] != "Turn On", (
+            "Description must not fall back to the title-cased service name"
+        )
+
+        calendar = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "calendar"},
+        )
+        calendar_data = assert_mcp_success(calendar, "calendar response metadata")
+        get_events = calendar_data.get("services", {}).get("calendar.get_events")
+        if get_events is not None:
+            assert get_events.get("response") == {"optional": False}, (
+                "calendar.get_events must report Core's non-optional response"
+            )
+
+        logger.info("Translated text and response metadata test passed")
 
     async def test_nonexistent_domain(self, mcp_client):
         """
