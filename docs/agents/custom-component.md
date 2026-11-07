@@ -109,6 +109,7 @@ the current stable-release candidate and that its GitHub release is absent.
 From the current publisher checkout, use the original tag's component and notes:
 
 ```bash
+set -euo pipefail
 TAG=vX.Y.Z
 REPO=homeassistant-ai/ha-mcp
 git fetch origin master --tags

@@ -17,7 +17,10 @@ so a match somewhere else in the file cannot stand in for that step's wiring.
 from __future__ import annotations
 
 import ast
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,52 @@ _STEP = "Create draft GitHub release"
 _WORKFLOW = "semver-release.yml"
 _OUT_RE = re.compile(r"extract_release_notes\.py[^\n]*--out\s+(\S+)")
 _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
+
+
+@pytest.mark.parametrize("matches_tag", [True, False])
+def test_recovery_recipe_cannot_publish_a_different_release(tmp_path, matches_tag):
+    guide = (_REPO_ROOT / "docs/agents/custom-component.md").read_text(encoding="utf-8")
+    section = guide.split(
+        "### Recover a stable tag pushed before its draft was created", 1
+    )[1]
+    script = (
+        section.split("```bash\n", 1)[1]
+        .split("```", 1)[0]
+        .replace("TAG=vX.Y.Z", "TAG=v1.2.3")
+    )
+    side_effects = tmp_path / "published"
+    stubs = (
+        'git() { if [ "$1" = describe ]; then printf "%s\\n" "$CANDIDATE"; fi; }\n'
+        'uv() { mkdir -p local/release-recovery; printf "notes\\n" > local/release-recovery/notes.md; }\n'
+        'gh() { printf "%s\\n" "$*" >> "$SIDE_EFFECTS"; }\n'
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", stubs + script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "BASH_ENV": os.devnull,
+            "ENV": os.devnull,
+            "CANDIDATE": "v1.2.3" if matches_tag else "v1.2.2",
+            "SIDE_EFFECTS": side_effects.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    if matches_tag:
+        assert result.returncode == 0, result.stderr
+        lines = side_effects.read_text().splitlines()
+        assert lines[0].startswith("release create v1.2.3 ")
+        assert lines[1].startswith("workflow run release-publish.yml ")
+    else:
+        assert result.returncode != 0, (
+            "The recipe ignored a failed release-tag prerequisite"
+        )
+        assert not side_effects.exists(), (
+            "The recipe performed GitHub writes after a failed prerequisite"
+        )
 
 
 def _workflow() -> dict[str, Any]:
