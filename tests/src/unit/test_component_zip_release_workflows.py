@@ -298,6 +298,7 @@ def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:
 @pytest.mark.parametrize("draft", [False, True])
 def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, draft):
     """The source token can see a draft that the mirror cannot download."""
+    assert shutil.which("jq"), "jq is required for this test"
     marker = tmp_path / ".github"
     marker.mkdir()
     (marker / "component-zip-source.json").write_text(
@@ -318,8 +319,10 @@ def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, dr
     }
     stub = (
         'gh() { case "$1 $2" in\n'
-        f'"api "*) printf "%s\\n" {shlex.quote(json.dumps(release))} | jq -r "$4";;\n'
-        '"release download") mkdir -p "$RUNNER_TEMP/upstream-integration-zip"; '
+        f'"api "*) printf "%s\\n" {shlex.quote(json.dumps(release))} | jq -r "$4" '
+        '&& touch "$RUNNER_TEMP/api-filter-succeeded";;\n'
+        '"release download") touch "$RUNNER_TEMP/download-called"; '
+        'mkdir -p "$RUNNER_TEMP/upstream-integration-zip"; '
         f'printf "%s" {shlex.quote(payload.decode())} > "$RUNNER_TEMP/upstream-integration-zip/ha_mcp_tools.zip";;\n'
         "*) return 2;; esac; }\n"
         # Snapshot comparison and commit are exercised above with real Git and
@@ -351,3 +354,7 @@ def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, dr
         timeout=30,
     )
     assert (result.returncode == 0) is not draft, result.stderr
+    assert (tmp_path / "api-filter-succeeded").exists()
+    if draft:
+        assert "The upstream ZIP is unavailable" in result.stdout
+        assert not (tmp_path / "download-called").exists()

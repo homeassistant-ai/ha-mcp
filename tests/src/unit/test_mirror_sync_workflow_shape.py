@@ -45,8 +45,8 @@ class TestMirrorSyncShape:
         # yaml reads the bare `on` key as True.
         triggers = _workflow(_MIRROR)[True]
         assert triggers["workflow_run"]["workflows"] == [
-            "Release Publish",
-            "Publish Dev Channel",
+            _workflow(_WORKFLOWS / "release-publish.yml")["name"],
+            _workflow(_WORKFLOWS / "publish-dev.yml")["name"],
         ]
         # A dispatched dev build from another branch must never be mirrored.
         assert triggers["workflow_run"]["branches"] == ["master"]
@@ -58,7 +58,7 @@ class TestMirrorSyncShape:
         assert "head_branch" in gate["env"]["TRIGGER_BRANCH"]
         assert '"$TRIGGER_BRANCH" != master' in gate["run"]
 
-    def test_gate_keys_on_the_jobs_that_publish_the_pin(self) -> None:
+    def test_gate_follows_the_stable_publisher_and_the_dev_pypi_job(self) -> None:
         gate = next(
             s
             for s in _workflow(_MIRROR)["jobs"]["gate"]["steps"]
@@ -66,16 +66,12 @@ class TestMirrorSyncShape:
         )["run"]
         jobs = {
             job["name"]
-            for path in (
-                _WORKFLOWS / "publish-dev.yml",
-                _WORKFLOWS / "semver-release.yml",
-            )
-            for job in _workflow(path)["jobs"].values()
+            for job in _workflow(_WORKFLOWS / "publish-dev.yml")["jobs"].values()
             if "name" in job
         }
-        assert "Semantic Release" in jobs
         assert "Publish PyPI (dev channel)" in jobs
-        assert '"$TRIGGER_WORKFLOW" = "Release Publish"' in gate
+        publisher = _workflow(_WORKFLOWS / "release-publish.yml")["name"]
+        assert f'"$TRIGGER_WORKFLOW" = "{publisher}"' in gate
         assert '"finalized_tag=$FINALIZED_TAG"' in gate
         assert 'job="Publish PyPI (dev channel)"' in gate
 
@@ -213,6 +209,7 @@ class TestMirrorSyncShape:
                 line.split("=", 1) for line in output.read_text().splitlines()
             )
             assert values["version"] == expected
+            assert values["tag"] == trigger
             assert git("-C", values["src"], "rev-parse", "HEAD") == shas[1]
 
     @pytest.mark.parametrize("finalized", ["", "v1.0.0"])
