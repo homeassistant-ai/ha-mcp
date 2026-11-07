@@ -126,3 +126,18 @@ async def test_download_of_the_main_repository_installs_from_the_mirror():
     assert install[0].kwargs["repository"] == "1289599380"
     assert result["success"] is True
     assert any("rerouted" in warning for warning in result["warnings"])
+
+
+async def test_the_store_refusal_itself_carries_the_way_out():
+    """A download refused by the store for a doubly claimed directory (the
+    Marketplace's own check) gets the same recovery routes, not a generic
+    service failure."""
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+    from ha_mcp.tools.hacs_backend import raise_store_error
+
+    err = HomeAssistantCommandError(
+        "The ha_mcp_tools directory belongs to homeassistant-ai/ha-mcp-integration"
+    )
+    with pytest.raises(ToolError) as excinfo:
+        raise_store_error(err, {"command": "marketplace/repository/install"})
+    assert "Devices & services" in str(excinfo.value)

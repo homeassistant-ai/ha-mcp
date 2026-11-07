@@ -18,7 +18,7 @@ from typing import Any
 
 from ..errors import ErrorCode, create_error_response
 from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
-from .hacs_backend import StoreApi
+from .hacs_backend import DUPLICATE_RECORD_SUGGESTIONS, StoreApi
 from .helpers import raise_tool_error
 
 # The stores use the GitHub repository id as the repository id.
@@ -72,15 +72,7 @@ async def route_own_repository_download(
                 f"{names} are both installed and both claim "
                 "custom_components/ha_mcp_tools, so the store refuses to update "
                 "either of them. One repository has to own the integration.",
-                suggestions=[
-                    "Keep homeassistant-ai/ha-mcp (the default-catalog entry) and "
-                    "uninstall the other record from the store.",
-                    "The store refuses to uninstall while the HA-MCP integration "
-                    "is set up: disable its entries under Settings > Devices & "
-                    "services first, uninstall the duplicate, reinstall or update "
-                    "the kept one, then enable the entries and restart Home "
-                    "Assistant.",
-                ],
+                suggestions=DUPLICATE_RECORD_SUGGESTIONS,
                 context={
                     "repository_id": repository_id,
                     "installed": [repo.get("full_name") for repo in installed],

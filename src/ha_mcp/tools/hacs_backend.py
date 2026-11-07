@@ -76,6 +76,26 @@ _GATE_SUGGESTIONS = {
     ],
 }
 
+# Two store records claiming custom_components/ha_mcp_tools (#2993): the
+# Marketplace refuses to update either, and refuses to uninstall a record while
+# any HA-MCP config entry exists, disabled ones included. Both ways out were
+# checked on a live instance; neither can be driven through this server.
+DUPLICATE_RECORD_SUGGESTIONS = [
+    "The store refuses to uninstall a record while any HA-MCP entry exists, "
+    "disabled ones included. Ask the user before either route; both need "
+    "Settings > Devices & services or a terminal, which this server cannot "
+    "drive.",
+    "Route 1 (no terminal): delete every HA-MCP entry under Settings > Devices "
+    "& services, uninstall the duplicate record in the store, update the kept "
+    "record, add the entries back and restart. An embedded server entry gets "
+    "a new connect URL, so MCP clients reconnect.",
+    "Route 2 (keeps the entries): with Home Assistant Core stopped, set "
+    '"installed": false on the duplicate record in '
+    ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
+    "start Core, then update the kept record.",
+]
+_OWNED_DIRECTORY_MARKER = "directory belongs to"
+
 
 @dataclass(frozen=True)
 class StoreApi:
@@ -195,7 +215,10 @@ def raise_store_error(
     The gates are told apart by Core's error code: their messages ("Connect a
     GitHub account ...") would otherwise read as a connection failure.
     """
-    if suggestions := _GATE_SUGGESTIONS.get(err.code or ""):
+    suggestions = _GATE_SUGGESTIONS.get(err.code or "")
+    if _OWNED_DIRECTORY_MARKER in str(err):
+        suggestions = DUPLICATE_RECORD_SUGGESTIONS
+    if suggestions:
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
