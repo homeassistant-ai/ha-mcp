@@ -1,7 +1,7 @@
 """Config-resolution + reference reads over the ``ha_mcp_tools`` component gate.
 
-Two consumers in the automation/script/scene family pay for a whole-collection
-fetch to answer a single question:
+Two consumers in the automation/script/scene family read through the
+component:
 
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
@@ -25,14 +25,12 @@ returns its payload (an EMPTY ``matches`` list is authoritative — "no registry
 entry with that unique_id" — kept distinct from the ``None`` miss). It maps a
 transport failure (``HomeAssistantConnectionError`` off ``send_command`` or from
 a failed (re)build of the pooled socket, or ``HomeAssistantAuthError``) to
-``None`` too, NEVER propagating it, because its consumers' legacy paths do not
-die identically on a pooled-WS drop:
-
-- ``fetch_entity_lookup_via_component`` consumers fall back to the legacy
-  WebSocket registry bridge or REST state reads. The post-write resolver catches
-  known API/transport failures and retains a best-effort entity ID; later wait
-  and category operations report any verification or assignment failure. Removal
-  resolvers retain their own error policies.
+``None`` too, NEVER propagating it: its consumers fall back to the legacy
+WebSocket registry bridge or REST state reads, which an escaping error would
+skip. The post-write resolver catches known API/transport failures and retains
+a best-effort entity ID; later wait and category operations report any
+verification or assignment failure. Removal resolvers retain their own error
+policies.
 
 **GET-path invariant:** the automation/script/scene *config-get* tools never
 read the config body through the component — its in-process ``raw_config``
@@ -132,25 +130,66 @@ async def fetch_entity_lookup_via_component(
     return matches
 
 
+_INSTALL_HINT = (
+    "install the ha_mcp_tools component via HACS (the Marketplace on Home "
+    "Assistant 2026.11+) and restart Home Assistant"
+)
+
+
+def _unavailable(error: str) -> dict[str, Any]:
+    return {"status": "unavailable", "error": error}
+
+
+def _answer_shape_error(result: Any) -> str | None:
+    """Why *result* is not a ``config_references`` answer, or None if it is."""
+    if not isinstance(result, dict) or not isinstance(result.get("status"), str):
+        return "no status"
+    if result["status"] != "ok":
+        return None if result.get("error") else "no error for a failed check"
+    fields = {
+        "missing": ("kind", "value"),
+        "mismatches": ("path", "kind", "name", "entity_id", "offered"),
+    }
+    for key, needed in fields.items():
+        items = result.get(key)
+        if not isinstance(items, list) or not all(
+            isinstance(item, dict) and all(k in item for k in needed) for item in items
+        ):
+            return f"malformed {key}"
+    return None
+
+
 async def fetch_config_references_via_component(
     client: Any, kind: str, config: dict[str, Any]
-) -> dict[str, Any] | None:
-    """One ``ha_mcp_tools/config_references`` read; ``None`` ⇒ the component is absent.
+) -> dict[str, Any]:
+    """Core's verdict on *config*'s references, through ``ha_mcp_tools/config_references``.
 
     The component validates *config* (an automation, script or scene, per
     *kind*) with Core, collects its references with Core's helpers, checks them
     against Core's registries and puts each entity target to Core's target
     lookups. It answers ``{"status": "ok", "missing": [...], "mismatches":
     [...]}``, ``{"status": "invalid", "error": ...}`` when Core's validator
-    refuses the config, or ``{"status": "unavailable", "error": ...}``. A
-    command or transport failure is answered the same unavailable way: the
-    write goes on and the caller reports the references as unchecked. There is
-    no REST/WebSocket fallback, since Core serves none of this for a config
+    refuses the config, or ``{"status": "unavailable", "error": ...}``. An
+    absent or outdated component, a command or transport failure and an answer
+    of the wrong shape are answered the same unavailable way, naming the cause:
+    the write goes on and the caller reports the references as unchecked. There
+    is no REST/WebSocket fallback, since Core serves none of this for a config
     that is not saved yet.
     """
     caps = await get_component_caps(client)
+    if caps is None:
+        return _unavailable(
+            "references were not checked: Home Assistant checks them through the "
+            "ha_mcp_tools component, which is not installed or did not answer; "
+            + _INSTALL_HINT
+        )
+    outdated = _unavailable(
+        "references were not checked: the installed ha_mcp_tools component "
+        "predates the reference check; update it via HACS (the Marketplace on "
+        "Home Assistant 2026.11+)"
+    )
     if not component_supports(caps, CONFIG_REFERENCES):
-        return None
+        return outdated
     try:
         ws = await get_websocket_client(
             url=client.base_url,
@@ -161,14 +200,17 @@ async def fetch_config_references_via_component(
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
-        return {"status": "unavailable", "error": str(exc) or type(exc).__name__}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("%s connection error: %r", WS_CONFIG_REFERENCES, exc)
-        return {"status": "unavailable", "error": str(exc) or type(exc).__name__}
+            return outdated
+        logger.warning("%s failed: %r", WS_CONFIG_REFERENCES, exc)
+        return _unavailable(str(exc) or type(exc).__name__)
+    except Exception as exc:
+        # A soft check must never abort the write it accompanies.
+        logger.warning("%s connection error", WS_CONFIG_REFERENCES, exc_info=True)
+        return _unavailable(str(exc) or type(exc).__name__)
     result = raw.get("result")
-    if not isinstance(result, dict) or not isinstance(result.get("status"), str):
-        return {
-            "status": "unavailable",
-            "error": f"{WS_CONFIG_REFERENCES} answered without a status",
-        }
+    if (shape := _answer_shape_error(result)) is not None or not isinstance(
+        result, dict
+    ):
+        logger.warning("%s answered with %s: %r", WS_CONFIG_REFERENCES, shape, result)
+        return _unavailable(f"{WS_CONFIG_REFERENCES} answered with {shape}")
     return result

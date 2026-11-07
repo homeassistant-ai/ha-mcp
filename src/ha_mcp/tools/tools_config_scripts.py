@@ -1038,7 +1038,7 @@ class ConfigScriptTools:
         detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
-        # Soft warnings only: the write happens even when references don't (#940).
+        # Soft warnings only: the write happens even if references don't resolve.
         validation_meta = await validate_config_references(
             self._client, config_dict, "script"
         )

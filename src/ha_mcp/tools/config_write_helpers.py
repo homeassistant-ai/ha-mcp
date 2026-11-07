@@ -8,7 +8,7 @@ metadata, and the config reload waiter.
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -177,7 +177,7 @@ async def apply_entity_category(
 
 
 def merge_validation_meta(
-    result: dict[str, Any], validation_meta: dict[str, Any]
+    result: dict[str, Any], validation_meta: Mapping[str, Any]
 ) -> None:
     """Attach reference-validator output to a set-tool success ``result``.
 

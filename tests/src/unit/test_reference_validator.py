@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import component_api, component_config_reads
 from ha_mcp.tools.reference_validator import validate_config_references
 
@@ -44,11 +48,11 @@ def _client() -> Any:
     return client
 
 
-async def _validate(
-    ws: Any, client: Any | None = None, kind: str = "automation"
-) -> dict[str, Any]:
+async def _validate(ws: Any, client: Any | None = None) -> dict[str, Any]:
     with patch_ws(ws, component_config_reads):
-        return await validate_config_references(client or _client(), _CONFIG, kind)
+        return await validate_config_references(
+            client or _client(), _CONFIG, "automation"
+        )
 
 
 def _answer(**answer: Any) -> Any:
@@ -78,8 +82,8 @@ async def test_select_option_on_an_input_select_is_reported_with_cores_offer():
     (warning,) = result["warnings"]
     assert warning["path"] == "actions[0]"
     assert warning["value"] == "input_select.mode_of_travel"
-    assert "select.select_option" in warning["reason"]
-    assert "input_select.select_option" in warning["reason"]
+    assert warning["target_of"] == "select.select_option"
+    assert "input_select.select_option" in warning["offered"]
     assert "references_unchecked" not in result
     (call,) = [
         c
@@ -113,22 +117,82 @@ async def test_a_config_core_refuses_leaves_the_references_unchecked():
 @pytest.mark.anyio
 async def test_without_the_component_the_references_are_reported_unchecked():
     """No server-side copy of Core's rules stands in for the component."""
-    caps = {**_CAPS, "capabilities": []}
-    ws = make_ws("ha_mcp_tools/config_references", info_result=caps)
-    result = await _validate(ws)
+    client = _client()
+    client.base_url = None  # no credentials: no component to ask
+    result = await _validate(make_ws("unused"), client)
     assert result["warnings"] == []
-    assert "ha_mcp_tools" in result["references_unchecked"]
+    assert "not installed" in result["references_unchecked"]
+
+
+@pytest.mark.parametrize(
+    "ws",
+    [
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS | {"capabilities": []},
+            ),
+            id="capability-not-advertised",
+        ),
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS,
+                cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
+            ),
+            id="command-unknown",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_an_outdated_component_is_told_apart_from_an_absent_one(ws):
+    """An installed component from before the check was told it was missing."""
+    client = _client()
+    result = await _validate(ws, client)
+    assert result["warnings"] == []
+    assert "update it" in result["references_unchecked"]
 
 
 @pytest.mark.anyio
-async def test_an_older_component_without_the_command_is_reported_and_forgotten():
+async def test_an_unknown_command_forgets_the_cached_capabilities():
     client = _client()
     ws = make_ws(
         "ha_mcp_tools/config_references",
         info_result=_CAPS,
         cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
     )
+    await _validate(ws, client)
+    assert client not in component_api._CAPS_CACHE
+
+
+@pytest.mark.parametrize(
+    "ws",
+    [
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS,
+                cmd_exc=HomeAssistantConnectionError("closed"),
+            ),
+            id="connection-lost",
+        ),
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS,
+                cmd_exc=HomeAssistantCommandTimeout("slow"),
+            ),
+            id="timeout",
+        ),
+        pytest.param(_answer(status="ok", missing=None, mismatches=[]), id="malformed"),
+        pytest.param(_answer(status="invalid"), id="failed-without-error"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_failed_check_never_aborts_the_write_and_says_why(ws):
+    """The check runs before the write; an error escaping it failed the write."""
+    client = _client()
     result = await _validate(ws, client)
     assert result["warnings"] == []
     assert result["references_unchecked"]
-    assert client not in component_api._CAPS_CACHE
+    assert client in component_api._CAPS_CACHE

@@ -67,8 +67,6 @@ def mock_client():
             }
         ]
     )
-    # Required by ``validate_config_references`` (asyncio.gather with get_states).
-    client.get_services = AsyncMock(return_value={})
     # Registry reads answer an entry without categories.
     client.send_websocket_message = AsyncMock(
         return_value={"success": True, "result": {"categories": {}}}

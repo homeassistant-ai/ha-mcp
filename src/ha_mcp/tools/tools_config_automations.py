@@ -80,7 +80,7 @@ from .helpers import (
     reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
-from .reference_validator import validate_config_references
+from .reference_validator import ValidationMeta, validate_config_references
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
 from .ws_waiters import (
@@ -1236,7 +1236,7 @@ class AutomationConfigTools:
         effective_category: str | None,
         wait: bool,
         bp_warnings: BestPracticeCheckResult,
-        validation_meta: dict[str, Any],
+        validation_meta: ValidationMeta,
         MandatoryBPS: bool,
         detached_blueprint: str | None = None,
         enabled: bool | None = None,

@@ -14,7 +14,11 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
-from ...utilities.wait_helpers import wait_for_condition, wait_for_tool_result
+from ...utilities.wait_helpers import (
+    wait_for_condition,
+    wait_for_entity_registration,
+    wait_for_tool_result,
+)
 
 pytestmark = pytest.mark.automation
 
@@ -230,22 +234,31 @@ async def test_unknown_area_target_is_warned(mcp_client) -> None:
             created = await mcp.call_tool_success(
                 "ha_config_set_automation", {"entity_id": config_id, "config": config}
             )
-            warnings = (created.get("validation") or {}).get("warnings") or []
-            assert any(w.get("value") == area_id for w in warnings), created
+            assert any(w.get("value") == area_id for w in _checked_warnings(created)), (
+                created
+            )
         finally:
             await _remove(mcp_client, config_id)
 
 
+def _checked_warnings(created: dict[str, Any]) -> list[dict[str, Any]]:
+    """The write's reference warnings, after proving the references were checked."""
+    validation = created.get("validation") or {}
+    assert "references_unchecked" not in validation, created
+    return validation.get("warnings") or []
+
+
 @pytest.mark.requires_component_surface
-async def test_entity_target_core_does_not_offer_is_warned(
-    mcp_client, ha_client
-) -> None:
+async def test_entity_target_core_does_not_offer_is_warned(mcp_client) -> None:
     """#2989: ``select.select_option`` aimed at an ``input_select`` saved
     silently and never changed it. Core's own target lookup refuses the pair,
-    and the warning carries what Core offers for the entity."""
+    and the warning carries what Core offers for the entity. The offered action
+    on the same entity is not warned, and a step holding a template is still
+    checked."""
     tag = _tag()
     config_id = f"e2e_target_offer_{tag}"
     helper = f"input_select.e2e_mode_{tag}"
+    ghost = f"notify.e2e_no_such_{tag}"
     config = _config(
         tag,
         actions=[
@@ -253,7 +266,13 @@ async def test_entity_target_core_does_not_offer_is_warned(
                 "action": "select.select_option",
                 "target": {"entity_id": helper},
                 "data": {"option": "a"},
-            }
+            },
+            {
+                "action": "input_select.select_option",
+                "target": {"entity_id": helper},
+                "data": {"option": "b"},
+            },
+            {"action": ghost, "data": {"message": "{{ now() }}"}},
         ],
     )
     async with MCPAssertions(mcp_client) as mcp:
@@ -266,24 +285,97 @@ async def test_entity_target_core_does_not_offer_is_warned(
                     "config": {"options": ["a", "b"]},
                 },
             )
-
-            async def _helper_state() -> bool:
-                states = await ha_client.get_states()
-                return any(s.get("entity_id") == helper for s in states)
-
-            assert await wait_for_condition(_helper_state, timeout=15)
+            assert await wait_for_entity_registration(mcp_client, helper, timeout=15)
             created = await mcp.call_tool_success(
                 "ha_config_set_automation", {"entity_id": config_id, "config": config}
             )
-            warnings = (created.get("validation") or {}).get("warnings") or []
-            (warning,) = [w for w in warnings if w.get("value") == helper]
-            assert "input_select.select_option" in warning["reason"], created
+            warnings = _checked_warnings(created)
+            (target,) = [w for w in warnings if w.get("value") == helper]
+            assert target["target_of"] == "select.select_option", created
+            assert "input_select.select_option" in target["offered"], created
+            assert any(w.get("value") == ghost for w in warnings), created
         finally:
             await _remove(mcp_client, config_id)
             await safe_call_tool(
                 mcp_client,
                 "ha_remove_helpers_integrations",
                 {"target": helper, "confirm": True},
+            )
+
+
+@pytest.mark.requires_component_surface
+async def test_blueprint_input_core_does_not_have_is_warned(mcp_client) -> None:
+    """Core applies the blueprint's inputs before the references are read, so
+    an entity passed as an input that Home Assistant does not have is warned."""
+    tag = _tag()
+    config_id = f"e2e_blueprint_refs_{tag}"
+    ghost = f"binary_sensor.e2e_no_such_{tag}"
+    config = {
+        "alias": f"E2E native contract {tag}",
+        "use_blueprint": {
+            "path": "homeassistant/motion_light.yaml",
+            "input": {
+                "motion_entity": ghost,
+                "light_target": {"entity_id": f"light.e2e_no_such_{tag}"},
+            },
+        },
+    }
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation", {"entity_id": config_id, "config": config}
+            )
+            assert any(w.get("value") == ghost for w in _checked_warnings(created)), (
+                created
+            )
+        finally:
+            await _remove(mcp_client, config_id)
+
+
+@pytest.mark.requires_component_surface
+async def test_script_and_scene_references_core_does_not_have_are_warned(
+    mcp_client,
+) -> None:
+    """Scripts and scenes are put to Core's own validator and registries too."""
+    tag = _tag()
+    script_id = f"e2e_script_refs_{tag}"
+    scene_id = f"e2e_scene_refs_{tag}"
+    ghost_service = f"notify.e2e_no_such_{tag}"
+    ghost_light = f"light.e2e_no_such_{tag}"
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            script = await mcp.call_tool_success(
+                "ha_config_set_script",
+                {
+                    "script_id": script_id,
+                    "config": {
+                        "alias": f"E2E refs {tag}",
+                        "sequence": [{"action": ghost_service}],
+                    },
+                },
+            )
+            assert any(
+                w.get("value") == ghost_service for w in _checked_warnings(script)
+            ), script
+            scene = await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "config": {
+                        "name": f"E2E refs {tag}",
+                        "entities": {ghost_light: {"state": "on"}},
+                    },
+                },
+            )
+            assert any(
+                w.get("value") == ghost_light for w in _checked_warnings(scene)
+            ), scene
+        finally:
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_script", {"script_id": script_id}
+            )
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
             )
 
 
@@ -562,7 +654,7 @@ async def test_none_and_all_targets_are_not_warned(mcp_client) -> None:
             created = await mcp.call_tool_success(
                 "ha_config_set_automation", {"entity_id": config_id, "config": config}
             )
-            warnings = (created.get("validation") or {}).get("warnings") or []
+            warnings = _checked_warnings(created)
             assert not any(w.get("value") in ("none", "all") for w in warnings), created
         finally:
             await _remove(mcp_client, config_id)

@@ -29,8 +29,8 @@ def mock_client():
     """Mock client that satisfies the upsert / get paths."""
     client = MagicMock()
     # Credential-less so the component gate short-circuits (get_component_caps
-    # returns None): these tests pin the legacy registry-list path, not the
-    # component route.
+    # returns None): entity resolution takes the legacy registry-list path and
+    # the references are reported unchecked.
     client.base_url = None
     client.token = None
     client.upsert_scene_config = AsyncMock(

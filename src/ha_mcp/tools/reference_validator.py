@@ -20,20 +20,30 @@ from typing import Any, Literal, NotRequired, TypedDict
 from .component_config_reads import fetch_config_references_via_component
 
 ConfigKind = Literal["automation", "script", "scene"]
-
-_UNCHECKED_WITHOUT_COMPONENT = (
-    "references were not checked: Home Assistant checks them through the "
-    "ha_mcp_tools component, which is not available"
-)
+RefKind = Literal["service", "entity", "device", "area", "floor", "label"]
 
 
 class ValidationWarning(TypedDict):
-    """One warning in the tool response."""
+    """One warning in the tool response.
 
-    kind: str
+    A missing reference has no ``path``: Core's helpers collect references as
+    sets. A target Core does not offer carries its ``path``, the item it is a
+    target of (``target_of``) and what Core does offer for it (``offered``).
+    """
+
+    kind: RefKind
     value: str
     reason: str
     path: NotRequired[str]
+    target_of: NotRequired[str]
+    offered: NotRequired[list[str]]
+
+
+class ValidationMeta(TypedDict):
+    """Core's warnings, or why the references went unchecked."""
+
+    warnings: list[ValidationWarning]
+    references_unchecked: NotRequired[str]
 
 
 def _warnings(answer: dict[str, Any]) -> list[ValidationWarning]:
@@ -43,37 +53,40 @@ def _warnings(answer: dict[str, Any]) -> list[ValidationWarning]:
             "value": missing["value"],
             "reason": f"Home Assistant has no {missing['kind']} {missing['value']}",
         }
-        for missing in answer.get("missing", [])
+        for missing in answer["missing"]
     ]
     warnings.extend(
         {
-            "path": mismatch["path"],
             "kind": "entity",
             "value": mismatch["entity_id"],
+            "path": mismatch["path"],
+            "target_of": mismatch["name"],
+            "offered": mismatch["offered"],
             "reason": (
                 f"Home Assistant does not offer {mismatch['entity_id']} as a "
-                f"target of {mismatch['name']}; for that entity it offers: "
-                + (", ".join(mismatch["offered"]) or "nothing")
+                f"target of {mismatch['name']}; see offered for what it does offer"
             ),
         }
-        for mismatch in answer.get("mismatches", [])
+        for mismatch in answer["mismatches"]
     )
     return warnings
 
 
 async def validate_config_references(
     client: Any, config: dict[str, Any], kind: ConfigKind
-) -> dict[str, Any]:
+) -> ValidationMeta:
     """Core's verdict on *config*'s references, as validation metadata.
 
-    Returns ``{"warnings": [...]}``, plus ``references_unchecked`` naming why
-    when the component could not answer: it is not installed, Core's
-    validator refused the config (Core refuses the write itself), or a part of
-    Core it asks is missing.
+    ``references_unchecked`` names why nothing was checked: the component is
+    absent or outdated, the command or transport failed, Core's validator
+    refused the config (Core then refuses the write itself), or the component's
+    check failed.
     """
     answer = await fetch_config_references_via_component(client, kind, config)
-    if answer is None:
-        return {"warnings": [], "references_unchecked": _UNCHECKED_WITHOUT_COMPONENT}
-    if answer.get("status") != "ok":
-        return {"warnings": [], "references_unchecked": answer.get("error")}
+    if answer["status"] != "ok":
+        return {
+            "warnings": [],
+            "references_unchecked": answer.get("error")
+            or f"references were not checked: the check answered {answer['status']}",
+        }
     return {"warnings": _warnings(answer)}

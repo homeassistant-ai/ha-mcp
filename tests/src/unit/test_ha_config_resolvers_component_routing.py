@@ -1,7 +1,7 @@
 """Routing tests for the entity_lookup component consumer.
 
 A set/remove/post-write consumer pays for a whole-collection fetch to answer
-a single question, and route through the ``ha_mcp_tools`` component when it
+a single question, and routes through the ``ha_mcp_tools`` component when it
 advertises the capability:
 
 - ``ConfigSceneTools._resolve_scene_entity_id`` (unique_id -> entity_id) dumps the
@@ -14,13 +14,12 @@ advertises the capability:
 
 These pin the standard component-routing taxonomy: component
 preferred, capability-miss -> legacy, ``unknown_command`` -> invalidate caps +
-legacy, non-unknown command error -> legacy WITHOUT invalidating, AND — uniform
-across every consumer — a transport failure -> legacy: both a
+legacy, non-unknown command error -> legacy WITHOUT invalidating, AND a
+transport failure -> legacy: both a
 ``HomeAssistantConnectionError`` off the frame AND the same error from
 ``get_websocket_client()`` failing to establish the socket fall back rather than
-propagate. The legacy path does not die identically on a pooled-WS drop: the
-scene resolver's legacy scan rides the ``send_websocket_message`` bridge
-(with a naive ``scene.{id}`` fallback), so an escaping error would abort a
+propagate. The scene resolver's legacy scan rides the ``send_websocket_message``
+bridge (with a naive ``scene.{id}`` fallback), so an escaping error would abort a
 landed write / a delete the legacy path would have completed. Plus the GET-path
 invariant: with ``allow_component`` unset
 (the config-get default) the resolvers never touch the component even with the

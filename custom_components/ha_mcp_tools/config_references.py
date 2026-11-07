@@ -28,6 +28,7 @@ import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+from .automation_config import _unavailable
 from .helper_collections import _INVALID_ERRORS
 
 if TYPE_CHECKING:
@@ -40,12 +41,8 @@ CAPABILITY = "config_references"
 _KINDS = ("automation", "script", "scene")
 
 
-def _unavailable(error: str) -> dict[str, Any]:
-    return {"status": "unavailable", "error": error}
-
-
-def _core() -> SimpleNamespace | None:
-    """Core's parts this bridge uses, or None on a Core without them."""
+def _core() -> SimpleNamespace | str:
+    """Core's parts this bridge uses, or the names of those this Core lacks."""
     try:
         from homeassistant import const
         from homeassistant.components.automation import config as automation_config
@@ -66,8 +63,8 @@ def _core() -> SimpleNamespace | None:
         )
         from homeassistant.helpers import config_validation as cv
         from homeassistant.helpers.script import Script
-    except ImportError:
-        return None
+    except ImportError as err:
+        return str(err.name or err)
     parts = SimpleNamespace(
         const=const,
         # Private, but they are what Core's loaders run; the public ones raise
@@ -81,8 +78,16 @@ def _core() -> SimpleNamespace | None:
         script_entities=getattr(Script, "_find_referenced_entities", None),
         script_devices=getattr(Script, "_find_referenced_devices", None),
         script_targets=getattr(Script, "_find_referenced_target", None),
-        trigger=trigger,
-        condition=condition,
+        trigger=SimpleNamespace(
+            entities=getattr(trigger, "async_extract_entities", None),
+            devices=getattr(trigger, "async_extract_devices", None),
+            targets=getattr(trigger, "async_extract_targets", None),
+        ),
+        condition=SimpleNamespace(
+            entities=getattr(condition, "async_extract_entities", None),
+            devices=getattr(condition, "async_extract_devices", None),
+            targets=getattr(condition, "async_extract_targets", None),
+        ),
         registries=SimpleNamespace(
             entity=entity_registry.async_get,
             device=device_registry.async_get,
@@ -92,7 +97,7 @@ def _core() -> SimpleNamespace | None:
         ),
         determine_action=getattr(cv, "determine_script_action", None),
         call_service=getattr(cv, "SCRIPT_ACTION_CALL_SERVICE", None),
-        service_schema=getattr(cv, "SERVICE_SCHEMA", None),
+        service_name=getattr(cv, "service", None),
         target_selection=getattr(target, "TargetSelection", None),
         referenced=getattr(target, "async_extract_referenced_entity_ids", None),
         is_template=getattr(template, "is_template_string", None),
@@ -110,12 +115,18 @@ def _core() -> SimpleNamespace | None:
         },
     )
     missing = [
-        name
+        f"{name}.{sub}" if sub else name
         for name, value in vars(parts).items()
-        if value is None
-        or (isinstance(value, dict) and any(v is None for v in value.values()))
+        for sub, part in (
+            value.items()
+            if isinstance(value, dict)
+            else vars(value).items()
+            if isinstance(value, SimpleNamespace)
+            else [("", value)]
+        )
+        if part is None
     ]
-    return None if missing else parts
+    return ", ".join(missing) if missing else parts
 
 
 async def _validated(
@@ -146,18 +157,20 @@ async def _validated(
     triggers = list(checked.get(const.CONF_TRIGGERS) or [])
     conditions = list(checked.get(const.CONF_CONDITIONS) or [])
     actions = list(checked.get(actions_key) or [])
-    tree = {actions_key: actions}
+    # Paths follow Core's validated form (plural root keys, ``action`` for
+    # ``service``), which is what the get tools return.
     if kind == "automation":
         tree = {
             const.CONF_TRIGGERS: triggers,
             const.CONF_CONDITIONS: conditions,
-            **tree,
+            actions_key: actions,
         }
+    else:
+        tree = {actions_key: actions}
     return {
         "triggers": triggers,
         "conditions": conditions,
         "actions": actions,
-        # The validated config as written, for the paths reported.
         "tree": tree,
     }, None
 
@@ -165,22 +178,18 @@ async def _validated(
 def _references(core: SimpleNamespace, parts: dict[str, Any]) -> dict[str, set]:
     """What the config references, collected as Core's automation entity does."""
     const = core.const
-    if "scene" in parts:
-        return {"entity": set(parts["scene"])}
-    actions, conditions, triggers = (
-        parts["actions"],
-        parts["conditions"],
-        parts["triggers"],
-    )
+    actions = parts["actions"]
+    conditions = parts["conditions"]
+    triggers = parts["triggers"]
     found: dict[str, set] = {"entity": set(), "device": set()}
     core.script_entities(found["entity"], actions)
     core.script_devices(found["device"], actions)
     for conf in conditions:
-        found["entity"] |= core.condition.async_extract_entities(conf)
-        found["device"] |= core.condition.async_extract_devices(conf)
+        found["entity"] |= set(core.condition.entities(conf))
+        found["device"] |= set(core.condition.devices(conf))
     for conf in triggers:
-        found["entity"] |= set(core.trigger.async_extract_entities(conf))
-        found["device"] |= set(core.trigger.async_extract_devices(conf))
+        found["entity"] |= set(core.trigger.entities(conf))
+        found["device"] |= set(core.trigger.devices(conf))
     for kind, attr in (
         ("area", const.ATTR_AREA_ID),
         ("floor", const.ATTR_FLOOR_ID),
@@ -189,9 +198,9 @@ def _references(core: SimpleNamespace, parts: dict[str, Any]) -> dict[str, set]:
         found[kind] = set()
         core.script_targets(attr, found[kind], actions)
         for conf in conditions:
-            found[kind] |= core.condition.async_extract_targets(conf, attr)
+            found[kind] |= set(core.condition.targets(conf, attr))
         for conf in triggers:
-            found[kind] |= set(core.trigger.async_extract_targets(conf, attr))
+            found[kind] |= set(core.trigger.targets(conf, attr))
     return found
 
 
@@ -228,39 +237,39 @@ class _Steps:
         self.core = core
         self.targeted = targeted
         self.services: set[str] = set()
-        self.items: list[dict[str, Any]] = []
+        self.targets: list[dict[str, Any]] = []
 
     def _targeted_item(self, node: dict[str, Any], path: str) -> bool:
         """A trigger or condition Core describes with a target; True if one."""
         const = self.core.const
         target = node.get(const.CONF_TARGET)
+        if not isinstance(target, dict):
+            return False
         for kind, keys in (
             ("triggers", (const.CONF_TRIGGER, const.CONF_PLATFORM)),
             ("conditions", (const.CONF_CONDITION,)),
         ):
             name = next((node[k] for k in keys if isinstance(node.get(k), str)), None)
-            if (
-                not isinstance(name, str)
-                or name not in self.targeted[kind]
-                or not isinstance(target, dict)
-            ):
+            if not isinstance(name, str) or name not in self.targeted[kind]:
                 continue
             selected = self.core.referenced(
                 self.hass, self.core.target_selection(target), expand_group=False
             )
-            self._add(
-                kind,
-                name,
-                {e for e in selected.referenced if not self.core.is_template(e)},
-                path,
-            )
+            literal = {
+                e
+                for e in selected.referenced
+                if isinstance(e, str) and not self.core.is_template(e)
+            }
+            self._add(kind, name, literal, path)
             return True
         return False
 
     def _add(self, kind: str, name: str, entity_ids: set[str], path: str) -> None:
         for entity_id in sorted(entity_ids):
+            # An entity Core has no state for is reported under ``missing``;
+            # Core's lookup would offer nothing for it.
             if self.hass.states.get(entity_id) is not None:
-                self.items.append(
+                self.targets.append(
                     {"path": path, "kind": kind, "name": name, "entity_id": entity_id}
                 )
 
@@ -285,19 +294,20 @@ class _Steps:
             self.walk(value, f"{path}.{key}" if path else key)
 
     def _service_step(self, node: dict[str, Any], path: str) -> None:
+        name = node.get(self.core.const.CONF_ACTION)
+        if not isinstance(name, str):
+            return  # a templated action names no service until it runs
         try:
-            # Core's own service-call schema: an ``action`` key in an event's
-            # data or a notification's buttons is no service call.
-            self.core.service_schema(copy.deepcopy(node))
+            # Core's own service-name check: an event's ``action`` data (a
+            # mobile app notification action id) is no service call.
+            self.core.service_name(name)
         except _INVALID_ERRORS:
             return
-        name = node.get(self.core.const.CONF_ACTION)
-        if isinstance(name, str):
-            self.services.add(name)
-            if name in self.targeted["services"]:
-                found: set[str] = set()
-                self.core.script_entities(found, [node])
-                self._add("services", name, found, path)
+        self.services.add(name)
+        if name in self.targeted["services"]:
+            found: set[str] = set()
+            self.core.script_entities(found, [node])
+            self._add("services", name, found, path)
 
 
 def _flat(kind: str, descriptions: Any) -> dict[str, Any]:
@@ -319,12 +329,15 @@ async def _mismatches(
 ) -> list[dict[str, Any]]:
     offered: dict[tuple[str, str], set[str]] = {}
     mismatches: list[dict[str, Any]] = []
-    for item in steps.items:
+    for item in steps.targets:
         key = (item["kind"], item["entity_id"])
         if key not in offered:
             offered[key] = set(
                 await core.for_target[item["kind"]](
-                    hass, {"entity_id": [item["entity_id"]]}, True
+                    hass,
+                    {"entity_id": [item["entity_id"]]},
+                    # A service call expands a group target to its members.
+                    expand_group=True,
                 )
             )
         if item["name"] not in offered[key]:
@@ -332,42 +345,53 @@ async def _mismatches(
     return mismatches
 
 
+async def _targeted(hass: HomeAssistant, core: SimpleNamespace) -> dict[str, set]:
+    """Names of the services, triggers and conditions Core describes with a target."""
+    targeted: dict[str, set] = {}
+    for kind, describe in core.descriptions.items():
+        targeted[kind] = {
+            name
+            for name, description in _flat(kind, await describe(hass)).items()
+            if isinstance(description, dict) and "target" in description
+        }
+    return targeted
+
+
 async def async_config_references(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
     core = _core()
-    if core is None:
-        return _unavailable("This Home Assistant lacks a part this check asks")
+    if isinstance(core, str):
+        _LOGGER.warning("%s: this Home Assistant lacks %s", WS_CONFIG_REFERENCES, core)
+        return _unavailable(
+            f"this Home Assistant lacks {core}, which the reference check needs"
+        )
     try:
         parts, error = await _validated(hass, core, msg["kind"], msg["config"])
         if error is not None:
             return {"status": "invalid", "error": error}
-        found = _references(core, parts)
-        if "scene" in parts:
-            return {
-                "status": "ok",
-                "missing": _missing(hass, core, found),
-                "mismatches": [],
-            }
-        targeted = {
-            kind: {
-                name
-                for name, description in _flat(kind, await describe(hass)).items()
-                if isinstance(description, dict) and "target" in description
-            }
-            for kind, describe in core.descriptions.items()
-        }
-        steps = _Steps(hass, core, targeted)
-        steps.walk(parts["tree"], "")
-        found["service"] = steps.services
+        if msg["kind"] == "scene":
+            found = {"entity": set(parts["scene"])}
+            mismatches: list[dict[str, Any]] = []
+        else:
+            found = _references(core, parts)
+            steps = _Steps(hass, core, await _targeted(hass, core))
+            steps.walk(parts["tree"], "")
+            found["service"] = steps.services
+            mismatches = await _mismatches(hass, core, steps)
         return {
             "status": "ok",
             "missing": _missing(hass, core, found),
-            "mismatches": await _mismatches(hass, core, steps),
+            "mismatches": mismatches,
         }
     except Exception as err:
-        _LOGGER.warning("%s failed", WS_CONFIG_REFERENCES, exc_info=True)
-        return _unavailable(str(err) or type(err).__name__)
+        _LOGGER.warning(
+            "%s failed on a %s config", WS_CONFIG_REFERENCES, msg["kind"], exc_info=True
+        )
+        return _unavailable(
+            f"the reference check failed ({type(err).__name__}: {err}); "
+            "see the Home Assistant log"
+        )
 
 
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:

@@ -111,11 +111,10 @@ the info handshake carries no capability entry:
   config-reference validator of servers released before ``config_references``
   consumes (kept for them): ``{services: [{domain, services:{name:{}}}],
   entity_ids: [...]}``. The ``services`` shape is the REST ``/api/services`` list
-  ``build_service_index`` reads (bodies are empty dicts — the index only reads
-  keys); ``entity_ids`` is every ``hass.states.async_all()`` id. With
+  (bodies are empty dicts — those validators index only the names);
+  ``entity_ids`` is every ``hass.states.async_all()`` id. With
   ``include_targets`` (flag ``reference_data_targets``) it adds the device,
-  area, floor and label registry ids, for the validator's target checks. Pure,
-  no prep.
+  area, floor and label registry ids, for their target checks. Pure, no prep.
 * ``ha_mcp_tools/automation_config`` — Core's automation validator run on a
   proposed config (``validate``: Core's ``validation_status`` and humanized
   error), Core's trigger/condition descriptions (``describe``), and an

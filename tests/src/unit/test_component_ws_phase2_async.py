@@ -31,8 +31,6 @@ from types import SimpleNamespace
 
 import pytest
 
-# The service index the server's reference validator builds off reference_data
-# (importable without the HA stubs — pure, like ha_mcp.tools.tools_search).
 # Import EVERYTHING component-side (including ``wsapi`` itself) THROUGH the sibling
 # module — importing it installs the ``homeassistant.*`` MagicMock stubs and forces
 # the REAL voluptuous into sys.modules FIRST, so a direct ``custom_components``

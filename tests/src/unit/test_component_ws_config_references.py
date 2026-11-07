@@ -30,10 +30,11 @@ for _mod in (
 ):
     sys.modules.setdefault(_mod, MagicMock())
 
-from ._component_ws_api import wsapi  # noqa: E402  (installs stubs, loads surface)
+from ha_mcp.tools.reference_validator import _warnings  # noqa: E402
 
-# Loaded by the import above, after the stubs it needs.
-config_references = sys.modules["custom_components.ha_mcp_tools.config_references"]
+from ._component_ws_api import wsapi  # noqa: E402  (after the stubs above)
+
+config_references = wsapi.config_references
 
 _STATES = {"input_select.mode_of_travel", "light.kitchen", "binary_sensor.hall"}
 _SERVICES = {"input_select.select_option", "select.select_option", "light.turn_on"}
@@ -52,11 +53,29 @@ _OFFERED = {
 }
 
 
+class _Template:
+    """Stands in for Core's Template: it holds ``hass``, which cannot be copied."""
+
+    def __deepcopy__(self, memo: dict) -> Any:
+        raise TypeError("HomeAssistant.__new__() missing 1 required argument")
+
+
+def _templated(value: Any) -> Any:
+    """Template strings become Template objects, as Core's validator makes them."""
+    if isinstance(value, dict):
+        return {k: _templated(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_templated(v) for v in value]
+    if isinstance(value, str) and "{{" in value:
+        return _Template()
+    return value
+
+
 class _Checked(dict):
     """Core's validated config: a dict with its validation outcome."""
 
     def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(config)
+        super().__init__(_templated(config))
         refused = config.get("refuse")
         self.validation_status = "failed_actions" if refused else "ok"
         self.validation_error = refused
@@ -69,10 +88,10 @@ def _determine(node: dict[str, Any]) -> str:
     raise ValueError("Unable to determine action")
 
 
-def _service_schema(node: dict[str, Any]) -> dict[str, Any]:
-    if "." not in str(node.get("action")):
+def _service_name(name: str) -> str:
+    if "." not in name:
         raise ValueError("invalid service")
-    return node
+    return name
 
 
 def _steps(sequence: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -127,9 +146,9 @@ def _registry(kind: str, getter: str) -> Any:
 
 def _fake_core() -> SimpleNamespace:
     helpers = SimpleNamespace(
-        async_extract_entities=_extract("entity_id"),
-        async_extract_devices=_extract("device_id"),
-        async_extract_targets=lambda conf, attr: set(),
+        entities=_extract("entity_id"),
+        devices=_extract("device_id"),
+        targets=lambda conf, attr: set(),
     )
     return SimpleNamespace(
         const=SimpleNamespace(
@@ -170,7 +189,7 @@ def _fake_core() -> SimpleNamespace:
         ),
         determine_action=_determine,
         call_service="call_service",
-        service_schema=_service_schema,
+        service_name=_service_name,
         target_selection=lambda target: target,
         referenced=lambda hass, selection, expand_group: SimpleNamespace(
             referenced={selection["entity_id"]}
@@ -348,16 +367,10 @@ async def test_trigger_and_condition_targets_are_put_to_their_own_lookups():
     ]
 
 
-@pytest.mark.parametrize(
-    ("kind", "config"),
-    [
-        ("automation", {"refuse": "Invalid action"}),
-        ("script", {"refuse": "Invalid action"}),
-    ],
-)
+@pytest.mark.parametrize("kind", ["automation", "script"])
 @pytest.mark.anyio
-async def test_a_config_core_refuses_is_answered_with_cores_error(kind, config):
-    assert await _check(config, kind) == {
+async def test_a_config_core_refuses_is_answered_with_cores_error(kind):
+    assert await _check({"refuse": "Invalid action"}, kind) == {
         "status": "invalid",
         "error": "Invalid action",
     }
@@ -385,11 +398,59 @@ async def test_a_scene_entity_core_does_not_have_is_missing():
 
 
 @pytest.mark.anyio
-async def test_a_core_without_the_parts_answers_unavailable(monkeypatch):
-    monkeypatch.setattr(config_references, "_core", lambda: None)
+async def test_a_step_holding_a_template_is_still_checked():
+    """Every config with a template in a service step answered "unavailable":
+    Core's Template holds hass, and copying the step failed."""
+    config = {
+        "actions": [
+            {"action": "notify.ghost", "data": {"message": "{{ trigger.id }}"}},
+            {
+                "action": "select.select_option",
+                "target": {"entity_id": "input_select.mode_of_travel"},
+                "data": {"option": "{{ trigger.id }}"},
+            },
+        ]
+    }
+    result = await _check(config)
+    assert result["missing"] == [{"kind": "service", "value": "notify.ghost"}]
+    assert [m["path"] for m in result["mismatches"]] == ["actions[1]"]
+
+
+@pytest.mark.anyio
+async def test_a_core_without_a_part_names_it(monkeypatch):
+    """After a Core rename the check stopped with no hint of which part went."""
+    monkeypatch.setattr(config_references, "_core", lambda: "script_entities")
     result = await _check({"actions": []})
     assert result["status"] == "unavailable"
+    assert "script_entities" in result["error"]
 
 
-def test_the_command_is_advertised():
-    assert config_references.CAPABILITY in wsapi.CAPABILITIES
+@pytest.mark.anyio
+async def test_a_failure_inside_the_check_is_answered_not_raised(monkeypatch):
+    core = _fake_core()
+    core.for_target["services"] = AsyncMock(side_effect=TypeError("boom"))
+    monkeypatch.setattr(config_references, "_core", lambda: core)
+    result = await _check(
+        {"actions": [_action("select.select_option", "input_select.mode_of_travel")]}
+    )
+    assert result["status"] == "unavailable"
+    assert "TypeError" in result["error"]
+
+
+@pytest.mark.anyio
+async def test_the_server_reads_the_components_answer():
+    """The server's reading of the answer and the component's answer must agree."""
+    answer = await _check(
+        {
+            "actions": [
+                {"action": "notify.ghost"},
+                _action("select.select_option", "input_select.mode_of_travel"),
+            ]
+        }
+    )
+    warnings = _warnings(answer)
+    assert [(w["kind"], w["value"]) for w in warnings] == [
+        ("service", "notify.ghost"),
+        ("entity", "input_select.mode_of_travel"),
+    ]
+    assert "input_select.select_option" in warnings[1]["offered"]
