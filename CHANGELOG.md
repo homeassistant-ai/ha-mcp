@@ -3,6 +3,70 @@
 <!-- version list -->
 
 
+## v9.1.1 (2026-11-07)
+
+### Changed
+
+- Document the ChatGPT connector tool-list refresh steps
+  ([#2986](https://github.com/homeassistant-ai/ha-mcp/pull/2986))
+
+### Fixed
+
+- A config entry read opens no options flow
+  ([#2990](https://github.com/homeassistant-ai/ha-mcp/pull/2990))
+- **marketplace**: Clarify HA-MCP AI management presentation
+  ([#2981](https://github.com/homeassistant-ai/ha-mcp/pull/2981))
+- Keep a renamed parameter callable and name a stale tool list when a tool rejects an unknown parameter
+  ([#2979](https://github.com/homeassistant-ai/ha-mcp/pull/2979))
+- Adopt component upgrades without a server restart, Core's Related set without the component, and a confirmed Marketplace warning accept
+  ([#2975](https://github.com/homeassistant-ai/ha-mcp/pull/2975))
+- Stop probing ignored config entries and pass Core's entry rows through (#2927)
+  ([#2930](https://github.com/homeassistant-ai/ha-mcp/pull/2930))
+- **backup**: Restore a deleted calendar event on Core 2026.11
+  ([#2966](https://github.com/homeassistant-ai/ha-mcp/pull/2966))
+- **settings-ui**: Left-align pending approval cards
+  ([#2962](https://github.com/homeassistant-ai/ha-mcp/pull/2962))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- Sync ratchet baselines after merge [skip ci]
+  ([`f0019f6`](https://github.com/homeassistant-ai/ha-mcp/commit/f0019f69cfde86220b237f27af6be91c746bacfc))
+- Sync tool docs after merge [skip ci]
+  ([`897132f`](https://github.com/homeassistant-ai/ha-mcp/commit/897132f78803352302fe19a86fb2d14c35cf70bd))
+- Sync ratchet baselines after merge [skip ci]
+  ([`ac2545c`](https://github.com/homeassistant-ai/ha-mcp/commit/ac2545c739086093d02c1174fce239a64029b5b2))
+- Sync ratchet baselines after merge [skip ci]
+  ([`cb46525`](https://github.com/homeassistant-ai/ha-mcp/commit/cb46525d51ef4244ee4483a00b20b5fd66555295))
+- Sync tool docs after merge [skip ci]
+  ([`7814bf0`](https://github.com/homeassistant-ai/ha-mcp/commit/7814bf0e203804a8792ffb8355a88ccb73ef5b60))
+- Machine-translate locale updates
+  ([`a82670c`](https://github.com/homeassistant-ai/ha-mcp/commit/a82670caabc6ea171c7db971cbe0b8542dc9300f))
+- Sync tool docs after merge [skip ci]
+  ([`5459759`](https://github.com/homeassistant-ai/ha-mcp/commit/545975987305b17a84a667b93c013e541699c55c))
+- Sync ratchet baselines after merge [skip ci]
+  ([`d3edecf`](https://github.com/homeassistant-ai/ha-mcp/commit/d3edecf7f59bde17d3f83e5e0231e21a7a30c677))
+- Sync tool docs after merge [skip ci]
+  ([`e195968`](https://github.com/homeassistant-ai/ha-mcp/commit/e1959684d48d0de0954ac3b2baa886e707b1d3d1))
+- Sync ratchet baselines after merge [skip ci]
+  ([`fc15da0`](https://github.com/homeassistant-ai/ha-mcp/commit/fc15da04364a44381438dbabc6a2cff7327783ee))
+- Machine-translate locale updates
+  ([`eddb9f8`](https://github.com/homeassistant-ai/ha-mcp/commit/eddb9f8d07f11d58a5b7ac5afcae786e1646282f))
+- Sync ratchet baselines after merge [skip ci]
+  ([`ceb424c`](https://github.com/homeassistant-ai/ha-mcp/commit/ceb424c27bef610997dff041161dd71ff19bbec1))
+- Sync ratchet baselines after merge [skip ci]
+  ([`c38b32e`](https://github.com/homeassistant-ai/ha-mcp/commit/c38b32eaaabfbba9447d56a6e4f62e017bbcb991))
+- Machine-translate locale updates
+  ([`b797e8d`](https://github.com/homeassistant-ai/ha-mcp/commit/b797e8d2a462b7671b05f27f86357233dfa54413))
+- **addon**: Publish version 9.1.0 [skip ci]
+  ([`bef7cfc`](https://github.com/homeassistant-ai/ha-mcp/commit/bef7cfc97f24a703363d18b0f69862e53c9fd421))
+</details>
+
+
 ## v9.1.0 (2026-11-04)
 
 ### Added
