@@ -25,6 +25,8 @@ from .helpers import raise_tool_error
 
 MAIN_REPOSITORY = "homeassistant-ai/ha-mcp"
 MIRROR_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
+# The stores use the GitHub repository id, fixed for a repository's lifetime.
+OWN_REPOSITORY_IDS = {"1056618941": MAIN_REPOSITORY, "1289599380": MIRROR_REPOSITORY}
 
 # The two repositories tag releases alike, but not development builds:
 # publish-dev.yml tags the main repository ``v<next>.dev<N>`` while
@@ -56,9 +58,8 @@ async def route_own_repository_download(
 ) -> tuple[str, str | None, str | None]:
     """Return the repository and version to download, and a note when rerouted.
 
-    A repository named by ``owner/repo`` that is not ha-mcp's own passes
-    through with no store call; a numeric id is looked up in the store's list,
-    since ids are the store's and not written down anywhere else. For ha-mcp's
+    A repository that is not ha-mcp's own, by name or by id, passes through
+    with no store call, so a download stays one store command. For ha-mcp's
     own, the installed one wins: a request for the other repository is
     rerouted to it, so the mirror keeps updating from the mirror and the main
     repository from the catalog, and a development ref is renamed the way the
@@ -66,8 +67,8 @@ async def route_own_repository_download(
     cannot resolve, so that is refused with the way out.
     """
     wanted = repository_id.strip().lower()
-    named_own = wanted in {n.lower() for n in CANDIDATE_REPO_FULL_NAMES}
-    if not named_own and "/" in wanted:
+    wanted = OWN_REPOSITORY_IDS.get(wanted, wanted)
+    if wanted not in {n.lower() for n in CANDIDATE_REPO_FULL_NAMES}:
         return repository_id, version, None
 
     try:
@@ -77,11 +78,6 @@ async def route_own_repository_download(
         return repository_id, version, None
     listed = response.get("result") if isinstance(response, dict) else None
     repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]
-    if not named_own:
-        requested = next((r for r in repos if str(r.get("id")) == wanted), None)
-        if requested is None or _own_name(requested) is None:
-            return repository_id, version, None
-        wanted = str(_own_name(requested))
 
     installed = [r for r in repos if _own_name(r) and r.get("installed")]
     if len(installed) > 1:

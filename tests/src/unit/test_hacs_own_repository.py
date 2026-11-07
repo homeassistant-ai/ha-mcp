@@ -156,25 +156,16 @@ async def test_a_development_ref_is_renamed_for_the_target(
     assert (expected in note) == (expected != version)
 
 
-async def test_a_numeric_id_is_resolved_against_the_store_list():
-    """A store id the server never wrote down still routes when its record is
-    one of ha-mcp's own."""
-    recreated = {**MAIN, "id": "424242"}
-    ws = _ws([recreated, _installed(MIRROR)])
-    target, _version, note = await route_own_repository_download(
-        ws, HACS_API, "424242", None
-    )
-    assert target == MIRROR["full_name"]
-    assert note is not None
-
-
 async def test_a_numeric_id_of_another_repository_passes_through():
+    """Another repository's id costs no store call: its download stays one
+    store command, as the Marketplace tests sequence it."""
     ws = _ws([OTHER, _installed(MIRROR)])
     assert await route_own_repository_download(ws, HACS_API, "441028036", None) == (
         "441028036",
         None,
         None,
     )
+    ws.send_command.assert_not_awaited()
 
 
 async def test_a_message_merely_containing_the_words_is_not_an_ownership_refusal():
@@ -215,8 +206,6 @@ async def test_a_failed_list_lookup_leaves_the_request_alone():
 
     ws = AsyncMock()
     ws.send_command = AsyncMock(side_effect=HomeAssistantCommandError("kaboom"))
-    assert await route_own_repository_download(ws, HACS_API, "441028036", None) == (
-        "441028036",
-        None,
-        None,
-    )
+    assert await route_own_repository_download(
+        ws, HACS_API, "homeassistant-ai/ha-mcp", None
+    ) == ("homeassistant-ai/ha-mcp", None, None)
