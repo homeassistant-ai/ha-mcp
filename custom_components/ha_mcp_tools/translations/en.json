@@ -188,7 +188,6 @@
         },
         "store_records_conflict": {
             "title": "Two store records claim the HA-MCP integration",
-            "description": "{records} are all marked installed in HACS or the Marketplace, and every one of them owns custom_components/ha_mcp_tools. The store refuses to update any of them, and refuses to uninstall one while HA-MCP is set up. Fixing this keeps {keep} and marks the other record as not installed; no files change and nothing is removed from Home Assistant. Update HA-MCP from {keep} afterwards.",
             "fix_flow": {
                 "step": {
                     "confirm": {

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, ISSUE_STORE_RECORDS_CONFLICT
 
@@ -32,12 +32,13 @@ OWN_REPOSITORIES = (MAIN_REPOSITORY, MIRROR_REPOSITORY)
 
 def _store_manager(hass: HomeAssistant) -> Any | None:
     """Return the loaded Marketplace (2026.11+) or HACS manager, or None."""
-    try:
-        from homeassistant.components.marketplace.base import async_get_marketplace
-
-        return async_get_marketplace(hass)
-    except Exception:  # noqa: BLE001 - older Core, or the Marketplace not loaded
-        pass
+    # The Marketplace (2026.11+) keeps its manager on its single config
+    # entry; HACS kept it in hass.data. Not imported, so hassfest does not ask
+    # for a dependency on a component older Core releases do not have.
+    for entry in hass.config_entries.async_loaded_entries("marketplace"):
+        manager = getattr(entry, "runtime_data", None)
+        if manager is not None:
+            return manager
     return hass.data.get("hacs")
 
 
@@ -121,6 +122,7 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
     """Run the check once Home Assistant has started, when the store is up."""
 
+    @callback
     def _check(_event: Any = None) -> None:
         try:
             async_check_store_records(hass)
