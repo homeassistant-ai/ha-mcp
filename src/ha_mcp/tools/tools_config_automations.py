@@ -64,12 +64,12 @@ from .config_write_errors import (
 )
 from .config_write_helpers import (
     apply_entity_category,
+    attach_reference_check,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
     config_reload_waiter,
     entry_category,
-    merge_validation_meta,
     note_reload_outcome,
 )
 from .helpers import (
@@ -80,7 +80,6 @@ from .helpers import (
     reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
-from .reference_validator import ValidationMeta, validate_config_references
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
 from .ws_waiters import (
@@ -704,9 +703,6 @@ class AutomationConfigTools:
                 operation = "created" if stored is None else "updated"
 
             bp_warnings = _check_best_practices(config_dict)
-            validation_meta = await validate_config_references(
-                self._client, config_dict, "automation"
-            )
             await self._check_before_write(
                 config_dict, entity_id, effective_category, bp_warnings
             )
@@ -719,7 +715,6 @@ class AutomationConfigTools:
                 effective_category,
                 wait,
                 bp_warnings,
-                validation_meta,
                 MandatoryBPS,
                 detached_blueprint,
                 enabled,
@@ -1212,6 +1207,9 @@ class AutomationConfigTools:
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
+        await attach_reference_check(
+            response, self._client, transformed_config, "automation"
+        )
         return response, bp_warnings
 
     async def _read_back_hash(
@@ -1236,7 +1234,6 @@ class AutomationConfigTools:
         effective_category: str | None,
         wait: bool,
         bp_warnings: BestPracticeCheckResult,
-        validation_meta: ValidationMeta,
         MandatoryBPS: bool,
         detached_blueprint: str | None = None,
         enabled: bool | None = None,
@@ -1320,7 +1317,7 @@ class AutomationConfigTools:
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)
 
-        merge_validation_meta(result, validation_meta)
+        await attach_reference_check(result, self._client, config_dict, "automation")
 
         automation_id = resolved_entity_id or entity_id or result.get("unique_id")
         response = {

@@ -640,13 +640,15 @@ async def test_none_and_all_targets_are_not_warned(mcp_client) -> None:
     reference validator warned them as registry items that do not exist."""
     tag = _tag()
     config_id = f"e2e_match_sentinels_{tag}"
+    ghost = f"notify.e2e_no_such_{tag}"
     config = _config(
         tag,
         actions=[
             {
                 "action": "light.turn_on",
                 "target": {"entity_id": "none", "area_id": "all"},
-            }
+            },
+            {"action": ghost},
         ],
     )
     async with MCPAssertions(mcp_client) as mcp:
@@ -655,6 +657,7 @@ async def test_none_and_all_targets_are_not_warned(mcp_client) -> None:
                 "ha_config_set_automation", {"entity_id": config_id, "config": config}
             )
             warnings = _checked_warnings(created)
+            assert any(w.get("value") == ghost for w in warnings), created
             assert not any(w.get("value") in ("none", "all") for w in warnings), created
         finally:
             await _remove(mcp_client, config_id)

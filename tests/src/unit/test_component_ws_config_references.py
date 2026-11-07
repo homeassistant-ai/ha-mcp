@@ -33,6 +33,12 @@ for _mod in (
 from ha_mcp.tools.reference_validator import _warnings  # noqa: E402
 
 from ._component_ws_api import wsapi  # noqa: E402  (after the stubs above)
+from .test_component_ws_search import (  # noqa: E402
+    FakeHass,
+    _FakeConnection,
+    _Unauthorized,
+    functional_ws,  # noqa: F401 - pytest fixture
+)
 
 config_references = wsapi.config_references
 
@@ -71,11 +77,12 @@ def _templated(value: Any) -> Any:
     return value
 
 
-class _Checked(dict):
-    """Core's validated config: a dict with its validation outcome."""
+class _Checked:
+    """Core's validated config: its values and its validation outcome."""
 
     def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(_templated(config))
+        self._config = _templated(config)
+        self.get = self._config.get
         refused = config.get("refuse")
         self.validation_status = "failed_actions" if refused else "ok"
         self.validation_error = refused
@@ -144,6 +151,13 @@ def _registry(kind: str, getter: str) -> Any:
     )
 
 
+def _scene_states(entities: Any) -> dict[str, Any]:
+    """Core's STATES_SCHEMA takes a dict; a list is refused."""
+    if not isinstance(entities, dict):
+        raise ValueError("expected a dictionary")
+    return dict(entities)
+
+
 def _fake_core() -> SimpleNamespace:
     helpers = SimpleNamespace(
         entities=_extract("entity_id"),
@@ -174,7 +188,7 @@ def _fake_core() -> SimpleNamespace:
         validate_script=AsyncMock(
             side_effect=lambda hass, object_id, config, **kw: _Checked(config)
         ),
-        scene_states=dict,
+        scene_states=_scene_states,
         script_entities=_script_entities,
         script_devices=_script_devices,
         script_targets=_script_targets,
@@ -323,6 +337,36 @@ async def test_action_lookalikes_in_event_and_service_data_are_not_services():
 
 
 @pytest.mark.anyio
+async def test_action_shaped_payloads_are_not_steps():
+    """An event's data, a fired event's data and step variables shaped like a
+    service call were put to Core's target lookup and reported as mismatches."""
+    payload = {
+        "action": "select.select_option",
+        "target": {"entity_id": "input_select.mode_of_travel"},
+    }
+    config = {
+        "triggers": [{"trigger": "event", "event_type": "x", "event_data": payload}],
+        "actions": [
+            {"event": "fired", "event_data": payload},
+            {"variables": {"step": payload}},
+        ],
+    }
+    assert await _check(config) == {"status": "ok", "missing": [], "mismatches": []}
+
+
+@pytest.mark.anyio
+async def test_a_scene_entities_list_reaches_cores_schema_unchanged():
+    """``entities: []`` was replaced by an empty dict Core accepts."""
+    result = await _check({"entities": []}, "scene")
+    assert result["status"] == "invalid"
+    assert await _check({}, "scene") == {
+        "status": "ok",
+        "missing": [],
+        "mismatches": [],
+    }
+
+
+@pytest.mark.anyio
 async def test_a_step_nested_in_a_choose_is_checked():
     config = {
         "actions": [
@@ -454,3 +498,15 @@ async def test_the_server_reads_the_components_answer():
         ("entity", "input_select.mode_of_travel"),
     ]
     assert "input_select.select_option" in warnings[1]["offered"]
+
+
+def test_the_command_is_admin_gated(functional_ws):  # noqa: F811
+    handler = functional_ws.registered[config_references.WS_CONFIG_REFERENCES]
+    msg = {"id": 1, "type": config_references.WS_CONFIG_REFERENCES}
+    msg |= {"kind": "automation", "config": {}}
+    for connection in (
+        _FakeConnection(is_admin=False),
+        _FakeConnection(has_user=False),
+    ):
+        with pytest.raises(_Unauthorized):
+            handler(FakeHass(), connection, msg)

@@ -786,6 +786,16 @@ class TestReferenceValidationMeta:
 
         assert "ha_mcp_tools" in result["validation"]["references_unchecked"]
 
+    async def test_a_transform_write_is_checked_too(self, tools):
+        """A python_transform saved the #2989 mismatch with no validation at all."""
+        result = await tools.ha_config_set_automation(
+            entity_id="abc123unique",
+            python_transform="config['mode'] = 'single'",
+            config_hash=STORED_HASH,
+        )
+
+        assert "ha_mcp_tools" in result["validation"]["references_unchecked"]
+
 
 class TestSceneCreateMisrouteThroughTheTool:
     async def test_nested_scene_create_without_a_trigger_is_refused_before_any_write(

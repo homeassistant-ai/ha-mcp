@@ -148,12 +148,21 @@ def _answer_shape_error(result: Any) -> str | None:
         return None if result.get("error") else "no error for a failed check"
     fields = {
         "missing": ("kind", "value"),
-        "mismatches": ("path", "kind", "name", "entity_id", "offered"),
+        "mismatches": ("path", "kind", "name", "entity_id"),
     }
-    for key, needed in fields.items():
+    for key, strings in fields.items():
         items = result.get(key)
         if not isinstance(items, list) or not all(
-            isinstance(item, dict) and all(k in item for k in needed) for item in items
+            isinstance(item, dict)
+            and all(isinstance(item.get(k), str) for k in strings)
+            and (
+                key != "mismatches"
+                or (
+                    isinstance(item.get("offered"), list)
+                    and all(isinstance(o, str) for o in item["offered"])
+                )
+            )
+            for item in items
         ):
             return f"malformed {key}"
     return None

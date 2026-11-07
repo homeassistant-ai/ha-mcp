@@ -185,6 +185,22 @@ async def test_an_unknown_command_forgets_the_cached_capabilities():
             id="timeout",
         ),
         pytest.param(_answer(status="ok", missing=None, mismatches=[]), id="malformed"),
+        pytest.param(
+            _answer(
+                status="ok",
+                missing=[],
+                mismatches=[
+                    {
+                        "path": "actions[0]",
+                        "kind": "services",
+                        "name": "x.y",
+                        "entity_id": "a.b",
+                        "offered": "x.z",
+                    }
+                ],
+            ),
+            id="malformed-value",
+        ),
         pytest.param(_answer(status="invalid"), id="failed-without-error"),
     ],
 )

@@ -43,11 +43,11 @@ from .coercion import JSON_STRING_COERCION, parse_json_param
 from .config_helpers.registry import validate_registry_ids
 from .config_write_helpers import (
     apply_entity_category,
+    attach_reference_check,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
     fetch_entity_category,
-    merge_validation_meta,
 )
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
@@ -58,7 +58,6 @@ from .helpers import (
     reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
-from .reference_validator import validate_config_references
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
@@ -1007,6 +1006,9 @@ class ConfigScriptTools:
             canonical_files=_SCRIPT_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
+        await attach_reference_check(
+            response, self._client, transformed_config, "script"
+        )
         return response
 
     async def _take_control_config(self, script_id: str) -> TakenControl:
@@ -1038,11 +1040,6 @@ class ConfigScriptTools:
         detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
-        # Soft warnings only: the write happens even if references don't resolve.
-        validation_meta = await validate_config_references(
-            self._client, config_dict, "script"
-        )
-
         result = await self._upsert_script(config_dict, script_id, resolved_key)
 
         await self._finalize_script_write(
@@ -1052,7 +1049,7 @@ class ConfigScriptTools:
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)
 
-        merge_validation_meta(result, validation_meta)
+        await attach_reference_check(result, self._client, config_dict, "script")
 
         response = {
             "success": True,

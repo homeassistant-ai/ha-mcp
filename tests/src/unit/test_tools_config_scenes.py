@@ -192,6 +192,7 @@ class TestScenePostWriteRegistration:
 
         assert result["success"] is True
         lookup.assert_not_awaited()
+        assert "references_unchecked" in result["validation"]
 
 
 class TestSceneToolsValidation:

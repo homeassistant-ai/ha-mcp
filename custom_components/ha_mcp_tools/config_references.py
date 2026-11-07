@@ -138,7 +138,7 @@ async def _validated(
     proposed = copy.deepcopy(config)
     if kind == "scene":
         try:
-            states = core.scene_states(proposed.get(const.CONF_ENTITIES) or {})
+            states = core.scene_states(proposed.get(const.CONF_ENTITIES, {}))
         except _INVALID_ERRORS as err:
             return {}, str(err)
         return {"scene": list(states)}, None
@@ -273,12 +273,19 @@ class _Steps:
                     {"path": path, "kind": kind, "name": name, "entity_id": entity_id}
                 )
 
-    def walk(self, node: Any, path: str) -> None:
+    def walk(self, node: Any, path: str, listed: bool = False) -> None:
         if isinstance(node, list):
             for i, child in enumerate(node):
-                self.walk(child, f"{path}[{i}]")
+                self.walk(child, f"{path}[{i}]", listed=True)
             return
         if not isinstance(node, dict):
+            return
+        if not listed:
+            # Core's validated config keeps every step, trigger and condition
+            # in a list; a dict held directly under a key is a payload (an
+            # event's data, variables), never one of them.
+            for key, value in node.items():
+                self.walk(value, f"{path}.{key}" if path else key)
             return
         if self._targeted_item(node, path):
             return

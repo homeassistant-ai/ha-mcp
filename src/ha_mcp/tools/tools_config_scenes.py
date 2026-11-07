@@ -41,12 +41,12 @@ from .component_config_reads import fetch_entity_lookup_via_component
 from .config_helpers.registry import validate_registry_ids
 from .config_write_helpers import (
     apply_entity_category,
+    attach_reference_check,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
     config_reload_waiter,
     fetch_entity_category,
-    merge_validation_meta,
 )
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
@@ -56,7 +56,6 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .reference_validator import validate_config_references
 from .scene_discovery import discover_scenes
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
@@ -1047,6 +1046,9 @@ class ConfigSceneTools:
             canonical_files=_SCENE_SKILL_FILES,
             referenced_files=None,
         )
+        await attach_reference_check(
+            response, self._client, transformed_config, "scene"
+        )
         return response
 
     @staticmethod
@@ -1261,10 +1263,6 @@ class ConfigSceneTools:
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
 
-        validation_meta = await validate_config_references(
-            self._client, config_dict, "scene"
-        )
-
         # ``resolved_id`` is already the storage key (from the hash-verify
         # fetch or the resolve above) — pass it as the write target to skip
         # the redundant re-resolve. ``scene_id`` stays the caller id so a
@@ -1323,7 +1321,7 @@ class ConfigSceneTools:
         if activate:
             await self._activate_scene(result, entity_id, standalone=False)
 
-        merge_validation_meta(result, validation_meta)
+        await attach_reference_check(result, self._client, config_dict, "scene")
 
         # Issue #1168 R3 blocker 6: build response from ``resolved_id``
         # so the outer ``scene_id`` always matches the storage key.
