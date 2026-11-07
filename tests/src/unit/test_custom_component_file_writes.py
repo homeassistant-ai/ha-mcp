@@ -340,7 +340,20 @@ class TestAfterFileWrite:
             10,
         )
 
-        assert "No YAML dashboard uses dashboards/rev.yaml" in info["warnings"][0]
+        assert "No YAML dashboard names dashboards/rev.yaml" in info["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_unreadable_dashboards_claim_nothing(self, tmp_path: Path) -> None:
+        """Without Core's dashboards nothing was checked, so nothing is said."""
+        hass = _Hass(tmp_path)
+
+        info = await file_post_action.after_file_write(
+            hass,  # type: ignore[arg-type]
+            "dashboards/rev.yaml",
+            10,
+        )
+
+        assert info == {}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

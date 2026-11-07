@@ -885,8 +885,8 @@ class FilesystemTools:
         uses the file: a theme or custom template is reloaded (post_action,
         reload_service), a custom template Home Assistant cannot load (not
         *.jinja, or over its size limit) gets a warning, and a dashboards/ file
-        names the YAML dashboards it backs (dashboards), which reread it when
-        next opened.
+        lists the YAML dashboards that name it as their file (dashboards); they
+        reread it when next opened. A file a dashboard !includes is not checked.
 
         EXAMPLE: ha_write_file(path="custom_templates/formatters.jinja", content="{% macro shout(text) %}{{ text | upper }}{% endmacro %}")
         EXAMPLE: ha_write_file(path="www/card.js", edits=[{"old": "const REFRESH = 30000;", "new": "const REFRESH = 10000;"}])

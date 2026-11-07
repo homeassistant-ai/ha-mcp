@@ -70,8 +70,13 @@ async def _custom_template_action(
     return await reload_after_edit(hass, "homeassistant", "reload_custom_templates")
 
 
-def _dashboards_using(hass: HomeAssistant, abs_path: str) -> list[dict[str, Any]]:
-    """Core's rows for the YAML dashboards served from ``abs_path``."""
+def _dashboards_using(
+    hass: HomeAssistant, abs_path: str
+) -> list[dict[str, Any]] | None:
+    """Core's rows for the YAML dashboards served from ``abs_path``.
+
+    None when Core's dashboards cannot be read, so nothing was checked.
+    """
     from .websocket_api.dashboards import (
         _dashboard_list_rows,
         _lovelace_dashboards_map,
@@ -79,7 +84,7 @@ def _dashboards_using(hass: HomeAssistant, abs_path: str) -> list[dict[str, Any]
 
     dashboards = _lovelace_dashboards_map(hass)
     if dashboards is None:
-        return []
+        return None
     wanted = os.path.normpath(abs_path)
     using = {
         url_path
@@ -92,14 +97,17 @@ def _dashboards_using(hass: HomeAssistant, abs_path: str) -> list[dict[str, Any]
 
 def _dashboard_action(hass: HomeAssistant, rel_path: str) -> dict[str, Any]:
     rows = _dashboards_using(hass, hass.config.path(rel_path))
+    if rows is None:
+        return {}
     if rows:
         # No reload: LovelaceYAML rereads the file once it is newer than its cache.
         return {"dashboards": rows}
     return {
         "warnings": [
-            f"No YAML dashboard uses {rel_path}. Add it under lovelace: "
+            f"No YAML dashboard names {rel_path} as its file (files a dashboard "
+            "!includes were not checked). A dashboard is added under lovelace: "
             "dashboards: (ha_config_set_yaml, yaml_path "
-            "'lovelace.dashboards.<url_path>') and restart Home Assistant."
+            "'lovelace.dashboards.<url_path>') and needs a restart."
         ]
     }
 

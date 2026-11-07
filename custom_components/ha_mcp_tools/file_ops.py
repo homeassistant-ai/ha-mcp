@@ -228,7 +228,10 @@ def _replace_contents(target_file: Path, data: bytes) -> None:
             os.fsync(temp_file.fileno())
         os.chmod(temp_name, original.st_mode & 0o7777)
         if hasattr(os, "chown"):
-            os.chown(temp_name, original.st_uid, original.st_gid)
+            # A user that may write a file it does not own cannot give the
+            # copy that owner; the file then belongs to Home Assistant's user.
+            with contextlib.suppress(PermissionError):
+                os.chown(temp_name, original.st_uid, original.st_gid)
         os.replace(temp_name, real_file)
     except BaseException:
         with contextlib.suppress(OSError):
