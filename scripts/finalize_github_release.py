@@ -10,6 +10,8 @@ import argparse
 import json
 import re
 import subprocess
+import sys
+import tempfile
 import time
 import tomllib
 import urllib.error
@@ -169,6 +171,64 @@ def _commit_sha(repository: str, git_object: dict) -> str:
     return str(git_object["sha"])
 
 
+def _verify_release_zip(
+    repository: str, asset: dict, checkout: Path, commit: str
+) -> None:
+    """Bind the actual uploaded bytes to the tagged component before publication."""
+    try:
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "diff",
+                "--exit-code",
+                commit,
+                "--",
+                "custom_components/ha_mcp_tools",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        with tempfile.TemporaryDirectory(prefix="ha-mcp-release-zip-") as temporary:
+            archive = Path(temporary) / "ha_mcp_tools.zip"
+            with archive.open("wb") as target:
+                subprocess.run(
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{repository}/releases/assets/{asset['id']}",
+                        "--header",
+                        "Accept: application/octet-stream",
+                    ],
+                    stdout=target,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("build_component_zip.py")),
+                    "--component-dir",
+                    str(checkout / "custom_components/ha_mcp_tools"),
+                    "--verify",
+                    str(archive),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.stdout.strip() != asset["digest"]:
+                raise ValueError(
+                    "The downloaded integration ZIP digest differs from GitHub metadata"
+                )
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            "The integration ZIP could not be verified against the tagged component"
+        ) from error
+
+
 def finalize_release(
     repository: str,
     tag: str,
@@ -211,6 +271,10 @@ def finalize_release(
         f"repos/{repository}/git/ref/tags/{urllib.parse.quote(tag, safe='')}"
     )["object"]
     target = target_object["sha"]
+    if filename is not None:
+        _verify_release_zip(
+            repository, asset, checkout, _commit_sha(repository, target_object)
+        )
     refs = _gh_json(f"repos/{repository}/git/matching-refs/tags/stable")
     current = next((r for r in refs if r["ref"] == "refs/tags/stable"), None)
     moved = current is None or current["object"]["sha"] != target

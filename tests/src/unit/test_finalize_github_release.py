@@ -1,6 +1,7 @@
 """Stable aliases/releases cannot expose missing package or integration assets."""
 
 import functools
+import hashlib
 import importlib.util
 import io
 import json
@@ -8,6 +9,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 from typing import ClassVar
 
@@ -23,6 +25,12 @@ publisher = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(publisher)
 
 _HACS = {"zip_release": True, "filename": "ha_mcp_tools.zip"}
+_ASSET = {
+    "name": "ha_mcp_tools.zip",
+    "state": "uploaded",
+    "size": 42,
+    "digest": "sha256:" + "a" * 64,
+}
 _COMPONENT = {"version": "9.1.1", "requirements": ["mcp>=1.24.0", "ha-mcp==9.1.1"]}
 _PROJECT = {
     "requires-python": ">=3.13,<3.15",
@@ -80,9 +88,12 @@ def _world(
     comparison="ahead",
     fail_publish=False,
     annotated=True,
+    target="version-tag-object",
+    release_asset=_ASSET,
 ):
     calls = []
     monkeypatch.setattr(publisher, "_pypi_ready", lambda version, pythons: ready)
+    monkeypatch.setattr(publisher, "_verify_release_zip", lambda *args: None)
 
     def push(remote, checkout, target, expected):
         calls.append(("git push", "PUSH", {"sha": target, "expected": expected}))
@@ -97,10 +108,7 @@ def _world(
             return {}
         if "/compare/" in endpoint:
             suffix = "-commit" if annotated else ""
-            assert (
-                endpoint
-                == f"repos/o/r/compare/{current}{suffix}...version-tag-object{suffix}"
-            )
+            assert endpoint == f"repos/o/r/compare/{current}{suffix}...{target}{suffix}"
             return {"status": comparison}
         if "/git/tags/" in endpoint:
             return {
@@ -115,23 +123,14 @@ def _world(
                 "tag_name": "v9.1.1",
                 "draft": draft,
                 "prerelease": False,
-                "assets": [
-                    {
-                        "name": "ha_mcp_tools.zip",
-                        "state": "uploaded",
-                        "size": 42,
-                        "digest": "sha256:" + "a" * 64,
-                    }
-                ]
-                if asset
-                else [],
+                "assets": [release_asset] if asset else [],
             }
             assert paginate
             return [[release]]
         if "/git/ref/tags/" in endpoint:
             return {
                 "object": {
-                    "sha": "version-tag-object",
+                    "sha": target,
                     "type": "tag" if annotated else "commit",
                 }
             }
@@ -153,6 +152,74 @@ def _world(
 
     monkeypatch.setattr(publisher, "_gh_json", gh)
     return calls
+
+
+@pytest.mark.parametrize("fault", [None, "digest", "members", "checkout"])
+def test_incorrect_uploaded_zip_cannot_publish_or_move_stable(
+    tmp_path, monkeypatch, fault
+):
+    checkout = tmp_path / "source"
+    component = checkout / "custom_components/ha_mcp_tools"
+    component.mkdir(parents=True)
+    (component / "manifest.json").write_text(
+        json.dumps({"domain": "ha_mcp_tools", "version": "9.1.1"})
+    )
+    (component / "__init__.py").write_text("VALUE = 1\n")
+    for args in (
+        ("init", "-q"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test@example.invalid"),
+        ("add", "."),
+        ("commit", "-qm", "release snapshot"),
+    ):
+        subprocess.run(["git", "-C", str(checkout), *args], check=True)
+    commit = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if fault == "checkout":
+        (component / "__init__.py").write_text("VALUE = 2\n")
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as target:
+        for path in component.iterdir():
+            target.writestr(
+                path.name,
+                b"VALUE = 2\n"
+                if fault == "members" and path.name == "__init__.py"
+                else path.read_bytes(),
+            )
+    payload = archive.getvalue()
+    metadata = {
+        "id": 456,
+        "name": "ha_mcp_tools.zip",
+        "state": "uploaded",
+        "size": len(payload),
+        "digest": "sha256:"
+        + ("a" * 64 if fault == "digest" else hashlib.sha256(payload).hexdigest()),
+    }
+    verifier = publisher._verify_release_zip
+    calls = _world(
+        monkeypatch,
+        target=commit,
+        annotated=False,
+        release_asset=metadata,
+    )
+    monkeypatch.setattr(publisher, "_verify_release_zip", verifier)
+    original = subprocess.run
+
+    def download(command, **options):
+        if command[:3] == ["gh", "api", "repos/o/r/releases/assets/456"]:
+            options["stdout"].write(payload)
+            return subprocess.CompletedProcess(command, 0)
+        return original(command, **options)
+
+    monkeypatch.setattr(publisher.subprocess, "run", download)
+    if fault is None:
+        _finalize("o/r", "v9.1.1", _HACS, _COMPONENT, checkout=checkout)
+        assert any(method != "GET" for _, method, _ in calls)
+    else:
+        with pytest.raises(ValueError, match="ZIP"):
+            _finalize("o/r", "v9.1.1", _HACS, _COMPONENT, checkout=checkout)
+        assert all(method == "GET" for _, method, _ in calls)
 
 
 def test_missing_pypi_performs_no_github_write(monkeypatch):
@@ -285,6 +352,11 @@ def test_draft_lookup_uses_all_pages_when_the_tag_endpoint_cannot_find_it(monkey
 
 def test_legacy_archive_release_does_not_require_a_new_zip(monkeypatch):
     calls = _world(monkeypatch, asset=False, missing_ref=True)
+    monkeypatch.setattr(
+        publisher,
+        "_verify_release_zip",
+        lambda *args: pytest.fail("legacy release must not download a new ZIP"),
+    )
     result = _finalize("o/r", "v9.1.1", {}, {})
     assert result["zip_required"] is False
     assert any(
