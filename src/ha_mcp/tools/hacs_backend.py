@@ -81,10 +81,13 @@ _GATE_SUGGESTIONS = {
 # any HA-MCP config entry exists, disabled ones included. Both ways out were
 # checked on a live instance; neither can be driven through this server.
 DUPLICATE_RECORD_SUGGESTIONS = [
-    "The store refuses to uninstall a record while any HA-MCP entry exists, "
-    "disabled ones included. Ask the user before either route; both need "
-    "Settings > Devices & services or a terminal, which this server cannot "
-    "drive.",
+    "A current HA-MCP integration files a repair for this under Settings > "
+    "System > Repairs; its fix keeps homeassistant-ai/ha-mcp and marks the "
+    "other record as not installed, with no change to entries or files. Ask "
+    "the user to run it.",
+    "Without that repair: the store refuses to uninstall a record while any "
+    "HA-MCP entry exists, disabled ones included, and this server cannot "
+    "drive either route below. Ask the user before suggesting them.",
     "Route 1 (no terminal): delete every HA-MCP entry under Settings > Devices "
     "& services, uninstall the duplicate record in the store, update the kept "
     "record, add the entries back and restart. An embedded server entry gets "
