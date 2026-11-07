@@ -76,8 +76,9 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
     The version comes from the REST bootstrap cache, which every call to this
     component populates and validates, so a WebSocket hiccup cannot be
     mistaken for an outdated component. An absent entry means the bootstrap
-    has not run yet; the caller below performs it first, and a component too
-    old to report a version at all is already rejected there.
+    has not run yet; ``_component_supports_extra_keys`` performs it first
+    (``_ensure_caller_token``), and a component too old to report a version at
+    all is already rejected there.
     """
     if not extra_keys:
         return

@@ -30,6 +30,7 @@ from homeassistant.core import (
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
+from .file_post_action import after_file_write
 from .volume_mounts import on_mounted_volume, os_error_text
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,15 +91,34 @@ def _delete_file_sync(target_file: Path) -> dict[str, Any]:
 def _replace_file_sync(target_file: Path, content: str) -> dict[str, Any]:
     """Bundle whole-file replace I/O for a single executor offload.
 
-    mkdir parent + atomic temp-write + rename + stat. Used by
+    mkdir parent + atomic swap + stat. Used by
     edit_yaml_config(action="replace_file").
     """
     target_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file = target_file.with_suffix(".tmp")
-    tmp_file.write_text(content)
-    os.replace(str(tmp_file), str(target_file))
+    write_text_atomic(target_file, content)
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime}
+
+
+def write_text_atomic(target_file: Path, content: str) -> None:
+    """Write ``content`` as stored, swapping an existing file in atomically.
+
+    An existing file goes through ``_replace_contents``, so a sibling file, a
+    symlink and the file's mode survive. A new file has nothing to protect and
+    is created in place; a failed write removes it again.
+    """
+    data = content.encode("utf-8")
+    if target_file.exists():
+        _replace_contents(target_file, data)
+        return
+    with open(target_file, "xb") as new_file:
+        try:
+            new_file.write(data)
+        except BaseException:
+            new_file.close()
+            with contextlib.suppress(OSError):
+                target_file.unlink()
+            raise
 
 
 def _is_valid_utf8(text: str) -> bool:
@@ -128,21 +148,29 @@ def _with_file_newlines(text: str, crlf: bool) -> str:
     return text.replace("\r\n", "\n").replace("\n", "\r\n") if crlf else text
 
 
+def _line_endings(content: str) -> str:
+    """``crlf``, ``lf`` or ``mixed``: how the lines of ``content`` end."""
+    has_crlf = "\r\n" in content
+    has_lf = "\n" in content.replace("\r\n", "")
+    if has_crlf and has_lf:
+        return "mixed"
+    return "crlf" if has_crlf else "lf"
+
+
 def _apply_edits(
     content: str, edits: list[dict[str, str]]
 ) -> tuple[str, dict[str, Any] | None]:
     """Apply ``edits`` in order; return ``(result, None)`` or ``("", refusal)``."""
     # Only a purely CRLF file can translate safely: in a mixed file the text
     # read_file shows does not say which line ending each line has.
-    crlf = "\r\n" in content and "\n" not in content.replace("\r\n", "")
-    translated = [
-        (_with_file_newlines(edit["old"], crlf), _with_file_newlines(edit["new"], crlf))
-        for edit in edits
-    ]
+    endings = _line_endings(content)
+    crlf = endings == "crlf"
     invalid = [
         index
-        for index, (old, new) in enumerate(translated)
-        if not old or old == new or not _is_valid_utf8(old + new)
+        for index, edit in enumerate(edits)
+        if not edit["old"]
+        or edit["old"] == edit["new"]
+        or not _is_valid_utf8(edit["old"] + edit["new"])
     ]
     if invalid:
         return "", {
@@ -150,11 +178,23 @@ def _apply_edits(
             "edit_index": invalid[0],
             "invalid_edit_indexes": invalid,
         }
+    translated = [
+        (_with_file_newlines(edit["old"], crlf), _with_file_newlines(edit["new"], crlf))
+        for edit in edits
+    ]
+    # Edits keep a CRLF file's line endings, so one that differs from its 'old'
+    # only in line endings would save nothing.
+    same = [index for index, (old, new) in enumerate(translated) if old == new]
+    if same:
+        return "", {"_error": "line_endings_only", "edit_index": same[0]}
     result = content
     for index, (old, new) in enumerate(translated):
         matches = _occurrences(result, old)
         if matches == 0:
-            return "", {"_error": "old_not_found", "edit_index": index}
+            refusal: dict[str, Any] = {"_error": "old_not_found", "edit_index": index}
+            if endings == "mixed" and "\n" in old:
+                refusal["line_endings"] = "mixed"
+            return "", refusal
         if matches > 1:
             return "", {
                 "_error": "old_not_unique",
@@ -243,7 +283,24 @@ _REFUSALS = {
     "Nothing was saved.",
     "old_not_unique": "Edit {edit_index}: 'old' text occurs {matches} times in "
     "{path}. Add surrounding context so it matches once. Nothing was saved.",
+    "line_endings_only": "Edit {edit_index} changes only line endings, which edits "
+    "keep as {path} stores them. Send the whole file with content to change them. "
+    "Nothing was saved.",
 }
+
+# Appended to the refusal when the file mixes CRLF and LF line endings.
+_MIXED_LINE_ENDINGS = (
+    " {path} mixes CRLF and LF line endings: a multi-line 'old' matches only "
+    "lines stored with the line ending it uses."
+)
+
+
+def refusal_text(reason: str, path: str, details: dict[str, Any]) -> str:
+    """The message for a refused edit, ``details`` being its ``_error`` fields."""
+    text = _REFUSALS[reason].format(path=path, **details)
+    if details.get("line_endings") == "mixed":
+        text += _MIXED_LINE_ENDINGS.format(path=path)
+    return text
 
 
 def build_edit_file_handler(
@@ -279,12 +336,12 @@ def build_edit_file_handler(
         if reason is not None:
             return {
                 "success": False,
-                "error": _REFUSALS[reason].format(path=rel_path, **result),
+                "error": refusal_text(reason, rel_path, result),
                 "reason": reason,
                 **result,
             }
         _LOGGER.info("Edited file: %s (%d bytes)", rel_path, result["size"])
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "path": rel_path,
             "size": result["size"],
@@ -292,6 +349,8 @@ def build_edit_file_handler(
             "edits_applied": len(edits),
             "message": "File updated successfully",
         }
+        response.update(await after_file_write(hass, rel_path, result["size"]))
+        return response
 
     return handle_edit_file
 

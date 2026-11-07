@@ -68,7 +68,9 @@ from .file_ops import (
     _replace_file_sync,
     register_edit_file,
     run_file_job,
+    write_text_atomic,
 )
+from .file_post_action import after_file_write, reload_after_edit
 from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
 from .yaml_find import SERVICE_FIND_YAML_KEY, register_find_yaml_key
@@ -193,6 +195,7 @@ SERVICE_READ_FILE_SCHEMA = vol.Schema(
         # under ``parsed`` (ha_config_get_yaml's include_parsed, #1788). HA tags
         # are rendered to source form, never resolved.
         vol.Optional("include_parsed", default=False): cv.boolean,
+        vol.Optional("keep_line_endings", default=False): cv.boolean,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -1365,14 +1368,19 @@ def _list_files_sync(
     return {"files": files}
 
 
-def _read_file_sync(target_file: Path) -> dict[str, Any]:
-    """Bundle read_file blocking I/O for a single executor offload."""
+def _read_file_sync(
+    target_file: Path, keep_line_endings: bool = False
+) -> dict[str, Any]:
+    """Bundle read_file blocking I/O for a single executor offload.
+
+    ``keep_line_endings`` returns CRLF as stored (auto-backup); otherwise LF.
+    """
     if not target_file.exists():
         return {"_error": "not_found"}
     if not target_file.is_file():
         return {"_error": "not_a_file"}
     stat = target_file.stat()
-    content = target_file.read_text()
+    content = target_file.read_text(newline="" if keep_line_endings else None)
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
 
 
@@ -1448,7 +1456,7 @@ def _write_file_sync(
         except ValueError:
             parent = str(target_file.parent)
         return {"_error": "no_parent", "parent": parent}
-    target_file.write_text(content)
+    target_file.write_bytes(content.encode("utf-8"))  # line endings as sent
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
 
@@ -2121,28 +2129,7 @@ async def _resolve_post_action(
     if kind == "lovelace_dashboard":
         post_info = {"post_action": "restart_required"}
     elif kind == "theme":
-        # Trigger frontend.reload_themes to load the theme change
-        try:
-            await hass.services.async_call(
-                "frontend",
-                "reload_themes",
-                {},
-                blocking=True,
-            )
-            post_info = {
-                "post_action": "reload_performed",
-                "reload_service": "frontend.reload_themes",
-            }
-        except Exception as reload_err:  # noqa: BLE001
-            post_info = {
-                "post_action": "reload_available",
-                "reload_service": "frontend.reload_themes",
-                "reload_error": str(reload_err),
-            }
-            _LOGGER.warning(
-                "frontend.reload_themes failed after theme edit: %s",
-                reload_err,
-            )
+        post_info = await reload_after_edit(hass, "frontend", "reload_themes")
     else:
         post_info = YAML_KEY_POST_ACTIONS.get(
             path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
@@ -2215,13 +2202,7 @@ async def _apply_yaml_key_edit(
             lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
         )
 
-        # Atomic write: write to temp file, then rename into place
-        def _atomic_write() -> None:
-            tmp_file = target_file.with_suffix(".tmp")
-            tmp_file.write_text(new_content)
-            os.replace(str(tmp_file), str(target_file))
-
-        await hass.async_add_executor_job(_atomic_write)
+        await hass.async_add_executor_job(write_text_atomic, target_file, new_content)
 
         stat = await hass.async_add_executor_job(target_file.stat)
         modified_dt = datetime.fromtimestamp(stat.st_mtime)
@@ -2916,7 +2897,11 @@ def _build_read_file_handler(
                     tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES,
                 )
             else:
-                result = await hass.async_add_executor_job(_read_file_sync, target_file)
+                result = await hass.async_add_executor_job(
+                    _read_file_sync,
+                    target_file,
+                    call.data.get("keep_line_endings", False),
+                )
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
             return {
@@ -3029,6 +3014,7 @@ def _build_write_file_handler(
             "modified": modified_dt.isoformat(),
             "created": is_new,
             "message": f"File {'created' if is_new else 'updated'} successfully",
+            **(await after_file_write(hass, rel_path, size)),
         }
 
     return handle_write_file

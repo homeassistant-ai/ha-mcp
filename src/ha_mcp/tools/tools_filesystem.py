@@ -32,6 +32,7 @@ from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import ComponentCaps, get_component_caps
 from .config_entry_flow import COMPONENT_DOMAIN as MCP_TOOLS_DOMAIN
+from .file_edit_refusal import raise_edit_file_refusal
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -456,10 +457,12 @@ def _assert_caps_version_ok(caps: ComponentCaps) -> None:
 async def _assert_file_edits_supported(client: Any) -> None:
     """Replace an opaque missing-service failure with an update prompt.
 
-    Asks the service registry instead of comparing versions: an unreleased
-    component (E2E, the dev environment, a dev pre-release) reports the previous
-    release's number while already carrying the service. Scoped to edits, unlike
-    MIN_COMPONENT_VERSION, so whole-file writes need no component update.
+    Asks the service registry instead of comparing versions, which cannot tell
+    either way: an unreleased build (master, E2E, the dev environment) reports
+    the previous release's number while already carrying the service, and a dev
+    pre-release carries the next release's number, also when it was cut before
+    the service existed. Scoped to edits, unlike MIN_COMPONENT_VERSION, so
+    whole-file writes need no component update.
     """
     if EDIT_FILE_SERVICE in (await _registered_tool_services(client) or {}):
         return
@@ -635,7 +638,7 @@ class FilesystemTools:
             # carries an error payload.
             if isinstance(result, dict):
                 result = unwrap_service_response(result)
-                if not result.get("success", True):
+                if result.get("success") is not True:
                     raise_tool_error(result)
                 return result
 
@@ -750,7 +753,7 @@ class FilesystemTools:
 
             if isinstance(result, dict):
                 result = unwrap_service_response(result)
-                if not result.get("success", True):
+                if result.get("success") is not True:
                     raise_tool_error(result)
                 return result
 
@@ -873,9 +876,17 @@ class FilesystemTools:
         snapshotted); the skip is logged, the write is not blocked.
 
         With edits, nothing is saved unless every edit applies, and the rest of
-        the file, line endings included, stays as it is. A file ha_read_file
-        shows with LF may be stored as CRLF; that is handled unless the file
-        mixes both.
+        the file, line endings included, stays as it is. ha_read_file shows a
+        CRLF file with LF; edits to it match either way. In a file that mixes
+        CRLF and LF, a multi-line 'old' matches only lines stored with the line
+        ending it uses.
+
+        After a write, the response says what Home Assistant needs before it
+        uses the file: a theme or custom template is reloaded (post_action,
+        reload_service), a custom template Home Assistant cannot load (not
+        *.jinja, or over its size limit) gets a warning, and a dashboards/ file
+        names the YAML dashboards it backs (dashboards), which reread it when
+        next opened.
 
         EXAMPLE: ha_write_file(path="custom_templates/formatters.jinja", content="{% macro shout(text) %}{{ text | upper }}{% endmacro %}")
         EXAMPLE: ha_write_file(path="www/card.js", edits=[{"old": "const REFRESH = 30000;", "new": "const REFRESH = 10000;"}])
@@ -923,14 +934,16 @@ class FilesystemTools:
 
             if isinstance(result, dict):
                 result = unwrap_service_response(result)
-                if not result.get("success", True):
-                    raise_tool_error(result)
-                return result
+                if result.get("success") is True:
+                    return result
+                if service == EDIT_FILE_SERVICE:
+                    raise_edit_file_refusal(result, path)
+                raise_tool_error(result)
 
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    "Unexpected response format from write_file service",
+                    f"Unexpected response format from {service} service",
                     context={"path": path},
                 )
             )
@@ -1014,7 +1027,7 @@ class FilesystemTools:
 
             if isinstance(result, dict):
                 result = unwrap_service_response(result)
-                if not result.get("success", True):
+                if result.get("success") is not True:
                     raise_tool_error(result)
                 return result
 

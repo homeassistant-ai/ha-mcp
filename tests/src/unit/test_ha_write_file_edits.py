@@ -77,22 +77,6 @@ async def test_content_write_works_on_a_component_without_edit_file() -> None:
     [{}, {"content": "x", "edits": EDITS}],
     ids=["neither", "both"],
 )
-async def test_exactly_one_of_content_and_edits_is_required(
-    modes: dict[str, Any],
-) -> None:
-    with pytest.raises(ToolError) as excinfo:
-        await _call_tool(_client("edit_file"), path="www/a.css", **modes)
-
-    assert excinfo.value.service.await_count == 0  # type: ignore[attr-defined]
-    assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "modes",
-    [{}, {"content": "x", "edits": EDITS}],
-    ids=["neither", "both"],
-)
 async def test_invalid_write_mode_is_refused_before_backup_and_component_checks(
     modes: dict[str, Any],
 ) -> None:
@@ -118,8 +102,9 @@ async def test_invalid_write_mode_is_refused_before_backup_and_component_checks(
 
 @pytest.mark.asyncio
 async def test_component_without_edit_file_gets_an_update_prompt() -> None:
-    """Asks the registry, not a version: an unreleased component reports the
-    previous release's number and still has the service."""
+    """Asks the registry, not a version: an unreleased build reports the
+    previous release's number with the service, and a dev pre-release the next
+    release's number, also without it."""
     with pytest.raises(ToolError) as excinfo:
         await _call_tool(_client("write_file"), path="www/a.css", edits=EDITS)
 
@@ -145,8 +130,58 @@ async def test_component_refusal_reaches_the_model_with_its_reason() -> None:
         )
 
     payload = json.loads(str(excinfo.value))
+    # Same shape as ha_config_set_dashboard_resource(edits=...) refusals.
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert payload["error"]["message"] == refusal["error"]
     assert payload["reason"] == "old_not_found"
     assert payload["edit_index"] == 0
+    assert payload["path"] == "www/a.css"
+
+
+@pytest.mark.asyncio
+async def test_a_file_refusal_of_an_edit_is_a_service_failure() -> None:
+    refusal = {"success": False, "error": "File not found", "reason": "not_found"}
+
+    with pytest.raises(ToolError) as excinfo:
+        await _call_tool(
+            _client("edit_file"), service_result=refusal, path="www/a.css", edits=EDITS
+        )
+
+    payload = json.loads(str(excinfo.value))
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert payload["reason"] == "not_found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [{"edits": EDITS}, {"content": "x"}])
+async def test_a_reply_without_success_is_not_taken_for_one(
+    mode: dict[str, Any],
+) -> None:
+    with pytest.raises(ToolError):
+        await _call_tool(
+            _client("edit_file"),
+            service_result={"path": "www/a.css"},
+            path="www/a.css",
+            **mode,
+        )
+
+
+def test_server_and_component_allow_the_same_number_of_edits() -> None:
+    """Drift would surface as the component schema's opaque length error."""
+    import ast
+    from pathlib import Path
+
+    from ha_mcp.tools.resource_patch import MAX_EDITS
+
+    source = Path(__file__).parents[3] / "custom_components/ha_mcp_tools/file_ops.py"
+    assigned = {
+        node.targets[0].id: node.value.value
+        for node in ast.parse(source.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+    }
+    assert assigned["MAX_EDITS"] == MAX_EDITS
 
 
 @pytest.mark.asyncio

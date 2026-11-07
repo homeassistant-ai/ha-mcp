@@ -53,9 +53,11 @@ The floor applies to every filesystem tool, so an optional feature must not
 raise it: users who don't need the feature would be forced to update. Such a
 feature gates on its own signal and prompts for the update only when it is used,
 as `ha_write_file(edits=...)` does by finding `edit_file` in the service registry
-(`_assert_file_edits_supported`). Prefer the registry over a version here: an
-unreleased component reports the previous release's number while already carrying
-the service.
+(`_assert_file_edits_supported`). Prefer the registry over a version here,
+because a version is wrong in both directions: an unreleased build (master, E2E,
+the dev environment) reports the previous release's number while already
+carrying the service, and a dev pre-release reports the next release's number
+(see above), including one cut before the service existed.
 
 Every development pre-release cut while that release is pending reports the
 same plain number, so the floor cannot tell a pre-release that has the new
