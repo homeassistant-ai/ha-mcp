@@ -5,6 +5,7 @@ This module provides utilities for cleaning up test entities, managing test data
 and ensuring tests don't interfere with each other.
 """
 
+import asyncio
 import logging
 import sys
 from collections.abc import Iterator
@@ -14,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from ...timed_out_task import CANCEL_MESSAGE
 from .assertions import parse_mcp_result
 
 logger = logging.getLogger(__name__)
@@ -34,16 +36,20 @@ class CleanupSteps:
     ``pytest.fail()`` counts as a failed step because some wait helpers in the
     tests use it. A skip in a step is a failed step too, so it cannot report a
     failed body as skipped. Any other ``BaseException`` (``KeyboardInterrupt``,
-    ``asyncio.CancelledError``) ends the cleanup and propagates unchanged.
+    an ``asyncio.CancelledError`` without the timeout hook's ``CANCEL_MESSAGE``)
+    ends the cleanup and propagates unchanged.
 
     The per-test timeout (pytest-timeout's ``signal`` method) calls
-    ``pytest.fail()`` in whatever frame runs when it fires. While an async step
-    awaits, that frame is the event loop, outside the step: the test fails, but
-    its task stays pending on the session-scoped loop, so the remaining steps
-    can run later, while another test runs the loop. While a step runs blocking
-    code, the step records the timeout as a failed step and the next step runs.
-    The timeout fires only once, so only the steps' own time limits and the CI
-    job timeout bound the steps after it.
+    ``pytest.fail()`` in whatever frame runs when it fires. While a step runs
+    blocking code, the step records the timeout as a failed step and the next
+    step runs; the timeout fires only once, so only the steps' own time limits
+    and the CI job timeout bound every step after it, blocking or awaiting.
+    While the test awaits, the hook in ``tests/src/timed_out_task.py`` cancels
+    its task instead. When that cancellation lands in the body, the steps run
+    as after any failed body; a step cancelled with the hook's
+    ``CANCEL_MESSAGE`` counts as a failed step, and the next step runs. Either
+    way, a ``CancelledError`` with that message is taken back, so the steps
+    after it run with none pending.
 
     Entering reads the body's outcome from ``sys.exception()``. Read while
     another exception is handled, for example inside an ``except`` in the
@@ -56,6 +62,8 @@ class CleanupSteps:
         self._body_failed = body_exception is not None and not isinstance(
             body_exception, pytest.skip.Exception
         )
+        if _from_timeout_hook(body_exception):
+            _take_back_cancellation()
         self._failures: list[BaseException] = []
         return self
 
@@ -77,6 +85,26 @@ class CleanupSteps:
         except (Exception, pytest.fail.Exception, pytest.skip.Exception) as error:
             logger.exception("Cleanup step failed")
             self._failures.append(error)
+        except asyncio.CancelledError as error:
+            if not _from_timeout_hook(error):
+                logger.error("Cleanup cancelled; the steps after this one do not run")
+                raise
+            logger.exception("Cleanup step cancelled after the test timed out")
+            self._failures.append(error)
+            _take_back_cancellation()
+
+
+def _from_timeout_hook(error: BaseException | None) -> bool:
+    return isinstance(error, asyncio.CancelledError) and error.args == (CANCEL_MESSAGE,)
+
+
+def _take_back_cancellation() -> None:
+    # A TaskGroup with a failing child in a later step reads a nonzero
+    # task.cancelling() as an outside cancellation and cancels the task again,
+    # without a message.
+    task = asyncio.current_task()
+    if task is not None:
+        task.uncancel()
 
 
 class TestEntityCleaner:

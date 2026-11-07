@@ -22,6 +22,9 @@ from pathlib import Path
 
 import pytest
 
+# Registers the hook that ends a timed-out async test's task; see the module.
+from .timed_out_task import pytest_runtest_call  # noqa: F401
+
 _UNIT = Path(__file__).parent / "unit"
 _E2E = Path(__file__).parent / "e2e"
 

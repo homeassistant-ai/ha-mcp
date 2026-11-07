@@ -8,13 +8,16 @@ it. Others pin that every failed step is named, that an interrupt propagates
 unchanged, that a skipped body counts as passed, that a timeout in a blocking
 step lets the next step run, that an ``except`` in the ``finally`` block does
 not change how the body's outcome is read, and that a clean cleanup raises
-nothing.
+nothing. A cancellation with the timeout hook's ``CANCEL_MESSAGE`` lets the
+next step run too, and one that lands in the body leaves none pending for the
+steps; any other cancellation ends the cleanup.
 
 No Docker and no HA instance: the steps run plain code.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import signal
 import time
@@ -23,6 +26,7 @@ from collections.abc import Callable
 import pytest
 
 from tests.src.e2e.utilities.cleanup import CleanupSteps
+from tests.src.timed_out_task import CANCEL_MESSAGE
 
 
 def _restore_failed() -> None:
@@ -163,6 +167,85 @@ def test_timeout_in_a_blocking_step_is_recorded_and_later_steps_still_run() -> N
         signal.signal(signal.SIGALRM, previous_handler)
     assert ran == ["first", "second"]
     assert isinstance(excinfo.value.__cause__, pytest.fail.Exception)
+
+
+async def _fail_after_a_tick() -> None:
+    await asyncio.sleep(0)
+    _restore_failed()
+
+
+async def _cleanup_with_awaiting_step(ran: list[str]) -> None:
+    try:
+        pass
+    finally:
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                ran.append("first")
+                await asyncio.sleep(30)
+            with cleanup.step():
+                # A TaskGroup whose child fails cancels the task. On exit it
+                # takes that back and, if task.cancelling() is still nonzero,
+                # cancels the task again without a message. Had CleanupSteps not
+                # taken back the first step's cancellation, that new one would
+                # land at the third step's await and end the cleanup.
+                async with asyncio.TaskGroup() as group:
+                    group.create_task(_fail_after_a_tick())
+            with cleanup.step():
+                await asyncio.sleep(0)
+                ran.append("third")
+
+
+async def test_timeout_hook_cancelling_a_step_is_recorded_and_later_steps_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ran: list[str] = []
+    task = asyncio.create_task(_cleanup_with_awaiting_step(ran))
+    await asyncio.sleep(0)
+    task.cancel(CANCEL_MESSAGE)
+    with pytest.raises(AssertionError, match="Cleanup failed") as raised:
+        # Bounded, so a cleanup left hanging fails the test instead of stalling it.
+        await asyncio.wait_for(task, timeout=5)
+    assert isinstance(raised.value.__cause__, asyncio.CancelledError)
+    assert ran == ["first", "third"]
+    assert "Cleanup step cancelled after the test timed out" in caplog.text
+
+
+async def test_timeout_hook_cancelling_the_body_is_taken_back_for_the_steps() -> None:
+    ran: list[str] = []
+
+    async def body_then_cleanup() -> None:
+        try:
+            await asyncio.sleep(30)
+        finally:
+            with CleanupSteps() as cleanup:
+                # See _cleanup_with_awaiting_step: the TaskGroup's cancellation
+                # would land at the next step's await.
+                with cleanup.step():
+                    async with asyncio.TaskGroup() as group:
+                        group.create_task(_fail_after_a_tick())
+                with cleanup.step():
+                    await asyncio.sleep(0)
+                    ran.append("second")
+
+    task = asyncio.create_task(body_then_cleanup())
+    await asyncio.sleep(0)
+    task.cancel(CANCEL_MESSAGE)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+    assert ran == ["second"]
+
+
+async def test_other_cancellation_of_a_step_ends_the_cleanup(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ran: list[str] = []
+    task = asyncio.create_task(_cleanup_with_awaiting_step(ran))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+    assert ran == ["first"]
+    assert "the steps after this one do not run" in caplog.text
 
 
 def test_step_inside_an_except_does_not_read_as_a_failed_body() -> None:
