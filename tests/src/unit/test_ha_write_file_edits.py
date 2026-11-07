@@ -263,3 +263,29 @@ async def test_edits_cannot_probe_a_file_that_defines_a_hidden_item() -> None:
 
     refuse.assert_awaited_once()
     assert excinfo.value.service.await_count == 0  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_a_yaml_edit_waits_for_a_file_write() -> None:
+    """ha_config_set_yaml and ha_write_file both write themes/; two snapshots
+    taken before either write would let a restore undo the other change."""
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace()
+    entered: list[str] = []
+
+    async def yaml_edit() -> None:
+        async with auto_backup._template_write_context(
+            object(), settings, "yaml", "themes/dark.yaml::dark"
+        ):
+            entered.append("yaml")
+
+    async with auto_backup._template_write_context(
+        object(), settings, "file", "themes/dark.yaml"
+    ):
+        waiting = asyncio.ensure_future(yaml_edit())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert entered == []
+    assert await waiting is None  # not a bare await: CodeQL reads that as no effect
+    assert entered == ["yaml"]

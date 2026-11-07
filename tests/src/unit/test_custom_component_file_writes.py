@@ -343,6 +343,19 @@ class TestAfterFileWrite:
         assert "No YAML dashboard names dashboards/rev.yaml" in info["warnings"][0]
 
     @pytest.mark.asyncio
+    async def test_an_absolute_path_inside_the_config_dir_counts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A custom directory can name the config dir by its absolute path."""
+        monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
+        hass = _Hass(tmp_path)
+        path = str(tmp_path / "custom_templates" / "rev.jinja")
+
+        info = await file_post_action.after_file_write(hass, path, 10)  # type: ignore[arg-type]
+
+        assert info["reload_service"] == "homeassistant.reload_custom_templates"
+
+    @pytest.mark.asyncio
     async def test_unreadable_dashboards_claim_nothing(self, tmp_path: Path) -> None:
         """Without Core's dashboards nothing was checked, so nothing is said."""
         hass = _Hass(tmp_path)

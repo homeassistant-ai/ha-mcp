@@ -415,7 +415,9 @@ async def _template_write_context(
     tools must not take the lock again: ``asyncio.Lock`` is not reentrant.
 
     File tools share one lock rather than one per path, because a link and its
-    target are the same file under two names.
+    target are the same file under two names. YAML edits take it as well: a
+    theme file is written by both, and two snapshots taken before either write
+    would let a restore of the later one remove the earlier change.
     """
     # Both options-update tools take stable config-entry IDs. Alias-based helper
     # removal and dotted subentry targets have separate resolution paths.
@@ -429,7 +431,8 @@ async def _template_write_context(
     elif domain == "dashboard_resource" and entity_id:
         async with resource_write_lock(entity_id):
             yield
-    elif domain == "file" and entity_id:
+    elif domain in ("file", "yaml") and entity_id:
+        # YAML edits too: ha_config_set_yaml and ha_write_file both write themes/.
         async with registry_update_lock("file", "all_files"):
             yield
     else:

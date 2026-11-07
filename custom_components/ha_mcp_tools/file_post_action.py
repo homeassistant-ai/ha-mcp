@@ -112,16 +112,32 @@ def _dashboard_action(hass: HomeAssistant, rel_path: str) -> dict[str, Any]:
     }
 
 
+def _config_relative(hass: HomeAssistant, abs_path: str) -> str | None:
+    """``abs_path`` relative to the config directory, or None outside it."""
+    config_dir = os.path.normpath(hass.config.config_dir)
+    try:
+        relative = os.path.relpath(os.path.normpath(abs_path), config_dir)
+    except ValueError:  # another drive on Windows
+        return None
+    if relative == os.curdir or relative.split(os.sep, 1)[0] == os.pardir:
+        return None
+    return relative
+
+
 async def after_file_write(
     hass: HomeAssistant, rel_path: str, size: int
 ) -> dict[str, Any]:
     """Response fields for a file written at ``rel_path``; empty when none apply.
 
-    Only config-relative paths count: an absolute path is a HAOS sibling volume
-    or a custom directory, which Core does not load from.
+    An absolute path counts only inside the config directory, by its relative
+    path there: elsewhere it is a HAOS sibling volume or a custom directory,
+    which Core does not load from.
     """
     if os.path.isabs(rel_path) or rel_path.startswith("/"):
-        return {}
+        inside = _config_relative(hass, rel_path)
+        if inside is None:
+            return {}
+        rel_path = inside
     normalized = posixpath.normpath(rel_path.replace("\\", "/"))
     top = normalized.split("/", 1)[0]
     if top == "themes" and normalized.endswith(_YAML_SUFFIXES):
