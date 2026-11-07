@@ -39,7 +39,13 @@ def _store_manager(hass: HomeAssistant) -> Any | None:
         manager = getattr(entry, "runtime_data", None)
         if manager is not None:
             return manager
-    return hass.data.get("hacs")
+    hacs = hass.data.get("hacs")
+    # HACS publishes its manager before restoring its records and, when that
+    # restore fails, disables itself and tries again 15 minutes later; until
+    # then its repository list is empty, not clean.
+    if hacs is not None and getattr(getattr(hacs, "system", None), "disabled", False):
+        return None
+    return hacs
 
 
 def _installed_own_records(manager: Any) -> list[Any]:
@@ -143,9 +149,11 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 
 
 _SCHEDULED_KEY = "store_records_check_scheduled"
-# A store that is not loaded when Home Assistant reports started is asked once
-# more; the stores set up during startup, so this covers a slow one.
-_STORE_RETRY_SECONDS = 60
+# A store that is not loaded when Home Assistant reports started is asked again
+# for about an hour: Core retries a not-ready Marketplace entry with a backoff
+# that caps at five minutes, and HACS retries a failed start after fifteen.
+_STORE_RETRY_SECONDS = 300
+_STORE_RETRY_LIMIT = 12
 
 
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
@@ -159,16 +167,16 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
     domain_data[_SCHEDULED_KEY] = True
 
     @callback
-    def _check(_event: Any = None, *, retry: bool = True) -> None:
+    def _check(_event: Any = None, *, retries_left: int = _STORE_RETRY_LIMIT) -> None:
         try:
             checked = async_check_store_records(hass)
         except Exception:
             _LOGGER.debug("Store record check failed", exc_info=True)
             checked = True
-        if not checked and retry:
+        if not checked and retries_left:
             # The flag stays set while the retry is pending, so another entry
             # registering meanwhile does not line up a second one.
-            _retry_later(hass, lambda _now: _check(retry=False))
+            _retry_later(hass, lambda _now: _check(retries_left=retries_left - 1))
             return
         domain_data.pop(_SCHEDULED_KEY, None)
 

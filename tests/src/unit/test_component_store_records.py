@@ -235,3 +235,43 @@ def test_a_registration_during_the_pending_retry_adds_no_second_retry(
 
     assert hass.bus.async_listen_once.call_count == 1
     later.assert_called_once()
+
+
+def test_a_disabled_hacs_is_unknown_not_clean(monkeypatch, issue_registry):
+    """HACS that failed its restore has an empty repository list until it
+    retries; the issue must not be cleared on that."""
+    hass = MagicMock()
+    hass.config_entries.async_loaded_entries.return_value = []
+    hacs = SimpleNamespace(
+        system=SimpleNamespace(disabled=True),
+        repositories=SimpleNamespace(get_by_full_name=lambda _name: None),
+    )
+    hass.data = {"hacs": hacs}
+
+    assert store_records.conflicting_records(hass) is None
+    assert store_records.async_check_store_records(hass) is False
+    issue_registry.async_delete_issue.assert_not_called()
+
+
+def test_retries_stop_after_the_limit(monkeypatch, issue_registry):
+    """A store that never loads is asked a bounded number of times, then the
+    guard clears so a later entry reload can start over."""
+    hass = _hass_with(monkeypatch, None)
+    hass.data = {}
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    event = ModuleType("homeassistant.helpers.event")
+    later = MagicMock()
+    event.async_call_later = later
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
+
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+    while later.call_count and later.call_count <= store_records._STORE_RETRY_LIMIT:
+        pending = later.call_args.args[2]
+        count = later.call_count
+        pending(None)
+        if later.call_count == count:
+            break
+
+    assert later.call_count == store_records._STORE_RETRY_LIMIT
+    assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
