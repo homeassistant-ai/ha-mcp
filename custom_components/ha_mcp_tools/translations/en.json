@@ -187,16 +187,16 @@
             }
         },
         "store_records_conflict": {
-            "title": "Two store records claim the HA-MCP integration",
+            "title": "HA-MCP is installed from two store listings",
             "fix_flow": {
                 "step": {
                     "confirm": {
-                        "title": "Keep one store record for HA-MCP?",
-                        "description": "Installed records: {records}.\n\nSubmitting keeps **{keep}** and marks the other record as not installed. Your HA-MCP entries, settings and files stay as they are. Afterwards, update HA-MCP from {keep} as usual."
+                        "title": "Keep HA-MCP on one store listing?",
+                        "description": "HA-MCP is marked installed from both {records}. They carry the same integration (the second one is the older distribution mirror), and HACS or the Marketplace lets only one listing own an integration, so right now neither of them can update HA-MCP.\n\nSubmit keeps **{keep}**, the listing in the default catalog that needs no custom repository, and marks the other listing as not installed. Nothing is deleted: your HA-MCP entries, settings and files stay exactly as they are, and from now on updates show up under {keep} as usual."
                     }
                 },
                 "abort": {
-                    "already_resolved": "Only one store record is installed now; nothing to fix."
+                    "already_resolved": "HA-MCP is installed from one store listing now; nothing to fix."
                 }
             }
         }
