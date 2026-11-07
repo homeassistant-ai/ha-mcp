@@ -2679,6 +2679,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     and the in-process ``server`` (#1527); a missing ``entry_type`` means
     ``tools``, so entries from before the server entry need no migration.
     """
+    from .store_records import async_schedule_store_records_check
+
+    async_schedule_store_records_check(hass)
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
         from .embedded_entry import async_setup_server_entry
 
