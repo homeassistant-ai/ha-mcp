@@ -1904,8 +1904,7 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
     "ha_mcp_tools/device_get": {"device_id": "d1"},
     "ha_mcp_tools/entity_enrich": {"entity_ids": []},
-    # exposure: no entity_id (list mode) — the registries resolve empty here so
-    # no per-entity settings lookup runs, keeping the admin-gate probe pure.
+    # exposure, list mode: registries resolve empty, so the probe stays pure.
     "ha_mcp_tools/entity_lookup": {"unique_id": "x"},
     "ha_mcp_tools/registries": {"registries": []},
     # registry_lookup now REQUIRES a target (entity_ids or config_entry_id) —
@@ -1960,6 +1959,7 @@ class TestRegistrationAndAdminGate:
             wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
             wsapi.todo_items.WS_TODO_ITEM,  # test_component_todo_items.py
             wsapi.automation_config.WS_AUTOMATION_CONFIG,
+            wsapi.config_references.WS_CONFIG_REFERENCES,  # its own test file
         }
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
 

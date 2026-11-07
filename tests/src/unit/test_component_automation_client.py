@@ -99,9 +99,10 @@ class TestCrossSeam:
     ) -> None:
         assert component_automation.WS_AUTOMATION_CONFIG in functional_ws.registered
 
-    def test_server_asks_for_targets_by_the_flag_the_component_advertises(
+    def test_server_asks_for_references_by_what_the_component_serves(
         self,
+        functional_ws,  # noqa: F811
     ) -> None:
-        """A renamed flag would leave every device, area, floor and label
-        target unchecked without an error."""
-        assert component_config_reads.REFERENCE_DATA_TARGETS in wsapi.CAPABILITIES
+        """A renamed flag or command would leave every reference unchecked."""
+        assert component_config_reads.CONFIG_REFERENCES in wsapi.CAPABILITIES
+        assert component_config_reads.WS_CONFIG_REFERENCES in functional_ws.registered

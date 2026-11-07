@@ -58,7 +58,7 @@ from .helpers import (
     reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
-from .reference_validator import validate_config_references
+from .reference_validator import validate_config_references as ref_check
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
@@ -978,6 +978,7 @@ class ConfigScriptTools:
         # ``script_id`` stays the caller id (the fetched config already
         # carries an alias here, so the default is a no-op, but keep the
         # contract consistent — #1935).
+        references = await ref_check(self._client, transformed_config, "script")
         result = await self._client.upsert_script_config(
             transformed_config, script_id, resolved_id=resolved_id
         )
@@ -1007,6 +1008,7 @@ class ConfigScriptTools:
             canonical_files=_SCRIPT_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
+        merge_validation_meta(response, references)
         return response
 
     async def _take_control_config(self, script_id: str) -> TakenControl:
@@ -1038,11 +1040,7 @@ class ConfigScriptTools:
         detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
-        # Cross-check literal service and entity references against
-        # the live registries. Soft warnings only — the write still
-        # happens, even when references don't resolve (#940).
-        validation_meta = await validate_config_references(self._client, config_dict)
-
+        references = await ref_check(self._client, config_dict, "script")
         result = await self._upsert_script(config_dict, script_id, resolved_key)
 
         await self._finalize_script_write(
@@ -1052,7 +1050,7 @@ class ConfigScriptTools:
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)
 
-        merge_validation_meta(result, validation_meta)
+        merge_validation_meta(result, references)
 
         response = {
             "success": True,
