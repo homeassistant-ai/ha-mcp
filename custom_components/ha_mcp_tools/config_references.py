@@ -96,7 +96,17 @@ def _core() -> SimpleNamespace | str:
             label=label_registry.async_get,
         ),
         determine_action=getattr(cv, "determine_script_action", None),
-        call_service=getattr(cv, "SCRIPT_ACTION_CALL_SERVICE", None),
+        # The step kinds Core's Script descends into, and the service call.
+        actions=SimpleNamespace(
+            call_service=getattr(cv, "SCRIPT_ACTION_CALL_SERVICE", None),
+            condition=getattr(cv, "SCRIPT_ACTION_CHECK_CONDITION", None),
+            wait_for_trigger=getattr(cv, "SCRIPT_ACTION_WAIT_FOR_TRIGGER", None),
+            choose=getattr(cv, "SCRIPT_ACTION_CHOOSE", None),
+            if_=getattr(cv, "SCRIPT_ACTION_IF", None),
+            repeat=getattr(cv, "SCRIPT_ACTION_REPEAT", None),
+            parallel=getattr(cv, "SCRIPT_ACTION_PARALLEL", None),
+            sequence=getattr(cv, "SCRIPT_ACTION_SEQUENCE", None),
+        ),
         service_name=getattr(cv, "service", None),
         target_selection=getattr(target, "TargetSelection", None),
         referenced=getattr(target, "async_extract_referenced_entity_ids", None),
@@ -154,24 +164,13 @@ async def _validated(
         actions_key = const.CONF_SEQUENCE
     if str(checked.validation_status) != "ok":
         return {}, checked.validation_error
-    triggers = list(checked.get(const.CONF_TRIGGERS) or [])
-    conditions = list(checked.get(const.CONF_CONDITIONS) or [])
-    actions = list(checked.get(actions_key) or [])
-    # Paths follow Core's validated form (plural root keys, ``action`` for
-    # ``service``), which is what the get tools return.
-    if kind == "automation":
-        tree = {
-            const.CONF_TRIGGERS: triggers,
-            const.CONF_CONDITIONS: conditions,
-            actions_key: actions,
-        }
-    else:
-        tree = {actions_key: actions}
     return {
-        "triggers": triggers,
-        "conditions": conditions,
-        "actions": actions,
-        "tree": tree,
+        "triggers": list(checked.get(const.CONF_TRIGGERS) or []),
+        "conditions": list(checked.get(const.CONF_CONDITIONS) or []),
+        "actions": list(checked.get(actions_key) or []),
+        # Paths follow Core's validated form (plural root keys, ``action`` for
+        # ``service``), which is what the get tools return.
+        "actions_key": actions_key,
     }, None
 
 
@@ -228,7 +227,15 @@ def _missing(
 
 
 class _Steps:
-    """One visit per item: service names, and entity targets to put to Core."""
+    """Core's own traversal of a validated config, recording the service names
+    and the entity targets to put to Core's lookups.
+
+    The descent is the one ``Script._find_referenced_*`` makes: into the step
+    kinds Core's ``determine_script_action`` names as holding further steps,
+    conditions or triggers, and nothing else. A list under an event's data or
+    a repeat's ``for_each`` is a payload, so its action-shaped entries are
+    never read as steps.
+    """
 
     def __init__(
         self, hass: HomeAssistant, core: SimpleNamespace, targeted: dict[str, set]
@@ -239,30 +246,109 @@ class _Steps:
         self.services: set[str] = set()
         self.targets: list[dict[str, Any]] = []
 
-    def _targeted_item(self, node: dict[str, Any], path: str) -> bool:
-        """A trigger or condition Core describes with a target; True if one."""
-        const = self.core.const
-        target = node.get(const.CONF_TARGET)
-        if not isinstance(target, dict):
-            return False
-        for kind, keys in (
-            ("triggers", (const.CONF_TRIGGER, const.CONF_PLATFORM)),
-            ("conditions", (const.CONF_CONDITION,)),
-        ):
-            name = next((node[k] for k in keys if isinstance(node.get(k), str)), None)
-            if not isinstance(name, str) or name not in self.targeted[kind]:
+    def triggers(self, triggers: Any, path: str) -> None:
+        for i, trigger in enumerate(_dicts(triggers)):
+            self._targeted_item("triggers", trigger, f"{path}[{i}]")
+
+    def conditions(self, conditions: Any, path: str) -> None:
+        for i, cond in enumerate(_dicts(conditions)):
+            self._condition(cond, f"{path}[{i}]")
+
+    def _condition(self, cond: dict[str, Any], path: str) -> None:
+        self._targeted_item("conditions", cond, path)
+        # ``and`` / ``or`` / ``not`` hold conditions of their own.
+        nested = self.core.const.CONF_CONDITIONS
+        self.conditions(cond.get(nested), f"{path}.{nested}")
+
+    def steps(self, sequence: Any, path: str) -> None:
+        kinds = self.core.actions
+        containers = {
+            kinds.choose: self._choose,
+            kinds.if_: self._if,
+            kinds.repeat: self._repeat,
+            kinds.parallel: self._parallel,
+        }
+        for i, step in enumerate(_dicts(sequence)):
+            at = f"{path}[{i}]"
+            try:
+                action = self.core.determine_action(step)
+            except ValueError:
                 continue
-            selected = self.core.referenced(
-                self.hass, self.core.target_selection(target), expand_group=False
+            if action == kinds.call_service:
+                self._service_step(step, at)
+            elif action == kinds.condition:
+                self._condition(step, at)
+            elif action == kinds.wait_for_trigger:
+                key = self.core.const.CONF_WAIT_FOR_TRIGGER
+                self.triggers(step.get(key), f"{at}.{key}")
+            elif action == kinds.sequence:
+                key = self.core.const.CONF_SEQUENCE
+                self.steps(step.get(key), f"{at}.{key}")
+            elif action in containers:
+                containers[action](step, at)
+
+    def _choose(self, step: dict[str, Any], at: str) -> None:
+        const = self.core.const
+        for j, choice in enumerate(_dicts(step.get(const.CONF_CHOOSE))):
+            choice_at = f"{at}.{const.CONF_CHOOSE}[{j}]"
+            self.conditions(
+                choice.get(const.CONF_CONDITIONS),
+                f"{choice_at}.{const.CONF_CONDITIONS}",
             )
-            literal = {
-                e
-                for e in selected.referenced
-                if isinstance(e, str) and not self.core.is_template(e)
-            }
-            self._add(kind, name, literal, path)
-            return True
-        return False
+            self.steps(
+                choice.get(const.CONF_SEQUENCE), f"{choice_at}.{const.CONF_SEQUENCE}"
+            )
+        self.steps(step.get(const.CONF_DEFAULT), f"{at}.{const.CONF_DEFAULT}")
+
+    def _if(self, step: dict[str, Any], at: str) -> None:
+        const = self.core.const
+        self.conditions(step.get(const.CONF_IF), f"{at}.{const.CONF_IF}")
+        self.steps(step.get(const.CONF_THEN), f"{at}.{const.CONF_THEN}")
+        self.steps(step.get(const.CONF_ELSE), f"{at}.{const.CONF_ELSE}")
+
+    def _repeat(self, step: dict[str, Any], at: str) -> None:
+        const = self.core.const
+        repeat = step.get(const.CONF_REPEAT)
+        repeat = repeat if isinstance(repeat, dict) else {}
+        repeat_at = f"{at}.{const.CONF_REPEAT}"
+        for key in (const.CONF_WHILE, const.CONF_UNTIL):
+            self.conditions(repeat.get(key), f"{repeat_at}.{key}")
+        self.steps(
+            repeat.get(const.CONF_SEQUENCE), f"{repeat_at}.{const.CONF_SEQUENCE}"
+        )
+
+    def _parallel(self, step: dict[str, Any], at: str) -> None:
+        const = self.core.const
+        for j, script in enumerate(_dicts(step.get(const.CONF_PARALLEL))):
+            self.steps(
+                script.get(const.CONF_SEQUENCE),
+                f"{at}.{const.CONF_PARALLEL}[{j}].{const.CONF_SEQUENCE}",
+            )
+
+    def _targeted_item(self, kind: str, node: dict[str, Any], path: str) -> None:
+        """Put a trigger's or condition's literal entity targets up for Core's
+        lookup when Core describes the item with a target."""
+        const = self.core.const
+        keys = (
+            (const.CONF_TRIGGER, const.CONF_PLATFORM)
+            if kind == "triggers"
+            else (const.CONF_CONDITION,)
+        )
+        name = next((node[k] for k in keys if isinstance(node.get(k), str)), None)
+        target = node.get(const.CONF_TARGET)
+        if not isinstance(name, str) or name not in self.targeted[kind]:
+            return
+        if not isinstance(target, dict):
+            return
+        selected = self.core.referenced(
+            self.hass, self.core.target_selection(target), expand_group=False
+        )
+        literal = {
+            e
+            for e in selected.referenced
+            if isinstance(e, str) and not self.core.is_template(e)
+        }
+        self._add(kind, name, literal, path)
 
     def _add(self, kind: str, name: str, entity_ids: set[str], path: str) -> None:
         for entity_id in sorted(entity_ids):
@@ -273,48 +359,26 @@ class _Steps:
                     {"path": path, "kind": kind, "name": name, "entity_id": entity_id}
                 )
 
-    def walk(self, node: Any, path: str, listed: bool = False) -> None:
-        if isinstance(node, list):
-            for i, child in enumerate(node):
-                self.walk(child, f"{path}[{i}]", listed=True)
-            return
-        if not isinstance(node, dict):
-            return
-        if not listed:
-            # Core's validated config keeps every step, trigger and condition
-            # in a list; a dict held directly under a key is a payload (an
-            # event's data, variables), never one of them.
-            for key, value in node.items():
-                self.walk(value, f"{path}.{key}" if path else key)
-            return
-        if self._targeted_item(node, path):
-            return
-        try:
-            action = self.core.determine_action(node)
-        except ValueError:
-            action = None
-        if action == self.core.call_service:
-            # A service step holds no further steps; its data is the service's.
-            self._service_step(node, path)
-            return
-        for key, value in node.items():
-            self.walk(value, f"{path}.{key}" if path else key)
-
     def _service_step(self, node: dict[str, Any], path: str) -> None:
         name = node.get(self.core.const.CONF_ACTION)
         if not isinstance(name, str):
             return  # a templated action names no service until it runs
         try:
-            # Core's own service-name check: an event's ``action`` data (a
-            # mobile app notification action id) is no service call.
             self.core.service_name(name)
         except _INVALID_ERRORS:
-            return
+            return  # Core's validator already refused it, or it is templated
         self.services.add(name)
         if name in self.targeted["services"]:
             found: set[str] = set()
             self.core.script_entities(found, [node])
             self._add("services", name, found, path)
+
+
+def _dicts(items: Any) -> list[dict[str, Any]]:
+    """The dict entries of a list Core validated; anything else is nothing."""
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _flat(kind: str, descriptions: Any) -> dict[str, Any]:
@@ -383,7 +447,9 @@ async def async_config_references(
         else:
             found = _references(core, parts)
             steps = _Steps(hass, core, await _targeted(hass, core))
-            steps.walk(parts["tree"], "")
+            steps.triggers(parts["triggers"], core.const.CONF_TRIGGERS)
+            steps.conditions(parts["conditions"], core.const.CONF_CONDITIONS)
+            steps.steps(parts["actions"], parts["actions_key"])
             found["service"] = steps.services
             mismatches = await _mismatches(hass, core, steps)
         return {

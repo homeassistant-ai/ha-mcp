@@ -88,8 +88,24 @@ class _Checked:
         self.validation_error = refused
 
 
+# Core's ACTIONS_SET keys and the kind each one names.
+_ACTION_KEYS = {
+    "action": "call_service",
+    "condition": "condition",
+    "choose": "choose",
+    "if": "if",
+    "repeat": "repeat",
+    "parallel": "parallel",
+    "sequence": "sequence",
+    "wait_for_trigger": "wait_for_trigger",
+    "event": "event",
+    "variables": "variables",
+    "delay": "delay",
+}
+
+
 def _determine(node: dict[str, Any]) -> str:
-    for key, kind in (("action", "call_service"), ("choose", "choose")):
+    for key, kind in _ACTION_KEYS.items():
         if key in node:
             return kind
     raise ValueError("Unable to determine action")
@@ -168,14 +184,24 @@ def _fake_core() -> SimpleNamespace:
         const=SimpleNamespace(
             CONF_ACTION="action",
             CONF_ACTIONS="actions",
+            CONF_CHOOSE="choose",
             CONF_CONDITION="condition",
             CONF_CONDITIONS="conditions",
+            CONF_DEFAULT="default",
+            CONF_ELSE="else",
             CONF_ENTITIES="entities",
+            CONF_IF="if",
+            CONF_PARALLEL="parallel",
             CONF_PLATFORM="platform",
+            CONF_REPEAT="repeat",
             CONF_SEQUENCE="sequence",
             CONF_TARGET="target",
+            CONF_THEN="then",
             CONF_TRIGGER="trigger",
             CONF_TRIGGERS="triggers",
+            CONF_UNTIL="until",
+            CONF_WAIT_FOR_TRIGGER="wait_for_trigger",
+            CONF_WHILE="while",
             ATTR_AREA_ID="area_id",
             ATTR_FLOOR_ID="floor_id",
             ATTR_LABEL_ID="label_id",
@@ -202,7 +228,16 @@ def _fake_core() -> SimpleNamespace:
             label=_registry("label", "async_get_label"),
         ),
         determine_action=_determine,
-        call_service="call_service",
+        actions=SimpleNamespace(
+            call_service="call_service",
+            condition="condition",
+            wait_for_trigger="wait_for_trigger",
+            choose="choose",
+            if_="if",
+            repeat="repeat",
+            parallel="parallel",
+            sequence="sequence",
+        ),
         service_name=_service_name,
         target_selection=lambda target: target,
         referenced=lambda hass, selection, expand_group: SimpleNamespace(
@@ -338,17 +373,22 @@ async def test_action_lookalikes_in_event_and_service_data_are_not_services():
 
 @pytest.mark.anyio
 async def test_action_shaped_payloads_are_not_steps():
-    """An event's data, a fired event's data and step variables shaped like a
-    service call were put to Core's target lookup and reported as mismatches."""
+    """An event's data, a fired event's data, step variables and a repeat's
+    ``for_each`` shaped like a service call, alone or in a list, were put to
+    Core's target lookup and reported as mismatches or missing services."""
     payload = {
-        "action": "select.select_option",
+        "action": "notify.ghost",
         "target": {"entity_id": "input_select.mode_of_travel"},
     }
     config = {
-        "triggers": [{"trigger": "event", "event_type": "x", "event_data": payload}],
+        "triggers": [
+            {"trigger": "event", "event_type": "x", "event_data": payload},
+            {"trigger": "event", "event_type": "y", "event_data": {"q": [payload]}},
+        ],
         "actions": [
-            {"event": "fired", "event_data": payload},
-            {"variables": {"step": payload}},
+            {"event": "fired", "event_data": {"queue": [payload]}},
+            {"variables": {"step": payload, "steps": [payload]}},
+            {"repeat": {"for_each": [payload], "sequence": [{"delay": 1}]}},
         ],
     }
     assert await _check(config) == {"status": "ok", "missing": [], "mismatches": []}
@@ -366,28 +406,84 @@ async def test_a_scene_entities_list_reaches_cores_schema_unchanged():
     }
 
 
-@pytest.mark.anyio
-async def test_a_step_nested_in_a_choose_is_checked():
-    config = {
-        "actions": [
+_MISMATCHED_STEP = _action("select.select_option", "input_select.mode_of_travel")
+_MISMATCHED_CONDITION = {
+    "condition": "light.is_on",
+    "target": {"entity_id": "binary_sensor.hall"},
+}
+
+
+@pytest.mark.parametrize(
+    ("step", "path"),
+    [
+        pytest.param(
+            {"choose": [{"conditions": [], "sequence": [_MISMATCHED_STEP]}]},
+            "actions[0].choose[0].sequence[0]",
+            id="choose-sequence",
+        ),
+        pytest.param(
+            {"choose": [], "default": [_MISMATCHED_STEP]},
+            "actions[0].default[0]",
+            id="choose-default",
+        ),
+        pytest.param(
+            {"choose": [{"conditions": [_MISMATCHED_CONDITION], "sequence": []}]},
+            "actions[0].choose[0].conditions[0]",
+            id="choose-conditions",
+        ),
+        pytest.param(
+            {"if": [_MISMATCHED_CONDITION], "then": []},
+            "actions[0].if[0]",
+            id="if-conditions",
+        ),
+        pytest.param(
+            {"if": [], "then": [], "else": [_MISMATCHED_STEP]},
+            "actions[0].else[0]",
+            id="if-else",
+        ),
+        pytest.param(
+            {"repeat": {"while": [_MISMATCHED_CONDITION], "sequence": []}},
+            "actions[0].repeat.while[0]",
+            id="repeat-while",
+        ),
+        pytest.param(
+            {"repeat": {"count": 2, "sequence": [_MISMATCHED_STEP]}},
+            "actions[0].repeat.sequence[0]",
+            id="repeat-sequence",
+        ),
+        pytest.param(
+            {"parallel": [{"sequence": [_MISMATCHED_STEP]}]},
+            "actions[0].parallel[0].sequence[0]",
+            id="parallel",
+        ),
+        pytest.param(
+            {"sequence": [_MISMATCHED_STEP]},
+            "actions[0].sequence[0]",
+            id="sequence",
+        ),
+        pytest.param(
             {
-                "choose": [
+                "wait_for_trigger": [
                     {
-                        "conditions": [],
-                        "sequence": [
-                            _action(
-                                "select.select_option", "input_select.mode_of_travel"
-                            )
-                        ],
+                        "trigger": "light.turned_on",
+                        "target": {"entity_id": "binary_sensor.hall"},
                     }
                 ]
-            }
-        ]
-    }
-    result = await _check(config)
-    assert [m["path"] for m in result["mismatches"]] == [
-        "actions[0].choose[0].sequence[0]"
-    ]
+            },
+            "actions[0].wait_for_trigger[0]",
+            id="wait-for-trigger",
+        ),
+        pytest.param(
+            {"condition": "and", "conditions": [_MISMATCHED_CONDITION]},
+            "actions[0].conditions[0]",
+            id="condition-step-nested",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_items_nested_the_way_core_nests_them_are_checked(step, path):
+    result = await _check({"actions": [step]})
+    assert [m["path"] for m in result["mismatches"]] == [path]
 
 
 @pytest.mark.anyio
