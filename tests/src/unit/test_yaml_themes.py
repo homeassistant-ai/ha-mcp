@@ -214,8 +214,8 @@ class TestThemeEditHandler:
         assert file_lock(hass).locked()
 
         release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await edit
+        (outcome,) = await asyncio.gather(edit, return_exceptions=True)
+        assert isinstance(outcome, asyncio.CancelledError)
         assert not file_lock(hass).locked()
         assert (tmp_path / "themes" / "dark.yaml").exists()
 
