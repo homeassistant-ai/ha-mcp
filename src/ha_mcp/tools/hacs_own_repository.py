@@ -41,7 +41,9 @@ _SHARED_TAGS_SINCE = (9, 0, 0)
 
 def _tagged_alike(version: str) -> bool:
     match = _RELEASE_REF.match(version)
-    return bool(match) and tuple(int(p) for p in match.groups()) >= _SHARED_TAGS_SINCE
+    if match is None:
+        return False
+    return tuple(int(p) for p in match.groups()) >= _SHARED_TAGS_SINCE
 
 
 def translate_version(version: str | None, target: str) -> str | None:
