@@ -102,7 +102,7 @@ DUPLICATE_RECORD_SUGGESTIONS = [
 # {owner}." The store sends no error code for it, so the whole sentence is
 # matched, owner as ``owner/repo``, never a fragment of some other message.
 _OWNED_DIRECTORY = re.compile(
-    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w.-]+)\.?$"
+    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w-][\w.-]*?)\.?$"
 )
 
 

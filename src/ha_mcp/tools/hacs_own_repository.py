@@ -33,6 +33,15 @@ OWN_REPOSITORY_IDS = {"1056618941": MAIN_REPOSITORY, "1289599380": MIRROR_REPOSI
 # sync-integration-mirror.yml tags the mirror ``v<next>-dev.<N>``.
 _MAIN_DEV_REF = re.compile(r"^(v?\d+\.\d+\.\d+)\.dev(\d+)$")
 _MIRROR_DEV_REF = re.compile(r"^(v?\d+\.\d+\.\d+)-dev\.(\d+)$")
+_RELEASE_REF = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+# From 9.0 both repositories tag a release with the server version; before
+# that the mirror carried the component's own numbers (v2.2.1 for 8.6.0).
+_SHARED_TAGS_SINCE = (9, 0, 0)
+
+
+def _tagged_alike(version: str) -> bool:
+    match = _RELEASE_REF.match(version)
+    return bool(match) and tuple(int(p) for p in match.groups()) >= _SHARED_TAGS_SINCE
 
 
 def translate_version(version: str | None, target: str) -> str | None:
@@ -98,6 +107,24 @@ async def route_own_repository_download(
     if not installed or _own_name(installed[0]) == wanted:
         return repository_id, version, None
     owner = str(installed[0].get("full_name"))
+    if version and not _tagged_alike(version):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{owner} owns custom_components/ha_mcp_tools, and releases "
+                f"before {'.'.join(map(str, _SHARED_TAGS_SINCE))} are tagged "
+                f"differently there, so {version} cannot be mapped to it.",
+                suggestions=[
+                    "Pick a version from the installed repository: "
+                    'ha_get_hacs_info(action="info", '
+                    f'repository_id="{owner}", include_releases=True), then '
+                    f'ha_manage_hacs(action="download", repository_id="{owner}", '
+                    'version="<one of its tags>").',
+                    "Or omit version to install its latest release.",
+                ],
+                context={"repository_id": repository_id, "version": version},
+            )
+        )
     target_version = translate_version(version, owner)
     note = (
         f"{repository_id} was rerouted to {owner}, which already owns "

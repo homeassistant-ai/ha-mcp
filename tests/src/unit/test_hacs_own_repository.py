@@ -209,3 +209,31 @@ async def test_a_failed_list_lookup_leaves_the_request_alone():
     assert await route_own_repository_download(
         ws, HACS_API, "homeassistant-ai/ha-mcp", None
     ) == ("homeassistant-ai/ha-mcp", None, None)
+
+
+async def test_a_release_the_target_tags_differently_asks_for_its_own_tag():
+    """Before 9.0 the mirror tagged releases with the component's numbers, so
+    a request for such a version cannot be renamed; it is refused with the
+    way to list the installed repository's tags instead of a store 404."""
+    ws = _ws([MAIN, _installed(MIRROR)])
+    with pytest.raises(ToolError) as excinfo:
+        await route_own_repository_download(
+            ws, HACS_API, "homeassistant-ai/ha-mcp", "v8.6.0"
+        )
+    error = json.loads(str(excinfo.value))["error"]
+    assert "v8.6.0" in error["message"]
+    assert any("include_releases=True" in s for s in error["suggestions"])
+
+
+async def test_the_punctuated_refusal_keeps_the_owner_clean():
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+    from ha_mcp.tools.hacs_backend import raise_store_error
+
+    err = HomeAssistantCommandError(
+        "Command failed: The ha_mcp_tools directory belongs to homeassistant-ai/ha-mcp."
+    )
+    with pytest.raises(ToolError) as excinfo:
+        raise_store_error(err, {"command": "marketplace/repository/install"})
+    suggestions = " ".join(json.loads(str(excinfo.value))["error"]["suggestions"])
+    assert 'repository_id="homeassistant-ai/ha-mcp")' in suggestions
+    assert 'repository_id="homeassistant-ai/ha-mcp.")' not in suggestions
