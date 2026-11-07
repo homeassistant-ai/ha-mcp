@@ -66,10 +66,13 @@ from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_flow_steps import run_integration_step
 from .integration_schema import (
     describe_flow_form,
+    entry_count,
     fetch_config_subentry_schema,
     fetch_options_schema,
     options_from_form_flow,
-    redact_component_options,
+    options_unread_warning,
+    options_withheld_warning,
+    withhold_component_options,
 )
 from .integration_ws_commands import (
     attach_ws_commands,
@@ -195,12 +198,10 @@ async def fetch_entry_options_with_status(
       raised, or its first step was not a form (a menu / abort / create_entry),
       so no options could be harvested.
 
-    The flag lets callers surface degraded reads instead of passing ``{}``
+    The flag lets the caller surface degraded reads instead of passing ``{}``
     off as real options: ``smart_search`` flips ``partial`` when a probe
-    fails mid-search, and ``ha_get_integration`` attaches a ``warnings``
-    entry on its single-entry and list responses. The abort in ``finally``
-    is cleanup; a failed abort does not flip ``ok`` (the options were
-    already harvested).
+    fails mid-search. The abort in ``finally`` is cleanup; a failed abort does
+    not flip ``ok`` (the options were already harvested).
 
     Home Assistant does not expose ``ConfigEntry.options`` through any
     read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
@@ -211,13 +212,12 @@ async def fetch_entry_options_with_status(
     :func:`options_from_form_flow` prefers over the static schema
     ``default`` (issue #1575).
 
-    Probe failures log at ``warning`` (so breakage of a deliberate
-    single-entry probe is discoverable) unless ``quiet=True``, which demotes
-    them to ``debug`` for bulk fan-out callers (e.g. ``smart_search`` probes
-    one entry per flow-helper on every ``ha_search``; a per-entry
-    warning there would spam the log on routine searches).
+    Probe failures log at ``warning`` unless ``quiet=True``, which demotes
+    them to ``debug`` for a bulk fan-out: ``smart_search`` probes one entry
+    per flow helper on every ``ha_search``, and a per-entry warning there
+    would spam the log on routine searches.
 
-    Exposed at module level (not as a method) so non-class callers such as
+    Exposed at module level (not as a method) so
     ``smart_search._search_flow_helpers`` can probe flow-helper config
     without instantiating ``IntegrationTools``.
     """
@@ -367,10 +367,12 @@ class IntegrationTools:
                 "For UI-created flow-based helpers (template, group, "
                 "utility_meter, derivative, ...), the current config — "
                 "template body, group members, source entity, etc. — is "
-                "surfaced here by probing the options flow. Prefer this over "
-                "include_schema when you only need to read the current values; "
-                "use include_schema when you also need the field types or "
-                "selector metadata.",
+                "here. Read through the ha_mcp_tools custom component; without "
+                "it an entry that has an options flow comes back without options "
+                "and a warning, and only include_schema on that entry reads them. "
+                "With the component, prefer this over include_schema when you "
+                "only need the current values; use include_schema when you also "
+                "need the field types or selector metadata.",
                 default=False,
             ),
         ] = False,
@@ -385,7 +387,9 @@ class IntegrationTools:
                 "Assistant aborts gives aborted, plus reason_text when Home "
                 "Assistant has a string for the reason. Only applies "
                 "when supports_options=true. The flow is started, described "
-                "and aborted. For an integration's setup form, use "
+                "and aborted; starting it runs the integration's own flow code, "
+                "and some integrations act there (Sonoff LAN signs in to its "
+                "cloud). For an integration's setup form, use "
                 "ha_set_integration(domain=...).",
                 default=False,
             ),
@@ -601,16 +605,17 @@ class IntegrationTools:
         - Only service integrations: ha_get_integration(integration_type="service")
         - An entry's panel commands: ha_get_integration(entry_id="abc123", include_ws_commands=True)
 
-        OPTIONS: ``options`` reflect the entry's persisted values. Values that
-        match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. For
-        the options form itself, see include_schema. The shape depends on the read path, which the response
-        does not name: when the ha_mcp_tools custom component serves the read,
-        ``options`` are the stored mapping as-is, so a field never set may be
-        absent and a section's fields stay nested under the section key (e.g. a
-        template helper's ``additional_options``). Otherwise they are read from
-        the options flow form, which shows unset fields at their schema default
-        and lists a section's fields at the top level. Check both places for a
-        section field.
+        OPTIONS: with the component, ``options`` are the stored mapping as-is,
+        so a field never set may be absent and a section's fields stay nested
+        under the section key (e.g. a template helper's ``additional_options``);
+        values that match a ``secrets.yaml`` entry are returned as
+        ``"**redacted**"``. Without it, include_schema=True reads ``options``
+        from the options form: unset fields at their schema default, a
+        section's fields at the top level. With redact_secrets on, every
+        option value of an entry that has an options flow is redacted unless
+        include_schema=True reads the form that names the password fields;
+        an entry without an options flow has no such form, so its option
+        values come back as stored.
 
         Each entry carries ``log_level``: the canonical Python logger level name
         (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
@@ -872,15 +877,12 @@ class IntegrationTools:
             if isinstance(result, dict):
                 normalize_ignored_entry(result)
 
-            # Surface `options` on every per-entry response (Core's entry
-            # fragment omits the field). For entries with supports_options=True
-            # we probe via OptionsFlow — see `fetch_entry_options_with_status`.
-            # When include_schema is also requested and the flow's first step
-            # is a form, `fetch_options_schema` below populates options from
-            # the same flow init so we don't pay for two round-trips.
-            probe_warnings: list[str] = []
-            await self._probe_legacy_entry_options(
-                result, entry_id, include_schema, probe_warnings
+            # Core's entry fragment has no `options`, and only the entry's
+            # options flow form shows them. With include_schema,
+            # `fetch_options_schema` below fills them from that form.
+            options_warnings: list[str] = []
+            self._note_unread_legacy_options(
+                result, entry_id, include_schema, options_warnings
             )
 
             resp: dict[str, Any] = {
@@ -888,8 +890,8 @@ class IntegrationTools:
                 "entry_id": entry_id,
                 "entry": result,
             }
-            if probe_warnings:
-                resp["warnings"] = probe_warnings
+            if options_warnings:
+                resp["warnings"] = options_warnings
 
             # Surface the effective Python logger level for this integration
             # so users can confirm log level changes took effect.
@@ -941,33 +943,26 @@ class IntegrationTools:
             )
             return None  # unreachable: exception_to_structured_error raises
 
-    async def _probe_legacy_entry_options(
-        self,
+    @staticmethod
+    def _note_unread_legacy_options(
         result: Any,
         entry_id: str,
         include_schema: bool | None,
-        probe_warnings: list[str],
+        warnings: list[str],
     ) -> None:
-        """Fill a legacy REST entry's ``options`` via OptionsFlow, noting misses.
+        """Warn that a legacy REST entry's ``options`` were not read (#2987).
 
-        Mutates ``result['options']`` in place and appends to ``probe_warnings``
-        when the probe fails. No-op for a non-dict ``result`` or when
-        ``include_schema`` is set (the schema path populates options instead).
+        Opening the options flow runs the integration's own code, so a read
+        does it only for ``include_schema``, which asks for the flow's form
+        and fills ``options`` from it. An entry without an options flow gets
+        an empty ``options``: Core's fragment has none.
         """
-        if isinstance(result, dict):
+        if not isinstance(result, dict):
+            return
+        if not result.get("supports_options"):
             result.setdefault("options", {})
-            if result.get("supports_options") and not include_schema:
-                options, probe_ok = await fetch_entry_options_with_status(
-                    self._client, entry_id
-                )
-                result["options"] = options
-                if not probe_ok:
-                    probe_warnings.append(
-                        f"options of {entry_id} not read: the OptionsFlow "
-                        "could not be read, so 'options' may "
-                        "be incomplete — empty options does not mean the "
-                        "entry has none"
-                    )
+        elif not include_schema:
+            warnings.append(options_unread_warning(entry_id))
 
     async def _single_entry_from_component(
         self,
@@ -1030,24 +1025,22 @@ class IntegrationTools:
             resp.setdefault("warnings", []).extend(level_warnings)
 
         # Component options are raw persisted values — under redact_secrets
-        # they must be redacted on EVERY read, not only when a schema was
-        # requested (#2157). Runs even when the include_schema fetch below
-        # will probe again: that path only redacts when the flow opens with
-        # a form, so relying on it alone would fail OPEN on menu-first flows
-        # and probe failures. Redaction is idempotent, so the double
-        # application costs one extra probe and nothing else.
-        if redaction_enabled():
-            redact_warnings: list[str] = []
-            await redact_component_options(
-                self._client, entry_id, entry, redact_warnings
-            )
-            if redact_warnings:
-                resp.setdefault("warnings", []).extend(redact_warnings)
+        # they must be redacted on EVERY read (#2157). A read that asks for
+        # the options form redacts by that form in fetch_options_schema
+        # below, which opens the flow once; any other read opens no flow and
+        # withholds every value (#2987).
+        schema_read = bool(include_schema and entry.get("supports_options"))
+        if (
+            redaction_enabled()
+            and not schema_read
+            and withhold_component_options(entry)
+        ):
+            resp.setdefault("warnings", []).append(options_withheld_warning(entry_id))
 
         # Options schema only exists in a live options flow — read it from the
         # legacy flow, but keep the component-provided options (populate_options
         # False) so the raw persisted values win over the flow-derived shape.
-        if include_schema and entry.get("supports_options"):
+        if schema_read:
             await fetch_options_schema(
                 self._client,
                 entry_id,
@@ -1155,48 +1148,30 @@ class IntegrationTools:
         level_warnings: list[str] = []
         logger_levels = await get_logger_levels(self._client, level_warnings)
 
-        # `_format_entry` is sync and cannot probe the OptionsFlow; options
-        # are filled in by a second async pass below for entries that
-        # advertise supports_options=True. See `fetch_entry_options_with_status`.
         formatted_entries = [
             self._format_entry(entry, include_opts, logger_levels, bool(level_warnings))
             for entry in response
         ]
-
-        # quiet=True: per-entry probe failures are aggregated into a response
-        # warning below instead of one log line each (bulk fan-out).
-        probe_failures: list[str] = []
-        if include_opts:
-            options_targets = [
-                e for e in formatted_entries if e.get("supports_options")
-            ]
-            if options_targets:
-                fetched = await asyncio.gather(
-                    *(
-                        fetch_entry_options_with_status(
-                            self._client, e["entry_id"], quiet=True
-                        )
-                        for e in options_targets
-                    ),
-                    return_exceptions=False,
-                )
-                for entry, (opts, probe_ok) in zip(
-                    options_targets, fetched, strict=True
-                ):
-                    entry["options"] = opts
-                    if not probe_ok:
-                        probe_failures.append(entry["entry_id"])
-
-        return self._finalize_entry_list(
+        result = self._finalize_entry_list(
             formatted_entries,
             domain_norm,
             query,
             exact_match,
             limit_int,
             offset_int,
-            probe_failures,
             level_warnings,
         )
+        # Core's rows have no options, and a list opens no options flow to
+        # read them (#2987): an entry that has one comes back without the key.
+        if include_opts:
+            unread = [e for e in result["entries"] if e.get("supports_options")]
+            for entry in unread:
+                entry.pop("options", None)
+            if unread:
+                result.setdefault("warnings", []).append(
+                    options_unread_warning(entry_count(len(unread)))
+                )
+        return result
 
     async def _fetch_rest_entries(self, params: dict[str, str]) -> list[Any]:
         """Core's REST entry list, filtered by Core with ``params``."""
@@ -1230,9 +1205,9 @@ class IntegrationTools:
         needs no per-entry OptionsFlow probe. ``options`` are raw persisted
         values (a field never set may be absent) and may contain
         ``"**redacted**"`` markers.
-        With ``redact_secrets`` on, the returned page IS probed per entry
-        after pagination (``redact_component_options``) to learn each
-        entry's password markers — the one case where this path probes.
+        With ``redact_secrets`` on, every option value of a returned entry
+        that has an options flow is withheld: only that flow's form tells
+        the password fields apart, and a list opens no flow (#2987).
         """
         level_warnings: list[str] = []
         logger_levels = await get_logger_levels(self._client, level_warnings)
@@ -1247,29 +1222,19 @@ class IntegrationTools:
             exact_match,
             limit_int,
             offset_int,
-            [],
             level_warnings,
         )
         # Component options are raw persisted values — under redact_secrets
-        # every RETURNED row must be redacted (#2157). Runs on the paginated
-        # slice only: entries outside it are not in the response, and
-        # bounding the probe fan-out to the page keeps the component fast
-        # path from probing an entire installation per list call.
+        # every RETURNED row must be redacted (#2157).
         if include_opts and redaction_enabled():
-            redaction_warnings: list[str] = []
-            await asyncio.gather(
-                *(
-                    redact_component_options(
-                        self._client,
-                        formatted.get("entry_id"),
-                        formatted,
-                        redaction_warnings,
-                    )
-                    for formatted in result["entries"]
+            withheld = 0
+            for formatted in result["entries"]:
+                if withhold_component_options(formatted):
+                    withheld += 1
+            if withheld:
+                result.setdefault("warnings", []).append(
+                    options_withheld_warning(entry_count(withheld))
                 )
-            )
-            if redaction_warnings:
-                result.setdefault("warnings", []).extend(redaction_warnings)
         return result
 
     def _finalize_entry_list(
@@ -1280,14 +1245,12 @@ class IntegrationTools:
         exact_match: bool | None,
         limit_int: int,
         offset_int: int,
-        probe_failures: list[str],
         extra_warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         """Query-filter, summarize, and paginate formatted entries.
 
         Shared tail of the component-served and legacy list paths so their
-        response shapes stay identical. ``probe_failures`` is always empty on
-        the component path (options ride the same read — no per-entry probe).
+        response shapes stay identical.
         """
         # Apply search filter if query provided
         if query and query.strip():
@@ -1318,14 +1281,6 @@ class IntegrationTools:
             result_data["domain_filter"] = domain
         if extra_warnings:
             result_data.setdefault("warnings", []).extend(extra_warnings)
-        if probe_failures:
-            result_data.setdefault("warnings", []).append(
-                f"options of {len(probe_failures)} "
-                f"entr{'y' if len(probe_failures) == 1 else 'ies'} not read "
-                f"({', '.join(probe_failures)}): the OptionsFlow could not "
-                "be read, so their 'options' may be incomplete; empty options does "
-                "not mean an entry has none"
-            )
         return result_data
 
     @staticmethod

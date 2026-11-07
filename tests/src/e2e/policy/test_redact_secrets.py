@@ -4,8 +4,10 @@ Boots a fresh in-process ha-mcp server with ``REDACT_SECRETS=true`` against
 the testcontainer HA (function-scoped — the session-scoped ``mcp_client``
 boots without the flag) and verifies the deployable contract:
 
-- reads keep working with the flag on, and options with no password markers
-  pass through unredacted (no false redaction);
+- reads keep working with the flag on: a plain read opens no options flow, so
+  it withholds every option value of an entry that has one, and
+  ``include_schema`` returns options with no password markers unredacted (no
+  false redaction);
 - a config-entry flow write carrying a redaction sentinel is rejected with
   a structured validation error — with the flag ON and with it OFF (the
   round-trip guard is deliberately unconditional).
@@ -78,9 +80,9 @@ def _assert_no_false_redaction(options) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reads_work_and_secret_free_options_pass_through(redacting_mcp):
-    """With the flag on, list + detail reads succeed and options without
-    password markers are returned unredacted (no false redaction)."""
+async def test_list_read_works_and_leaves_flowless_options_alone(redacting_mcp):
+    """With the flag on, the list read succeeds and an entry without an options
+    flow keeps its options unredacted (no false redaction)."""
     client, _server = redacting_mcp
     result = await client.call_tool(
         "ha_get_integration", {"include_options": True, "limit": 10}
@@ -90,14 +92,59 @@ async def test_reads_work_and_secret_free_options_pass_through(redacting_mcp):
     entries = body.get("entries") or []
     assert entries, body
     for entry in entries:
-        _assert_no_false_redaction(entry.get("options"))
+        if not entry.get("supports_options"):
+            _assert_no_false_redaction(entry.get("options"))
 
-    detail = await client.call_tool(
-        "ha_get_integration", {"entry_id": entries[0]["entry_id"]}
+
+@pytest.mark.asyncio
+async def test_options_are_withheld_until_the_options_form_is_asked_for(
+    redacting_mcp,
+):
+    """A plain read opens no options flow (#2987), so it cannot tell the
+    password fields apart and returns no option value; include_schema reads
+    the form and returns options with no password markers as stored."""
+    client, _server = redacting_mcp
+    created = parse_mcp_result(
+        await client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "tod",
+                "name": "redact e2e tod",
+                "config": {
+                    "name": "redact e2e tod",
+                    "after_time": "08:00:00",
+                    "before_time": "17:00:00",
+                },
+            },
+        )
     )
-    detail_body = parse_mcp_result(detail)
-    assert detail_body.get("success") is True, detail_body
-    _assert_no_false_redaction(detail_body.get("entry", {}).get("options"))
+    entry_id = created["entry_id"]
+    try:
+        plain = parse_mcp_result(
+            await client.call_tool("ha_get_integration", {"entry_id": entry_id})
+        )
+        assert plain.get("success") is True, plain
+        warnings = plain.get("warnings") or []
+        if "options" in plain["entry"]:
+            # The component served the options; every value is withheld.
+            assert all(is_sentinel(v) for v in plain["entry"]["options"].values())
+            assert any("redact_secrets" in w for w in warnings), plain
+        else:
+            # Without the component nothing was read.
+            assert any("ha_mcp_tools" in w for w in warnings), plain
+
+        described = parse_mcp_result(
+            await client.call_tool(
+                "ha_get_integration", {"entry_id": entry_id, "include_schema": True}
+            )
+        )
+        assert described["entry"]["options"]["after_time"] == "08:00:00", described
+    finally:
+        await safe_call_tool(
+            client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
 
 
 async def _expect_sentinel_rejected(client: Client) -> None:

@@ -33,7 +33,7 @@ from ha_mcp.tools.component_config_entries import ComponentEntries
 from ha_mcp.tools.config_entry_flow import _reject_redaction_sentinels
 from ha_mcp.tools.integration_schema import (
     options_from_form_flow,
-    redact_component_options,
+    redact_options_by_form,
 )
 
 
@@ -43,14 +43,6 @@ def _clean_registry():
     _clear_known_secret_values()
     yield
     _clear_known_secret_values()
-
-
-@pytest.fixture
-def redact_on(monkeypatch):
-    monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
-    )
 
 
 @pytest.fixture
@@ -595,60 +587,54 @@ class TestRedactSecretsMiddleware:
         assert str(exc_info.value) == f"boom {REDACTED_KNOWN}"
 
 
-class TestRedactComponentOptions:
-    """integration_schema.redact_component_options — component path (issue 2157)."""
+class TestRedactOptionsByForm:
+    """integration_schema.redact_options_by_form — component path (issue 2157)."""
 
-    def _tools_with_flow(self, flow_response):
-        from ha_mcp.tools.tools_integrations import IntegrationTools
+    _FORM: typing.ClassVar[dict] = {
+        "flow_id": "f1",
+        "type": "form",
+        "data_schema": FLOW_SCHEMA,
+    }
 
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(return_value=flow_response)
-        client.abort_options_flow = AsyncMock()
-        return IntegrationTools(client)
-
-    @pytest.mark.asyncio
-    async def test_form_schema_redacts_marked_fields(self):
-        tools = self._tools_with_flow(
-            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
-        )
+    def test_form_schema_redacts_marked_fields(self):
         entry = {
             "entry_id": "e1",
             "supports_options": True,
             "options": {"host": "1.2.3.4", "api_key": "sk-LIVEFLOWSECRET"},
         }
         warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
+        redact_options_by_form(entry, self._FORM, "e1", warnings)
         assert entry["options"] == {"host": "1.2.3.4", "api_key": REDACTED_SET}
         assert warnings == []
-        tools._client.abort_options_flow.assert_awaited_once_with("f1")
 
-    @pytest.mark.asyncio
-    async def test_form_schema_redacts_password_inside_section(self):
-        tools = self._tools_with_flow(
-            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
-        )
+    def test_form_schema_redacts_password_inside_section(self):
         entry = {
             "entry_id": "e1",
             "supports_options": True,
             "options": {"advanced": {"inner_token": "tok-INNERSECRET"}},
         }
         warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
+        redact_options_by_form(entry, self._FORM, "e1", warnings)
         assert entry["options"] == {"advanced": {"inner_token": REDACTED_SET}}
         assert warnings == []
 
-    @pytest.mark.asyncio
-    async def test_menu_flow_fails_closed_with_warning(self):
-        tools = self._tools_with_flow(
-            {"flow_id": "f1", "type": "menu", "menu_options": ["a"]}
-        )
+    @pytest.mark.parametrize(
+        "flow",
+        [
+            {"flow_id": "f1", "type": "menu", "menu_options": ["a"]},
+            {"flow_id": "f1", "type": "form", "data_schema": []},
+            None,
+        ],
+        ids=["menu", "form-without-fields", "flow-raised"],
+    )
+    def test_no_readable_form_fails_closed_with_warning(self, flow):
         entry = {
             "entry_id": "e1",
             "supports_options": True,
             "options": {"host": "1.2.3.4", "maybe_pw": "hunter2secret", "empty": ""},
         }
         warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
+        redact_options_by_form(entry, flow, "e1", warnings)
         assert entry["options"] == {
             "host": REDACTED_SET,
             "maybe_pw": REDACTED_SET,
@@ -656,60 +642,11 @@ class TestRedactComponentOptions:
         }
         assert len(warnings) == 1
 
-    @pytest.mark.asyncio
-    async def test_probe_failure_fails_closed_with_warning(self):
-        from ha_mcp.tools.tools_integrations import IntegrationTools
-
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(side_effect=RuntimeError("boom"))
-        client.abort_options_flow = AsyncMock()
-        tools = IntegrationTools(client)
-        entry = {
-            "entry_id": "e1",
-            "supports_options": True,
-            "options": {"api_key": "sk-LIVEFLOWSECRET"},
-        }
-        warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
-        assert entry["options"] == {"api_key": REDACTED_SET}
-        assert len(warnings) == 1
-
-    @pytest.mark.asyncio
-    async def test_no_options_flow_passes_through(self):
-        tools = self._tools_with_flow({"flow_id": "f1", "type": "form"})
-        entry = {
-            "entry_id": "e1",
-            "supports_options": False,
-            "options": {"plain": "value"},
-        }
-        warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
-        assert entry["options"] == {"plain": "value"}
-        assert warnings == []
-        tools._client.start_options_flow.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_empty_options_skip_probe(self):
-        tools = self._tools_with_flow({"flow_id": "f1", "type": "form"})
+    def test_empty_options_need_no_warning(self):
         entry = {"entry_id": "e1", "supports_options": True, "options": {}}
-        await redact_component_options(tools._client, "e1", entry, [])
-        assert entry["options"] == {}
-        tools._client.start_options_flow.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_abort_failure_does_not_break_redaction(self):
-        tools = self._tools_with_flow(
-            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
-        )
-        tools._client.abort_options_flow.side_effect = RuntimeError("abort failed")
-        entry = {
-            "entry_id": "e1",
-            "supports_options": True,
-            "options": {"api_key": "sk-LIVEFLOWSECRET"},
-        }
         warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
-        assert entry["options"] == {"api_key": REDACTED_SET}
+        redact_options_by_form(entry, None, "e1", warnings)
+        assert entry["options"] == {}
         assert warnings == []
 
 
@@ -821,28 +758,6 @@ class TestWriteFlowErrorSchemaRedaction:
         client.abort_config_flow = AsyncMock(return_value={})
         ctx = await _flow_helper_error_context(client, "filter")
         assert ctx["data_schema"][0]["description"]["suggested_value"] == REDACTED_SET
-
-
-class TestEmptyFormSchemaFailsClosed:
-    @pytest.mark.asyncio
-    async def test_empty_form_schema_treated_as_unreadable(self):
-        from ha_mcp.tools.tools_integrations import IntegrationTools
-
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(
-            return_value={"flow_id": "f1", "type": "form", "data_schema": []}
-        )
-        client.abort_options_flow = AsyncMock()
-        tools = IntegrationTools(client)
-        entry = {
-            "entry_id": "e1",
-            "supports_options": True,
-            "options": {"maybe_pw": "hunter2secret"},
-        }
-        warnings: list[str] = []
-        await redact_component_options(tools._client, "e1", entry, warnings)
-        assert entry["options"] == {"maybe_pw": REDACTED_SET}
-        assert len(warnings) == 1
 
 
 class TestWriteEntryPointsRejectSentinels:

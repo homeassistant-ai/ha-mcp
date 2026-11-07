@@ -20,6 +20,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.redaction import REDACTED_SET
 from ha_mcp.tools import component_api, component_config_entries
 from ha_mcp.tools.component_config_entries import fetch_config_entries
 from ha_mcp.tools.tools_integrations import register_integration_tools
@@ -170,10 +171,14 @@ class RoutingClient:
         return {"success": True, "result": list(self._subentries)}
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        # Only logger/log_info is reached (get_logger_levels enrichment); it fails
-        # soft, so an empty result yields log_level DEFAULT on both paths.
+        # logger/log_info (get_logger_levels enrichment) fails soft, so an empty
+        # result yields log_level DEFAULT on both paths; a schema read asks for
+        # Core's flow strings, and an empty catalog describes the form without
+        # help text.
         if msg.get("type") == "logger/log_info":
             return {"success": True, "result": []}
+        if msg.get("type") == "frontend/get_translations":
+            return {"success": True, "result": {"resources": {}}}
         raise AssertionError(f"unexpected ws message {msg.get('type')!r}")
 
 
@@ -316,7 +321,7 @@ async def test_single_entry_not_found_via_component_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_single_entry_capsless_falls_back_to_legacy() -> None:
-    """Old component -> legacy REST get + OptionsFlow probe."""
+    """Old component -> legacy REST get; include_schema reads options from the form."""
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
@@ -332,13 +337,12 @@ async def test_single_entry_capsless_falls_back_to_legacy() -> None:
             ],
         },
     )
-    resp = await _get(ws, client, entry_id="cfg1")
+    resp = await _get(ws, client, entry_id="cfg1", include_schema=True)
 
     assert resp["entry"]["entry_id"] == "cfg1"
-    # The legacy path served it: REST get + one OptionsFlow probe.
     assert client.get_config_entry_calls == 1
-    assert client.start_options_flow_calls == 1
     assert resp["entry"]["options"] == {"discovery": True}
+    assert "warnings" not in resp
     assert not _ce_calls(ws)
 
 
@@ -553,13 +557,13 @@ async def test_ignored_entry_legacy_single_is_not_probed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_not_loaded_entry_that_is_not_ignored_is_still_probed() -> None:
+async def test_not_loaded_entry_that_is_not_ignored_keeps_its_schema_read() -> None:
     # Control for the ignored-entry tests: the gate keys on ``source``, not on
-    # the entry state, so a not-loaded user entry keeps its options probe.
+    # the entry state, so a not-loaded user entry's options form is still read.
     ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
     entry = _rest_entry("nl1", "unifi", state="not_loaded")
     client = RoutingClient(single_entry=entry)
-    resp = await _get(ws, client, entry_id="nl1")
+    resp = await _get(ws, client, entry_id="nl1", include_schema=True)
 
     assert client.start_options_flow_calls == 1
     assert resp["entry"]["supports_options"] is True
@@ -607,6 +611,113 @@ async def test_ignored_entry_component_single_schema_opens_no_flow() -> None:
     assert resp["entry"]["supports_options"] is False
     assert "options_schema" not in resp
     assert "warnings" not in resp
+
+
+# --- a read opens no options flow (#2987) ---------------------------------------
+# An options flow's first step is the integration's own code and may act: Sonoff
+# LAN logs in to its cloud there, which ends the session the integration runs on.
+# Only include_schema=True, which asks for the form, opens one.
+@pytest.mark.asyncio
+async def test_reading_an_entry_without_the_component_opens_no_options_flow() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(single_entry=_rest_entry("cfg1", "sonoff"))
+    resp = await _get(ws, client, entry_id="cfg1")
+
+    assert client.start_options_flow_calls == 0
+    assert "options" not in resp["entry"]
+    assert "ha_mcp_tools" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_listing_options_without_the_component_opens_no_options_flow() -> None:
+    ws = make_ws(WS_CONFIG_ENTRIES, info_exc=_CAPSLESS)
+    client = RoutingClient(
+        rest_entries=[_rest_entry("c1", "sonoff"), _rest_entry("c2", "sonoff")]
+    )
+    resp = await _get(ws, client, domain="sonoff")
+
+    assert client.start_options_flow_calls == 0
+    assert all("options" not in entry for entry in resp["entries"])
+    assert len(resp["warnings"]) == 1
+    assert "ha_mcp_tools" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call", [{"entry_id": "cfg1"}, {"include_options": True}], ids=["single", "list"]
+)
+async def test_redact_secrets_withholds_options_without_opening_the_options_flow(
+    call: dict[str, Any], redact_on: None
+) -> None:
+    options = {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"}
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("cfg1", "sonoff", options=options)]},
+    )
+    client = RoutingClient()
+    resp = await _get(ws, client, **call)
+
+    entry = resp["entry"] if "entry" in resp else resp["entries"][0]
+    assert client.start_options_flow_calls == 0
+    assert entry["options"] == {"api_key": REDACTED_SET, "host": REDACTED_SET}
+    assert "redact_secrets" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_redact_secrets_leaves_the_options_of_an_entry_without_a_flow(
+    redact_on: None,
+) -> None:
+    # Only an options flow's form marks password fields, so an entry without
+    # one has nothing to withhold; the warning counts the entries that had.
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={
+            "entries": [
+                _row("flow", "sonoff", options={"api_key": "sk-LIVEFLOWSECRET"}),
+                _row(
+                    "plain", "mqtt", options={"discovery": True}, supports_options=False
+                ),
+            ]
+        },
+    )
+    client = RoutingClient()
+    resp = await _get(ws, client, include_options=True)
+
+    by_id = {e["entry_id"]: e for e in resp["entries"]}
+    assert by_id["plain"]["options"] == {"discovery": True}
+    assert by_id["flow"]["options"] == {"api_key": REDACTED_SET}
+    assert "1 entry" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_schema_read_under_redact_secrets_opens_the_options_flow_once(
+    redact_on: None,
+) -> None:
+    # The flow's first step may act, so the form that is described is also the
+    # one that names the password fields.
+    options = {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"}
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": [_row("cfg1", "sonoff", options=options)]},
+    )
+    client = RoutingClient(
+        options_flow={
+            "type": "form",
+            "flow_id": "f1",
+            "step_id": "init",
+            "data_schema": [
+                {"name": "host", "selector": {"text": {}}},
+                {"name": "api_key", "selector": {"text": {"type": "password"}}},
+            ],
+        }
+    )
+    resp = await _get(ws, client, entry_id="cfg1", include_schema=True)
+
+    assert client.start_options_flow_calls == 1
+    assert resp["entry"]["options"] == {"api_key": REDACTED_SET, "host": "1.2.3.4"}
 
 
 @pytest.mark.asyncio

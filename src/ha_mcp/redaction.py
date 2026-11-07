@@ -11,13 +11,14 @@ surfaces stop returning operator secrets verbatim:
    entry are never touched, and option names are never guessed at. The only
    name-based match is the operator's own ``redact_app_option_keys`` list;
    listed options and PEM private-key values are treated as password fields.
-2. **Integration options** (``ha_get_integration``): fields the
-   options-flow schema marks with a password text selector are replaced the
-   same way, on both the harvested options and the ``include_schema=True``
-   fields (whose current value comes from the form's ``suggested_value``).
-   Stored option values are checked against the flow's first form only,
-   so a password field that only a later form declares is not detected
-   in them.
+2. **Integration options** (``ha_get_integration``): only an options flow's
+   form marks the password fields, and a read opens that flow only for
+   ``include_schema=True`` (#2987). A read without it replaces every option
+   value of an entry that has an options flow with the sentinel. With it,
+   the fields the form marks with a password text selector are replaced the
+   same way, in the options and in the form's ``current`` values. Stored
+   option values are checked against the flow's first form only, so a
+   password field that only a later form declares is not detected in them.
 3. **Every other tool response**: secret values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
    :class:`RedactSecretsMiddleware` (registered just outside the

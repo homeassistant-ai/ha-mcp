@@ -2,10 +2,11 @@
 
 ``flow_handlers?type=helper`` lists Core's own helper flows plus custom
 integrations of ``integration_type: "helper"`` — the list the HA UI offers under
-"Create helper". Cached per client for a few minutes so a tool call does not pay
-a REST round-trip each time; a type missing from a cached copy is re-read once
-before it counts as unlisted (``listed_helper_flows``), so a newly installed helper
-integration is found.
+"Create helper". ``integration/descriptions`` tells Core's own apart from the
+custom ones (``core_helper_domains``). Both are cached per client for a few
+minutes so a tool call does not pay a round-trip each time; a type missing from
+a cached copy is re-read once before it counts as unlisted
+(``listed_helper_flows``), so a newly installed helper integration is found.
 """
 
 from __future__ import annotations
@@ -16,15 +17,18 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAdminRequiredError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helpers import exception_to_structured_error, raise_tool_error
 
 _TTL_SECONDS = 300.0
-_CACHE: weakref.WeakKeyDictionary[Any, tuple[float, frozenset[str]]] = (
-    weakref.WeakKeyDictionary()
-)
+_Cache = weakref.WeakKeyDictionary[Any, tuple[float, frozenset[str]]]
+_CACHE: _Cache = weakref.WeakKeyDictionary()
+_CORE_CACHE: _Cache = weakref.WeakKeyDictionary()
 
 
 async def _fetch_helper_flow_types(client: Any) -> frozenset[str]:
@@ -41,9 +45,37 @@ async def _fetch_helper_flow_types(client: Any) -> frozenset[str]:
     return frozenset(str(domain) for domain in domains)
 
 
-def _cached(client: Any) -> frozenset[str] | None:
+async def _fetch_core_helper_domains(client: Any) -> frozenset[str]:
+    """Core's own helper flows: the ``core.helper`` domains of
+    ``integration/descriptions``, the frontend's integration catalog.
+
+    The command is admin-only, and only a REST 401 latches the client's
+    refused-admin-route flag, so the token is checked first: a non-admin
+    token is refused here, which is what tells the search to name the token.
+    """
+    if await client.token_is_admin() is False:
+        raise HomeAssistantAdminRequiredError(
+            "integration/descriptions is admin-only in Home Assistant and this "
+            "token's user is not an administrator"
+        )
+    answer = await client.send_websocket_message({"type": "integration/descriptions"})
+    result = answer.get("result") if isinstance(answer, dict) else None
+    helpers = (
+        (result or {}).get("core", {}).get("helper")
+        if isinstance(result, dict)
+        else None
+    )
+    if not isinstance(helpers, dict):
+        raise HomeAssistantConnectionError(
+            "integration/descriptions returned an unexpected response shape: "
+            f"{answer!r}"[:300]
+        )
+    return frozenset(str(domain) for domain in helpers)
+
+
+def _cached(cache: _Cache, client: Any) -> frozenset[str] | None:
     try:
-        cached = _CACHE.get(client)
+        cached = cache.get(client)
     except TypeError:
         return None
     if cached is not None and time.monotonic() - cached[0] < _TTL_SECONDS:
@@ -51,23 +83,34 @@ def _cached(client: Any) -> frozenset[str] | None:
     return None
 
 
-async def helper_flow_types(client: Any, *, refresh: bool = False) -> frozenset[str]:
-    """The helper types the connected Home Assistant offers as config flows."""
-    cached = None if refresh else _cached(client)
+async def _read(
+    cache: _Cache, fetch: Any, client: Any, *, refresh: bool
+) -> frozenset[str]:
+    cached = None if refresh else _cached(cache, client)
     if cached is not None:
         return cached
-    types = await _fetch_helper_flow_types(client)
+    domains: frozenset[str] = await fetch(client)
     try:
-        _CACHE[client] = (time.monotonic(), types)
+        cache[client] = (time.monotonic(), domains)
     except TypeError:  # a client that cannot be weakly referenced is not cached
         pass
-    return types
+    return domains
+
+
+async def helper_flow_types(client: Any, *, refresh: bool = False) -> frozenset[str]:
+    """The helper types the connected Home Assistant offers as config flows."""
+    return await _read(_CACHE, _fetch_helper_flow_types, client, refresh=refresh)
+
+
+async def core_helper_domains(client: Any) -> frozenset[str]:
+    """The helper flows that are Home Assistant's own, not a custom integration's."""
+    return await _read(_CORE_CACHE, _fetch_core_helper_domains, client, refresh=False)
 
 
 async def listed_helper_flows(client: Any, name: str) -> frozenset[str]:
     """The helper flow list, re-read once when ``name`` is missing from a cached
     copy (a fresh read is not repeated)."""
-    cached = _cached(client)
+    cached = _cached(_CACHE, client)
     if cached is not None and name in cached:
         return cached
     return await helper_flow_types(client, refresh=cached is not None)

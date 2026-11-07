@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -18,12 +17,11 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.redaction import REDACTED_SET
-from ha_mcp.tools import config_entry_flow_introspect
+from ha_mcp.tools import config_entry_flow_introspect, integration_schema
 from ha_mcp.tools.config_helpers import describe as flow_describe
 from ha_mcp.tools.integration_schema import (
     fetch_config_subentry_schema,
     fetch_options_schema,
-    redact_component_options,
 )
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
@@ -146,10 +144,7 @@ async def _describe(
     resp: dict[str, Any] | None = None,
 ) -> None:
     resp = _resp() if resp is None else resp
-    if kind == "probe":
-        entry = {"supports_options": True, "options": {"host": "h"}}
-        await redact_component_options(client, "e1", entry, [])
-    elif kind == "entry_options":
+    if kind == "entry_options":
         await fetch_entry_options_with_status(client, "e1")
     elif kind == "options":
         await fetch_options_schema(client, "e1", resp)
@@ -163,7 +158,7 @@ _FLOW_METHODS = {
 }
 
 
-_ABORTS = {"probe": "abort_options_flow", "entry_options": "abort_options_flow"} | {
+_ABORTS = {"entry_options": "abort_options_flow"} | {
     kind: methods[1] for kind, methods in _FLOW_METHODS.items()
 }
 
@@ -288,6 +283,7 @@ async def test_a_failed_options_probe_keeps_cores_message_in_the_warning() -> No
     await fetch_options_schema(client, "e1", resp)
 
     assert "options_schema" not in resp
+    assert "options" not in resp["entry"]
     assert any("Config entry not loaded" in w for w in resp["warnings"])
 
 
@@ -299,8 +295,8 @@ async def test_options_behind_a_menu_are_reported_unread_on_the_legacy_read() ->
 
     await fetch_options_schema(client, "e1", resp)
 
-    assert resp["entry"]["options"] == {}
-    assert any("options for e1 could not be read" in w for w in resp["warnings"])
+    assert "options" not in resp["entry"]
+    assert any("options of e1 not read" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio
@@ -332,20 +328,6 @@ async def test_an_options_abort_that_never_answers_does_not_hold_the_read(
     await asyncio.wait_for(_describe(kind, client), timeout=2)
 
     client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_a_redaction_probe_abort_that_never_answers_does_not_hold_the_read(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(config_entry_flow_introspect, "_ABORT_TIMEOUT_S", 0.01)
-    client = _client(_form("init", _HOST, _API_KEY))
-    client.abort_options_flow.side_effect = _never_answers
-    entry = {"supports_options": True, "options": {"host": "h", "api_key": "k"}}
-
-    await asyncio.wait_for(redact_component_options(client, "e1", entry, []), timeout=2)
-
-    assert entry["options"] == {"host": "h", "api_key": REDACTED_SET}
 
 
 @pytest.mark.asyncio
@@ -412,13 +394,50 @@ async def test_a_menu_choice_that_finishes_the_flow_is_reported_as_saved() -> No
 
 
 @pytest.mark.asyncio
-async def test_component_read_keeps_its_options_and_redacts_the_secret(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("readable", ["menu", "flow-raises"])
+async def test_a_component_read_without_a_readable_form_withholds_every_option(
+    redact_on: None, readable: str
 ) -> None:
-    monkeypatch.setattr(
-        "ha_mcp.redaction.get_global_settings",
-        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    # Without the form the password fields cannot be told apart.
+    client = _client(dict(_MENU))
+    if readable == "flow-raises":
+        client.start_options_flow.side_effect = RuntimeError("down")
+    resp = _resp()
+    resp["entry"].update(
+        supports_options=True, options={"host": "10.0.0.9", "api_key": "sk-LIVE"}
     )
+
+    await fetch_options_schema(client, "e1", resp, populate_options=False)
+
+    assert resp["entry"]["options"] == {"host": REDACTED_SET, "api_key": REDACTED_SET}
+    assert any("no options schema readable" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_error_still_closes_the_options_flow(
+    redact_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The flow's first step may act, so a bug in the redaction must not leave
+    # the flow it was opened for hanging; the error itself fails the read.
+    monkeypatch.setattr(
+        integration_schema,
+        "redact_options_by_form",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("redaction bug")),
+    )
+    client = _client(_form("init", _HOST, _API_KEY))
+    resp = _resp()
+    resp["entry"].update(supports_options=True, options={"api_key": "sk-LIVE"})
+
+    with pytest.raises(RuntimeError):
+        await fetch_options_schema(client, "e1", resp, populate_options=False)
+
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_component_read_keeps_its_options_and_redacts_the_secret(
+    redact_on: None,
+) -> None:
     live_key = {**_API_KEY, "description": {"suggested_value": "sk-LIVE"}}
     client = _client(_form("init", _HOST, live_key))
     resp = _resp()
@@ -464,7 +483,8 @@ async def test_a_flow_that_aborts_at_once_returns_cores_reason_text(
     assert schema["flow_type"] == "abort"
     assert schema["aborted"] == "not_supported"
     assert schema["reason_text"] == "X1 has no options."
-    assert resp["entry"]["options"] == {}
+    # An aborted options flow read no options; a subentry flow never touches them.
+    assert ("options" in resp["entry"]) is (kind == "subentry")
     client.send_websocket_message.assert_awaited_once_with(
         {
             "type": "frontend/get_translations",
@@ -643,15 +663,14 @@ async def test_an_unreadable_entry_domain_is_a_warning_beside_the_reason() -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["probe", "options"])
 async def test_a_swallowed_options_flow_failure_logs_its_traceback(
-    kind: str, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     client = _client(_form("init", _HOST))
     client.start_options_flow.side_effect = RuntimeError("ws down")
 
     with caplog.at_level("WARNING", logger="ha_mcp.tools.integration_schema"):
-        await _describe(kind, client)
+        await _describe("options", client)
 
     (record,) = [
         r for r in caplog.records if r.name == "ha_mcp.tools.integration_schema"

@@ -82,7 +82,7 @@ async def test_flow_helper_cancellation_propagates():
         ]
     )
     tools._score_flow_entry = AsyncMock(
-        side_effect=[(None, False), asyncio.CancelledError()]
+        side_effect=[(None, False, False), asyncio.CancelledError()]
     )
 
     with pytest.raises(asyncio.CancelledError):

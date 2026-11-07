@@ -342,7 +342,14 @@ def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
         "_fetch_helper_flow_types",
         AsyncMock(return_value=frozenset(flows)),
     )
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_core_helper_domains",
+        AsyncMock(return_value=frozenset(flows)),
+        raising=False,
+    )
     helper_flows._CACHE.clear()
+    getattr(helper_flows, "_CORE_CACHE", {}).clear()
 
 
 @pytest.fixture
@@ -431,3 +438,12 @@ def opened_flows(
     flows: dict[str, tuple[str, str | None]] = {}
     monkeypatch.setattr(integration_flow_steps, "_opened_flows", flows)
     return flows
+
+
+@pytest.fixture
+def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn the redact_secrets toggle on for one test."""
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
+    )
