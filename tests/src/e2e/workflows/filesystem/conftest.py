@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
@@ -13,9 +15,13 @@ def _filesystem_feature_flag(ha_container_with_fresh_config):
 
     Restores the flag's previous value, which a lane may have set itself.
     """
-    with pytest.MonkeyPatch.context() as patcher:
-        patcher.setenv(FEATURE_FLAG, "true")
-        yield
+    previous = os.environ.get(FEATURE_FLAG)
+    os.environ[FEATURE_FLAG] = "true"
+    yield
+    if previous is None:
+        os.environ.pop(FEATURE_FLAG, None)
+    else:
+        os.environ[FEATURE_FLAG] = previous
 
 
 @pytest.fixture
