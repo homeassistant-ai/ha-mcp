@@ -37,6 +37,13 @@ def _manager(*repositories):
     )
 
 
+@pytest.fixture(autouse=True)
+def real_callback_decorator(monkeypatch):
+    """Another unit module may have stubbed ``homeassistant.core`` with a bare
+    MagicMock, whose ``callback`` would swallow the scheduled check."""
+    monkeypatch.setattr(store_records, "callback", lambda func: func)
+
+
 @pytest.fixture
 def issue_registry(monkeypatch):
     registry = MagicMock()
