@@ -13,7 +13,7 @@ name: Deploy to GitHub Pages
 # workflow and never trigger a deploy.
 on:
   workflow_run:
-    workflows: ["SemVer Release"]
+    workflows: ["Release Publish"]
     types: [completed]
   push:
     branches: [master]
@@ -36,10 +36,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  finalized:
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - if: github.event_name != 'workflow_run'
+        run: ':'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: github.event_name == 'workflow_run'
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/read-finalized-release
+      - id: release
+        if: github.event_name == 'workflow_run'
+        uses: ./.github/actions/read-finalized-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+
   build:
-    # SemVer Release moves `stable` before it publishes the release and app
-    # config; a run that fails after that point must not publish the site.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # Release Publish finalizes `stable` only once the package and integration
+    # asset are usable. Do not build docs ahead of that handoff.
+    needs: finalized
+    if: ${{ github.event_name != 'workflow_run' || needs.finalized.outputs.tag != '' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -50,9 +74,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Every non-dispatch trigger builds `stable`; on a gated-out release
-          # week the tag has not moved, so the rebuild is a no-op.
-          ref: ${{ inputs.ref || 'stable' }}
+          # Release events use their verified finalized tag. Other events keep
+          # the existing stable/default or explicit manual-ref behavior.
+          ref: ${{ inputs.ref || needs.finalized.outputs.tag || 'stable' }}
 
       - name: Generate star history charts
         # The built-in token cannot access GitHub's restricted stargazer history.

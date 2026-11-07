@@ -480,7 +480,9 @@ jobs:
       run: |
         uv run pytest tests/src/unit/test_build_component_zip.py \
           tests/src/unit/test_component_zip_release_workflows.py \
-          tests/src/unit/test_mirror_sync_workflow_shape.py --tb=short -q
+          tests/src/unit/test_mirror_sync_workflow_shape.py \
+          tests/src/unit/test_finalize_github_release.py \
+          tests/src/unit/test_release_notes_wiring_shape.py --tb=short -q
 
     - name: Run update-path e2e test
       # E2E_BACKEND deliberately UNSET (container backend): the test drives its

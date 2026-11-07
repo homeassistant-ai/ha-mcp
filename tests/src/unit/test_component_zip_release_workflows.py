@@ -293,3 +293,74 @@ def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:
     target = workflow["jobs"]["e2e-tests-update-path"]
     assert "if" not in target
     assert any(s.get("env", {}).get("E2E_UPDATE_PATH") == "1" for s in target["steps"])
+
+
+@pytest.mark.parametrize("source", ["published", "draft", "unavailable"])
+def test_mirror_tag_requires_an_available_public_zip(tmp_path, source):
+    """Reject API failures and defensive draft JSON before downloading."""
+    assert shutil.which("jq"), "jq is required for this test"
+    marker = tmp_path / ".github"
+    marker.mkdir()
+    (marker / "component-zip-source.json").write_text(
+        json.dumps({"repository": "upstream/repo", "tag": "v9.1.1"})
+    )
+    payload = b"the verified integration artifact"
+    digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    release = {
+        "draft": source == "draft",
+        "assets": [
+            {
+                "name": "ha_mcp_tools.zip",
+                "state": "uploaded",
+                "size": 42,
+                "digest": digest,
+            }
+        ],
+    }
+    stub = (
+        'gh() { case "$1 $2" in\n'
+        '"api "*) touch "$RUNNER_TEMP/api-requested"\n'
+        'if [ "$SOURCE_STATE" = unavailable ]; then echo "HTTP 404: Not Found" >&2; return 1; fi\n'
+        f'printf "%s\\n" {shlex.quote(json.dumps(release))} | jq -r "$4" '
+        '&& touch "$RUNNER_TEMP/api-filter-succeeded";;\n'
+        '"release download") touch "$RUNNER_TEMP/download-called"; '
+        'mkdir -p "$RUNNER_TEMP/upstream-integration-zip"; '
+        f'printf "%s" {shlex.quote(payload.decode())} > "$RUNNER_TEMP/upstream-integration-zip/ha_mcp_tools.zip";;\n'
+        "*) return 2;; esac; }\n"
+        # Snapshot comparison and commit are exercised above with real Git and
+        # builder; this case isolates the public/draft source admission gate.
+        f'python3() {{ case "$*" in scripts/build_component_zip.py*) echo {shlex.quote(digest)};; '
+        f'*) {shlex.quote(Path(sys.executable).as_posix())} "$@";; esac; }}\n'
+        "git() { return 0; }\n"
+        "seq() { echo 1; }\nsleep() { :; }\n"
+    )
+    step = next(
+        s
+        for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+        if s.get("name") == "Wait for the upstream integration ZIP before tagging"
+    )
+    script = step["run"].replace("/tmp/mirror", tmp_path.as_posix())
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", stub + script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": tmp_path.as_posix(),
+            "TAG": "v9.1.1",
+            "VER": "9.1.1",
+            "CHANNEL": "stable",
+            "SOURCE_STATE": source,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is (source == "published"), result.stderr
+    assert (tmp_path / "api-requested").exists()
+    assert (tmp_path / "api-filter-succeeded").exists() is (source != "unavailable")
+    if source != "published":
+        assert "The upstream ZIP is unavailable" in result.stdout
+        assert not (tmp_path / "download-called").exists()
+    else:
+        assert (tmp_path / "download-called").exists()
