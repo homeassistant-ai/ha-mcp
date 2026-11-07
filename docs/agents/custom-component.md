@@ -100,6 +100,34 @@ not claim an old-version component migration or a Marketplace UI click test.
 For a focused GitHub runner execution, dispatch `e2e-tests.yml` on a test fork
 with `update_path_only=true`.
 
+### Recover a stable tag pushed before its draft was created
+
+If uv setup or ZIP creation fails after SemVer pushes its tag, a fresh SemVer
+dispatch may report no new release. Recover the same tag instead of cutting a
+new version. Pause other release cuts during recovery, confirm that the tag is
+the current stable-release candidate and that its GitHub release is absent.
+From the current publisher checkout, use the original tag's component and notes:
+
+```bash
+TAG=vX.Y.Z
+REPO=homeassistant-ai/ha-mcp
+git fetch origin master --tags
+test "$(git describe origin/master --tags --abbrev=0 --match 'v[0-9]*' --exclude '*dev*')" = "$TAG"
+git worktree add --detach worktree/release-recovery "$TAG"
+uv run -s scripts/build_component_zip.py --component-dir worktree/release-recovery/custom_components/ha_mcp_tools --output local/release-recovery/ha_mcp_tools.zip
+uv run -s scripts/extract_release_notes.py --version "$TAG" --changelog worktree/release-recovery/CHANGELOG.md --out local/release-recovery/notes.md
+test -s local/release-recovery/notes.md
+gh release create "$TAG" local/release-recovery/ha_mcp_tools.zip --repo "$REPO" --verify-tag --draft --title "$TAG" --notes-file local/release-recovery/notes.md
+gh workflow run release-publish.yml --repo "$REPO" --ref master
+```
+
+The current Release Publish workflow selects that existing tag, publishes its
+PyPI package with `skip-existing`, then verifies and finalizes the recovered
+draft. If the draft already exists, inspect it and upload only a missing ZIP;
+do not recreate it or overwrite a usable counted asset. Confirm finalization
+and its finalized-tag artifact before recovering the mirror. This is a manual
+recovery path, not a claim that rerunning SemVer repairs a stranded tag.
+
 ## Version cycle
 
 The component shares the server's version and pins the server build it runs
