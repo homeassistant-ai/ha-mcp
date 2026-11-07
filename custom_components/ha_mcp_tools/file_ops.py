@@ -52,6 +52,18 @@ SERVICE_EDIT_FILE_SCHEMA = vol.Schema(
 )
 
 
+def file_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """The one lock every file change in this component takes.
+
+    edit_yaml_config holds it across its read-modify-write too: a theme file is
+    writable through both it and edit_file. Not reentrant, so nothing holding it
+    may call ``run_file_job``.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    lock: asyncio.Lock = domain_data.setdefault("file_lock", asyncio.Lock())
+    return lock
+
+
 async def run_file_job(
     hass: HomeAssistant, job: Callable[..., dict[str, Any]], *args: Any
 ) -> dict[str, Any]:
@@ -62,9 +74,7 @@ async def run_file_job(
     are too rare for the bookkeeping of per-path locks (and of links to one file)
     to pay off.
     """
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    lock: asyncio.Lock = domain_data.setdefault("file_lock", asyncio.Lock())
-    async with lock:
+    async with file_lock(hass):
         running = hass.async_add_executor_job(job, *args)
         try:
             result: dict[str, Any] = await asyncio.shield(running)
