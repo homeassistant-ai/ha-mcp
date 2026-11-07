@@ -158,26 +158,21 @@ def test_interrupt_stops_the_session_without_the_hook_ending_the_task(tmp_path):
     output, order = _run(
         tmp_path,
         f"""\
-        import signal
+        def interrupt():
+            raise KeyboardInterrupt
 
-        # No pytest-timeout limit in play: the interrupts alone end the test.
+        # No pytest-timeout limit in play: the interrupt alone ends the test.
         @pytest.mark.timeout(30)
-        async def test_a_is_interrupted_twice():
-            # The first interrupt cancels the task, the second one raises
-            # KeyboardInterrupt from the event loop while the cleanup runs.
-            loop = asyncio.get_running_loop()
-            loop.call_soon(signal.raise_signal, signal.SIGINT)
+        async def test_a_is_interrupted():
+            # KeyboardInterrupt from the event loop while the task is pending,
+            # as a Ctrl-C can raise it. Raised directly, because pytest-asyncio
+            # versions differ in how they handle SIGINT.
+            asyncio.get_running_loop().call_soon(interrupt)
             try:
                 await asyncio.sleep(30)
-            finally:
-                # Scheduled here, not up front, so it cannot arrive before the
-                # first one's cancellation has reached the task.
-                loop.call_soon(signal.raise_signal, signal.SIGINT)
-                try:
-                    await asyncio.sleep(30)
-                except asyncio.CancelledError as error:
-                    hook = error.args == ({timed_out_task.CANCEL_MESSAGE!r},)
-                    record("hook-cancel" if hook else "other-cancel")
+            except asyncio.CancelledError as error:
+                hook = error.args == ({timed_out_task.CANCEL_MESSAGE!r},)
+                record("hook-cancel" if hook else "other-cancel")
 
         async def test_b_does_not_run():
             record("b-start")
