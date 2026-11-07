@@ -29,6 +29,7 @@ from .hacs_backend import (
     fetch_releases,
     raise_store_error,
 )
+from .hacs_own_repository import route_own_repository_download
 from .hacs_registration import (
     HACS_ADD_REGISTRATION_TIMEOUT,
     HACS_REFRESH_TIMEOUT,
@@ -557,6 +558,10 @@ class HacsTools:
         )
         ws_client, api = await self._get_hacs_client()
 
+        repository_id, reroute_note = await route_own_repository_download(
+            ws_client, api, repository_id
+        )
+
         # Resolve GitHub path to numeric ID if needed
         actual_id, repo_name = await _resolve_hacs_repo_id(
             ws_client, api, repository_id
@@ -635,7 +640,10 @@ class HacsTools:
                 "data": result,
             },
         )
-        return {"success": True, **wrapped}
+        answer: dict[str, Any] = {"success": True, **wrapped}
+        if reroute_note:
+            answer["warnings"] = [reroute_note]
+        return answer
 
     async def _hacs_remove(self, repository_id: str | None) -> dict[str, Any]:
         # Same up-front guard as ``_hacs_download``: an empty identifier
