@@ -18,25 +18,30 @@ const expression = new Parser(new Lexer(workflow.jobs.renovate.if).lex().tokens,
 const dashboard = {
   event_name: 'issues',
   event: {
+    repository: { fork: false },
     issue: { title: 'Dependency Dashboard', user: { login: 'ha-mcp-renovate[bot]' }, body: '- [x] request' },
     sender: { type: 'User' }, changes: { body: { from: '- [ ] request' } },
   },
 };
 const cases = [
   ['human checked request', () => {}, true],
+  ['dashboard request in a fork', (g) => { g.event.repository.fork = true; }, false],
   ['uppercase checked request', (g) => { g.event.issue.body = '- [X] request'; }, true],
   ['bot edit', (g) => { g.event.sender.type = 'Bot'; }, false],
   ['unrelated issue', (g) => { g.event.issue.title = 'Other issue'; }, false],
   ['spoofed dashboard author', (g) => { g.event.issue.user.login = 'someone-else'; }, false],
   ['unchanged body', (g) => { delete g.event.changes.body; }, false],
   ['unchecked body', (g) => { g.event.issue.body = '- [ ] request'; }, false],
-  ['manual dispatch', (g) => { g.event_name = 'workflow_dispatch'; g.event = {}; }, true],
-  ['hourly schedule', (g) => { g.event_name = 'schedule'; g.event = {}; }, true],
+  ['manual dispatch', (g) => { g.event_name = 'workflow_dispatch'; g.event = { repository: { fork: false } }; }, true],
+  ['hourly schedule', (g) => { g.event_name = 'schedule'; g.event = { repository: { fork: false } }; }, true],
+  ['manual dispatch in a fork', (g) => { g.event_name = 'workflow_dispatch'; g.event = { repository: { fork: true } }; }, false],
+  ['hourly schedule in a fork', (g) => { g.event_name = 'schedule'; g.event = { repository: { fork: true } }; }, false],
 ];
 const pr = {
   event_name: 'pull_request_target',
   repository: 'homeassistant-ai/ha-mcp',
   event: {
+    repository: { fork: false },
     action: 'edited',
     pull_request: {
       state: 'open',
@@ -51,6 +56,7 @@ const pr = {
 };
 const prCases = [
   ['PR checkbox checked', () => {}, true],
+  ['PR checkbox in a fork', (g) => { g.event.repository.fork = true; }, false],
   ['uppercase PR checkbox', (g) => { g.event.pull_request.body = '- [X] <!-- rebase-check -->retry'; }, true],
   ['bot PR edit', (g) => { g.event.sender.type = 'Bot'; }, false],
   ['missing sender', (g) => { delete g.event.sender; }, false],
