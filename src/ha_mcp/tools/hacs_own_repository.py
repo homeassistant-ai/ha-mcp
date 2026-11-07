@@ -75,7 +75,8 @@ async def route_own_repository_download(
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout):
         # The download itself reports the store's trouble, with its own context
         return repository_id, version, None
-    repos = [dict(r) for r in response.get("result", []) if isinstance(r, dict)]
+    listed = response.get("result") if isinstance(response, dict) else None
+    repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]
     if not named_own:
         requested = next((r for r in repos if str(r.get("id")) == wanted), None)
         if requested is None or _own_name(requested) is None:
