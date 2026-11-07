@@ -13,10 +13,14 @@ from ._pytest_subprocess import run_pytest
 
 
 def _run(
-    tmp_path: Path, tests: str, *, timeout_plugin: bool = True
+    tmp_path: Path,
+    tests: str,
+    *,
+    timeout_plugin: bool = True,
+    grace_seconds: float = 0.5,
 ) -> tuple[str, list[str]]:
     # Mirrors the asyncio and timeout settings in pyproject.toml, with 0.5s for
-    # the timeout and for each cancellation to keep the run fast.
+    # the timeout and, by default, for each cancellation to keep the run fast.
     (tmp_path / "pytest.ini").write_text(
         textwrap.dedent(
             """\
@@ -33,11 +37,11 @@ def _run(
     )
     (tmp_path / "conftest.py").write_text(
         textwrap.dedent(
-            """\
+            f"""\
             from tests.src import timed_out_task
             from tests.src.timed_out_task import pytest_runtest_call
 
-            timed_out_task.GRACE_SECONDS = 0.5
+            timed_out_task.GRACE_SECONDS = {grace_seconds}
             """
         ),
         encoding="utf-8",
@@ -154,18 +158,21 @@ def test_interrupt_stops_the_session_without_the_hook_ending_the_task(tmp_path):
     output, order = _run(
         tmp_path,
         f"""\
-        import os
         import signal
 
+        # No pytest-timeout limit in play: the interrupts alone end the test.
+        @pytest.mark.timeout(30)
         async def test_a_is_interrupted_twice():
             # The first interrupt cancels the task, the second one raises
             # KeyboardInterrupt from the event loop while the cleanup runs.
             loop = asyncio.get_running_loop()
-            loop.call_later(0.05, os.kill, os.getpid(), signal.SIGINT)
-            loop.call_later(0.15, os.kill, os.getpid(), signal.SIGINT)
+            loop.call_soon(signal.raise_signal, signal.SIGINT)
             try:
                 await asyncio.sleep(30)
             finally:
+                # Scheduled here, not up front, so it cannot arrive before the
+                # first one's cancellation has reached the task.
+                loop.call_soon(signal.raise_signal, signal.SIGINT)
                 try:
                     await asyncio.sleep(30)
                 except asyncio.CancelledError as error:
@@ -190,7 +197,7 @@ def test_system_exit_from_the_loop_does_not_leave_the_task_pending(tmp_path):
         import sys
 
         async def test_a_exits_from_the_loop():
-            asyncio.get_running_loop().call_later(0.05, sys.exit, 3)
+            asyncio.get_running_loop().call_soon(sys.exit, 3)
             try:
                 await asyncio.sleep(30)
             finally:
@@ -213,20 +220,22 @@ def test_timeout_does_not_fire_while_the_hook_ends_the_task(tmp_path):
         """\
         import sys
 
-        @pytest.mark.timeout(0.25)
         async def test_a_exits_from_the_loop():
-            asyncio.get_running_loop().call_later(0.05, sys.exit, 3)
+            # Exits on the loop's next pass, long before the timeout.
+            asyncio.get_running_loop().call_soon(sys.exit, 3)
             try:
                 await asyncio.sleep(30)
             finally:
                 record("a-cleanup-start")
-                # Past the call's timeout, within a cancellation's 0.5s.
-                await asyncio.sleep(0.3)
+                # Past the call's 0.5s timeout.
+                await asyncio.sleep(0.6)
                 record("a-cleanup-done")
 
         async def test_b_runs_after():
             record("b-start")
         """,
+        # Keeps the 0.6s cleanup within the hook's first cancellation.
+        grace_seconds=5,
     )
     assert "FAILED test_order.py::test_a_exits_from_the_loop - SystemExit" in output, (
         output
