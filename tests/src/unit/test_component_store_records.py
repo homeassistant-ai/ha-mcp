@@ -152,3 +152,58 @@ def test_the_check_is_scheduled_once_per_start(monkeypatch):
     store_records.async_schedule_store_records_check(hass)
     store_records.async_schedule_store_records_check(hass)
     assert hass.bus.async_listen_once.call_count == 1
+
+
+def test_a_reload_after_the_check_ran_schedules_a_fresh_one(
+    monkeypatch, issue_registry
+):
+    """Once the pending check has run, a later entry reload gets its own."""
+    manager = _manager(_repository(store_records.MIRROR_REPOSITORY, True))
+    hass = _hass_with(monkeypatch, manager)
+    hass.data = {}
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+    store_records.async_schedule_store_records_check(hass)
+    assert hass.bus.async_listen_once.call_count == 2
+
+
+def test_startup_runs_the_check_through_at_started(monkeypatch, issue_registry):
+    """The normal path: the callback handed to async_at_started files the
+    repair for two installed records."""
+    manager = _manager(
+        _repository(store_records.MAIN_REPOSITORY, True),
+        _repository(store_records.MIRROR_REPOSITORY, True),
+    )
+    hass = _hass_with(monkeypatch, manager)
+    hass.data = {}
+    start = ModuleType("homeassistant.helpers.start")
+    captured = {}
+    start.async_at_started = lambda _hass, cb: captured.setdefault("cb", cb)
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", start)
+
+    store_records.async_schedule_store_records_check(hass)
+    captured["cb"](hass)
+
+    assert (
+        issue_registry.async_create_issue.call_args.args[2]
+        == ISSUE_STORE_RECORDS_CONFLICT
+    )
+
+
+def test_no_store_yet_leaves_the_issue_and_asks_again(monkeypatch, issue_registry):
+    """A store that has not loaded is unknown, not clean: the issue stays and
+    one retry is scheduled."""
+    hass = _hass_with(monkeypatch, None)
+    hass.data = {}
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    event = ModuleType("homeassistant.helpers.event")
+    later = MagicMock()
+    event.async_call_later = later
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
+
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+
+    issue_registry.async_delete_issue.assert_not_called()
+    later.assert_called_once()

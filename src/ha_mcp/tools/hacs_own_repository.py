@@ -110,18 +110,21 @@ async def route_own_repository_download(
             )
         # HACS never checked ownership, so the download still works there and
         # is the way to bring in the release whose repair keeps one listing.
-        return (
-            repository_id,
-            version,
-            (
-                f"{names} are both installed and both claim "
-                "custom_components/ha_mcp_tools. HACS still updates either, but the "
-                "Marketplace in Home Assistant 2026.11 will refuse to; the current "
-                "HA-MCP release files a repair under Settings > System > Repairs "
-                f"that keeps {MAIN_REPOSITORY}. Restart Home Assistant after this "
-                "download and run it."
-            ),
+        note = (
+            f"{names} are both installed and both claim "
+            "custom_components/ha_mcp_tools. HACS still updates either, but the "
+            "Marketplace in Home Assistant 2026.11 will refuse to. HA-MCP "
+            "releases after 9.1.1 file a repair under Settings > System > "
+            f"Repairs that keeps {MAIN_REPOSITORY}; "
         )
+        if version:
+            note += (
+                f"this download pins {version}, so update to a current release "
+                "and run the repair then, or follow the manual route in the FAQ."
+            )
+        else:
+            note += "restart Home Assistant after this download and run it."
+        return repository_id, version, note
     if not installed or _own_name(installed[0]) == wanted:
         return repository_id, version, None
     owner = str(installed[0].get("full_name"))

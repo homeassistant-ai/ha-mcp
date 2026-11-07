@@ -594,7 +594,7 @@ class HacsTools:
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
-                    **({"rerouted": reroute_note} if reroute_note else {}),
+                    **({"routing_note": reroute_note} if reroute_note else {}),
                 },
                 suggestions=[
                     "The download may still have completed on the HACS side — "
@@ -611,7 +611,7 @@ class HacsTools:
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
-                    **({"rerouted": reroute_note} if reroute_note else {}),
+                    **({"routing_note": reroute_note} if reroute_note else {}),
                 },
             )
 
@@ -622,7 +622,7 @@ class HacsTools:
                     "command": api.command("install"),
                     "repository_id": repository_id,
                     "version": version,
-                    **({"rerouted": reroute_note} if reroute_note else {}),
+                    **({"routing_note": reroute_note} if reroute_note else {}),
                 },
                 raise_error=True,
             )

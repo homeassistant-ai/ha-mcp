@@ -56,25 +56,31 @@ def _installed_own_records(manager: Any) -> list[Any]:
     return records
 
 
-def conflicting_records(hass: HomeAssistant) -> list[str]:
-    """Full names of the installed records when more than one claims the directory."""
+def conflicting_records(hass: HomeAssistant) -> list[str] | None:
+    """Full names of the installed records when more than one claims the
+    directory; None when no store manager is loaded to ask."""
     manager = _store_manager(hass)
     if manager is None:
-        return []
+        return None
     records = _installed_own_records(manager)
     if len(records) < 2:
         return []
     return [str(repository.data.full_name) for repository in records]
 
 
-def async_check_store_records(hass: HomeAssistant) -> None:
-    """File or clear the repair issue for two installed records."""
+def async_check_store_records(hass: HomeAssistant) -> bool:
+    """File or clear the repair issue for two installed records.
+
+    Returns False when no store manager was loaded yet, so the caller can ask
+    again; the issue is left as it was rather than cleared on no evidence."""
     from homeassistant.helpers import issue_registry as ir
 
     records = conflicting_records(hass)
+    if records is None:
+        return False
     if not records:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_STORE_RECORDS_CONFLICT)
-        return
+        return True
     _LOGGER.warning(
         "%s are all installed in the store and claim custom_components/%s; on "
         "Home Assistant 2026.11 the Marketplace refuses to update any of them "
@@ -96,6 +102,7 @@ def async_check_store_records(hass: HomeAssistant) -> None:
             "keep": MAIN_REPOSITORY,
         },
     )
+    return True
 
 
 async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
@@ -136,23 +143,31 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 
 
 _SCHEDULED_KEY = "store_records_check_scheduled"
+# A store that is not loaded when Home Assistant reports started is asked once
+# more; the stores set up during startup, so this covers a slow one.
+_STORE_RETRY_SECONDS = 60
 
 
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
     """Run the check once Home Assistant has started, when the store is up.
 
-    Both entry types register through here; the check runs once per start."""
+    Both entry types register through here, so a pending check is shared; once
+    it has run, a later entry reload schedules a fresh one."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(_SCHEDULED_KEY):
         return
     domain_data[_SCHEDULED_KEY] = True
 
     @callback
-    def _check(_event: Any = None) -> None:
+    def _check(_event: Any = None, *, retry: bool = True) -> None:
+        domain_data.pop(_SCHEDULED_KEY, None)
         try:
-            async_check_store_records(hass)
+            checked = async_check_store_records(hass)
         except Exception:
             _LOGGER.debug("Store record check failed", exc_info=True)
+            return
+        if not checked and retry:
+            _retry_later(hass, lambda _now: _check(retry=False))
 
     try:
         from homeassistant.helpers.start import async_at_started
@@ -161,3 +176,11 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
         hass.bus.async_listen_once("homeassistant_started", _check)
         return
     async_at_started(hass, _check)
+
+
+def _retry_later(hass: HomeAssistant, action: Any) -> None:
+    try:
+        from homeassistant.helpers.event import async_call_later
+    except ImportError:
+        return
+    async_call_later(hass, _STORE_RETRY_SECONDS, action)
