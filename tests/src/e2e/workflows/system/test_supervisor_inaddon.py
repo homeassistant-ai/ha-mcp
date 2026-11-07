@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from haos_runtime import HA_MCP_DEV_ADDON_SLUG
@@ -127,7 +127,11 @@ class TestGetLogsHoursBackReal:
         stamps = _entry_times(result["log"])
         assert stamps, f"Expected timestamped entries, got {result['log'][:200]!r}"
         assert min(stamps) >= datetime.fromisoformat(result["window_start"])
-        assert max(stamps) <= datetime.fromisoformat(result["window_end"])
+        # The window runs to the journal's end, so entries logged while the
+        # read was in flight may follow read_at by a moment.
+        assert max(stamps) <= datetime.fromisoformat(result["read_at"]) + timedelta(
+            minutes=1
+        )
         assert result["window_complete"] is True, result.get("warnings")
 
     @pytest.mark.parametrize(
@@ -150,7 +154,7 @@ class TestGetLogsHoursBackReal:
         assert result["log"], "Expected entries logged in the last hour"
         assert result["window_complete"] is True, result.get("warnings")
         assert datetime.fromisoformat(result["window_start"]) < datetime.fromisoformat(
-            result["window_end"]
+            result["read_at"]
         )
 
 

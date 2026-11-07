@@ -10,13 +10,13 @@ Consolidation and Module Size.
 """
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
-from ..client.journal_window import read_logs_window
+from ..client.journal_window import read_logs_window, window_start
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -47,17 +47,18 @@ class SupervisorLogSourcesMixin:
     ) -> tuple[list[str], dict[str, Any]]:
         """The last ``hours_back`` hours of entries, and fields describing the read.
 
-        The journal selects the window (``realtime=`` Range); a window too
-        large to read whole says so, so that a partial window is not mistaken
-        for a whole one.
+        The journal selects the window (``realtime=`` Range) from its start
+        to the journal's end; a window too large to read whole says so, so
+        that a partial window is not mistaken for a whole one. ``read_at`` is
+        when the read started: entries logged while it ran are included.
         """
-        until = now or datetime.now(UTC)
-        since = until - timedelta(hours=hours_back)
-        read = await read_logs_window(self._client, path, since, until)
+        read_at = now or datetime.now(UTC)
+        since = window_start(read_at, hours_back)
+        read = await read_logs_window(self._client, path, since)
         fields: dict[str, Any] = {
             "hours_back": hours_back,
             "window_start": since.isoformat(timespec="seconds"),
-            "window_end": until.isoformat(timespec="seconds"),
+            "read_at": read_at.isoformat(timespec="seconds"),
             "window_complete": read.complete,
         }
         if not read.complete:

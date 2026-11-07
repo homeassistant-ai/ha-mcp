@@ -1,11 +1,13 @@
 """``hours_back`` on ``ha_get_logs(source="supervisor"|"system_service")``.
 
 The journal selects the window: the read sends gatewayd's own time range,
-``Range: realtime=<since>:<until>:<skip>:<count>``, which Supervisor and Core's
-hassio proxy pass through. ``FakeGatewayd`` answers those ranges the way
-``journal-gatewayd.c`` does (seek, skip and count by ENTRY, stop after
-``until``), so the tests check what the tool asks for and what it does with
-the answer, not a copy of the selection.
+``Range: realtime=<since>::<skip>:<count>``, which Supervisor and Core's hassio
+proxy pass through. ``FakeGatewayd`` answers ranges the way
+``journal-gatewayd.c`` does: entries in journal order, whose timestamps need
+not be in order; seek to the first entry stamped at or after ``since``; skip
+and count by ENTRY; end at the first entry stamped after ``until`` when one is
+given; ``entries=:-N:N`` for the newest N. So the tests check what the tool
+asks for and what it does with the answer, not a copy of the selection.
 """
 
 import asyncio
@@ -17,10 +19,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp.client.journal_window import (
+    EPOCH,
     newest_range,
     read_logs_window,
     read_window,
     window_range,
+    window_start,
 )
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
@@ -30,7 +34,8 @@ from ha_mcp.tools.log_common import _collect_log_warnings
 from ha_mcp.tools.tools_logs import LogTools
 
 NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
-_RANGE = re.compile(r"^realtime=(\d*):(\d+):(-?\d+):(\d+)$")
+_REALTIME = re.compile(r"^realtime=(\d*):(\d*):(-?\d+):(\d+)$")
+_ENTRIES = re.compile(r"^entries=:(-?\d+):(\d+)$")
 
 
 def at(minutes_ago: int) -> int:
@@ -38,7 +43,7 @@ def at(minutes_ago: int) -> int:
 
 
 class FakeGatewayd:
-    """A journal of ``(epoch seconds, lines)`` entries, oldest first."""
+    """A journal of ``(epoch seconds, lines)`` entries, in journal order."""
 
     def __init__(self, entries: list[tuple[int, list[str]]]) -> None:
         self.entries = entries
@@ -51,21 +56,28 @@ class FakeGatewayd:
 
     def answer(self, range_header: str) -> str:
         self.ranges.append(range_header)
-        match = _RANGE.match(range_header)
-        assert match, f"unexpected Range {range_header!r}"
-        since, until, skip, count = (
-            int(match[1]) if match[1] else None,
-            int(match[2]),
-            int(match[3]),
-            int(match[4]),
-        )
-        in_range = [e for e in self.entries if e[0] <= until]
-        if since is not None:
-            assert skip >= 0
-            picked = [e for e in in_range if e[0] >= since][skip : skip + count]
+        if match := _ENTRIES.match(range_header):
+            skip, count = int(match[1]), int(match[2])
+            start = max(len(self.entries) - 1 + skip, 0)
+            picked = self.entries[start : start + count]
         else:
-            assert skip == -(count - 1)
-            picked = in_range[-count:]
+            match = _REALTIME.match(range_header)
+            assert match, f"unexpected Range {range_header!r}"
+            since = int(match[1]) if match[1] else 0
+            until = int(match[2]) if match[2] else None
+            skip, count = int(match[3]), int(match[4])
+            assert skip >= 0
+            start = next(
+                (i for i, e in enumerate(self.entries) if e[0] >= since),
+                len(self.entries),
+            )
+            picked = []
+            for stamp, lines in self.entries[start + skip :]:
+                if until is not None and stamp > until:
+                    break  # gatewayd ends here; it does not skip the entry
+                picked.append((stamp, lines))
+                if len(picked) == count:
+                    break
         return "\n".join(line for _, lines in picked for line in lines)
 
     def client(self, timeout: float = 30) -> MagicMock:
@@ -85,15 +97,24 @@ def shown(text: str) -> list[str]:
 
 
 class TestRanges:
-    def test_a_window_is_sent_as_gatewayd_seconds(self):
+    def test_a_window_is_sent_as_gatewayd_seconds_with_no_end(self):
         since = datetime(2026, 11, 5, 11, 0, 30, 999000, tzinfo=UTC)
-        assert window_range(since, NOW, 0, 50) == (
-            f"realtime={int(since.timestamp())}:{int(NOW.timestamp())}:0:50"
-        )
+        assert window_range(since, 0, 50) == f"realtime={int(since.timestamp())}::0:50"
 
     def test_the_newest_read_always_names_its_entry_count(self):
         # systemd 256 rejected a Range without num_entries (systemd#37172).
-        assert newest_range(NOW, 10).endswith(":-9:10")
+        assert newest_range(10) == "entries=:-9:10"
+
+
+class TestWindowStart:
+    def test_a_window_starts_hours_back_from_the_read(self):
+        assert window_start(NOW, 2) == NOW - timedelta(hours=2)
+
+    @pytest.mark.parametrize("hours_back", [600_000, 17_800_000, 10**12, 10**30])
+    def test_a_window_reaching_past_1970_is_the_whole_journal(self, hours_back: int):
+        # 600,000 h would be a negative time, which gatewayd does not take;
+        # the larger values overflow datetime.
+        assert window_start(NOW, hours_back) == EPOCH
 
 
 @pytest.mark.asyncio
@@ -101,7 +122,7 @@ class TestReadWindow:
     async def test_the_journal_returns_exactly_the_window(self):
         journal = FakeGatewayd.per_minute(600)
         read = await read_window(
-            journal.client(), "supervisor", NOW - timedelta(hours=2), NOW
+            journal.client(), "supervisor", NOW - timedelta(hours=2)
         )
         assert read.complete
         assert read.lines == [f"m{m}" for m in range(120, -1, -1)]
@@ -114,7 +135,7 @@ class TestReadWindow:
             + [(at(10), ["Traceback:", "  File x", "Error"])]
         )
         read = await read_window(
-            journal.client(), "core", NOW - timedelta(hours=1), NOW, max_entries=5
+            journal.client(), "core", NOW - timedelta(hours=1), max_entries=5
         )
         assert read.complete
         assert read.lines[-3:] == ["Traceback:", "  File x", "Error"]
@@ -123,26 +144,27 @@ class TestReadWindow:
     async def test_an_oversized_window_returns_its_newest_entries(self):
         journal = FakeGatewayd.per_minute(600)
         read = await read_window(
-            journal.client(),
-            "host",
-            NOW - timedelta(hours=5),
-            NOW,
-            max_entries=100,
+            journal.client(), "host", NOW - timedelta(hours=5), max_entries=100
         )
         assert not read.complete
         assert read.lines == [f"m{m}" for m in range(99, -1, -1)]
+        assert journal.ranges[-1] == "entries=:-99:100"
 
-    async def test_entries_logged_after_until_are_not_read(self):
-        journal = FakeGatewayd.per_minute(600)
-        journal.entries.append((at(-5), ["after the window"]))
-        read = await read_window(
-            journal.client(), "host", NOW - timedelta(hours=5), NOW, max_entries=100
-        )
-        assert "after the window" not in read.lines
+    async def test_an_entry_stamped_in_the_future_does_not_end_the_read(self):
+        # After a clock correction an entry can carry a later time than the ones
+        # logged after it. Gatewayd ends a read with an end time at such an
+        # entry, so the read sends none, and nothing after it is lost.
+        journal = FakeGatewayd.per_minute(120)
+        journal.entries.insert(60, (at(-60), ["stamped an hour ahead"]))
+        read = await read_window(journal.client(), "host", NOW - timedelta(hours=1))
+        assert read.complete
+        assert "stamped an hour ahead" in read.lines
+        assert read.lines[-1] == "m0"
+        assert all(re.match(r"^realtime=\d+::", r) for r in journal.ranges)
 
     async def test_an_empty_window_is_complete_and_empty(self):
         read = await read_window(
-            FakeGatewayd([]).client(), "dns", NOW - timedelta(hours=1), NOW
+            FakeGatewayd([]).client(), "dns", NOW - timedelta(hours=1)
         )
         assert read.complete and read.lines == []
 
@@ -155,7 +177,7 @@ class TestRoutes:
         with patch(
             "ha_mcp.client.journal_window.is_running_in_addon", return_value=True
         ):
-            await read_window(client, "addons/core_ssh", NOW - timedelta(hours=1), NOW)
+            await read_window(client, "addons/core_ssh", NOW - timedelta(hours=1))
         path, headers, params = client._supervisor_logs_response.call_args.args
         assert path == "addons/core_ssh"
         assert headers["Range"].startswith("realtime=")
@@ -167,7 +189,7 @@ class TestRoutes:
         with patch(
             "ha_mcp.client.journal_window.is_running_in_addon", return_value=False
         ):
-            await read_window(client, "supervisor", NOW - timedelta(hours=1), NOW)
+            await read_window(client, "supervisor", NOW - timedelta(hours=1))
         args, kwargs = client._raw_request.call_args
         assert args == ("GET", "/hassio/supervisor/logs")
         assert kwargs["headers"]["Range"].startswith("realtime=")
@@ -185,12 +207,15 @@ class TestRoutes:
             ),
             pytest.raises(HomeAssistantConnectionError, match="Timeout reading"),
         ):
-            await read_logs_window(client, "supervisor", NOW - timedelta(hours=1), NOW)
+            await read_logs_window(client, "supervisor", NOW - timedelta(hours=1))
 
-    async def test_a_rejected_range_names_the_systemd_it_needs(self):
+    @pytest.mark.parametrize("status", [400, 500])
+    async def test_a_rejected_range_names_the_systemd_it_needs(self, status: int):
         client = MagicMock(timeout=30)
         client._raw_request = AsyncMock(
-            side_effect=HomeAssistantAPIError("API error: 400 - bad", status_code=400)
+            side_effect=HomeAssistantAPIError(
+                f"API error: {status} - bad", status_code=status
+            )
         )
         with (
             patch(
@@ -198,8 +223,8 @@ class TestRoutes:
             ),
             pytest.raises(HomeAssistantAPIError, match="systemd 255") as raised,
         ):
-            await read_logs_window(client, "host", NOW - timedelta(hours=1), NOW)
-        assert raised.value.status_code == 400
+            await read_logs_window(client, "host", NOW - timedelta(hours=1))
+        assert raised.value.status_code == status
 
 
 def tools_on(journal: FakeGatewayd) -> LogTools:
@@ -222,8 +247,20 @@ class TestToolLayer:
         assert out["total_lines"] == 121
         assert out["window_complete"] is True
         assert out["window_start"] == "2026-11-05T10:00:00+00:00"
-        assert out["window_end"] == "2026-11-05T12:00:00+00:00"
+        assert out["read_at"] == "2026-11-05T12:00:00+00:00"
+        assert "window_end" not in out
         assert "warnings" not in out
+
+    @pytest.mark.parametrize("hours_back", [600_000, 10**12])
+    async def test_a_huge_hours_back_reads_the_whole_journal(self, hours_back: int):
+        journal = FakeGatewayd.per_minute(300)
+        out = await tools_on(journal)._get_system_service_log(
+            service="host", limit=500, hours_back=hours_back, now=NOW
+        )
+        assert out["success"] is True
+        assert out["window_start"] == "1970-01-01T00:00:00+00:00"
+        assert out["total_lines"] == 300
+        assert journal.ranges[0] == "realtime=0::0:10000"
 
     async def test_app_log_search_spans_the_whole_window(self):
         journal = FakeGatewayd.per_minute(600)
