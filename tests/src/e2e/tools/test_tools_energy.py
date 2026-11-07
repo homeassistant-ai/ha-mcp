@@ -140,6 +140,7 @@ async def test_energy_add_device_roundtrip(mcp_client):
     run would otherwise hit RESOURCE_ALREADY_EXISTS.
     """
     stat = "sensor.test_e2e_add_device"
+    added = False
     try:
         add_result = await mcp_client.call_tool(
             "ha_manage_energy_prefs",
@@ -150,6 +151,7 @@ async def test_energy_add_device_roundtrip(mcp_client):
             },
         )
         assert_mcp_success(add_result)
+        added = True
         assert add_result.data["target_key"] == "device_consumption"
         assert add_result.data["new_count"] >= 1
 
@@ -164,13 +166,12 @@ async def test_energy_add_device_roundtrip(mcp_client):
             f"Added device should appear in subsequent get; got stats={stats}"
         )
     finally:
-        # After a passing body the entry exists, so the remove must succeed.
-        # After a failed body a failed remove, of a missing entry, is only logged.
         with CleanupSteps() as cleanup, cleanup.step():
-            await MCPAssertions(mcp_client).call_tool_success(
-                "ha_manage_energy_prefs",
-                {"mode": "remove_device", "stat_consumption": stat},
-            )
+            if added:
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_manage_energy_prefs",
+                    {"mode": "remove_device", "stat_consumption": stat},
+                )
 
 
 @pytest.mark.asyncio

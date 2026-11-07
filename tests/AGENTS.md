@@ -175,25 +175,24 @@ tests against them.
   — so it genuinely proves the call failed. Prefer also passing `expected_error` to pin
   *which* failure; about half the current call sites omit it and assert on the returned
   dict themselves instead, which is equally fine.
-- `safe_call_tool()` is for calls whose outcome the test does **not** assert: deleting,
-  in a `finally` block, an object the test created under its own name, and
+- `safe_call_tool()` is for calls whose outcome the test does **not** assert: removing
+  or aborting, in a `finally` block, something the test created or opened, and
   service-availability probes. It swallows `ToolError` and returns a parsed dict, so using
   it for an expected failure means nothing verifies the call failed at all.
-- A `finally` block that puts back state a later test on the worker reads (for example
-  options, log levels, allowed paths, read-only mode, energy preferences, themes, entity,
-  device or app settings) runs its steps in `CleanupSteps`
-  (`src/e2e/utilities/cleanup.py`): one `with cleanup.step():` per step. A tool call in a
-  step goes through `MCPAssertions(client).call_tool_success()`; a helper counts as
-  checked when it raises on failure. A delete in the same block of an object the test
-  created may stay on `safe_call_tool()`, in a step of its own. A step that raises an
-  `Exception` or calls `pytest.fail()` or `pytest.skip()` is logged, and the next step
-  runs. It fails a test whose body passed; after a failed or skipped body it is only
-  logged, so pytest reports the body's own failure. Enter `CleanupSteps` as the first
-  statement of the `finally` block, and not in a `try`/`finally` that runs while another
-  exception is handled (an `except` in the `finally` block, a caller's `except`) or whose
-  body raises an exception the caller expects (`pytest.raises`): it would read that
-  exception as a failed body and only log a failed step. A restore that must never fail
-  the test keeps its own `try`/`except` and a comment saying why.
+- A `finally` block that puts back state a later test on the worker reads runs its steps
+  in `CleanupSteps` (`src/e2e/utilities/cleanup.py`): one `with cleanup.step():` per
+  step. A tool call in a step goes through `MCPAssertions(client).call_tool_success()`;
+  a helper counts as checked when it raises on failure. Removing or aborting, in the same
+  block, something the test created or opened may stay on `safe_call_tool()`, in a step
+  of its own. A step that raises an `Exception` or calls `pytest.fail()` or
+  `pytest.skip()` is logged, and the next step runs. A failed step fails a test whose
+  body passed or was skipped; after a failed body it is only logged, so pytest reports
+  the body's own failure. Enter `CleanupSteps` as the first statement of the `finally`
+  block, and not in a `try`/`finally` that runs while another exception is handled (an
+  `except` in the `finally` block, a caller's `except`) or whose body raises an exception
+  the caller expects (`pytest.raises`): it would read that exception as a failed body and
+  only log a failed step. A restore that must never fail the test keeps its own
+  `try`/`except` and a comment saying why.
 
 ## E2E Test Patterns
 

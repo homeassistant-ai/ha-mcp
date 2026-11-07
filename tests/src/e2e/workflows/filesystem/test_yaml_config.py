@@ -1309,7 +1309,7 @@ class TestYamlConfigThemesIntegration:
         finally:
             # Cleanup: remove the theme and verify it disappears from the list, so
             # the themes-module count==2 assertion (sequential per-worker runs) does
-            # not see it. After a failed body, a failed remove is only logged.
+            # not see it.
             with CleanupSteps() as cleanup, cleanup.step():
                 async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
                     remove_data = await call_set_yaml_confirmed(
@@ -1489,9 +1489,8 @@ class TestYamlConfigAutoBackup:
             assert read.get("success") is True, read
             assert "V1" in read["content"], read["content"]
         finally:
-            # Best-effort cleanup: drive the confirm flow with safe_call_tool
-            # so a preview (or a failure) can't raise out of ``finally`` and
-            # mask the real assertion error.
+            # Removes the key this test added to its own package file, so
+            # ``safe_call_tool`` is enough (tests/AGENTS.md "Test Patterns").
             rm = await safe_call_tool(
                 mcp,
                 TOOL_NAME,

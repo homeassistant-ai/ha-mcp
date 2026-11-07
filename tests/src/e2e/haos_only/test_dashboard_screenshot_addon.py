@@ -303,6 +303,8 @@ async def screenshot_engine_started(
         await _wait_engine_serving(mcp_client)
         yield
     finally:
+        # A fixture teardown sees no test outcome, so a failed step fails here
+        # even after a failed test.
         with CleanupSteps() as cleanup:
             with cleanup.step():
                 await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)

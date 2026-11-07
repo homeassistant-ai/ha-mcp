@@ -26,16 +26,24 @@ class CleanupSteps:
     Enter it as the first statement of the ``finally`` block and wrap each step
     in ``with cleanup.step():``. A step that raises an ``Exception`` or calls
     ``pytest.fail()`` or ``pytest.skip()`` is logged and the next step runs.
-    On exit the failures raise one ``AssertionError`` naming all of them, but
-    only when the body passed: after a failed or skipped body they stay in the
-    log, and the body's own failure is the one pytest reports.
+    On exit the failures raise one ``AssertionError`` naming all of them,
+    unless the body failed: then they stay in the log, and the body's own
+    failure is the one pytest reports. A skipped body has no failure to keep,
+    so it counts as passed.
 
     ``pytest.fail()`` counts as a failed step because some wait helpers in the
     tests use it. A skip in a step is a failed step too, so it cannot report a
     failed body as skipped. Any other ``BaseException`` (``KeyboardInterrupt``,
-    ``asyncio.CancelledError``) ends the cleanup and propagates unchanged. So
-    does the per-test timeout when it fires while an async step awaits: it is
-    raised in the event loop, outside the step.
+    ``asyncio.CancelledError``) ends the cleanup and propagates unchanged.
+
+    The per-test timeout (pytest-timeout's ``signal`` method) calls
+    ``pytest.fail()`` in whatever frame runs when it fires. While an async step
+    awaits, that frame is the event loop, outside the step: the test fails, but
+    its task stays pending on the session-scoped loop, so the remaining steps
+    can run later, while another test runs the loop. While a step runs blocking
+    code, the step records the timeout as a failed step and the next step runs.
+    The timeout fires only once, so only the steps' own time limits and the CI
+    job timeout bound the steps after it.
 
     Entering reads the body's outcome from ``sys.exception()``. Read while
     another exception is handled, for example inside an ``except`` in the
@@ -44,7 +52,10 @@ class CleanupSteps:
     """
 
     def __enter__(self) -> "CleanupSteps":
-        self._body_failed = sys.exception() is not None
+        body_exception = sys.exception()
+        self._body_failed = body_exception is not None and not isinstance(
+            body_exception, pytest.skip.Exception
+        )
         self._failures: list[BaseException] = []
         return self
 

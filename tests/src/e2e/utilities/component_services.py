@@ -37,6 +37,7 @@ async def _call_admin_service(
 async def bootstrap_caller_token(base_url: str) -> str:
     """Fetch the caller token via the admin-gated bootstrap service."""
     sr = await _call_admin_service(base_url, "get_caller_token", {})
+    assert sr.get("token"), f"get_caller_token returned no token: {sr!r}"
     return sr["token"]
 
 

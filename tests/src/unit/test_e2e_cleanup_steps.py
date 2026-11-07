@@ -5,8 +5,10 @@ share. The cases pin the ways a cleanup can fail without anyone noticing: a
 failed restore that is swallowed after a passing body, one that replaces the
 body's real failure in pytest's report, or one that skips the restores after
 it. Others pin that every failed step is named, that an interrupt propagates
-unchanged, that an ``except`` in the ``finally`` block does not change how the
-body's outcome is read, and that a clean cleanup raises nothing.
+unchanged, that a skipped body counts as passed, that a timeout in a blocking
+step lets the next step run, that an ``except`` in the ``finally`` block does
+not change how the body's outcome is read, and that a clean cleanup raises
+nothing.
 
 No Docker and no HA instance: the steps run plain code.
 """
@@ -14,6 +16,8 @@ No Docker and no HA instance: the steps run plain code.
 from __future__ import annotations
 
 import logging
+import signal
+import time
 from collections.abc import Callable
 
 import pytest
@@ -120,22 +124,45 @@ def test_interrupt_in_a_step_propagates_unchanged() -> None:
     assert ran == []
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        pytest.param(ValueError("body failed"), id="failed"),
-        pytest.param(pytest.skip.Exception("body skipped"), id="skipped"),
-    ],
-)
 def test_failed_step_after_failed_body_keeps_the_body_failure(
-    body: BaseException, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    body = ValueError("body failed")
     ran: list[str] = []
-    with caplog.at_level(logging.ERROR), pytest.raises(type(body)) as excinfo:
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError) as excinfo:
         _finally_with_failed_step(body, ran)
     assert excinfo.value is body
     assert ran == ["first", "second"]
     assert "restore failed" in caplog.text
+
+
+def test_failed_step_after_skipped_body_fails_the_test() -> None:
+    # A skipped test shows only its skip reason in the report, so a failed
+    # restore that is only logged would leave no trace there.
+    ran: list[str] = []
+    with pytest.raises(BaseException, match="restore failed") as excinfo:
+        _finally_with_failed_step(pytest.skip.Exception("body skipped"), ran)
+    assert excinfo.type is AssertionError, repr(excinfo.value)
+    assert ran == ["first", "second"]
+
+
+def test_timeout_in_a_blocking_step_is_recorded_and_later_steps_still_run() -> None:
+    # pytest-timeout's signal method calls pytest.fail() in the frame that
+    # runs when the alarm fires: here a blocking step, which records it.
+    def on_alarm(signum: int, frame: object) -> None:
+        pytest.fail("Timeout (>0.1s) from pytest-timeout.")
+
+    ran: list[str] = []
+    previous_handler = signal.signal(signal.SIGALRM, on_alarm)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0.1)
+    try:
+        with pytest.raises(AssertionError, match="Timeout") as excinfo:
+            _finally_with_failed_step(None, ran, lambda: time.sleep(5))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, previous_handler)
+    assert ran == ["first", "second"]
+    assert isinstance(excinfo.value.__cause__, pytest.fail.Exception)
 
 
 def test_step_inside_an_except_does_not_read_as_a_failed_body() -> None:

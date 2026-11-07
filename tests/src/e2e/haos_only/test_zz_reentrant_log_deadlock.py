@@ -357,10 +357,7 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         # Hand a healthy VM back to the rest of the worker's session. Later
         # modules on this xdist worker share it, so a restore that leaves the
         # probe config behind or a restart that leaves Core down is a failure
-        # of this test — unless the body already failed, in which case that
-        # failure must stay the one reported.
-        # Each step is attempted regardless of the previous one — a failed
-        # probe removal must not skip the config restore or the restart.
+        # of this test.
         with CleanupSteps() as cleanup:
             with cleanup.step():
                 _sh(f"rm -rf {shlex.quote(probe_dir)}")

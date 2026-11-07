@@ -812,7 +812,6 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
         assert matching[0]["level"] == "DEBUG"
     finally:
         with CleanupSteps() as cleanup, cleanup.step():
-            # Restore default
             await MCPAssertions(mcp_client).call_tool_success(
                 "ha_call_service",
                 {

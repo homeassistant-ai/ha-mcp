@@ -344,8 +344,12 @@ asyncio_default_test_loop_scope = "session"
 # stalls the run silently until the JOB timeout - observed as a 22-minute
 # hang in test_zone_search_discovery on the HAOS in-addon backend. 300s is
 # ~10x the slowest legitimate test (~30s deliberate-timeout tests). The signal
-# method interrupts only the hung test and raises inside the running coroutine,
-# so the failure traceback names the exact stuck await.
+# method fails the hung test and lets the run go on, where the thread method
+# would end the whole worker process with os._exit(). It calls pytest.fail() in
+# whatever frame runs when it fires. In an async test that awaits, that frame is
+# the event loop: the traceback ends in the loop's selector, not at the stuck
+# await, and the test's task stays pending on the session-scoped loop, where it
+# can resume while a later test runs.
 timeout = 300
 timeout_method = "signal"
 # Bill the timeout to the TEST FUNCTION only. Session fixtures (container
