@@ -12,7 +12,9 @@ from tests.src import timed_out_task
 from ._pytest_subprocess import run_pytest
 
 
-def _run(tmp_path: Path, tests: str) -> tuple[str, list[str]]:
+def _run(
+    tmp_path: Path, tests: str, *, timeout_plugin: bool = True
+) -> tuple[str, list[str]]:
     # Mirrors the asyncio and timeout settings in pyproject.toml, with 0.5s for
     # the timeout and for each cancellation to keep the run fast.
     (tmp_path / "pytest.ini").write_text(
@@ -60,8 +62,7 @@ def _run(tmp_path: Path, tests: str) -> tuple[str, list[str]]:
         tmp_path,
         "-p",
         "pytest_asyncio.plugin",
-        "-p",
-        "pytest_timeout",
+        *(["-p", "pytest_timeout"] if timeout_plugin else []),
         "-p",
         "no:cacheprovider",
         "-rA",
@@ -181,8 +182,9 @@ def test_interrupt_stops_the_session_without_the_hook_ending_the_task(tmp_path):
 
 def test_system_exit_from_the_loop_does_not_leave_the_task_pending(tmp_path):
     # pytest reports a SystemExit as a failed test and goes on, unlike a
-    # KeyboardInterrupt, so the hook must still end the task.
-    _, order = _run(
+    # KeyboardInterrupt, so the hook must still end the task. Run without
+    # pytest-timeout, whose hook the task's end calls when it is loaded.
+    output, order = _run(
         tmp_path,
         """\
         import sys
@@ -197,8 +199,40 @@ def test_system_exit_from_the_loop_does_not_leave_the_task_pending(tmp_path):
         async def test_b_runs_after():
             record("b-start")
         """,
+        timeout_plugin=False,
     )
-    assert order == ["a-cleanup", "b-start"]
+    assert "FAILED test_order.py::test_a_exits_from_the_loop - SystemExit" in output, (
+        output
+    )
+    assert order == ["a-cleanup", "b-start"], output
+
+
+def test_timeout_does_not_fire_while_the_hook_ends_the_task(tmp_path):
+    output, order = _run(
+        tmp_path,
+        """\
+        import sys
+
+        @pytest.mark.timeout(0.25)
+        async def test_a_exits_from_the_loop():
+            asyncio.get_running_loop().call_later(0.05, sys.exit, 3)
+            try:
+                await asyncio.sleep(30)
+            finally:
+                record("a-cleanup-start")
+                # Past the call's timeout, within a cancellation's 0.5s.
+                await asyncio.sleep(0.3)
+                record("a-cleanup-done")
+
+        async def test_b_runs_after():
+            record("b-start")
+        """,
+    )
+    assert "FAILED test_order.py::test_a_exits_from_the_loop - SystemExit" in output, (
+        output
+    )
+    assert "Failed: Timeout" not in output, output
+    assert order == ["a-cleanup-start", "a-cleanup-done", "b-start"], output
 
 
 def test_hung_cleanup_is_cancelled_and_logged_before_the_next_test(tmp_path):

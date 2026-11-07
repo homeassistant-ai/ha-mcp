@@ -68,14 +68,21 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, object, object]:
     try:
         return (yield)
     except KeyboardInterrupt:
-        # The session is stopping, and closing its loop cancels the task.
-        # Ending it here could take until the timeout fires, which would
-        # replace the interrupt with a test failure and let the session go on.
+        # The session is stopping, and closing its loop cancels the task;
+        # ending it here could delay the stop by GRACE_SECONDS per cancellation.
         task = None
         raise
     finally:
         item.obj = test
         if task is not None and not task.done():
+            # The call can end before its timeout fires, e.g. on a SystemExit
+            # from the loop: stop the timer so it cannot fire during _end_task
+            # and replace that failure. The hook is missing with -p no:timeout.
+            cancel_timer = getattr(
+                item.config.hook, "pytest_timeout_cancel_timer", None
+            )
+            if cancel_timer is not None:
+                cancel_timer(item=item)
             _end_task(task, item.nodeid)
 
 
