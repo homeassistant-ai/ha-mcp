@@ -48,7 +48,8 @@ def _installed_own_records(manager: Any) -> list[Any]:
     for full_name in OWN_REPOSITORIES:
         try:
             repository = manager.repositories.get_by_full_name(full_name)
-        except Exception:  # noqa: BLE001 - unknown manager shape
+        except Exception:
+            _LOGGER.debug("Store manager lookup failed", exc_info=True)
             return []
         if repository is not None and getattr(repository.data, "installed", False):
             records.append(repository)
@@ -108,14 +109,28 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
     kept = next(
         (r for r in records if str(r.data.full_name) == MAIN_REPOSITORY), records[0]
     )
-    for repository in records:
-        if repository is kept:
-            continue
+    forgotten = [r for r in records if r is not kept]
+    saved = {
+        id(r): (r.data.installed, r.data.installed_version, r.data.installed_commit)
+        for r in forgotten
+    }
+    for repository in forgotten:
         repository.data.installed = False
         repository.data.installed_version = None
         repository.data.installed_commit = None
+    try:
+        await manager.data.async_write()
+    except Exception:
+        # Nothing reached disk, so nothing in memory may differ from it either
+        for repository in forgotten:
+            (
+                repository.data.installed,
+                repository.data.installed_version,
+                repository.data.installed_commit,
+            ) = saved[id(repository)]
+        raise
+    for repository in forgotten:
         _LOGGER.info("Forgot the duplicate store record %s", repository.data.full_name)
-    await manager.data.async_write()
     return str(kept.data.full_name)
 
 

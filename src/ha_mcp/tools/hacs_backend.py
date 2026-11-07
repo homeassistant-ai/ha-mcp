@@ -5,6 +5,7 @@ integration and removes the ``hacs/*`` WebSocket commands. The HACS tools
 talk to whichever API the instance serves, Marketplace first.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
@@ -82,28 +83,32 @@ _GATE_SUGGESTIONS = {
 # checked on a live instance; neither can be driven through this server.
 DUPLICATE_RECORD_SUGGESTIONS = [
     "A current HA-MCP integration files a repair for this under Settings > "
-    "System > Repairs; its fix keeps homeassistant-ai/ha-mcp and marks the "
-    "other record as not installed, with no change to entries or files. Ask "
-    "the user to run it.",
+    + "System > Repairs; its fix keeps homeassistant-ai/ha-mcp and marks the "
+    + "other record as not installed, with no change to entries or files. Ask "
+    + "the user to run it.",
     "Without that repair: the store refuses to uninstall a record while any "
-    "HA-MCP entry exists, disabled ones included, and this server cannot "
-    "drive either route below. Ask the user before suggesting them.",
+    + "HA-MCP entry exists, disabled ones included, and this server cannot "
+    + "drive either route below. Ask the user before suggesting them.",
     "Route 1 (no terminal): delete every HA-MCP entry under Settings > Devices "
-    "& services, uninstall the duplicate record in the store, update the kept "
-    "record, add the entries back and restart. An embedded server entry gets "
-    "a new connect URL, so MCP clients reconnect.",
+    + "& services, uninstall the duplicate record in the store, update the kept "
+    + "record, add the entries back and restart. An embedded server entry gets "
+    + "a new connect URL, so MCP clients reconnect.",
     "Route 2 (keeps the entries): with Home Assistant Core stopped, set "
-    '"installed": false on the duplicate record in '
-    ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
-    "start Core, then update the kept record.",
+    + '"installed": false on the duplicate record in '
+    + ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
+    + "start Core, then update the kept record.",
 ]
-_OWNED_DIRECTORY_MARKER = "directory belongs to"
+# Core's ``integration_owned`` message: "The {domain} directory belongs to
+# {owner}." The store sends no error code for it, so the whole sentence is
+# matched, owner as ``owner/repo``, never a fragment of some other message.
+_OWNED_DIRECTORY = re.compile(
+    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w.-]+)\.?$"
+)
 
 
-def _owned_directory_suggestions(message: str) -> list[str]:
+def _owned_directory_suggestions(owner: str) -> list[str]:
     """The store refused an install because another installed record owns the
     integration's directory: the owner is the record to install or update."""
-    owner = message.rsplit(_OWNED_DIRECTORY_MARKER, 1)[1].strip().rstrip(".")
     return [
         f"{owner} already provides this integration. Update or reinstall it "
         f'there: ha_manage_hacs(action="download", repository_id="{owner}").',
@@ -233,8 +238,8 @@ def raise_store_error(
     GitHub account ...") would otherwise read as a connection failure.
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
-    if _OWNED_DIRECTORY_MARKER in str(err):
-        suggestions = _owned_directory_suggestions(str(err))
+    if match := _OWNED_DIRECTORY.match(str(err).strip()):
+        suggestions = _owned_directory_suggestions(match[1])
     if suggestions:
         raise_tool_error(
             create_error_response(

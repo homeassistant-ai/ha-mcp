@@ -125,3 +125,19 @@ def test_an_unknown_manager_shape_is_left_alone(monkeypatch, issue_registry):
     store_records.async_check_store_records(hass)
 
     issue_registry.async_create_issue.assert_not_called()
+
+
+async def test_a_failed_save_puts_the_records_back(monkeypatch):
+    """Nothing reached disk, so the duplicate stays installed in memory too and
+    the repair can be run again."""
+    main = _repository(store_records.MAIN_REPOSITORY, True)
+    mirror = _repository(store_records.MIRROR_REPOSITORY, True)
+    manager = _manager(main, mirror)
+    manager.data.async_write = AsyncMock(side_effect=OSError("disk full"))
+    hass = _hass_with(monkeypatch, manager)
+
+    with pytest.raises(OSError):
+        await store_records.async_resolve_store_records(hass)
+
+    assert mirror.data.installed is True
+    assert mirror.data.installed_version == "v9.1.0"

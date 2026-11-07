@@ -14,6 +14,7 @@ installed.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
@@ -21,51 +22,64 @@ from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
 from .hacs_backend import DUPLICATE_RECORD_SUGGESTIONS, StoreApi
 from .helpers import raise_tool_error
 
-# The stores use the GitHub repository id as the repository id.
-OWN_REPOSITORY_IDS: dict[str, str] = {
-    "homeassistant-ai/ha-mcp": "1056618941",
-    "homeassistant-ai/ha-mcp-integration": "1289599380",
-}
+MAIN_REPOSITORY = "homeassistant-ai/ha-mcp"
+MIRROR_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
+
+# The two repositories tag releases alike, but not development builds:
+# publish-dev.yml tags the main repository ``v<next>.dev<N>`` while
+# sync-integration-mirror.yml tags the mirror ``v<next>-dev.<N>``.
+_MAIN_DEV_REF = re.compile(r"^(v?\d+\.\d+\.\d+)\.dev(\d+)$")
+_MIRROR_DEV_REF = re.compile(r"^(v?\d+\.\d+\.\d+)-dev\.(\d+)$")
 
 
-def _names_own_repository(repository_id: str) -> bool:
-    wanted = repository_id.strip().lower()
-    return wanted in {name.lower() for name in CANDIDATE_REPO_FULL_NAMES} or wanted in (
-        OWN_REPOSITORY_IDS.values()
-    )
+def translate_version(version: str | None, target: str) -> str | None:
+    """The same release named the way ``target`` tags it."""
+    if not version:
+        return version
+    if target.lower() == MIRROR_REPOSITORY and (match := _MAIN_DEV_REF.match(version)):
+        return f"{match[1]}-dev.{match[2]}"
+    if target.lower() == MAIN_REPOSITORY and (match := _MIRROR_DEV_REF.match(version)):
+        return f"{match[1]}.dev{match[2]}"
+    return version
 
 
-def _matches(repo: dict[str, Any], repository_id: str) -> bool:
-    wanted = repository_id.strip().lower()
-    return wanted in ((repo.get("full_name") or "").lower(), str(repo.get("id")))
+def _own_name(repo: dict[str, Any]) -> str | None:
+    full_name = (repo.get("full_name") or "").lower()
+    if full_name in {n.lower() for n in CANDIDATE_REPO_FULL_NAMES}:
+        return full_name
+    return None
 
 
 async def route_own_repository_download(
-    ws_client: Any, api: StoreApi, repository_id: str
-) -> tuple[str, str | None]:
-    """Return the repository to download and a note when it was rerouted.
+    ws_client: Any, api: StoreApi, repository_id: str, version: str | None
+) -> tuple[str, str | None, str | None]:
+    """Return the repository and version to download, and a note when rerouted.
 
-    Any repository that is not ha-mcp's own passes through untouched, with no
-    store call. For ha-mcp's own, the installed one wins: a request for the
-    other repository is rerouted to it, so the mirror keeps updating from the
-    mirror and the main repository from the catalog. Two installed records
-    are the deadlock the Marketplace cannot resolve, so that is refused with
-    the way out.
+    A repository named by ``owner/repo`` that is not ha-mcp's own passes
+    through with no store call; a numeric id is looked up in the store's list,
+    since ids are the store's and not written down anywhere else. For ha-mcp's
+    own, the installed one wins: a request for the other repository is
+    rerouted to it, so the mirror keeps updating from the mirror and the main
+    repository from the catalog, and a development ref is renamed the way the
+    target tags it. Two installed records are the deadlock the Marketplace
+    cannot resolve, so that is refused with the way out.
     """
-    if not _names_own_repository(repository_id):
-        return repository_id, None
+    wanted = repository_id.strip().lower()
+    named_own = wanted in {n.lower() for n in CANDIDATE_REPO_FULL_NAMES}
+    if not named_own and "/" in wanted:
+        return repository_id, version, None
 
     response = await ws_client.send_command(api.command("list"))
-    own = [
-        dict(repo)
-        for repo in response.get("result", [])
-        if isinstance(repo, dict)
-        and (repo.get("full_name") or "").lower()
-        in {name.lower() for name in CANDIDATE_REPO_FULL_NAMES}
-    ]
-    installed = [repo for repo in own if repo.get("installed")]
+    repos = [dict(r) for r in response.get("result", []) if isinstance(r, dict)]
+    if not named_own:
+        requested = next((r for r in repos if str(r.get("id")) == wanted), None)
+        if requested is None or _own_name(requested) is None:
+            return repository_id, version, None
+        wanted = str(_own_name(requested))
+
+    installed = [r for r in repos if _own_name(r) and r.get("installed")]
     if len(installed) > 1:
-        names = " and ".join(str(repo.get("full_name")) for repo in installed)
+        names = " and ".join(str(r.get("full_name")) for r in installed)
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -75,15 +89,19 @@ async def route_own_repository_download(
                 suggestions=DUPLICATE_RECORD_SUGGESTIONS,
                 context={
                     "repository_id": repository_id,
-                    "installed": [repo.get("full_name") for repo in installed],
+                    "installed": [r.get("full_name") for r in installed],
                 },
             )
         )
-    if not installed or _matches(installed[0], repository_id):
-        return repository_id, None
+    if not installed or _own_name(installed[0]) == wanted:
+        return repository_id, version, None
     owner = str(installed[0].get("full_name"))
-    return owner, (
+    target_version = translate_version(version, owner)
+    note = (
         f"{repository_id} was rerouted to {owner}, which already owns "
         "custom_components/ha_mcp_tools; the store allows one repository per "
         "integration."
     )
+    if target_version != version:
+        note += f" The version was renamed from {version} to {target_version}."
+    return owner, target_version, note

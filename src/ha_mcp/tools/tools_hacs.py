@@ -558,8 +558,8 @@ class HacsTools:
         )
         ws_client, api = await self._get_hacs_client()
 
-        repository_id, reroute_note = await route_own_repository_download(
-            ws_client, api, repository_id
+        repository_id, version, reroute_note = await route_own_repository_download(
+            ws_client, api, repository_id, version
         )
 
         # Resolve GitHub path to numeric ID if needed
@@ -610,6 +610,7 @@ class HacsTools:
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
+                    **({"rerouted": reroute_note} if reroute_note else {}),
                 },
             )
 

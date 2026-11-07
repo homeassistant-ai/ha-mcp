@@ -44,8 +44,9 @@ def _installed(repo, version="v9.1.0"):
 
 async def test_other_repositories_pass_through_without_a_store_call():
     ws = _ws([_installed(MIRROR)])
-    assert await route_own_repository_download(ws, HACS_API, "piitaya/x") == (
+    assert await route_own_repository_download(ws, HACS_API, "piitaya/x", None) == (
         "piitaya/x",
+        None,
         None,
     )
     ws.send_command.assert_not_awaited()
@@ -61,8 +62,10 @@ async def test_other_repositories_pass_through_without_a_store_call():
 )
 async def test_the_installed_repository_wins(requested, installed, owner):
     ws = _ws([MAIN, MIRROR, OTHER, _installed(installed)])
-    target, note = await route_own_repository_download(ws, HACS_API, requested)
-    assert target == owner
+    target, version, note = await route_own_repository_download(
+        ws, HACS_API, requested, "v9.1.1"
+    )
+    assert (target, version) == (owner, "v9.1.1")
     assert note is not None
     assert owner in note
 
@@ -70,21 +73,23 @@ async def test_the_installed_repository_wins(requested, installed, owner):
 async def test_a_request_for_the_installed_repository_is_untouched():
     ws = _ws([_installed(MAIN), MIRROR])
     assert await route_own_repository_download(
-        ws, HACS_API, "homeassistant-ai/ha-mcp"
-    ) == ("homeassistant-ai/ha-mcp", None)
+        ws, HACS_API, "homeassistant-ai/ha-mcp", None
+    ) == ("homeassistant-ai/ha-mcp", None, None)
 
 
 async def test_nothing_installed_keeps_the_requested_repository():
     ws = _ws([MAIN, MIRROR])
     assert await route_own_repository_download(
-        ws, HACS_API, "homeassistant-ai/ha-mcp"
-    ) == ("homeassistant-ai/ha-mcp", None)
+        ws, HACS_API, "homeassistant-ai/ha-mcp", None
+    ) == ("homeassistant-ai/ha-mcp", None, None)
 
 
 async def test_two_installed_records_are_refused_with_the_way_out():
     ws = _ws([_installed(MAIN, "v9.1.1"), _installed(MIRROR)])
     with pytest.raises(ToolError) as excinfo:
-        await route_own_repository_download(ws, HACS_API, "homeassistant-ai/ha-mcp")
+        await route_own_repository_download(
+            ws, HACS_API, "homeassistant-ai/ha-mcp", None
+        )
     message = str(excinfo.value)
     assert "homeassistant-ai/ha-mcp" in message
     assert "homeassistant-ai/ha-mcp-integration" in message
@@ -127,6 +132,61 @@ async def test_download_of_the_main_repository_installs_from_the_mirror():
     assert install[0].kwargs["repository"] == "1289599380"
     assert result["success"] is True
     assert any("rerouted" in warning for warning in result["warnings"])
+
+
+@pytest.mark.parametrize(
+    ("requested", "installed", "version", "expected"),
+    [
+        (MAIN, MIRROR, "v9.1.2.dev3397", "v9.1.2-dev.3397"),
+        (MIRROR, MAIN, "v9.1.2-dev.3397", "v9.1.2.dev3397"),
+        (MAIN, MIRROR, "v9.1.1", "v9.1.1"),
+    ],
+)
+async def test_a_development_ref_is_renamed_for_the_target(
+    requested, installed, version, expected
+):
+    """The repositories tag dev builds differently, so a rerouted dev request
+    names the build the way the installed repository tags it."""
+    ws = _ws([requested, _installed(installed)])
+    target, target_version, note = await route_own_repository_download(
+        ws, HACS_API, requested["full_name"], version
+    )
+    assert target == installed["full_name"]
+    assert target_version == expected
+    assert (expected in note) == (expected != version)
+
+
+async def test_a_numeric_id_is_resolved_against_the_store_list():
+    """A store id the server never wrote down still routes when its record is
+    one of ha-mcp's own."""
+    recreated = {**MAIN, "id": "424242"}
+    ws = _ws([recreated, _installed(MIRROR)])
+    target, _version, note = await route_own_repository_download(
+        ws, HACS_API, "424242", None
+    )
+    assert target == MIRROR["full_name"]
+    assert note is not None
+
+
+async def test_a_numeric_id_of_another_repository_passes_through():
+    ws = _ws([OTHER, _installed(MIRROR)])
+    assert await route_own_repository_download(ws, HACS_API, "441028036", None) == (
+        "441028036",
+        None,
+        None,
+    )
+
+
+async def test_a_message_merely_containing_the_words_is_not_an_ownership_refusal():
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+    from ha_mcp.tools.hacs_backend import raise_store_error
+
+    err = HomeAssistantCommandError(
+        "Could not write directory belongs to nobody.txt: permission denied"
+    )
+    with pytest.raises(ToolError) as excinfo:
+        raise_store_error(err, {"command": "marketplace/repository/install"})
+    assert "already provides" not in str(excinfo.value)
 
 
 async def test_the_store_refusal_names_the_owner_to_update():
