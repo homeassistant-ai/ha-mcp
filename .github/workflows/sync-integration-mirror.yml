@@ -94,13 +94,25 @@ jobs:
       - name: Validate stable recovery input
         if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable'
         env:
+          GH_TOKEN: ${{ github.token }}
           RECOVERY_RUN_ID: ${{ inputs.release_publish_run_id }}
           RECOVERY_BRANCH: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           if [ "$RECOVERY_BRANCH" != master ] || ! [[ "$RECOVERY_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Stable recovery requires master and a finalized Release Publish run ID. Retry the current publisher first if finalization failed."
             exit 1
           fi
+          PUBLISHER_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-publish.yml" --jq .id)
+          [[ "$PUBLISHER_ID" =~ ^[1-9][0-9]*$ ]]
+          SOURCE_RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID" \
+            --jq "select(.workflow_id == $PUBLISHER_ID and .head_branch == \"master\"
+              and (.event == \"workflow_run\" or .event == \"workflow_dispatch\")) | .id")
+          if [ "$SOURCE_RUN_ID" != "$RECOVERY_RUN_ID" ]; then
+            echo "::error::Stable recovery requires a Release Publish run on master from a publisher event."
+            exit 1
+          fi
+          # Its finalized artifact remains valid after a later Docker/MCP failure.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: >-
           (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Release Publish') ||

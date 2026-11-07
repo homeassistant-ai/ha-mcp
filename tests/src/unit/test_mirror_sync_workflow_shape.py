@@ -247,6 +247,12 @@ class TestMirrorSyncShape:
         workflow = _workflow(_MIRROR)
         gate = workflow["jobs"]["gate"]
         reader = next(s for s in gate["steps"] if s.get("id") == "finalized")
+        validation = next(
+            s
+            for s in gate["steps"]
+            if s.get("name") == "Validate stable recovery input"
+        )
+        assert gate["steps"].index(validation) < gate["steps"].index(reader)
         assert gate["permissions"]["actions"] == "read"
         assert "workflow_dispatch" in reader["if"]
         inputs = re.findall(r"inputs\.(\w+)", reader["with"]["run-id"])
@@ -256,38 +262,73 @@ class TestMirrorSyncShape:
         )
 
     @pytest.mark.parametrize(
-        "branch,run_id,accepted",
+        "branch,run_id,run_kind,accepted",
         [
-            ("master", "42", True),
-            ("feature", "42", False),
-            ("master", "abc", False),
-            ("master", "0", False),
-            ("master", "", False),
+            ("master", "42", "workflow_run", True),
+            ("feature", "42", "workflow_run", False),
+            ("master", "abc", "workflow_run", False),
+            ("master", "0", "workflow_run", False),
+            ("master", "", "workflow_run", False),
+            ("master", "42", "workflow_dispatch", True),
+            ("master", "42", "other-workflow", False),
+            ("master", "42", "other-branch", False),
+            ("master", "42", "pull_request", False),
+            ("master", "42", "pull_request_target", False),
+            ("master", "42", "push", False),
+            ("master", "42", "lookup-error", False),
         ],
     )
-    def test_manual_recovery_rejects_an_untrusted_ref_or_invalid_run_id(
-        self, tmp_path: Path, branch: str, run_id: str, accepted: bool
+    def test_manual_recovery_requires_a_trusted_publisher_run(
+        self, tmp_path: Path, branch: str, run_id: str, run_kind: str, accepted: bool
     ) -> None:
         step = next(
             s
             for s in _workflow(_MIRROR)["jobs"]["gate"]["steps"]
             if s.get("name") == "Validate stable recovery input"
         )
+        run = {
+            "id": 42,
+            "workflow_id": 74 if run_kind == "other-workflow" else 73,
+            "name": "Release Publish",
+            "head_branch": "feature" if run_kind == "other-branch" else "master",
+            "event": run_kind
+            if run_kind
+            in {"workflow_dispatch", "pull_request", "pull_request_target", "push"}
+            else "workflow_run",
+            # Finalization can have succeeded before a later Docker job failed.
+            "conclusion": "failure",
+        }
+        stub = (
+            'gh() { printf "%s\\n" "$2" >> api-called\n'
+            'case "$2" in\n'
+            'repos/o/r/actions/workflows/release-publish.yml) printf "%s\\n" \'{"id":73}\' | jq -r "$4";;\n'
+            'repos/o/r/actions/runs/42) [ "$RUN_KIND" != lookup-error ] || return 2\n'
+            'printf "%s\\n" "$RUN_JSON" | jq -r "$4";;\n'
+            "*) return 2;; esac; }\n"
+        )
         result = subprocess.run(
-            [shutil.which("bash") or "bash", "-e", "-c", step["run"]],
+            [shutil.which("bash") or "bash", "-e", "-c", stub + step["run"]],
             cwd=tmp_path,
-            env={**os.environ, "RECOVERY_BRANCH": branch, "RECOVERY_RUN_ID": run_id},
+            env={
+                **os.environ,
+                "RECOVERY_BRANCH": branch,
+                "RECOVERY_RUN_ID": run_id,
+                "GITHUB_REPOSITORY": "o/r",
+                "RUN_KIND": run_kind,
+                "RUN_JSON": json.dumps(run),
+            },
             capture_output=True,
             text=True,
             check=False,
             timeout=30,
         )
         assert (result.returncode == 0) is accepted, result.stderr
-        if not accepted:
+        if branch != "master" or run_id != "42":
             assert (
                 "Stable recovery requires master and a finalized Release Publish run ID"
                 in result.stdout
             )
+            assert not (tmp_path / "api-called").exists()
 
     def test_alias_change_after_resolution_blocks_the_mirror_tag(
         self, tmp_path

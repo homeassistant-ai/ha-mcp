@@ -62,8 +62,12 @@ publication must not race this workflow; historical workflow revisions do not
 inherit new concurrency controls. Recover through the current publisher.
 
 A manual stable mirror recovery supplies `release_publish_run_id` from a
-finalized Release Publish run on master. It reads the same finalized-tag artifact
-as an automatic run, never the latest public release. A public release left by
+finalized Release Publish run on master. Before reading its finalized-tag artifact,
+validation checks the run's workflow ID against `release-publish.yml`, its master
+branch and a publisher event (`workflow_run` or `workflow_dispatch`). PR runs and
+failed metadata lookups are refused; a later Docker/MCP failure does not invalidate
+successful finalization. Recovery uses the same artifact and current-alias checks
+as the automatic path, never the latest public release. A public release left by
 a failed alias lease is not sufficient: retry the current publisher first.
 The resolved tag must still match the raw stable alias both before staging
 the snapshot and again at the final mirror-tag step.
