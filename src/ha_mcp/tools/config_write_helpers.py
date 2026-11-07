@@ -24,7 +24,6 @@ from ..client.rest_client import (
 from ..utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME as _HA_BEST_PRACTICES_SKILL_NAME,
 )
-from .reference_validator import ConfigKind, validate_config_references
 from .ws_waiters import _get_waiter_ws_client, _ws_cleanup, _ws_subscribe_all
 
 logger = logging.getLogger(__name__)
@@ -196,15 +195,6 @@ def merge_validation_meta(
     }
     if entry:
         result["validation"] = entry
-
-
-async def attach_reference_check(
-    result: dict[str, Any], client: Any, config: dict[str, Any], kind: ConfigKind
-) -> None:
-    """Put Core's verdict on *config*'s references into a set-tool ``result``."""
-    merge_validation_meta(
-        result, await validate_config_references(client, config, kind)
-    )
 
 
 # ---------------------------------------------------------------------------
