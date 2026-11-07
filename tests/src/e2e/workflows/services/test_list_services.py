@@ -220,8 +220,10 @@ class TestServiceDiscovery:
         )
         assert "color_name" in additional_fields
 
-        # Core's common light.turn_on fields must survive the shaping.
-        expected_fields = {"brightness", "brightness_pct", "color_temp_kelvin"}
+        # Core's common light.turn_on fields must survive the shaping. These two
+        # come from the captured 2026.11 payload; there is no `brightness` key
+        # (Core exposes brightness_pct / brightness_step_pct instead).
+        expected_fields = {"brightness_pct", "color_temp_kelvin"}
         assert expected_fields <= set(fields), (
             f"light.turn_on is missing Core fields: {sorted(expected_fields - set(fields))}"
         )
