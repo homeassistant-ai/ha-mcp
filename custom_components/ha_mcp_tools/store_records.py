@@ -33,9 +33,7 @@ OWN_REPOSITORIES = (MAIN_REPOSITORY, MIRROR_REPOSITORY)
 def _store_manager(hass: HomeAssistant) -> Any | None:
     """Return the loaded Marketplace (2026.11+) or HACS manager, or None."""
     try:
-        from homeassistant.components.marketplace.base import (  # type: ignore[import-not-found]
-            async_get_marketplace,
-        )
+        from homeassistant.components.marketplace.base import async_get_marketplace
 
         return async_get_marketplace(hass)
     except Exception:  # noqa: BLE001 - older Core, or the Marketplace not loaded
@@ -122,12 +120,17 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
     """Run the check once Home Assistant has started, when the store is up."""
-    from homeassistant.helpers.start import async_at_started
 
-    def _check(_hass: HomeAssistant) -> None:
+    def _check(_event: Any = None) -> None:
         try:
             async_check_store_records(hass)
         except Exception:
             _LOGGER.debug("Store record check failed", exc_info=True)
 
+    try:
+        from homeassistant.helpers.start import async_at_started
+    except ImportError:
+        # Hermetic unit tests stub ``homeassistant.helpers`` without ``start``.
+        hass.bus.async_listen_once("homeassistant_started", _check)
+        return
     async_at_started(hass, _check)
