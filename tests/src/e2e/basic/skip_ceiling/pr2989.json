@@ -1,0 +1,7 @@
+{
+  "reason": "#2989 adds one requires_component_surface test in tests/src/e2e/workflows/automation/test_native_contract.py: an entity target Core's target lookup does not offer is warned, which only the component's config_references can ask Core. It skips at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon) and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

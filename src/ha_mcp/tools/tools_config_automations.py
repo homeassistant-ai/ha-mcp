@@ -705,7 +705,7 @@ class AutomationConfigTools:
 
             bp_warnings = _check_best_practices(config_dict)
             validation_meta = await validate_config_references(
-                self._client, config_dict
+                self._client, config_dict, "automation"
             )
             await self._check_before_write(
                 config_dict, entity_id, effective_category, bp_warnings

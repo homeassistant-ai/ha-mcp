@@ -9,6 +9,7 @@ from homeassistant.generated.config_flows import FLOWS
 from .. import (
     automation_config,
     card_definitions,
+    config_references,
     core_contract,
     entity_restore,
     helper_collections,
@@ -215,6 +216,7 @@ CAPABILITIES: list[str] = [
     core_contract.INTEGRATION_CAPABILITY,
     todo_items.CAPABILITY,
     automation_config.CAPABILITY,
+    config_references.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]
 

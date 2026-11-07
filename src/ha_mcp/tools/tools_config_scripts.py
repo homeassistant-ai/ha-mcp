@@ -1038,10 +1038,10 @@ class ConfigScriptTools:
         detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
-        # Cross-check literal service and entity references against
-        # the live registries. Soft warnings only — the write still
-        # happens, even when references don't resolve (#940).
-        validation_meta = await validate_config_references(self._client, config_dict)
+        # Soft warnings only: the write happens even when references don't (#940).
+        validation_meta = await validate_config_references(
+            self._client, config_dict, "script"
+        )
 
         result = await self._upsert_script(config_dict, script_id, resolved_key)
 

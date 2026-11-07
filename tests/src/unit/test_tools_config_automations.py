@@ -779,23 +779,14 @@ class TestBestPracticeSectionsReachTheResponse:
 class TestReferenceValidationMeta:
     """What the reference validator could not check reaches the response."""
 
-    async def test_an_unchecked_target_kind_is_named(self, tools):
-        """Without the component's registry ids an area target went unchecked
-        and the response read as if every reference had been checked."""
-        config = _config(
-            action=[{"action": "light.turn_on", "target": {"area_id": "kitchen"}}]
-        )
-
-        result = await tools.ha_config_set_automation(config=config, wait=False)
-
-        assert result["validation"]["unchecked_target_kinds"] == ["area"]
-
-    async def test_a_failed_reference_fetch_is_reported(self, tools, mock_client):
-        mock_client.get_services = AsyncMock(side_effect=RuntimeError("down"))
-
+    async def test_references_left_unchecked_without_the_component_are_named(
+        self, tools
+    ):
+        """Only the component can ask Core about an unsaved config; without it
+        an empty warning list would read as every reference checked."""
         result = await tools.ha_config_set_automation(config=_config(), wait=False)
 
-        assert result["validation"]["references_unchecked"] == "down"
+        assert "ha_mcp_tools" in result["validation"]["references_unchecked"]
 
 
 class TestSceneCreateMisrouteThroughTheTool:

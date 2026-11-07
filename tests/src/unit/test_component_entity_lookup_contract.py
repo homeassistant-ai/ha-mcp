@@ -1,4 +1,4 @@
-"""Cross-seam contract tests for the entity_lookup / reference_data seams.
+"""Cross-seam contract tests for the entity_lookup seam, and reference_data.
 
 Like the other ``test_component_*_contract`` files, these wire the REAL component
 handlers (``_do_entity_lookup`` / ``_do_reference_data``, driven against fake hass
@@ -10,9 +10,9 @@ runtime. The seams verified:
   set/remove/post-write path). A multi-platform ``unique_id`` collision fixture —
   a scene and a light sharing one ``unique_id`` — pins that the resolver's
   ``domain="scene"`` narrowing picks the SCENE entity, not the colliding light.
-- ``_do_reference_data`` under ``validate_config_references`` pins that the
-  component-served service index + entity universe produce warnings BYTE-IDENTICAL
-  to the legacy ``get_services()`` + ``get_states()`` path over the same fixture.
+
+``_do_reference_data`` is no longer read by this server; servers released
+before ``config_references`` still read it, so its reply shape stays pinned.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp.tools import component_api, component_config_reads
-from ha_mcp.tools.reference_validator import validate_config_references
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from .test_component_ws_search import (
@@ -58,7 +57,7 @@ def _real_ws(hass: FakeHass) -> AsyncMock:
     """A WS mock whose commands are served by the REAL component functions.
 
     ``info`` returns the real ``_do_info()`` (so the caps probe sees the real
-    capability list, entity_lookup / reference_data included), and each read
+    capability list, entity_lookup included), and each read
     command runs the real ``_do_*`` against ``hass`` — the seam under test is
     everything between that return value and the consumer's resolved answer.
     """
@@ -70,8 +69,6 @@ def _real_ws(hass: FakeHass) -> AsyncMock:
         params = dict(kwargs)
         if command_type == "ha_mcp_tools/entity_lookup":
             return {"success": True, "result": wsapi._do_entity_lookup(hass, params)}
-        if command_type == "ha_mcp_tools/reference_data":
-            return {"success": True, "result": wsapi._do_reference_data(hass, params)}
         raise AssertionError(f"unexpected command {command_type!r}")
 
     ws.send_command = AsyncMock(side_effect=_send)
@@ -92,18 +89,6 @@ class _CredClient:
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         self.ws_types[msg.get("type", "")] += 1
         return {"success": True, "result": []}
-
-
-class _LegacyClient:
-    """No credentials → ``get_component_caps`` returns None without probing, so
-    ``validate_config_references`` takes the legacy ``get_services`` + ``get_states``
-    gather. Used to compute the reference-warning ground truth."""
-
-    def __init__(
-        self, services: list[dict[str, Any]], states: list[dict[str, Any]]
-    ) -> None:
-        self.get_services = AsyncMock(return_value=services)
-        self.get_states = AsyncMock(return_value=states)
 
 
 @contextlib.contextmanager
@@ -175,18 +160,8 @@ class TestSceneResolverContract:
         assert entity_id == "scene.led_desk_strip_night_light"
 
 
+# reference_data — the reply servers released before config_references read
 # =============================================================================
-# reference_data — validator warnings byte-identical to the legacy path
-# =============================================================================
-# References one valid + one bogus service AND one valid + one bogus entity.
-_REF_CONFIG = {
-    "action": [
-        {"service": "light.turn_on", "entity_id": "light.a"},
-        {"service": "climate.bogus", "entity_id": "sensor.ghost"},
-    ]
-}
-
-
 class TestReferenceDataContract:
     def _hass(self) -> FakeHass:
         services = FakeServices(
@@ -197,40 +172,6 @@ class TestReferenceDataContract:
         )
         states = [FakeState("light.a"), FakeState("sensor.b")]
         return FakeHass(states=states, services=services)
-
-    @pytest.mark.asyncio
-    async def test_component_warnings_identical_to_legacy(self) -> None:
-        """The component-served reference_data and the legacy get_services +
-        get_states gather build the same indexes, so ``validate_config_references``
-        emits byte-identical warnings over the same fixture."""
-        hass = self._hass()
-
-        # Component path: real _do_reference_data over `hass`.
-        component_client = _CredClient()
-        ws = _real_ws(hass)
-        with _routed(ws):
-            component_result = await validate_config_references(
-                component_client, _REF_CONFIG
-            )
-
-        # Legacy ground truth: derive the REST payloads from the SAME hass via the
-        # real component projections, feed a credential-less (legacy-only) client.
-        services_payload = wsapi._overview_services(hass)
-        entity_ids = wsapi._do_reference_data(hass, {})["entity_ids"]
-        states_payload = [{"entity_id": eid} for eid in entity_ids]
-        legacy_result = await validate_config_references(
-            _LegacyClient(services_payload, states_payload), _REF_CONFIG
-        )
-
-        assert component_result == legacy_result
-        # Two warnings: the bogus service and the bogus entity.
-        assert {(w["value"], w["kind"]) for w in component_result["warnings"]} == {
-            ("climate.bogus", "service"),
-            ("sensor.ghost", "entity"),
-        }
-        # The component path took no legacy REST fetch.
-        assert component_client.get_services.await_count == 0
-        assert component_client.get_states.await_count == 0
 
     def test_targets_are_the_live_registry_ids(self, monkeypatch) -> None:
         """Without them the validator could not tell a typo'd device, area,

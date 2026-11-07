@@ -217,7 +217,7 @@ async def test_get_reports_registry_entry_and_no_load_failure(mcp_client) -> Non
 @pytest.mark.requires_component_surface
 async def test_unknown_area_target_is_warned(mcp_client) -> None:
     """Core saves a service call aimed at an area that does not exist; the
-    reference validator, fed the component's registry ids, warns about it."""
+    component checks it against Core's area registry and the write warns."""
     tag = _tag()
     config_id = f"e2e_area_target_{tag}"
     area_id = f"e2e_no_such_area_{tag}"
@@ -234,6 +234,57 @@ async def test_unknown_area_target_is_warned(mcp_client) -> None:
             assert any(w.get("value") == area_id for w in warnings), created
         finally:
             await _remove(mcp_client, config_id)
+
+
+@pytest.mark.requires_component_surface
+async def test_entity_target_core_does_not_offer_is_warned(
+    mcp_client, ha_client
+) -> None:
+    """#2989: ``select.select_option`` aimed at an ``input_select`` saved
+    silently and never changed it. Core's own target lookup refuses the pair,
+    and the warning carries what Core offers for the entity."""
+    tag = _tag()
+    config_id = f"e2e_target_offer_{tag}"
+    helper = f"input_select.e2e_mode_{tag}"
+    config = _config(
+        tag,
+        actions=[
+            {
+                "action": "select.select_option",
+                "target": {"entity_id": helper},
+                "data": {"option": "a"},
+            }
+        ],
+    )
+    async with MCPAssertions(mcp_client) as mcp:
+        try:
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "input_select",
+                    "name": f"e2e_mode_{tag}",
+                    "config": {"options": ["a", "b"]},
+                },
+            )
+
+            async def _helper_state() -> bool:
+                states = await ha_client.get_states()
+                return any(s.get("entity_id") == helper for s in states)
+
+            assert await wait_for_condition(_helper_state, timeout=15)
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation", {"entity_id": config_id, "config": config}
+            )
+            warnings = (created.get("validation") or {}).get("warnings") or []
+            (warning,) = [w for w in warnings if w.get("value") == helper]
+            assert "input_select.select_option" in warning["reason"], created
+        finally:
+            await _remove(mcp_client, config_id)
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": helper, "confirm": True},
+            )
 
 
 @pytest.mark.requires_component_surface

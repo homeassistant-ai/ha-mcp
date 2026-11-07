@@ -198,15 +198,19 @@ automation the registry resolves but Core's config API answers "Resource not
 found" for is defined in YAML or a package, outside `automations.yaml`; the
 get, set and remove tools report it as CONFIG_NOT_FOUND. A config id with no
 registry row returns the body Core stores under it, with `entity` None; only
-an id Core stores nothing under is not found. The reference validator also
-checks
-device, area, floor and label targets when the component's `reference_data`
-advertises `reference_data_targets`, and entities and services only
-otherwise, naming the target kinds it could not check in
-`validation.unchecked_target_kinds` (a failed fetch is
-`validation.references_unchecked`). With targets, `reference_data` also
-carries Core's match sentinels (`ENTITY_MATCH_NONE` / `ENTITY_MATCH_ALL` from
-`homeassistant.const`), which the validator never reports as missing. The tools' own checks are HA-MCP
+an id Core stores nothing under is not found. References in a proposed automation, script or scene come from the
+component's `ha_mcp_tools/config_references` bridge (capability
+`config_references`): Core's own validator runs on the config (blueprint
+inputs applied), Core's `Script` and trigger/condition helpers collect its
+entities, devices, areas, floors and labels as Core's automation entity does,
+and Core's state machine, registries and services say which are missing (Core's
+match sentinels never are). Each entity target also goes to Core's
+`async_get_services_for_target` / `async_get_triggers_for_target` /
+`async_get_conditions_for_target`, the lookups behind the editor's target
+pickers, and an entity Core does not offer for its item is reported with the
+list Core does offer. The server keeps no copy of these rules: without the
+component, or when Core refuses the config, `validation.references_unchecked`
+says why nothing was checked. The tools' own checks are HA-MCP
 policies, not Core rules: the `config_hash` optimistic lock, the
 alias-replacement guard, the guard against a config `id` passed without an
 entity_id, the config-`id` mismatch guard, write-mode exclusivity, keeping

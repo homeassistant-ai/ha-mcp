@@ -166,7 +166,7 @@ def _translation_key_domain(key: Any) -> str | None:
 # ha_mcp_tools/reference_data
 # =============================================================================
 def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return the service index + entity-id universe the reference validator reads.
+    """The service index + entity-id universe older servers' validators read.
 
     ``services`` is the REST ``/api/services`` list shape ``build_service_index``
     consumes — reusing :func:`_overview_services`, whose per-service bodies are

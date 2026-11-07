@@ -1261,9 +1261,9 @@ class ConfigSceneTools:
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
 
-        # Cross-check literal service and entity references against the
-        # live registries. Soft warnings only.
-        validation_meta = await validate_config_references(self._client, config_dict)
+        validation_meta = await validate_config_references(
+            self._client, config_dict, "scene"
+        )
 
         # ``resolved_id`` is already the storage key (from the hash-verify
         # fetch or the resolve above) — pass it as the write target to skip
