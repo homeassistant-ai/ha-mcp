@@ -15,6 +15,64 @@ import yaml
 _ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.parametrize("mismatch", [None, "version", "pin", "constant"])
+def test_stable_snapshot_preserves_tagged_unicode_bytes_and_rejects_bad_pins(
+    tmp_path, mismatch
+):
+    source = tmp_path / "source"
+    component = source / "custom_components/ha_mcp_tools"
+    component.mkdir(parents=True)
+    manifest = {
+        "domain": "ha_mcp_tools",
+        "name": "HA-MCP — Manage Home Assistant with AI",
+        "version": "1.0.1" if mismatch == "version" else "1.0.0",
+        "requirements": ["ha-mcp==1.0.1" if mismatch == "pin" else "ha-mcp==1.0.0"],
+    }
+    (component / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    version = "1.0.1" if mismatch == "constant" else "1.0.0"
+    (component / "const.py").write_text(f'COMPONENT_VERSION = "{version}"\n')
+    (source / "hacs.json").write_text("{}\n")
+    (source / "LICENSE").write_text("test\n")
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    step = next(
+        s
+        for s in _steps(".github/workflows/sync-integration-mirror.yml", "sync")
+        if s.get("name") == "Stage snapshot"
+    )
+    script = (
+        step["run"]
+        .replace("/tmp/mirror", mirror.as_posix())
+        .replace("python3 ", shlex.quote(Path(sys.executable).as_posix()) + " ")
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", script],
+        cwd=_ROOT,
+        env={
+            **os.environ,
+            "SRC": source.as_posix(),
+            "CHANNEL": "stable",
+            "VER": "1.0.0",
+            "PIN": "1.0.0",
+            "DIST": "ha-mcp",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is (mismatch is None), result.stdout + result.stderr
+    if mismatch is None:
+        for path in component.iterdir():
+            assert (
+                mirror / "custom_components/ha_mcp_tools" / path.name
+            ).read_bytes() == path.read_bytes()
+
+
 @pytest.mark.parametrize("matches_snapshot", [True, False])
 def test_the_verified_zip_digest_is_committed_with_its_snapshot(
     tmp_path, matches_snapshot

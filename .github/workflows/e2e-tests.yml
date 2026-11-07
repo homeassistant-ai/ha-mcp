@@ -445,6 +445,12 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-extras --dev
 
+    - name: Verify integration artifact and mirror publishing
+      run: |
+        uv run pytest tests/src/unit/test_build_component_zip.py \
+          tests/src/unit/test_component_zip_release_workflows.py \
+          tests/src/unit/test_mirror_sync_workflow_shape.py --tb=short -q
+
     - name: Cache HA Docker image
       id: cache-ha-image
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -475,12 +481,6 @@ jobs:
           sleep 15
         done
         echo "All registries failed" && exit 1
-
-    - name: Verify integration artifact and mirror publishing
-      run: |
-        uv run pytest tests/src/unit/test_build_component_zip.py \
-          tests/src/unit/test_component_zip_release_workflows.py \
-          tests/src/unit/test_mirror_sync_workflow_shape.py --tb=short -q
 
     - name: Run update-path e2e test
       # E2E_BACKEND deliberately UNSET (container backend): the test drives its

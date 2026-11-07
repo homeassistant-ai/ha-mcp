@@ -2,8 +2,8 @@
 
 semantic-release writes a stable release's version into ``manifest.json``
 (``version`` and the ``ha-mcp==`` requirement) and ``const.py`` in the release
-commit; the mirror sync's stable leg stamps the same values again, which
-changes nothing and guards against a commit that missed them. A development
+commit; the mirror sync's stable leg checks those values without rewriting
+the tagged bytes. A development
 pre-release is cut from a master snapshot, so the mirror sync stamps the
 snapshot with:
 
@@ -50,8 +50,15 @@ def _is_server_requirement(requirement: str) -> bool:
     return server_pin.server_dist(requirement) is not None
 
 
-def stamp(component_dir: Path, version: str, pin: str, dist: str = "ha-mcp") -> None:
-    """Rewrite ``manifest.json`` and ``const.py`` under ``component_dir``."""
+def stamp(
+    component_dir: Path,
+    version: str,
+    pin: str,
+    dist: str = "ha-mcp",
+    *,
+    check: bool = False,
+) -> None:
+    """Stamp development snapshots, or check a stable snapshot without writes."""
     if not _PLAIN_VERSION.match(version):
         raise ValueError(f"component version must be X.Y.Z, got {version!r}")
     if not _PIN_VERSION.match(pin):
@@ -68,17 +75,28 @@ def stamp(component_dir: Path, version: str, pin: str, dist: str = "ha-mcp") -> 
             f"expected exactly one ha-mcp requirement in "
             f"{manifest_path}, found {pinned}"
         )
-    manifest["requirements"] = [
+    expected_requirements = [
         f"{dist}=={pin}" if _is_server_requirement(r) else r for r in requirements
     ]
-    manifest["version"] = version
-    manifest_path.write_text(json.dumps(manifest, indent=4) + "\n", encoding="utf-8")
 
     const_path = component_dir / "const.py"
     source = const_path.read_text(encoding="utf-8")
     stamped, count = _COMPONENT_VERSION.subn(f'COMPONENT_VERSION = "{version}"', source)
     if count != 1:
         raise ValueError(f"expected one COMPONENT_VERSION in {const_path}")
+    if check:
+        if (
+            manifest.get("version") != version
+            or requirements != expected_requirements
+            or source != stamped
+        ):
+            raise ValueError(
+                "stable component version, server pin or constant differs from its release"
+            )
+        return
+    manifest["requirements"] = expected_requirements
+    manifest["version"] = version
+    manifest_path.write_text(json.dumps(manifest, indent=4) + "\n", encoding="utf-8")
     const_path.write_text(stamped, encoding="utf-8")
 
 
@@ -88,9 +106,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--pin", required=True)
     parser.add_argument("--dist", default="ha-mcp", choices=SERVER_DISTS)
+    parser.add_argument(
+        "--check", action="store_true", help="Validate without rewriting tagged files"
+    )
     args = parser.parse_args(argv)
     try:
-        stamp(args.component_dir, args.version, args.pin, args.dist)
+        stamp(args.component_dir, args.version, args.pin, args.dist, check=args.check)
     except ValueError as err:
         print(f"stamp_component_version: {err}", file=sys.stderr)
         return 1

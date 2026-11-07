@@ -288,7 +288,7 @@ jobs:
             if [ "$CHANNEL" = stable ]; then
               python3 scripts/stamp_component_version.py \
                 --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
-                --version "$VER" --pin "$PIN" --dist "$DIST"
+                --version "$VER" --pin "$PIN" --dist "$DIST" --check
             fi
           fi
           python3 scripts/build_mirror_readme.py \
@@ -397,7 +397,7 @@ jobs:
           [ -f "$MARKER" ] || exit 0
           SOURCE_REPOSITORY=$(python3 -c "import json; print(json.load(open('$MARKER'))['repository'])")
           SOURCE_TAG=$(python3 -c "import json; print(json.load(open('$MARKER'))['tag'])")
-          for attempt in $(seq 1 40); do
+          for _ in $(seq 1 40); do
             DIGEST=$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
               --jq '.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0) | .digest' 2>/dev/null || true)
             if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
