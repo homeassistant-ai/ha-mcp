@@ -32,10 +32,10 @@ update the component producer, server consumer, capability gate and fallback in
 the same pull request, on both component entry topologies. A path can be
 component-only by design when the fallback would be a copy of Core's rules:
 the reference check on automation, script and scene writes is one, since
-Core's API validates single triggers, conditions and actions and serves the
-target lookups and registries, but not validating a whole unsaved config or
-collecting its references, and a server-side copy of that part is the
-hand-kept walker it replaced. Without the component the write says the
+Core's API validates a config's trigger, condition and action lists and serves
+the target lookups and registries, but does not collect an unsaved config's
+references, and a server-side copy of that part is the hand-kept walker it
+replaced. Without the component the write says the
 references went unchecked.
 
 "The component" is the `ha_mcp_tools` integration's shared `ha_mcp_tools/*`
