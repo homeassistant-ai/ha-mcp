@@ -31,7 +31,9 @@ jobs:
     name: Renovate
     # Let Renovate handle native checkbox overrides on its next scan. Wake it
     # for human requests, not bot edits, unrelated PRs, or an already checked box.
+    # Forks do not have the upstream Renovate app credentials.
     if: >-
+      github.event.repository.fork == false && (
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issues' &&
@@ -50,7 +52,7 @@ jobs:
        github.event.sender.type == 'User' &&
        github.event.changes.body &&
        contains(github.event.pull_request.body, '[x] <!-- rebase-check -->') &&
-       !contains(github.event.changes.body.from, '[x] <!-- rebase-check -->'))
+       !contains(github.event.changes.body.from, '[x] <!-- rebase-check -->')))
     # Serialize writers without interrupting a run partway through PR creation.
     # Job-level concurrency keeps unrelated issue/PR edits out of this queue.
     concurrency:
