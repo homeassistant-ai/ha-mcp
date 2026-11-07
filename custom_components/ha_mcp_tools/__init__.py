@@ -66,9 +66,9 @@ from .file_ops import (
     SERVICE_EDIT_FILE,
     _delete_file_sync,
     _replace_file_sync,
-    file_lock,
     register_edit_file,
     run_file_job,
+    run_locked,
     write_text_atomic,
 )
 from .file_post_action import after_file_write, reload_after_edit
@@ -2286,10 +2286,12 @@ def _build_edit_yaml_config_handler(
         # validation, the atomic temp-write+rename, and the post-write config
         # check. No new files become writable; yaml_path is ignored here.
         if action == "replace_file":
-            async with file_lock(hass):
-                return await _apply_replace_file(
+            return await run_locked(
+                hass,
+                lambda: _apply_replace_file(
                     hass, config_dir, rel_path, normalized, action, yaml_path, content
-                )
+                ),
+            )
 
         gate_err = _check_packages_key_gate(call, yaml_path, is_package)
         if gate_err is not None:
@@ -2311,8 +2313,10 @@ def _build_edit_yaml_config_handler(
         if content_err is not None:
             return content_err
 
-        async with file_lock(hass):  # shared with edit_file: a theme is both's
-            return await _apply_yaml_key_edit(
+        # Shared with edit_file, which can write the same theme file.
+        return await run_locked(
+            hass,
+            lambda: _apply_yaml_key_edit(
                 hass,
                 config_dir,
                 call,
@@ -2323,7 +2327,8 @@ def _build_edit_yaml_config_handler(
                 kind,
                 path_parts,
                 parsed_content,
-            )
+            ),
+        )
 
     return handle_edit_yaml_config
 

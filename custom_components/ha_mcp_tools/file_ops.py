@@ -55,9 +55,9 @@ SERVICE_EDIT_FILE_SCHEMA = vol.Schema(
 def file_lock(hass: HomeAssistant) -> asyncio.Lock:
     """The one lock every file change in this component takes.
 
-    edit_yaml_config holds it across its read-modify-write too: a theme file is
-    writable through both it and edit_file. Not reentrant, so nothing holding it
-    may call ``run_file_job``.
+    edit_yaml_config holds it across its read-modify-write too (``run_locked``): a
+    theme file is writable through both it and edit_file. Not reentrant, so
+    nothing holding it may call ``run_file_job``.
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
     lock: asyncio.Lock = domain_data.setdefault("file_lock", asyncio.Lock())
@@ -74,17 +74,25 @@ async def run_file_job(
     are too rare for the bookkeeping of per-path locks (and of links to one file)
     to pay off.
     """
+    return await run_locked(hass, lambda: hass.async_add_executor_job(job, *args))
+
+
+async def run_locked[T](hass: HomeAssistant, start: Callable[[], Awaitable[T]]) -> T:
+    """Run the work ``start`` begins under ``file_lock``, to its end.
+
+    A running thread can't be stopped, so a cancelled caller keeps the lock until
+    the work ends: otherwise the next write could report success before the
+    cancelled one overwrites it. edit_yaml_config runs its whole edit this way.
+    """
     async with file_lock(hass):
-        running = hass.async_add_executor_job(job, *args)
+        running = asyncio.ensure_future(start())
         try:
-            result: dict[str, Any] = await asyncio.shield(running)
+            return await asyncio.shield(running)
         except asyncio.CancelledError:
-            # A running thread can't be stopped, so it keeps the lock until it ends.
             while not running.done():
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.wait({running})
             raise
-        return result
 
 
 def _delete_file_sync(target_file: Path) -> dict[str, Any]:
