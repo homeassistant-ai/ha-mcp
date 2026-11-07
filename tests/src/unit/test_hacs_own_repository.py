@@ -254,16 +254,5 @@ async def test_two_installed_records_still_download_on_hacs():
     assert "Marketplace" in note and "HACS still updates" in note
     assert "homeassistant-ai/ha-mcp" in note and "Repairs" in note
     assert "restart" in note.lower()
-
-
-async def test_a_pinned_version_on_a_doubled_hacs_install_does_not_promise_the_repair():
-    """A pinned older release has no repair to run; the warning says to update
-    to a current release first or take the manual route."""
-    ws = _ws([_installed(MAIN), _installed(MIRROR)])
-    _target, version, note = await route_own_repository_download(
-        ws, HACS_API, "homeassistant-ai/ha-mcp-integration", "v9.1.0"
-    )
-    assert version == "v9.1.0"
-    assert note is not None
-    assert "pins v9.1.0" in note and "manual route" in note
-    assert "restart Home Assistant after this download" not in note
+    # The downloaded release may predate the repair: the way out is named too.
+    assert "manual route" in note

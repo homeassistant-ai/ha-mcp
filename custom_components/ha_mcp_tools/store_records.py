@@ -160,14 +160,17 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
 
     @callback
     def _check(_event: Any = None, *, retry: bool = True) -> None:
-        domain_data.pop(_SCHEDULED_KEY, None)
         try:
             checked = async_check_store_records(hass)
         except Exception:
             _LOGGER.debug("Store record check failed", exc_info=True)
-            return
+            checked = True
         if not checked and retry:
+            # The flag stays set while the retry is pending, so another entry
+            # registering meanwhile does not line up a second one.
             _retry_later(hass, lambda _now: _check(retry=False))
+            return
+        domain_data.pop(_SCHEDULED_KEY, None)
 
     try:
         from homeassistant.helpers.start import async_at_started

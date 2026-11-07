@@ -214,3 +214,24 @@ def test_no_store_yet_leaves_the_issue_and_asks_again(monkeypatch, issue_registr
 
     issue_registry.async_delete_issue.assert_not_called()
     later.assert_called_once()
+
+
+def test_a_registration_during_the_pending_retry_adds_no_second_retry(
+    monkeypatch, issue_registry
+):
+    """Two entries setting up while the store is still unavailable share the
+    one pending retry instead of each warning later."""
+    hass = _hass_with(monkeypatch, None)
+    hass.data = {}
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    event = ModuleType("homeassistant.helpers.event")
+    later = MagicMock()
+    event.async_call_later = later
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
+
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+    store_records.async_schedule_store_records_check(hass)
+
+    assert hass.bus.async_listen_once.call_count == 1
+    later.assert_called_once()

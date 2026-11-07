@@ -113,17 +113,12 @@ async def route_own_repository_download(
         note = (
             f"{names} are both installed and both claim "
             "custom_components/ha_mcp_tools. HACS still updates either, but the "
-            "Marketplace in Home Assistant 2026.11 will refuse to. HA-MCP "
-            "releases after 9.1.1 file a repair under Settings > System > "
-            f"Repairs that keeps {MAIN_REPOSITORY}; "
+            "Marketplace in Home Assistant 2026.11 will refuse to. After this "
+            "download restart Home Assistant and run the repair under Settings > "
+            f"System > Repairs, which keeps {MAIN_REPOSITORY}. If no repair "
+            "appears, the installed release predates it: update to a current "
+            "release or follow the manual route in the FAQ."
         )
-        if version:
-            note += (
-                f"this download pins {version}, so update to a current release "
-                "and run the repair then, or follow the manual route in the FAQ."
-            )
-        else:
-            note += "restart Home Assistant after this download and run it."
         return repository_id, version, note
     if not installed or _own_name(installed[0]) == wanted:
         return repository_id, version, None
