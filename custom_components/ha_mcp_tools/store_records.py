@@ -101,6 +101,9 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
         DOMAIN,
         ISSUE_STORE_RECORDS_CONFLICT,
         is_fixable=True,
+        # Survives a restart: while the store is not loaded the check leaves
+        # the issue alone instead of re-deriving it, so it must still be there.
+        is_persistent=True,
         severity=ir.IssueSeverity.WARNING,
         translation_key=ISSUE_STORE_RECORDS_CONFLICT,
         translation_placeholders={
