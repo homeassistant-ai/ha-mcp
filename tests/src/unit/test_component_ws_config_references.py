@@ -437,6 +437,11 @@ _MISMATCHED_CONDITION = {
             id="if-conditions",
         ),
         pytest.param(
+            {"if": [], "then": [_MISMATCHED_STEP]},
+            "actions[0].then[0]",
+            id="if-then",
+        ),
+        pytest.param(
             {"if": [], "then": [], "else": [_MISMATCHED_STEP]},
             "actions[0].else[0]",
             id="if-else",
@@ -445,6 +450,11 @@ _MISMATCHED_CONDITION = {
             {"repeat": {"while": [_MISMATCHED_CONDITION], "sequence": []}},
             "actions[0].repeat.while[0]",
             id="repeat-while",
+        ),
+        pytest.param(
+            {"repeat": {"until": [_MISMATCHED_CONDITION], "sequence": []}},
+            "actions[0].repeat.until[0]",
+            id="repeat-until",
         ),
         pytest.param(
             {"repeat": {"count": 2, "sequence": [_MISMATCHED_STEP]}},
