@@ -46,9 +46,9 @@ from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
-# WS command name for the component's coarse-filtered service catalog read
-# (see ``component_api`` module docstring for the capability-negotiation pattern
-# this consumer follows).
+# WS command name for the component's service catalog read (domain-scoped; see
+# ``component_api`` module docstring for the capability-negotiation pattern this
+# consumer follows).
 WS_SERVICES_LIST = "ha_mcp_tools/services_list"
 
 
@@ -287,19 +287,16 @@ async def _fetch_services_list_via_component(
     Returns ``{"services": [...], "translations": {...}}`` — ``services`` is the
     REST ``/api/services`` list shape and ``translations`` the same flat
     ``frontend/get_translations`` resources map ``_get_service_translations``
-    returns — so ``_process_services`` consumes either source unchanged. Only
-    ``domain`` is threaded to the component (an exact match, identical semantics
-    on both sides); ``query`` is deliberately NOT forwarded, even though the
-    component also accepts a coarse ``query`` filter, because that coarse pass
-    can drop a domain from the payload ENTIRELY when nothing under it matches
-    anywhere (name/description/translation) — but ``_process_services``'s
-    ``domains`` field is populated purely from ``domain_filter`` (every domain
-    that passes it, independent of ``query_filter``), so a query-trimmed payload
-    would silently omit domains legacy still lists. Skipping ``query`` on the
-    wire keeps ``_process_services`` doing 100% of the query filtering over an
-    identical (domain-filtered only) catalog either way, so the output — the
-    ``domains`` field included — is byte-identical to legacy in every case, not
-    just when a query happens not to trigger the drop. ``None`` on capability
+    returns — so ``_process_services`` consumes either source unchanged.
+
+    The command accepts only ``domain`` and an optional ``language``. This
+    consumer threads ``domain`` alone (an exact match, identical semantics on
+    both sides). ``query`` is not a command parameter: the exact
+    concatenation-based filter stays here in ``_process_services``, applied to
+    the full domain-scoped catalog, so ``domains`` still lists every domain that
+    passes ``domain_filter``. ``language`` is not sent either — the component
+    resolves ``hass.config.language`` itself, and an explicit wire value would
+    override the instance's configured language. ``None`` on capability
     miss, downgrade (``unknown_command`` → invalidate the cached caps), or
     command error/timeout (logged) — the caller falls back to the legacy REST +
     WS translations fetch.
@@ -633,6 +630,10 @@ def _process_service_fields(
     section field translations under the service's flat ``fields.<name>``
     namespace and the section's own name under ``sections.<name>``.
 
+    ``example`` has its own translated key (``fields.<field>.example``), which
+    the frontend prefers over the services.yaml value, so it is read the same
+    way as the name and description; the key is omitted when neither exists.
+
     A payload shape that is not a mapping is discarded, never fatal. Its dotted
     path is appended to ``incomplete`` so the catalog can label the description
     incomplete instead of silently serving a shorter field list.
@@ -672,6 +673,13 @@ def _process_service_fields(
             or "",
             placeholders,
         )
+        translated_example = _translation(translations, f"{translation_prefix}.example")
+        if translated_example is not None:
+            entry["example"] = _apply_placeholders(translated_example, placeholders)
+        elif entry.get("example") is None:
+            # Neither a translated nor a Core-supplied example: omit the key
+            # rather than advertising an empty one.
+            entry.pop("example", None)
         if is_section:
             entry["fields"] = _process_service_fields(
                 field_info["fields"],

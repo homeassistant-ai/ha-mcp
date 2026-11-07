@@ -17,9 +17,10 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import component_api
-from ha_mcp.tools.tools_services import _process_services, register_services_tools
+from ha_mcp.tools.tools_services import _process_services
 
 from ._services_catalog_fixture import SERVICES, TRANSLATIONS
+from .test_ha_list_services_component_routing import _build_list_services
 
 
 def _process(
@@ -187,6 +188,86 @@ def test_derived_type_and_synthetic_example_are_gone() -> None:
 
     assert "example" not in fields["brightness_pct"]
     assert "example" not in fields["transition"]
+
+
+def test_translated_field_example_wins_over_core_and_resolves_placeholders() -> None:
+    """Core has a translated ``fields.<field>.example``; the frontend prefers it."""
+    field = _service(_process(domain="zwave_js"), "zwave_js.invoke_cc_api")["fields"][
+        "parameters"
+    ]
+
+    assert field["example"].startswith("Example: [1, 1]")
+    assert "https://zwave-js.github.io/node-zwave-js/" in field["example"]
+    assert "{api_docs_url}" not in field["example"]
+
+
+def test_null_core_example_is_omitted() -> None:
+    """A ``None`` example from Core becomes an omitted key, never ``example: null``."""
+    catalog = [
+        {
+            "domain": "demo",
+            "services": {
+                "no_example": {
+                    "fields": {"field_1": {"example": None, "selector": {"text": {}}}}
+                }
+            },
+        }
+    ]
+
+    field = _process_services(
+        rest_services=catalog, translations={}, limit=200, detail_level="full"
+    )["services"]["demo.no_example"]["fields"]["field_1"]
+
+    assert "example" not in field
+
+
+def test_field_text_falls_back_to_core_payload() -> None:
+    """Dynamic services carry field text in Core's own payload, not translations.
+
+    ``or field_info.get("name")`` / ``.get("description")`` are load-bearing: the
+    derived label is the title-cased field key, so "radio_mode" would read
+    "Radio Mode" and the description would be empty without them.
+    """
+    catalog = [
+        {
+            "domain": "script",
+            "services": {
+                "dynamic": {
+                    "fields": {
+                        "radio_mode": {
+                            "name": "Radio mode",
+                            "description": "Core's own field text.",
+                            "selector": {"boolean": {}},
+                        }
+                    }
+                }
+            },
+        }
+    ]
+
+    field = _process_services(
+        rest_services=catalog, translations={}, limit=200, detail_level="full"
+    )["services"]["script.dynamic"]["fields"]["radio_mode"]
+
+    assert field["name"] == "Radio mode"
+    assert field["description"] == "Core's own field text."
+
+
+def test_service_level_placeholders_resolve_in_the_description() -> None:
+    """``description_placeholders`` apply to service text, not only field text."""
+    translations = copy.deepcopy(TRANSLATIONS)
+    translations["component.zwave_js.services.invoke_cc_api.description"] = (
+        "Calls a Command Class API. See {api_docs_url}."
+    )
+
+    description = _service(
+        _process(domain="zwave_js", translations=translations),
+        "zwave_js.invoke_cc_api",
+    )["description"]
+
+    assert description.startswith("Calls a Command Class API.")
+    assert "https://zwave-js.github.io/node-zwave-js/" in description
+    assert "{api_docs_url}" not in description
 
 
 def test_select_options_are_not_flattened_or_truncated() -> None:
@@ -387,19 +468,3 @@ class _LegacyClient:
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         self.translation_messages.append(dict(msg))
         return {"success": True, "result": {"resources": TRANSLATIONS}}
-
-
-def _build_list_services(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = type("MCP", (), {"add_tool": staticmethod(capture_add_tool)})()
-    register_services_tools(mcp, client)
-    return registered["ha_list_services"]

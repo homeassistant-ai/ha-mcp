@@ -352,6 +352,9 @@ TRANSLATIONS: dict[str, str] = {
         "A list of parameters to pass to the API method. Refer to the Z-Wave "
         "Command Class API documentation ({api_docs_url}) for parameters."
     ),
+    "component.zwave_js.services.invoke_cc_api.fields.parameters.example": (
+        "Example: [1, 1] as documented at {api_docs_url}"
+    ),
     "component.fan.services.increase_speed.name": "Increase fan speed",
     "component.fan.services.increase_speed.description": (
         "Increases the speed of a fan."
