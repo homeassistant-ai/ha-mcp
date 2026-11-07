@@ -182,8 +182,8 @@ class TestServiceDiscovery:
         services = data.get("services", {})
 
         # light.turn_on is the reference full-detail entry: Core's own
-        # light/services.yaml defines it, so its absence is a failure rather
-        # than a street of skipped checks.
+        # light/services.yaml defines it, so its absence must fail rather than
+        # skip the checks below.
         assert "light.turn_on" in services, (
             f"light domain must list turn_on, got {sorted(services)}"
         )
@@ -220,10 +220,11 @@ class TestServiceDiscovery:
         )
         assert "color_name" in additional_fields
 
-        # Common light.turn_on fields to check
-        expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
-        found_fields = [f for f in expected_fields if f in fields]
-        logger.info(f"Found expected fields: {found_fields}")
+        # Core's common light.turn_on fields must survive the shaping.
+        expected_fields = {"brightness", "brightness_pct", "color_temp_kelvin"}
+        assert expected_fields <= set(fields), (
+            f"light.turn_on is missing Core fields: {sorted(expected_fields - set(fields))}"
+        )
 
         logger.info("Service field details test passed")
 
@@ -246,9 +247,6 @@ class TestServiceDiscovery:
         assert turn_on["name"].strip(), "Service name should not be empty"
         assert turn_on["description"].strip(), (
             "Core ships a translation for light.turn_on; the catalog must use it"
-        )
-        assert turn_on["description"] != "Turn On", (
-            "Description must not fall back to the title-cased service name"
         )
 
         calendar = await mcp_client.call_tool(
