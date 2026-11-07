@@ -7,6 +7,7 @@ either. A download of either of ha-mcp's repositories now goes to the one
 that is installed, and two installed records are refused with the way out.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -140,8 +141,8 @@ async def test_the_store_refusal_names_the_owner_to_update():
     )
     with pytest.raises(ToolError) as excinfo:
         raise_store_error(err, {"command": "marketplace/repository/install"})
-    message = str(excinfo.value)
+    suggestions = " ".join(json.loads(str(excinfo.value))["error"]["suggestions"])
     assert (
         'ha_manage_hacs(action="download", '
-        'repository_id="homeassistant-ai/ha-mcp-integration")' in message
+        'repository_id="homeassistant-ai/ha-mcp-integration")' in suggestions
     )
