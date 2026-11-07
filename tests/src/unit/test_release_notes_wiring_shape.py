@@ -16,10 +16,12 @@ so a match somewhere else in the file cannot stand in for that step's wiring.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -101,6 +103,91 @@ def test_release_publish_consumes_its_producing_run_instead_of_moving_master() -
         if step.get("uses", "").startswith("actions/upload-artifact@")
     )
     assert f"--name {produced}" in source["run"]
+
+
+def _workflow_expression(expression: str, context: dict[str, Any]) -> Any:
+    """Evaluate this wiring's equality/and/or subset on literal test contexts."""
+    expression = expression.strip().removeprefix("${{").removesuffix("}}").strip()
+    expression = re.sub(
+        r"\b(?:github|inputs)\.[\w.]+", lambda m: repr(context[m[0]]), expression
+    )
+    tree = ast.parse(
+        expression.replace("&&", " and ").replace("||", " or "), mode="eval"
+    )
+
+    def value(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.BoolOp):
+            result = None
+            for term in node.values:
+                result = value(term)
+                if isinstance(node.op, ast.And) and not result:
+                    break
+                if isinstance(node.op, ast.Or) and result:
+                    break
+            return result
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            left, right = value(node.left), value(node.comparators[0])
+            if isinstance(node.ops[0], ast.Eq):
+                return left == right
+            if isinstance(node.ops[0], ast.NotEq):
+                return left != right
+        raise AssertionError(f"Unsupported workflow expression: {ast.dump(node)}")
+
+    return value(tree.body)
+
+
+@pytest.mark.parametrize(
+    "event,producer,channel,manual_id,reads,validates,expected_id",
+    [
+        ("workflow_run", "stable", "", "202", True, False, 101),
+        ("workflow_dispatch", "", "stable", "202", True, True, "202"),
+        ("workflow_dispatch", "", "stable", "", True, True, ""),
+        ("workflow_dispatch", "", "stable", "0", True, True, "0"),
+        ("workflow_run", "dev", "", "202", False, False, None),
+        ("workflow_dispatch", "", "dev", "202", False, False, None),
+        ("push", "", "", "202", False, False, None),
+    ],
+)
+def test_finalized_reader_routes_only_stable_events_through_the_right_run(
+    event, producer, channel, manual_id, reads, validates, expected_id
+) -> None:
+    workflow = yaml.safe_load(
+        (_WORKFLOW_DIR / "sync-integration-mirror.yml").read_text()
+    )
+    gate = workflow["jobs"]["gate"]
+    reader = next(s for s in gate["steps"] if s.get("id") == "finalized")
+    validation = next(
+        s for s in gate["steps"] if s.get("name") == "Validate stable recovery input"
+    )
+    publishers = {
+        kind: yaml.safe_load((_WORKFLOW_DIR / path).read_text())["name"]
+        for kind, path in (
+            ("stable", "release-publish.yml"),
+            ("dev", "publish-dev.yml"),
+        )
+    }
+    context = {
+        "github.event_name": event,
+        "github.event.workflow_run.name": publishers.get(producer, ""),
+        "github.event.workflow_run.id": 101 if event == "workflow_run" else None,
+        "inputs.channel": channel,
+        "inputs.release_publish_run_id": manual_id,
+    }
+    assert gate["permissions"]["actions"] == "read"
+    assert gate["steps"].index(validation) < gate["steps"].index(reader)
+    assert bool(_workflow_expression(reader["if"], context)) is reads
+    assert bool(_workflow_expression(validation["if"], context)) is validates
+    if reads:
+        assert str(_workflow_expression(reader["with"]["run-id"], context)) == str(
+            expected_id
+        )
+    if validates:
+        assert (
+            _workflow_expression(validation["env"]["RECOVERY_RUN_ID"], context)
+            == expected_id
+        )
 
 
 def test_the_extractor_the_workflow_calls_exists() -> None:

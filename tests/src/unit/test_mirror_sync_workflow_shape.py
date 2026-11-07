@@ -243,24 +243,6 @@ class TestMirrorSyncShape:
             values = output.read_text().splitlines()
             assert "channel=stable" in values and f"finalized_tag={finalized}" in values
 
-    def test_manual_recovery_can_read_the_selected_publishers_artifact(self) -> None:
-        workflow = _workflow(_MIRROR)
-        gate = workflow["jobs"]["gate"]
-        reader = next(s for s in gate["steps"] if s.get("id") == "finalized")
-        validation = next(
-            s
-            for s in gate["steps"]
-            if s.get("name") == "Validate stable recovery input"
-        )
-        assert gate["steps"].index(validation) < gate["steps"].index(reader)
-        assert gate["permissions"]["actions"] == "read"
-        assert "workflow_dispatch" in reader["if"]
-        inputs = re.findall(r"inputs\.(\w+)", reader["with"]["run-id"])
-        assert (
-            len(inputs) == 1
-            and inputs[0] in workflow[True]["workflow_dispatch"]["inputs"]
-        )
-
     @pytest.mark.parametrize(
         "branch,run_id,run_kind,accepted",
         [
@@ -330,8 +312,9 @@ class TestMirrorSyncShape:
             )
             assert not (tmp_path / "api-called").exists()
 
+    @pytest.mark.parametrize("matches_alias", [False, True])
     def test_alias_change_after_resolution_blocks_the_mirror_tag(
-        self, tmp_path
+        self, tmp_path, matches_alias
     ) -> None:
         step = next(
             s
@@ -339,7 +322,7 @@ class TestMirrorSyncShape:
             if s.get("name") == "Tag the mirror"
         )
         stub = (
-            'gh() { case "$2" in *tags/stable) echo other-object;; '
+            'gh() { case "$2" in *tags/stable) echo "$ALIAS_OBJECT";; '
             "*tags/v1.0.0) echo finalized-object;; *) return 2;; esac; }\n"
             "git() { echo called > git-called; echo existing-tag; }\n"
         )
@@ -351,15 +334,17 @@ class TestMirrorSyncShape:
                 "CHANNEL": "stable",
                 "TAG": "v1.0.0",
                 "GITHUB_REPOSITORY": "o/r",
+                "ALIAS_OBJECT": "finalized-object" if matches_alias else "other-object",
             },
             capture_output=True,
             text=True,
             check=False,
             timeout=30,
         )
-        assert result.returncode != 0
-        assert "Stable changed after resolution" in result.stdout
-        assert not (tmp_path / "git-called").exists()
+        assert (result.returncode == 0) is matches_alias, result.stderr
+        if not matches_alias:
+            assert "Stable changed after resolution" in result.stdout
+        assert (tmp_path / "git-called").exists() is matches_alias
 
     def test_snapshot_is_stamped(self) -> None:
         stage = next(

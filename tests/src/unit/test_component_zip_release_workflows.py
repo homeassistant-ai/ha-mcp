@@ -295,9 +295,9 @@ def test_focused_e2e_dispatch_keeps_other_backend_runs_as_the_default() -> None:
     assert any(s.get("env", {}).get("E2E_UPDATE_PATH") == "1" for s in target["steps"])
 
 
-@pytest.mark.parametrize("draft", [False, True])
-def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, draft):
-    """The source token can see a draft that the mirror cannot download."""
+@pytest.mark.parametrize("source", ["published", "draft", "unavailable"])
+def test_mirror_tag_requires_an_available_public_zip(tmp_path, source):
+    """Reject API failures and defensive draft JSON before downloading."""
     assert shutil.which("jq"), "jq is required for this test"
     marker = tmp_path / ".github"
     marker.mkdir()
@@ -307,7 +307,7 @@ def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, dr
     payload = b"the verified integration artifact"
     digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     release = {
-        "draft": draft,
+        "draft": source == "draft",
         "assets": [
             {
                 "name": "ha_mcp_tools.zip",
@@ -319,7 +319,9 @@ def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, dr
     }
     stub = (
         'gh() { case "$1 $2" in\n'
-        f'"api "*) printf "%s\\n" {shlex.quote(json.dumps(release))} | jq -r "$4" '
+        '"api "*) touch "$RUNNER_TEMP/api-requested"\n'
+        'if [ "$SOURCE_STATE" = unavailable ]; then echo "HTTP 404: Not Found" >&2; return 1; fi\n'
+        f'printf "%s\\n" {shlex.quote(json.dumps(release))} | jq -r "$4" '
         '&& touch "$RUNNER_TEMP/api-filter-succeeded";;\n'
         '"release download") touch "$RUNNER_TEMP/download-called"; '
         'mkdir -p "$RUNNER_TEMP/upstream-integration-zip"; '
@@ -347,14 +349,18 @@ def test_mirror_tag_requires_a_public_zip_not_a_token_visible_draft(tmp_path, dr
             "TAG": "v9.1.1",
             "VER": "9.1.1",
             "CHANNEL": "stable",
+            "SOURCE_STATE": source,
         },
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
     )
-    assert (result.returncode == 0) is not draft, result.stderr
-    assert (tmp_path / "api-filter-succeeded").exists()
-    if draft:
+    assert (result.returncode == 0) is (source == "published"), result.stderr
+    assert (tmp_path / "api-requested").exists()
+    assert (tmp_path / "api-filter-succeeded").exists() is (source != "unavailable")
+    if source != "published":
         assert "The upstream ZIP is unavailable" in result.stdout
         assert not (tmp_path / "download-called").exists()
+    else:
+        assert (tmp_path / "download-called").exists()
