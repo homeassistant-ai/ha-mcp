@@ -241,7 +241,14 @@ def test_publish_follows_asset_gate_and_retains_the_version_tag_object(
     monkeypatch, annotated
 ):
     calls = _world(monkeypatch, annotated=annotated)
+    verified_commits = []
+    monkeypatch.setattr(
+        publisher,
+        "_verify_release_zip",
+        lambda repository, asset, checkout, commit: verified_commits.append(commit),
+    )
     _finalize("o/r", "v9.1.1", _HACS, _COMPONENT)
+    assert verified_commits == ["version-tag-object" + ("-commit" if annotated else "")]
     writes = [
         (endpoint, fields) for endpoint, method, fields in calls if method != "GET"
     ]

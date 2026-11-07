@@ -42,10 +42,11 @@ same bytes to its mirror release. Never replace a usable counted asset.
 Stable SemVer creates a draft with the stamped ZIP; Release
 Publish publishes PyPI, verifies an available pure Python wheel for the Python
 versions declared by the released project's metadata, and checks the ZIP,
-then publishes the draft and advances `stable`. ZIP verification downloads
-the actual asset by ID, checks its
-digest and members against the tagged component, and refuses a checkout that
-differs from that tag. These checks precede both GitHub writes. Legacy archive
+then publishes the draft and advances `stable`. Release Publish supplies
+`hacs.json` and `pyproject.toml` from its tag checkout. The finalizer independently
+compares the tracked component directory with that tag, then downloads the
+asset by ID and checks its digest and members. These checks precede both GitHub
+writes. Legacy archive
 releases that do not select a ZIP keep their recovery path.
 Do not wait for PyPI inside SemVer: the PyPI workflow starts only after SemVer
 completes. The site deploy
