@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..errors import ErrorCode, create_error_response
 from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
 from .hacs_backend import DUPLICATE_RECORD_SUGGESTIONS, StoreApi
@@ -69,7 +70,11 @@ async def route_own_repository_download(
     if not named_own and "/" in wanted:
         return repository_id, version, None
 
-    response = await ws_client.send_command(api.command("list"))
+    try:
+        response = await ws_client.send_command(api.command("list"))
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout):
+        # The download itself reports the store's trouble, with its own context
+        return repository_id, version, None
     repos = [dict(r) for r in response.get("result", []) if isinstance(r, dict)]
     if not named_own:
         requested = next((r for r in repos if str(r.get("id")) == wanted), None)

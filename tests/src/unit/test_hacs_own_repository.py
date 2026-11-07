@@ -206,3 +206,17 @@ async def test_the_store_refusal_names_the_owner_to_update():
         'ha_manage_hacs(action="download", '
         'repository_id="homeassistant-ai/ha-mcp-integration")' in suggestions
     )
+
+
+async def test_a_failed_list_lookup_leaves_the_request_alone():
+    """The store's list failing is the download's problem to report, with the
+    download's own context; the lookup never speaks for it."""
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+    ws = AsyncMock()
+    ws.send_command = AsyncMock(side_effect=HomeAssistantCommandError("kaboom"))
+    assert await route_own_repository_download(ws, HACS_API, "441028036", None) == (
+        "441028036",
+        None,
+        None,
+    )
