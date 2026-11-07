@@ -65,7 +65,7 @@ def test_two_installed_records_file_the_repair(monkeypatch, issue_registry):
     call = issue_registry.async_create_issue.call_args
     assert call.args[1:] == (DOMAIN, ISSUE_STORE_RECORDS_CONFLICT)
     assert call.kwargs["is_fixable"] is True
-    assert set(call.kwargs["translation_placeholders"]["records"].split(", ")) == {
+    assert set(call.kwargs["translation_placeholders"]["records"].split(" and ")) == {
         store_records.MAIN_REPOSITORY,
         store_records.MIRROR_REPOSITORY,
     }
