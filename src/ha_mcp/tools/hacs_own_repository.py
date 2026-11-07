@@ -93,18 +93,34 @@ async def route_own_repository_download(
     installed = [r for r in repos if _own_name(r) and r.get("installed")]
     if len(installed) > 1:
         names = " and ".join(str(r.get("full_name")) for r in installed)
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"{names} are both installed and both claim "
-                "custom_components/ha_mcp_tools, so the store refuses to update "
-                "either of them. One repository has to own the integration.",
-                suggestions=DUPLICATE_RECORD_SUGGESTIONS,
-                context={
-                    "repository_id": repository_id,
-                    "installed": [r.get("full_name") for r in installed],
-                },
+        if api.is_marketplace:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{names} are both installed and both claim "
+                    "custom_components/ha_mcp_tools, so the Marketplace refuses "
+                    "to update either of them. One repository has to own the "
+                    "integration.",
+                    suggestions=DUPLICATE_RECORD_SUGGESTIONS,
+                    context={
+                        "repository_id": repository_id,
+                        "installed": [r.get("full_name") for r in installed],
+                    },
+                )
             )
+        # HACS never checked ownership, so the download still works there and
+        # is the way to bring in the release whose repair keeps one listing.
+        return (
+            repository_id,
+            version,
+            (
+                f"{names} are both installed and both claim "
+                "custom_components/ha_mcp_tools. HACS still updates either, but the "
+                "Marketplace in Home Assistant 2026.11 will refuse to; the current "
+                "HA-MCP release files a repair under Settings > System > Repairs "
+                f"that keeps {MAIN_REPOSITORY}. Restart Home Assistant after this "
+                "download and run it."
+            ),
         )
     if not installed or _own_name(installed[0]) == wanted:
         return repository_id, version, None
@@ -130,8 +146,8 @@ async def route_own_repository_download(
     target_version = translate_version(version, owner)
     note = (
         f"{repository_id} was rerouted to {owner}, which already owns "
-        "custom_components/ha_mcp_tools; the store allows one repository per "
-        "integration."
+        "custom_components/ha_mcp_tools; HA-MCP stays on the one listing it "
+        "was installed from."
     )
     if target_version != version:
         note += f" The version was renamed from {version} to {target_version}."

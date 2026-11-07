@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.hacs_backend import HACS_API
+from ha_mcp.tools.hacs_backend import HACS_API, StoreApi
 from ha_mcp.tools.hacs_own_repository import route_own_repository_download
 from ha_mcp.tools.tools_hacs import HacsTools
 
@@ -84,11 +84,13 @@ async def test_nothing_installed_keeps_the_requested_repository():
     ) == ("homeassistant-ai/ha-mcp", None, None)
 
 
-async def test_two_installed_records_are_refused_with_the_way_out():
+async def test_two_installed_records_are_refused_on_the_marketplace():
+    """The Marketplace refuses to update either record, so the request is
+    refused up front with the way out."""
     ws = _ws([_installed(MAIN, "v9.1.1"), _installed(MIRROR)])
     with pytest.raises(ToolError) as excinfo:
         await route_own_repository_download(
-            ws, HACS_API, "homeassistant-ai/ha-mcp", None
+            ws, StoreApi("marketplace"), "homeassistant-ai/ha-mcp", None
         )
     message = str(excinfo.value)
     assert "homeassistant-ai/ha-mcp" in message
@@ -237,3 +239,16 @@ async def test_the_punctuated_refusal_keeps_the_owner_clean():
     suggestions = " ".join(json.loads(str(excinfo.value))["error"]["suggestions"])
     assert 'repository_id="homeassistant-ai/ha-mcp")' in suggestions
     assert 'repository_id="homeassistant-ai/ha-mcp.")' not in suggestions
+
+
+async def test_two_installed_records_still_download_on_hacs():
+    """HACS never checked ownership, so a doubled install on Home Assistant
+    2026.10 can still pull the release whose repair keeps one listing; the
+    request passes through with the warning instead of a refusal."""
+    ws = _ws([_installed(MAIN), _installed(MIRROR)])
+    target, version, note = await route_own_repository_download(
+        ws, HACS_API, "homeassistant-ai/ha-mcp", None
+    )
+    assert (target, version) == ("homeassistant-ai/ha-mcp", None)
+    assert note is not None
+    assert "Repairs" in note

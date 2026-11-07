@@ -78,7 +78,7 @@ class StoreRecordsRepairFlow(RepairsFlow):
             step_id="confirm",
             data_schema=vol.Schema({}),
             description_placeholders={
-                "records": ", ".join(records),
+                "records": " and ".join(records),
                 "keep": store_records.MAIN_REPOSITORY,
             },
         )

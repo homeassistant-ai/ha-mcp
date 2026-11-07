@@ -76,9 +76,10 @@ def async_check_store_records(hass: HomeAssistant) -> None:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_STORE_RECORDS_CONFLICT)
         return
     _LOGGER.warning(
-        "%s are all installed in the store and claim custom_components/%s; "
-        "the store refuses to update any of them until one is forgotten. The "
-        "repair under Settings > System > Repairs keeps %s",
+        "%s are all installed in the store and claim custom_components/%s; on "
+        "Home Assistant 2026.11 the Marketplace refuses to update any of them "
+        "until one is forgotten. The repair under Settings > System > Repairs "
+        "keeps %s",
         " and ".join(records),
         DOMAIN,
         MAIN_REPOSITORY,
@@ -91,7 +92,7 @@ def async_check_store_records(hass: HomeAssistant) -> None:
         severity=ir.IssueSeverity.WARNING,
         translation_key=ISSUE_STORE_RECORDS_CONFLICT,
         translation_placeholders={
-            "records": ", ".join(records),
+            "records": " and ".join(records),
             "keep": MAIN_REPOSITORY,
         },
     )
@@ -134,8 +135,17 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
     return str(kept.data.full_name)
 
 
+_SCHEDULED_KEY = "store_records_check_scheduled"
+
+
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
-    """Run the check once Home Assistant has started, when the store is up."""
+    """Run the check once Home Assistant has started, when the store is up.
+
+    Both entry types register through here; the check runs once per start."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get(_SCHEDULED_KEY):
+        return
+    domain_data[_SCHEDULED_KEY] = True
 
     @callback
     def _check(_event: Any = None) -> None:

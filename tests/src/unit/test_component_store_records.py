@@ -141,3 +141,14 @@ async def test_a_failed_save_puts_the_records_back(monkeypatch):
 
     assert mirror.data.installed is True
     assert mirror.data.installed_version == "v9.1.0"
+
+
+def test_the_check_is_scheduled_once_per_start(monkeypatch):
+    """Both entry types register through the same device helper; the check
+    and its warning must not run twice."""
+    hass = MagicMock()
+    hass.data = {}
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    store_records.async_schedule_store_records_check(hass)
+    store_records.async_schedule_store_records_check(hass)
+    assert hass.bus.async_listen_once.call_count == 1

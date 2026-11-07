@@ -739,8 +739,8 @@ top of the first (older ha-mcp servers suggested exactly that); the Marketplace
 in Home Assistant 2026.11 refuses to update either record, and refuses to
 uninstall one while any HA-MCP entry exists, disabled ones included.
 
-Open **Settings → System → Repairs**. A current HA-MCP integration shows **Two
-store records claim the HA-MCP integration**; submitting it keeps
+Open **Settings → System → Repairs**. A current HA-MCP integration shows
+**HA-MCP is installed from two store listings**; submitting it keeps
 `homeassistant-ai/ha-mcp` and marks the other record as not installed. Nothing
 is deleted and your entries stay. Then update HA-MCP from the store as usual.
 
