@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA-MCP Anpassad Komponent",
+        "title": "HA-MCP — Hantera Home Assistant med AI",
         "description": "Välj vad som ska läggas till. **HA-MCP Server** kör hela ha-mcp-servern inne i Home Assistant och exponerar den via en Home Assistant-webhook – detta är installationen som de flesta vill ha. Den är en fristående server och en komplett ersättning för alla andra installationsmetoder: App (tillägg), Docker, uvx/PyPI, stdio; om du kör den, kör inte någon av dem samtidigt. **HA-MCP File & YAML Tools** har två roller. Om din ha-mcp-server körs utanför Home Assistant – app, Docker, uvx/PyPI, stdio – ger denna post även den servern de inbyggda komponentfunktioner den inte kan nå utifrån (snabb inbyggd sökning, metadata för konfigurationsposter, registerbaserade läsningar), så den är värd att lägga till för varje extern installation, och den fungerar som spärr för de privilegierade fil- och YAML-redigeringstjänsterna som används av ha-mcp:s valbara fil-/YAML-verktyg. Om du lägger till posten HA-MCP Server i stället, tillhandahåller den posten redan dessa delade funktioner, så denna andra post behövs då endast som spärr för de valbara fil-/YAML-verktygen. Den fungerar med alla servertyper och kan läggas till senare när som helst.",
         "menu_options": {
           "server": "HA-MCP Server (rekommenderas)",
@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Uppdatera HA-MCP Custom Component",
-      "description": "Den installerade ha-mcp-servern kräver HA-MCP Custom Component {required} eller nyare, men du har {installed}. Uppdatera komponent från Inställningar > System > Uppdateringar (i HACS, eller Marketplace i Home Assistant 2026.11+, öppna HA-MCP Custom Component och använd 'Uppdatera information' (HACS) eller 'Uppdatera information' (Marketplace) om ingen uppdatering visas än) och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän komponenten har uppdaterats."
+      "title": "Uppdatera HA-MCP-integrationen",
+      "description": "Den installerade ha-mcp-servern kräver HA-MCP-integrationen {required} eller nyare, men du har {installed}. Uppdatera integrationen från Inställningar > System > Uppdateringar (i HACS, eller Marketplace i Home Assistant 2026.11+, öppna HA-MCP-integrationen och använd 'Update information' (HACS) eller 'Refresh information' (Marketplace) om ingen uppdatering visas än) och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän integrationen har uppdaterats."
     },
     "legacy_oauth_restart": {
       "title": "Starta om Home Assistant för att tillämpa de äldre OAuth-inställningarna",

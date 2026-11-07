@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA-MCP egyéni komponens",
+        "title": "HA-MCP — Kezelje a Home Assistantot mesterséges intelligenciával",
         "description": "Válassza ki, mit szeretne hozzáadni. A **HA-MCP Server** a teljes ha-mcp szervert futtatja a Home Assistanton belül, és egy Home Assistant webhookon keresztül teszi elérhetővé – a legtöbben ezt a telepítést választják. Ez egy önálló szerver, amely teljes mértékben kivált minden egyéb telepítési módot: Alkalmazás (bővítmény), Docker, uvx/PyPI, stdio; ha ezt futtatja, ne futtassa mellette valamelyik másikat.\n\nA **HA-MCP File & YAML Tools** két szerepkört tölthet be. Ha a ha-mcp szerver a Home Assistanton kívül fut – alkalmazás, Docker, uvx/PyPI, stdio –, ez a bejegyzés biztosítja annak a szervernek a folyamaton belüli komponensfunkciókat is, amelyeket kívülről nem érhet el (gyors folyamaton belüli keresés, konfigurációs bejegyzés metaadatai, regisztráció alapú olvasások), így minden külső telepítéshez érdemes hozzáadni, emellett ez szolgál a ha-mcp opcionális fájl-/YAML-eszközei által használt, emelt szintű jogosultságú fájl- és YAML-szerkesztési szolgáltatások kapujaként is. Ha ehelyett a HA-MCP Server bejegyzést adja hozzá, az már eleve biztosítja ezeket a megosztott képességeket, így ez a második bejegyzés ekkor csak az opcionális fájl-/YAML-eszközök kapujaként szükséges. Minden szervertípussal működik, és később bármikor hozzáadható.",
         "menu_options": {
           "server": "HA-MCP Server (ajánlott)",
@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Frissítse a HA-MCP egyéni komponenst",
-      "description": "A telepített ha-mcp szerverhez a HA-MCP Custom Component {required} vagy újabb verziója szükséges, de Ön a {installed} verzióval rendelkezik. Frissítse a komponenst a Beállítások > Rendszer > Frissítések menüpontban (a HACS-ban vagy a Home Assistant 2026.11+ Marketplace áruházában nyissa meg a HA-MCP Custom Componentet, és használja az 'Információk frissítése' (HACS) vagy a 'Frissítés' (Marketplace) lehetőséget, ha még nem jelenik meg frissítés), majd indítsa újra a Home Assistantot. A szerver közben futva marad, de néhány újabb funkció esetleg nem fog működni a komponens frissítéséig."
+      "title": "Frissítse a HA-MCP integrációt",
+      "description": "A telepített ha-mcp szerver a(z) {required} vagy újabb HA-MCP integrációt igényli, de önnek a(z) {installed} verzió van telepítve. Frissítse az integrációt a Beállítások > Rendszer > Frissítések menüpontban (a HACS-ban, vagy a Marketplace-en a Home Assistant 2026.11+ verziójában, nyissa meg a HA-MCP integrációt, és használja az 'Update information' (HACS) vagy 'Refresh information' (Marketplace) lehetőséget, ha még nem jelenik meg frissítés), majd indítsa újra a Home Assistantot. A szerver addig is fut tovább, de néhány újabb funkció nem feltétlenül fog működni az integráció frissítéséig."
     },
     "legacy_oauth_restart": {
       "title": "Indítsa újra a Home Assistantot a régi OAuth-beállítások alkalmazásához",

@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA-MCP 自訂元件",
+        "title": "HA-MCP — 使用 AI 管理 Home Assistant",
         "description": "選擇要新增的項目。**HA-MCP Server** 會在 Home Assistant 內部執行完整的 ha-mcp 伺服器，並透過 Home Assistant Webhook 對外暴露——這是多數人想要的安裝方式。它是獨立伺服器，可完全取代所有其他安裝方法：App（附加元件）、Docker、uvx/PyPI、stdio；若執行了此項，請勿同時執行其中任一其他方式。**HA-MCP File & YAML Tools** 有兩種角色。如果您的 ha-mcp 伺服器是在 Home Assistant 外部執行（app、Docker、uvx/PyPI、stdio），此項目可讓該伺服器獲得無法從外部取得的處理程序內元件功能（快速的處理程序內搜尋、設定項目後設資料、登錄檔支援的讀取），因此非常值得新增至每個外部安裝中，它同時也是 ha-mcp 選擇性啟用的檔案/YAML 工具所需的具特權檔案與 YAML 編輯服務之閘道。如果您改為新增 **HA-MCP Server** 項目，該項目已提供這些共用功能，因此只有在需要作為選擇性檔案/YAML 工具的閘道時，才需要這個第二個項目。它適用於所有伺服器類型，且隨時都能在之後新增。",
         "menu_options": {
           "server": "HA-MCP Server（建議）",
@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "更新 HA-MCP 自訂元件",
-      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP Custom Component {required} 或更新版本，但您目前安裝的是 {installed}。請前往「設定」>「系統」>「更新」（在 HACS 中，或在 Home Assistant 2026.11+ 的市集中）更新此元件；若尚未顯示更新，請開啟 HA-MCP Custom Component 並使用「更新資訊」（HACS）或「重新整理資訊」（市集），然後重新啟動 Home Assistant。伺服器在此期間會繼續運行，但在更新元件之前，部分新功能可能無法使用。"
+      "title": "更新 HA-MCP 整合",
+      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP 整合 {required} 或更新版本，但您目前安裝的是 {installed}。請從「設定」>「系統」>「更新」（如果在 HACS 中，或在 Home Assistant 2026.11+ 的市集中，若尚未顯示更新，請開啟 HA-MCP 整合並使用「更新資訊」（HACS）或「重新整理資訊」（市集））更新整合並重新啟動 Home Assistant。伺服器在此期間將繼續執行，但在更新整合之前，某些較新功能可能無法運作。"
     },
     "legacy_oauth_restart": {
       "title": "重新啟動 Home Assistant 以套用舊版 OAuth 設定",

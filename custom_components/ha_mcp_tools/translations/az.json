@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA-MCP fərdi komponenti",
+        "title": "HA-MCP — Süni intellekt ilə Home Assistant-ı idarə edin",
         "description": "Əlavə etmək istədiyinizi seçin. **HA-MCP Server** tam ha-mcp serverini Home Assistant daxilində işlədir və Home Assistant webhook-u vasitəsilə ona giriş imkanı verir - əksər istifadəçilərin istədiyi quraşdırma budur. Bu, müstəqil serverdir və bütün digər quraşdırma üsullarını tam əvəz edir: tətbiq (əlavə), Docker, uvx/PyPI, stdio; onu işlədirsinizsə, digərlərindən birini eyni vaxtda işlətməyin. **HA-MCP File & YAML Tools** iki vəzifəni yerinə yetirir. ha-mcp serveriniz Home Assistant xaricində işləyirsə - tətbiq, Docker, uvx/PyPI, stdio - bu qeyd həmin serverə xaricdən istifadə edə bilmədiyi, proses daxilindəki komponent imkanlarını da verir (proses daxilində sürətli axtarış, konfiqurasiya qeydinin metaməlumatları, reyestrdən oxuma). Buna görə onu hər bir xarici quraşdırmaya əlavə etmək faydalıdır. Həmçinin ha-mcp-nin istəyə bağlı fayl/YAML alətlərinin istifadə etdiyi imtiyazlı fayl və YAML redaktə xidmətlərinə girişi tənzimləyir. Əvəzində HA-MCP Server qeydini əlavə etsəniz, həmin qeyd bu ortaq imkanları artıq təmin edir və ikinci qeyd yalnız istəyə bağlı fayl/YAML alətlərinə girişi təmin etmək üçün lazım olur. O, bütün server növləri ilə işləyir və sonradan istənilən vaxt əlavə edilə bilər.",
         "menu_options": {
           "server": "HA-MCP Server (tövsiyə olunur)",
@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "HA-MCP Fərdi Komponentini yeniləyin",
-      "description": "Quraşdırılmış ha-mcp serveri HA-MCP Fərdi Komponentinin {required} və ya daha yeni versiyasını tələb edir, lakin sizdə {installed} quraşdırılıb. Komponenti Tənzimləmələr > Sistem > Yeniləmələr bölməsindən yeniləyin (HACS-də və ya Home Assistant 2026.11+-də Marketplace-də, hələ heç bir yeniləmə göstərilmirsə, HA-MCP Fərdi Komponentini açın və 'Update information' (HACS) və ya 'Refresh information' (Marketplace) seçin) və Home Assistant-ı yenidən başladın. Bu müddət ərzində server işləməyə davam edəcək, lakin komponent yenilənənə qədər bəzi yeni xüsusiyyətlər işləməyə bilər."
+      "title": "HA-MCP inteqrasiyasını yeniləyin",
+      "description": "Quraşdırılmış ha-mcp serveri {required} və ya daha yeni HA-MCP inteqrasiyası tələb edir, lakin sizdə {installed} quraşdırılıb. İnteqrasiyanı Tənzimləmələr > Sistem > Yeniləmələr bölməsindən yeniləyin (HACS-də və ya Home Assistant 2026.11+-də Marketpleysdə, hələ heç bir yeniləmə göstərilmirsə, HA-MCP inteqrasiyasını açın və 'Məlumatı yenilə' (HACS) və ya 'Məlumatı yenilə' (Marketpleys) seçin) və Home Assistant-ı yenidən başladın. Server bu müddət ərzində işləməyə davam edəcək, lakin bəzi yeni xüsusiyyətlər inteqrasiya yenilənənə qədər işləməyə bilər."
     },
     "legacy_oauth_restart": {
       "title": "Köhnə OAuth parametrlərini tətbiq etmək üçün Home Assistant-ı yenidən başlat",

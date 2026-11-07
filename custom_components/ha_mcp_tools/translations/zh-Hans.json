@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA-MCP 自定义组件",
+        "title": "HA-MCP — 使用 AI 管理 Home Assistant",
         "description": "选择要添加的内容。**HA-MCP Server** 在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant webhook 将其暴露——这是大多数人想要的安装方式。它是一个独立的服务器，可完全替代所有其他安装方法：App (add-on)、Docker、uvx/PyPI、stdio；如果您运行了它，请勿同时运行其他安装方式。**HA-MCP File & YAML Tools** 有两个作用。如果您的 ha-mcp server 运行在 Home Assistant 外部（app、Docker、uvx/PyPI、stdio），此条目还可为该服务器提供其无法从外部访问的进程内组件功能（快速进程内搜索、配置条目元数据、注册表支持的读取），因此非常值得添加到每个外部安装中，并且它还是 ha-mcp 的可选文件/YAML 工具所使用的特权文件与 YAML 编辑服务的访问控制关卡。如果您改为添加 HA-MCP Server 条目，该条目已提供这些共享功能，因此该第二个条目此时仅用作可选文件/YAML 工具的访问控制关卡。它适用于所有服务器类型，并且可以随时在以后添加。",
         "menu_options": {
           "server": "HA-MCP 服务器（推荐）",
@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "更新 HA-MCP 自定义组件",
-      "description": "已安装的 ha-mcp 服务器需要 HA-MCP Custom Component {required} 或更新版本，但当前安装的版本为 {installed}。请前往“设置”>“系统”>“更新”更新组件（在 HACS 中，或在 Home Assistant 2026.11+ 的应用商店中；若暂未显示更新，请打开 HA-MCP Custom Component 并使用 HACS 的“更新信息”或应用商店的“刷新信息”功能），然后重启 Home Assistant。服务器在此期间会继续运行，但在组件更新之前，某些新功能可能无法正常使用。"
+      "title": "更新 HA-MCP 集成",
+      "description": "已安装的 ha-mcp 服务器需要 {required} 或更新版本的 HA-MCP 集成，但您当前安装的是 {installed}。请前往“设置”>“系统”>“更新”更新集成（如果在 HACS 或 Home Assistant 2026.11+ 的商店中未显示更新，请打开 HA-MCP 集成并使用“更新信息” (HACS) 或“刷新信息” (Marketplace)），然后重启 Home Assistant。服务器在此期间将继续运行，但在更新集成之前，某些新功能可能无法正常使用。"
     },
     "legacy_oauth_restart": {
       "title": "重启 Home Assistant 以应用旧版 OAuth 设置",
