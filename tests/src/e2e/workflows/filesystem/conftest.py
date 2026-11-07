@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
@@ -11,10 +9,13 @@ FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 
 @pytest.fixture(scope="module")
 def _filesystem_feature_flag(ha_container_with_fresh_config):
-    """Enable the filesystem feature flag for the filesystem suites' modules."""
-    os.environ[FEATURE_FLAG] = "true"
-    yield
-    os.environ.pop(FEATURE_FLAG, None)
+    """Enable the filesystem feature flag for the filesystem suites' modules.
+
+    Restores the flag's previous value, which a lane may have set itself.
+    """
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setenv(FEATURE_FLAG, "true")
+        yield
 
 
 @pytest.fixture

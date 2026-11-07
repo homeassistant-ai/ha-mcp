@@ -1380,7 +1380,9 @@ def _read_file_sync(
     if not target_file.is_file():
         return {"_error": "not_a_file"}
     stat = target_file.stat()
-    content = target_file.read_text(newline="" if keep_line_endings else None)
+    content = target_file.read_text(
+        encoding="utf-8", newline="" if keep_line_endings else None
+    )
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
 
 
