@@ -182,8 +182,11 @@ async def fetch_config_references_via_component(
     absent or outdated component, a command or transport failure and an answer
     of the wrong shape are answered the same unavailable way, naming the cause:
     the write goes on and the caller reports the references as unchecked. There
-    is no REST/WebSocket fallback, since Core serves none of this for a config
-    that is not saved yet.
+    is no REST/WebSocket fallback by design: Core serves the target lookups,
+    ``validate_config`` for single triggers, conditions and actions, and the
+    registries over its API, but not validating a whole unsaved automation,
+    script or scene nor collecting its references, which is where the check
+    starts; a server-side copy of that part is the walker this replaced.
     """
     caps = await get_component_caps(client)
     if caps is None:

@@ -29,7 +29,14 @@ gives in-process access to the Core object a tool wraps, and keep Core's
 REST/WebSocket API as the explicit fallback for an installation without the
 component. Gate the choice on the component's `capabilities` handshake, and
 update the component producer, server consumer, capability gate and fallback in
-the same pull request, on both component entry topologies.
+the same pull request, on both component entry topologies. A path can be
+component-only by design when the fallback would be a copy of Core's rules:
+the reference check on automation, script and scene writes is one, since
+Core's API validates single triggers, conditions and actions and serves the
+target lookups and registries, but not validating a whole unsaved config or
+collecting its references, and a server-side copy of that part is the
+hand-kept walker it replaced. Without the component the write says the
+references went unchecked.
 
 "The component" is the `ha_mcp_tools` integration's shared `ha_mcp_tools/*`
 command surface, which both of its config-entry types serve: the HA-MCP Server
