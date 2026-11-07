@@ -97,6 +97,20 @@ DUPLICATE_RECORD_SUGGESTIONS = [
 _OWNED_DIRECTORY_MARKER = "directory belongs to"
 
 
+def _owned_directory_suggestions(message: str) -> list[str]:
+    """The store refused an install because another installed record owns the
+    integration's directory: the owner is the record to install or update."""
+    owner = message.rsplit(_OWNED_DIRECTORY_MARKER, 1)[1].strip().rstrip(".")
+    return [
+        f"{owner} already provides this integration. Update or reinstall it "
+        f'there: ha_manage_hacs(action="download", repository_id="{owner}").',
+        "To switch repositories instead, uninstall the owner first; the store "
+        "refuses that while any of the integration's config entries exist, so "
+        "ask the user before deleting entries under Settings > Devices & "
+        "services.",
+    ]
+
+
 @dataclass(frozen=True)
 class StoreApi:
     """The store API this Home Assistant serves and its ``info`` reply."""
@@ -217,7 +231,7 @@ def raise_store_error(
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
     if _OWNED_DIRECTORY_MARKER in str(err):
-        suggestions = DUPLICATE_RECORD_SUGGESTIONS
+        suggestions = _owned_directory_suggestions(str(err))
     if suggestions:
         raise_tool_error(
             create_error_response(
