@@ -8,7 +8,6 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_traces import (
     TraceTools,
-    _format_detailed_trace,
     _format_trace_list,
     _gather_diagnostics,
     _resolve_trace_item_id,
@@ -380,94 +379,15 @@ class TestFormatTraceList:
         assert [trace["run_id"] for trace in result["traces"]] == ["r1"]
         assert result["trace_count"] == 1
 
-    def test_detail_includes_logbook_entries_when_requested(self):
-        """The logbook section returns entries when Core supplies them."""
-        result = _format_detailed_trace(
+    def test_list_handles_non_string_timestamp(self):
+        """A non-string timestamp sorts as empty instead of crashing."""
+        result = _format_trace_list(
             "automation.test",
-            "r1",
-            {
-                "run_id": "r1",
-                "state": "stopped",
-                "logbook_entries": [{"name": "Trace capture", "message": "turned on"}],
-                "trace": {},
-            },
-            sections="logbook",
+            [{"run_id": "r1", "state": "stopped", "timestamp": 123}],
+            10,
         )
 
-        assert result["logbook_entries"] == [
-            {"name": "Trace capture", "message": "turned on"}
-        ]
-
-    def test_detail_preserves_core_extended_dict_fields(self):
-        """Every field Core's trace/get returns survives the detail projection."""
-        trace = {
-            "last_step": "action/0",
-            "run_id": "r1",
-            "state": "stopped",
-            "script_execution": "finished",
-            "timestamp": {
-                "start": "2026-11-08T16:00:04.319026+00:00",
-                "finish": "2026-11-08T16:00:04.319959+00:00",
-            },
-            "domain": "automation",
-            "item_id": "trace_capture",
-            "trigger": None,
-            "not_triggered": True,
-            "trace": {
-                "trigger": [{"path": "trigger", "changed_variables": {}}],
-                "action/0": [{"path": "action/0", "result": {}}],
-            },
-            "config": {"alias": "Trace capture", "mode": "single"},
-            "blueprint_inputs": {"target_entity": "light.fan_bulb_1"},
-            "context": {"id": "ctx-1", "parent_id": None, "user_id": None},
-        }
-
-        result = _format_detailed_trace("automation.test", "r1", trace, detailed=True)
-
-        assert result["last_step"] == "action/0"
-        assert result["domain"] == "automation"
-        assert result["item_id"] == "trace_capture"
-        assert result["not_triggered"] is True
-        assert result["blueprint_inputs"] == {"target_entity": "light.fan_bulb_1"}
-        assert result["context"] == {
-            "id": "ctx-1",
-            "parent_id": None,
-            "user_id": None,
-        }
-
-    def test_detail_handles_null_config_and_trace(self):
-        """A restored or unfinished trace can carry null config and trace."""
-        result = _format_detailed_trace(
-            "automation.test",
-            "r1",
-            {
-                "run_id": "r1",
-                "state": "running",
-                "config": None,
-                "trace": None,
-            },
-        )
-
-        assert result["success"] is True
-        assert result["run_id"] == "r1"
-
-    def test_sections_context_without_detailed(self):
-        """Requesting the context section returns it without detailed."""
-        result = _format_detailed_trace(
-            "automation.test",
-            "r1",
-            {
-                "run_id": "r1",
-                "state": "stopped",
-                "context": {"id": "ctx-1"},
-                "config": {"alias": "Trace capture"},
-                "trace": {},
-            },
-            sections="context",
-        )
-
-        assert result["context"] == {"id": "ctx-1"}
-        assert "config_summary" not in result
+        assert [trace["run_id"] for trace in result["traces"]] == ["r1"]
 
 
 class TestGatherDiagnostics:
@@ -591,6 +511,11 @@ class TestGatherDiagnostics:
             {"success": True, "result": {}},
             {"success": True, "result": {"config": {}}},
             {"success": True, "result": {"config": {"trace": {}}}},
+            {
+                "success": True,
+                "result": {"config": {"trace": {"stored_traces": "abc"}}},
+            },
+            {"success": True, "result": {"config": {"trace": {"stored_traces": {}}}}},
             {"success": True, "result": {"config": None}},
             {"success": True, "result": "not-a-dict"},
             {"success": False, "error": "unknown command"},
@@ -599,6 +524,8 @@ class TestGatherDiagnostics:
             "no-config-key",
             "no-trace-key",
             "no-stored-traces-key",
+            "non-numeric-stored-traces",
+            "mapping-stored-traces",
             "null-config",
             "malformed-result",
             "failed-command",
@@ -623,21 +550,94 @@ class TestGatherDiagnostics:
         assert result["trace_storage_enabled"] is True
 
     @pytest.mark.asyncio
-    async def test_script_domain(self):
-        """Diagnostics work correctly for script domain."""
+    @pytest.mark.parametrize("stored", ["0", 0.0], ids=["string-zero", "float-zero"])
+    async def test_trace_storage_coerces_core_accepted_zero_values(self, stored):
+        """Core coerces number-like zero values; the diagnostic follows."""
         client = AsyncMock()
         client.get_entity_state.return_value = {
             "state": "on",
             "attributes": {
+                "id": "test_unique_id",
+                "last_triggered": "2025-11-30T15:00:00Z",
+            },
+        }
+        client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"config": {"trace": {"stored_traces": stored}}},
+        }
+
+        result = await _gather_diagnostics(client, "automation.test", "automation")
+
+        assert result["trace_storage_enabled"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored", ["5", 5.0], ids=["string-five", "float-five"])
+    async def test_trace_storage_keeps_core_accepted_positive_values(self, stored):
+        """Core coerces number-like positive values; the diagnostic follows."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "on",
+            "attributes": {
+                "id": "test_unique_id",
+                "last_triggered": "2025-11-30T15:00:00Z",
+            },
+        }
+        client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"config": {"trace": {"stored_traces": stored}}},
+        }
+
+        result = await _gather_diagnostics(client, "automation.test", "automation")
+
+        assert result["trace_storage_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_script_domain(self):
+        """An idle script is not reported as disabled."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "off",
+            "attributes": {
                 "last_triggered": None,
             },
+        }
+        client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"config": {"trace": {"stored_traces": 5}}},
         }
 
         result = await _gather_diagnostics(client, "script.test", "script")
 
         assert result["automation_exists"] is True
+        assert result["automation_enabled"] is True
         # For scripts, we should see "script" in suggestion, not "automation"
         assert "script" in result["suggestion"].lower()
+        client.send_websocket_message.assert_awaited_once_with(
+            {"type": "script/config", "entity_id": "script.test"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_script_trace_storage_disabled(self):
+        """A script's stored_traces=0 disables its trace storage diagnostic."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "off",
+            "attributes": {
+                "last_triggered": None,
+            },
+        }
+        client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"config": {"trace": {"stored_traces": 0}}},
+        }
+
+        result = await _gather_diagnostics(client, "script.test", "script")
+
+        assert result["automation_enabled"] is True
+        assert result["trace_storage_enabled"] is False
+        assert "trace storage is disabled for this script" in (
+            result["suggestion"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_config_fetch_failure_graceful(self):
@@ -706,6 +706,25 @@ def _make_pooled_client(dispatch):
     return client
 
 
+def _dispatch(*, list_result=None, detail_result=None, context_result=None):
+    """Return a pooled-client dispatcher for trace commands."""
+
+    def _d(mtype, message):
+        if mtype == "config/entity_registry/get":
+            return {"success": True, "result": {"unique_id": "uid_1"}}
+        if mtype == "trace/list":
+            return list_result
+        if mtype == "trace/get":
+            return detail_result
+        if mtype == "trace/contexts":
+            return context_result
+        if mtype in ("automation/config", "script/config"):
+            return {"success": True, "result": {}}
+        return {"success": False, "error": f"unexpected {mtype}"}
+
+    return _d
+
+
 class TestResolveTraceItemIdPooled:
     """``_resolve_trace_item_id`` drives the pooled ``send_websocket_message``
     (issue #1813 item #5) and keeps its best-effort fall-back semantics."""
@@ -762,23 +781,6 @@ class TestTraceFetchPooledClient:
     """`ha_get_automation_traces` drives the pooled client end-to-end (issue
     #1813 item #5): no dedicated socket, structured errors preserved."""
 
-    @staticmethod
-    def _dispatch(*, list_result=None, detail_result=None, context_result=None):
-        def _d(mtype, message):
-            if mtype == "config/entity_registry/get":
-                return {"success": True, "result": {"unique_id": "uid_1"}}
-            if mtype == "trace/list":
-                return list_result
-            if mtype == "trace/get":
-                return detail_result
-            if mtype == "trace/contexts":
-                return context_result
-            if mtype == "automation/config":
-                return {"success": True, "result": {}}
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        return _d
-
     @pytest.mark.asyncio
     async def test_list_drives_pooled_client(self):
         list_result = {
@@ -791,7 +793,7 @@ class TestTraceFetchPooledClient:
                 }
             ],
         }
-        client = _make_pooled_client(self._dispatch(list_result=list_result))
+        client = _make_pooled_client(_dispatch(list_result=list_result))
         tools = TraceTools(client)
 
         result = await tools.ha_get_automation_traces(automation_id="automation.test")
@@ -817,7 +819,7 @@ class TestTraceFetchPooledClient:
                 "config": {"alias": "Test"},
             },
         }
-        client = _make_pooled_client(self._dispatch(detail_result=detail_result))
+        client = _make_pooled_client(_dispatch(detail_result=detail_result))
         tools = TraceTools(client)
 
         result = await tools.ha_get_automation_traces(
@@ -841,7 +843,7 @@ class TestTraceFetchPooledClient:
             "success": False,
             "error": "Failed to connect to Home Assistant",
         }
-        client = _make_pooled_client(self._dispatch(list_result=list_result))
+        client = _make_pooled_client(_dispatch(list_result=list_result))
         tools = TraceTools(client)
 
         with pytest.raises(ToolError) as exc_info:
@@ -855,7 +857,7 @@ class TestTraceFetchPooledClient:
     async def test_trace_command_error_maps_to_service_call_failed(self):
         """A non-connection pooled failure keeps its SERVICE_CALL_FAILED shape."""
         list_result = {"success": False, "error": "unknown_command"}
-        client = _make_pooled_client(self._dispatch(list_result=list_result))
+        client = _make_pooled_client(_dispatch(list_result=list_result))
         tools = TraceTools(client)
 
         with pytest.raises(ToolError) as exc_info:
@@ -873,7 +875,7 @@ class TestTraceFetchPooledClient:
             "success": False,
             "error": "Failed to connect to Home Assistant",
         }
-        client = _make_pooled_client(self._dispatch(detail_result=detail_result))
+        client = _make_pooled_client(_dispatch(detail_result=detail_result))
         tools = TraceTools(client)
 
         with pytest.raises(ToolError) as exc_info:
@@ -890,7 +892,7 @@ class TestTraceFetchPooledClient:
         """The DETAIL path keeps a non-connection pooled failure as
         SERVICE_CALL_FAILED."""
         detail_result = {"success": False, "error": "unknown_command"}
-        client = _make_pooled_client(self._dispatch(detail_result=detail_result))
+        client = _make_pooled_client(_dispatch(detail_result=detail_result))
         tools = TraceTools(client)
 
         with pytest.raises(ToolError) as exc_info:

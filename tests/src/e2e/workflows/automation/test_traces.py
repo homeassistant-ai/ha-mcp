@@ -513,6 +513,58 @@ class TestAutomationTraces:
             f"Expected at least 1 trace after running script, got {trace_count}"
         )
 
+    async def test_script_trace_storage_disabled_diagnostics(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """A script with stored_traces=0 reports disabled storage, not idle."""
+        test_light = await self._find_test_light_entity(mcp_client)
+        script_id_base = "trace_storage_disabled_script_e2e"
+        script_config = test_data_factory.script_config(
+            "Trace Storage Disabled Script E2E",
+            sequence=[
+                {"service": "light.turn_on", "target": {"entity_id": test_light}}
+            ],
+            trace={"stored_traces": 0},
+        )
+
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_script",
+            {"script_id": script_id_base, "config": script_config},
+        )
+        assert_mcp_success(create_result)
+        create_data = parse_mcp_result(create_result)
+        script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
+        cleanup_tracker.track("script", script_entity_id)
+
+        run_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "script",
+                "service": "turn_on",
+                "entity_id": script_entity_id,
+            },
+        )
+        assert_mcp_success(run_result)
+
+        traces_data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"automation_id": script_entity_id},
+            predicate=lambda data: (
+                data.get("diagnostics", {}).get("trace_storage_enabled") is False
+            ),
+            timeout=15,
+            poll_interval=0.5,
+            description="script trace storage disabled diagnostic",
+        )
+
+        assert traces_data["trace_count"] == 0
+        assert traces_data["diagnostics"]["automation_enabled"] is True
+        assert traces_data["diagnostics"]["trace_storage_enabled"] is False
+        assert "trace storage is disabled for this script" in (
+            traces_data["diagnostics"]["suggestion"].lower()
+        )
+
 
 @pytest.mark.automation
 class TestGetAutomationTracesNegativeInputs:

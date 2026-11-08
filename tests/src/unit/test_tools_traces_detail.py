@@ -563,7 +563,7 @@ class TestFilterTraceSections:
         "trigger": {"platform": "time"},
         "condition_results": [{"result": True}],
         "action_trace": [{"path": "action/0"}],
-        "config_summary": {"alias": "Test"},
+        "config": {"alias": "Test"},
         "error": "boom",
         "logbook_entries": [{"name": "Test"}],
         "context": {"id": "ctx1"},
@@ -576,7 +576,7 @@ class TestFilterTraceSections:
         for dropped in (
             "trigger",
             "condition_results",
-            "config_summary",
+            "config",
             "error",
             "logbook_entries",
             "context",
@@ -598,7 +598,7 @@ class TestFilterTraceSections:
         assert "condition_results" in result
         for dropped in (
             "action_trace",
-            "config_summary",
+            "config",
             "error",
             "logbook_entries",
             "context",
@@ -612,7 +612,7 @@ class TestFilterTraceSections:
             "trigger",
             "condition_results",
             "action_trace",
-            "config_summary",
+            "config",
             "error",
             "logbook_entries",
             "context",
@@ -633,3 +633,133 @@ class TestFilterTraceSections:
         assert "action_trace" in result
         assert "trigger" in result
         assert "condition_results" not in result
+
+
+class TestFormatDetailedTraceNativeFields:
+    """Test the detailed trace projection."""
+
+    def test_detail_includes_logbook_entries_when_requested(self):
+        """The logbook section returns entries when Core supplies them."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "logbook_entries": [{"name": "Trace capture", "message": "turned on"}],
+                "trace": {},
+            },
+            sections="logbook",
+        )
+
+        assert result["logbook_entries"] == [
+            {"name": "Trace capture", "message": "turned on"}
+        ]
+
+    def test_detail_preserves_core_extended_dict_fields(self):
+        """Core's extended summary and config fields survive the projection."""
+        trace = {
+            "last_step": "action/0",
+            "run_id": "r1",
+            "state": "stopped",
+            "script_execution": "finished",
+            "timestamp": {
+                "start": "2026-11-08T16:00:04.319026+00:00",
+                "finish": "2026-11-08T16:00:04.319959+00:00",
+            },
+            "domain": "automation",
+            "item_id": "trace_capture",
+            "trigger": None,
+            "not_triggered": True,
+            "trace": {
+                "trigger": [{"path": "trigger", "changed_variables": {}}],
+                "action/0": [{"path": "action/0", "result": {}}],
+            },
+            "config": {
+                "alias": "Trace capture",
+                "mode": "single",
+                "triggers": [{"platform": "event"}],
+            },
+            "blueprint_inputs": {"target_entity": "light.fan_bulb_1"},
+            "context": {"id": "ctx-1", "parent_id": None, "user_id": None},
+        }
+
+        result = _format_detailed_trace("automation.test", "r1", trace, detailed=True)
+
+        assert result["last_step"] == "action/0"
+        assert result["domain"] == "automation"
+        assert result["item_id"] == "trace_capture"
+        assert result["not_triggered"] is True
+        assert result["blueprint_inputs"] == {"target_entity": "light.fan_bulb_1"}
+        assert result["config"] == trace["config"]
+        assert result["context"] == {
+            "id": "ctx-1",
+            "parent_id": None,
+            "user_id": None,
+        }
+
+    def test_detail_config_passes_raw_config_without_inventing_mode(self):
+        """A raw config with no mode is returned as-is, not given a default."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "config": {"alias": "No mode"},
+                "trace": {},
+            },
+        )
+
+        assert result["config"] == {"alias": "No mode"}
+        assert "config_summary" not in result
+
+    def test_detail_handles_null_config_and_trace(self):
+        """A restored or unfinished trace can carry null config and trace."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "running",
+                "config": None,
+                "trace": None,
+            },
+        )
+
+        assert result["success"] is True
+        assert result["run_id"] == "r1"
+
+    def test_sections_context_without_detailed(self):
+        """Requesting the context section returns it without detailed."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "context": {"id": "ctx-1"},
+                "config": {"alias": "Trace capture"},
+                "trace": {},
+            },
+            sections="context",
+        )
+
+        assert result["context"] == {"id": "ctx-1"}
+        assert "config" not in result
+
+    def test_sections_ignores_empty_segments(self):
+        """Commas and whitespace around a section name are ignored."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "context": {"id": "ctx-1"},
+                "trace": {},
+            },
+            sections=" , context, ",
+        )
+
+        assert result["context"] == {"id": "ctx-1"}
