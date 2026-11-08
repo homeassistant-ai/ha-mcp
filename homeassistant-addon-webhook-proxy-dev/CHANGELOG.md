@@ -9,6 +9,13 @@ history from before the fork.
 -->
 
 
+## v3.0.5.dev6 (2026-11-08)
+
+- Type annotations match Home Assistant Core 2026.11's own types (repairs
+  flow results, the webhook handler, the protected-resource view URL). No
+  behavior change.
+
+
 ## v3.0.5.dev5 (2026-11-06)
 
 - The Claude.ai connector steps in DOCS.md follow the current connector
