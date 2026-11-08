@@ -3,6 +3,43 @@
 <!-- version list -->
 
 
+## v9.1.2 (2026-11-08)
+
+### Fixed
+
+- **hacs**: Keep HA-MCP on one store listing and repair installs that got two
+  ([#2994](https://github.com/homeassistant-ai/ha-mcp/pull/2994))
+- Check automation, script and scene references with Core through the component
+  ([#2992](https://github.com/homeassistant-ai/ha-mcp/pull/2992))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Fixed
+
+- **ci**: Skip Renovate on forks
+  ([#2991](https://github.com/homeassistant-ai/ha-mcp/pull/2991))
+
+### Chores
+
+- Sync ratchet baselines after merge [skip ci]
+  ([`c7dbc9c`](https://github.com/homeassistant-ai/ha-mcp/commit/c7dbc9c5f3651cf421a9c8d9a1f45089dbe71809))
+- Sync ratchet baselines after merge [skip ci]
+  ([`4a54354`](https://github.com/homeassistant-ai/ha-mcp/commit/4a543543375f0fcc42141381be57bbd0f378a603))
+- Machine-translate locale updates
+  ([`e603464`](https://github.com/homeassistant-ai/ha-mcp/commit/e603464a804a1bc7810b4a4fa17b3232316d1252))
+- **addon**: Publish version 9.1.1 [skip ci]
+  ([`8b02263`](https://github.com/homeassistant-ai/ha-mcp/commit/8b022630215c7a516d9e0b92aa39c4d3cc94dc5d))
+
+### Testing
+
+- **e2e**: Fail on a broken cleanup step only when the test body passed
+  ([#2985](https://github.com/homeassistant-ai/ha-mcp/pull/2985))
+</details>
+
+
 ## v9.1.1 (2026-11-07)
 
 ### Changed
