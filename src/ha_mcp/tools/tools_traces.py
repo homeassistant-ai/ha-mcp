@@ -51,7 +51,7 @@ class TraceTools:
     @log_tool_usage
     async def ha_get_automation_traces(
         self,
-        automation_id: Annotated[
+        entity_id: Annotated[
             str,
             Field(
                 description="Automation or script entity_id (e.g., 'automation.motion_light' or 'script.morning_routine')"
@@ -106,8 +106,11 @@ class TraceTools:
             Field(
                 description=(
                     "Comma-separated list of trace sections to return. "
-                    "Valid values: trigger, conditions, actions, config, error, logbook, context. "
-                    "Omit to return all sections. Example: 'actions' or 'trigger,conditions'."
+                    "Valid values: trigger, conditions, actions, config, error, "
+                    "logbook, context. 'config' returns the full historical "
+                    "config; 'logbook' reads Core's logbook for the run. Omit "
+                    "to return all sections. Example: 'actions' or "
+                    "'trigger,conditions'."
                 ),
                 default=None,
             ),
@@ -158,6 +161,20 @@ class TraceTools:
            this flag.
         5. Variables at every step (trigger sets and null entries are still
            omitted): deduplicate=False.
+
+        RESPONSE FIELDS:
+        - `traces` carries Core's short dict fields unchanged, plus the
+          `execution` alias for `script_execution`.
+        - `entity_id`, `run_id`, `timestamp`, `state`, `last_step`, `domain`,
+          `item_id`, `not_triggered` identify the run.
+        - `context_match` is `trace` for the run's own context or `parent` for
+          a triggering context; `context_scanned` and
+          `context_scan_truncated` describe the bounded parent scan, and
+          `context_scan_errors` lists stored traces it could not read.
+        - `config_summary` is the compact alias/mode view. Pass
+          `sections="config"` for the full historical `config`.
+        - `logbook_entries`, `logbook_transport`, `logbook_total` and
+          `logbook_truncated` describe the run's logbook rows.
         """
         try:
             if run_id is not None and context_id is not None:
@@ -181,29 +198,29 @@ class TraceTools:
                         "event/service context id",
                         "Omit context_id to list recent traces",
                     ],
-                    context={"automation_id": automation_id},
+                    context={"entity_id": entity_id},
                 )
 
             # Determine domain from entity_id
-            if automation_id.startswith("automation."):
+            if entity_id.startswith("automation."):
                 domain = "automation"
-            elif automation_id.startswith("script."):
+            elif entity_id.startswith("script."):
                 domain = "script"
             else:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid entity_id format: {automation_id}",
+                        f"Invalid entity_id format: {entity_id}",
                         details="Entity ID must start with 'automation.' or 'script.'",
-                        context={"automation_id": automation_id},
+                        context={"entity_id": entity_id},
                     )
                 )
 
             # Extract the object_id (part after the domain) as fallback
-            object_id = automation_id.split(".", 1)[1]
+            object_id = entity_id.split(".", 1)[1]
 
             logger.debug(
-                f"ha_get_automation_traces starting: id={automation_id} "
+                f"ha_get_automation_traces starting: id={entity_id} "
                 f"run_id={run_id or '<list>'} context_id={context_id or '<none>'}",
             )
             await safe_progress(
@@ -223,9 +240,7 @@ class TraceTools:
 
             # Home Assistant stores traces by unique_id, not entity_id.
             # We need to resolve entity_id -> unique_id via entity registry.
-            item_id = await _resolve_trace_item_id(
-                self._client, automation_id, object_id
-            )
+            item_id = await _resolve_trace_item_id(self._client, entity_id, object_id)
 
             resolved_run_id = run_id
             context_match: ContextTraceMatch | None = None
@@ -246,7 +261,7 @@ class TraceTools:
                 detail = await self._fetch_trace_detail(
                     domain,
                     item_id,
-                    automation_id,
+                    entity_id,
                     resolved_run_id,
                     deduplicate=deduplicate,
                     detailed=detailed,
@@ -259,7 +274,7 @@ class TraceTools:
             return await self._fetch_trace_list(
                 domain,
                 item_id,
-                automation_id,
+                entity_id,
                 limit=limit,
                 offset=offset,
                 order=order,
@@ -269,10 +284,10 @@ class TraceTools:
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Error getting traces for {automation_id}: {e}")
+            logger.error(f"Error getting traces for {entity_id}: {e}")
             exception_to_structured_error(
                 e,
-                context={"automation_id": automation_id},
+                context={"entity_id": entity_id},
                 suggestions=[
                     "Verify the automation/script entity_id exists",
                     "Check if traces are available (automation must have run recently)",
@@ -287,7 +302,7 @@ class TraceTools:
         self,
         domain: str,
         item_id: str,
-        automation_id: str,
+        entity_id: str,
         run_id: str,
         *,
         deduplicate: bool,
@@ -308,7 +323,7 @@ class TraceTools:
         if not result.get("success"):
             _raise_trace_ws_failure(
                 result.get("error", "Failed to retrieve trace"),
-                {"automation_id": automation_id, "run_id": run_id},
+                {"entity_id": entity_id, "run_id": run_id},
             )
 
         trace_data = result.get("result", {})
@@ -317,7 +332,7 @@ class TraceTools:
             logbook = await fetch_trace_logbook(self._client, trace_data)
         await safe_progress(ctx, progress=3, total=3, message="formatting trace")
         formatted = _format_detailed_trace(
-            automation_id,
+            entity_id,
             run_id,
             trace_data,
             deduplicate=deduplicate,
@@ -333,7 +348,7 @@ class TraceTools:
         self,
         domain: str,
         item_id: str,
-        automation_id: str,
+        entity_id: str,
         *,
         limit: int,
         offset: int,
@@ -352,7 +367,7 @@ class TraceTools:
         if not result.get("success"):
             _raise_trace_ws_failure(
                 result.get("error", "Failed to list traces"),
-                {"automation_id": automation_id},
+                {"entity_id": entity_id},
             )
 
         traces_data = result.get("result", [])
@@ -364,12 +379,12 @@ class TraceTools:
                 total=3,
                 message="no traces; gathering diagnostics",
             )
-            diagnostics = await _gather_diagnostics(self._client, automation_id, domain)
+            diagnostics = await _gather_diagnostics(self._client, entity_id, domain)
             await safe_progress(
                 ctx, progress=3, total=3, message="diagnostics complete"
             )
             return _format_trace_list(
-                automation_id,
+                entity_id,
                 traces_data,
                 limit,
                 diagnostics,
@@ -384,7 +399,7 @@ class TraceTools:
             message=f"listed {len(traces_data)} traces",
         )
         return _format_trace_list(
-            automation_id,
+            entity_id,
             traces_data,
             limit,
             offset=offset,
@@ -408,6 +423,8 @@ def _add_context_match(
     detail["context_scanned"] = match.scanned
     if match.truncated:
         detail["context_scan_truncated"] = True
+    if match.scan_errors:
+        detail["context_scan_errors"] = list(match.scan_errors)
 
 
 async def _resolve_trace_item_id(
@@ -460,7 +477,7 @@ async def _resolve_trace_item_id(
 
 async def _gather_diagnostics(
     client: Any,
-    automation_id: str,
+    entity_id: str,
     domain: str,
 ) -> dict[str, Any]:
     """
@@ -471,20 +488,22 @@ async def _gather_diagnostics(
 
     Args:
         client: Pooled REST client (REST reads + ``send_websocket_message``)
-        automation_id: Full entity_id (e.g., 'automation.motion_light')
+        entity_id: Full entity_id (e.g., 'automation.motion_light')
         domain: Either 'automation' or 'script'
 
     Returns:
         Dictionary containing diagnostic information:
-        - automation_exists: Whether the entity exists
-        - automation_enabled: Whether the automation is enabled (on/off state)
+        - entity_exists: Whether the entity exists
+        - entity_enabled: Whether the automation/script can run
+        - trace_key_available: Whether Core can key a trace for this item
         - trace_storage_enabled: Whether trace storage is enabled for this item
         - last_triggered: Last trigger timestamp if available
         - suggestion: Helpful hint based on the diagnostics
     """
     diagnostics: dict[str, Any] = {
-        "automation_exists": False,
-        "automation_enabled": False,
+        "entity_exists": False,
+        "entity_enabled": False,
+        "trace_key_available": True,
         "trace_storage_enabled": True,  # Default assumption
         "last_triggered": None,
         "suggestion": "",
@@ -492,16 +511,16 @@ async def _gather_diagnostics(
 
     try:
         # Get entity state to check existence and enabled status
-        entity_state = await client.get_entity_state(automation_id)
+        entity_state = await client.get_entity_state(entity_id)
 
         if entity_state:
-            diagnostics["automation_exists"] = True
+            diagnostics["entity_exists"] = True
 
             # Automations are disabled when their state is off. A script's
             # off state means idle, not disabled; only an unavailable script
             # is treated as unable to run.
             state = entity_state.get("state", "unknown")
-            diagnostics["automation_enabled"] = (
+            diagnostics["entity_enabled"] = (
                 state != "unavailable" if domain == "script" else state == "on"
             )
 
@@ -511,9 +530,15 @@ async def _gather_diagnostics(
             if last_triggered:
                 diagnostics["last_triggered"] = last_triggered
 
+            # Core stores a trace under the automation's unique id. A YAML
+            # automation without an id has no trace key at all; scripts always
+            # have one.
+            if domain == "automation":
+                diagnostics["trace_key_available"] = bool(attributes.get("id"))
+
             # Both automations and scripts expose the same trace config shape.
             diagnostics["trace_storage_enabled"] = await _is_trace_storage_enabled(
-                client, automation_id, domain
+                client, entity_id, domain
             )
 
             diagnostics["suggestion"] = _diagnostic_suggestion(diagnostics, domain)
@@ -522,7 +547,7 @@ async def _gather_diagnostics(
         # Entity doesn't exist or error occurred
         logger.debug(f"Error getting entity state for diagnostics: {e}")
         diagnostics["suggestion"] = (
-            f"Could not find {automation_id}. "
+            f"Could not find {entity_id}. "
             "Verify the entity_id is correct using ha_search()."
         )
 
@@ -567,10 +592,15 @@ async def _is_trace_storage_enabled(
 
 def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
     """Build a helpful hint explaining why no traces are available."""
-    if not diagnostics["automation_enabled"]:
+    if not diagnostics["entity_enabled"]:
         return (
             f"The {domain} is currently disabled (state: off). "
             "Enable it to start recording traces."
+        )
+    if not diagnostics.get("trace_key_available", True):
+        return (
+            "Home Assistant does not store traces for this automation because "
+            "it has no unique id. Add an 'id' to the automation config."
         )
     if not diagnostics["trace_storage_enabled"]:
         return (
@@ -578,6 +608,11 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
             f"Set 'stored_traces' to a positive number in the {domain} config."
         )
     if diagnostics["last_triggered"] is None:
+        if domain == "script":
+            return (
+                "Run the script to generate traces. Home Assistant keeps only "
+                "a limited number of recent runs."
+            )
         return (
             f"The {domain} has never been triggered. "
             "Wait for it to trigger or manually trigger it to generate traces."
@@ -589,7 +624,7 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
 
 
 def _format_trace_list(
-    automation_id: str,
+    entity_id: str,
     traces: list[dict[str, Any]],
     limit: int,
     diagnostics: dict[str, Any] | None = None,
@@ -600,7 +635,7 @@ def _format_trace_list(
     """Format trace list for AI consumption.
 
     Args:
-        automation_id: The automation or script entity_id
+        entity_id: The automation or script entity_id
         traces: List of trace data from Home Assistant (sorted here by Core's
             start timestamp before paging)
         limit: Maximum number of traces to include
@@ -632,7 +667,7 @@ def _format_trace_list(
 
     result: dict[str, Any] = {
         "success": True,
-        "automation_id": automation_id,
+        "entity_id": entity_id,
         "trace_count": len(formatted_traces),
         "total_available": len(traces),
         "offset": offset,
@@ -675,12 +710,15 @@ def _add_optional_detail(
             result["logbook_entries"] = entries
         if logbook is not None and logbook.transport is not None:
             result["logbook_transport"] = logbook.transport
+        if logbook is not None:
+            result["logbook_total"] = logbook.total
+            result["logbook_truncated"] = logbook.truncated
     if (detailed or "context" in requested) and trace.get("context"):
         result["context"] = trace["context"]
 
 
 def _format_detailed_trace(
-    automation_id: str,
+    entity_id: str,
     run_id: str,
     trace: dict[str, Any],
     *,
@@ -690,10 +728,10 @@ def _format_detailed_trace(
     logbook: TraceLogbook | None = None,
 ) -> dict[str, Any]:
     """Format detailed trace for AI consumption."""
-    domain = "automation" if automation_id.startswith("automation.") else "script"
+    domain = "automation" if entity_id.startswith("automation.") else "script"
     result: dict[str, Any] = {
         "success": True,
-        "automation_id": automation_id,
+        "entity_id": entity_id,
         "run_id": run_id,
         "timestamp": trace.get("timestamp"),
         "state": trace.get("state"),
@@ -710,12 +748,18 @@ def _format_detailed_trace(
     # independently of the action trace and were previously dropped.
     _add_core_summary_fields(result, trace)
 
-    # Add the run's raw config from Core. It is historical (the config used by
-    # this run), not the automation's current config, and it is the native
-    # field the trace editor shows when debugging.
+    # Add a compact summary of the run's raw config by default. The full
+    # historical config is opt-in through sections="config" because triggers,
+    # conditions and actions can be large.
+    requested = _requested_sections(sections)
     config = trace.get("config")
     if config is not None:
-        result["config"] = config
+        result["config_summary"] = {
+            "alias": config.get("alias"),
+            "mode": config.get("mode"),
+        }
+        if "config" in requested:
+            result["config"] = config
 
     # Check for overall error
     if trace.get("error"):
@@ -724,8 +768,6 @@ def _format_detailed_trace(
     # Add script execution info if present
     if trace.get("script_execution"):
         result["script_execution"] = trace["script_execution"]
-
-    requested = _requested_sections(sections)
 
     # In detailed mode, include logbook entries that Home Assistant supplies
     # and the run's context metadata. Either can be requested explicitly
@@ -809,7 +851,7 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
     # Always keep metadata keys
     keep_keys |= {
         "success",
-        "automation_id",
+        "entity_id",
         "run_id",
         "timestamp",
         "state",
@@ -820,6 +862,8 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
         "item_id",
         "not_triggered",
         "logbook_transport",
+        "logbook_total",
+        "logbook_truncated",
     }
     return {k: v for k, v in result.items() if k in keep_keys}
 

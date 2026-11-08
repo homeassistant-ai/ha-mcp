@@ -43,7 +43,7 @@ class TestTraceContextLookup:
         )
 
         result = await TraceTools(client).ha_get_automation_traces(
-            automation_id="automation.test", context_id="ctx-1"
+            entity_id="automation.test", context_id="ctx-1"
         )
 
         assert result["success"] is True
@@ -96,7 +96,7 @@ class TestTraceContextLookup:
         client = _make_pooled_client(_d)
 
         result = await TraceTools(client).ha_get_automation_traces(
-            automation_id="automation.test", context_id="parent-1"
+            entity_id="automation.test", context_id="parent-1"
         )
 
         assert result["run_id"] == "r1"
@@ -120,14 +120,23 @@ class TestTraceContextLookup:
 
         with patch(
             "ha_mcp.tools.tools_traces.resolve_context_trace",
-            AsyncMock(return_value=ContextTraceMatch("r1", "parent", 50, True)),
+            AsyncMock(
+                return_value=ContextTraceMatch(
+                    "r1",
+                    "parent",
+                    50,
+                    True,
+                    ("r49: The trace could not be found",),
+                )
+            ),
         ):
             result = await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test", context_id="parent-1"
+                entity_id="automation.test", context_id="parent-1"
             )
 
         assert result["context_scan_truncated"] is True
         assert result["context_scanned"] == 50
+        assert result["context_scan_errors"] == ["r49: The trace could not be found"]
 
     @pytest.mark.asyncio
     async def test_unknown_context_id_is_not_found(self):
@@ -138,7 +147,7 @@ class TestTraceContextLookup:
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test", context_id="missing"
+                entity_id="automation.test", context_id="missing"
             )
 
         error = json.loads(str(exc_info.value))
@@ -154,7 +163,7 @@ class TestTraceContextLookup:
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test", context_id="ctx-1"
+                entity_id="automation.test", context_id="ctx-1"
             )
 
         error = json.loads(str(exc_info.value))
@@ -167,7 +176,7 @@ class TestTraceContextLookup:
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test",
+                entity_id="automation.test",
                 run_id="r1",
                 context_id="ctx-1",
             )
@@ -183,7 +192,7 @@ class TestTraceContextLookup:
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test", context_id="   "
+                entity_id="automation.test", context_id="   "
             )
 
         error = json.loads(str(exc_info.value))
@@ -204,7 +213,7 @@ class TestTraceContextLookup:
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test", context_id="ctx-1"
+                entity_id="automation.test", context_id="ctx-1"
             )
 
         error = json.loads(str(exc_info.value))
@@ -219,7 +228,7 @@ class TestTraceContextLookup:
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test", context_id="ctx-1"
+                entity_id="automation.test", context_id="ctx-1"
             )
 
         error = json.loads(str(exc_info.value))

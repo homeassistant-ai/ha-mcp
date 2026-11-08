@@ -22,7 +22,7 @@ class TestFormatTraceList:
         result = _format_trace_list("automation.test", [], 10)
 
         assert result["success"] is True
-        assert result["automation_id"] == "automation.test"
+        assert result["entity_id"] == "automation.test"
         assert result["trace_count"] == 0
         assert result["total_available"] == 0
         assert result["traces"] == []
@@ -31,8 +31,8 @@ class TestFormatTraceList:
     def test_empty_traces_with_diagnostics(self):
         """Empty traces with diagnostics include diagnostics in result."""
         diagnostics = {
-            "automation_exists": True,
-            "automation_enabled": True,
+            "entity_exists": True,
+            "entity_enabled": True,
             "trace_storage_enabled": True,
             "last_triggered": "2025-11-30T15:00:00Z",
             "suggestion": "Traces may have been cleared.",
@@ -43,7 +43,7 @@ class TestFormatTraceList:
         assert result["success"] is True
         assert result["trace_count"] == 0
         assert "diagnostics" in result
-        assert result["diagnostics"]["automation_exists"] is True
+        assert result["diagnostics"]["entity_exists"] is True
         assert result["diagnostics"]["last_triggered"] == "2025-11-30T15:00:00Z"
 
     def test_non_empty_traces_ignore_diagnostics(self):
@@ -57,8 +57,8 @@ class TestFormatTraceList:
             }
         ]
         diagnostics = {
-            "automation_exists": True,
-            "automation_enabled": True,
+            "entity_exists": True,
+            "entity_enabled": True,
             "trace_storage_enabled": True,
             "last_triggered": "2025-11-30T15:00:00Z",
             "suggestion": "Test suggestion",
@@ -399,7 +399,7 @@ class TestGatherDiagnostics:
     """
 
     @pytest.mark.asyncio
-    async def test_automation_exists_and_enabled(self):
+    async def test_entity_exists_and_enabled(self):
         """Diagnostics correctly identify existing, enabled automation."""
         client = AsyncMock()
         client.get_entity_state.return_value = {
@@ -416,14 +416,35 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
-        assert result["automation_exists"] is True
-        assert result["automation_enabled"] is True
+        assert result["entity_exists"] is True
+        assert result["entity_enabled"] is True
         assert result["last_triggered"] == "2025-11-30T15:00:00Z"
         assert result["trace_storage_enabled"] is True
         # The config probe went through the pooled client, not a dedicated socket.
         client.send_websocket_message.assert_awaited_once_with(
             {"type": "automation/config", "entity_id": "automation.test"}
         )
+
+    @pytest.mark.asyncio
+    async def test_automation_without_id_reports_no_trace_key(self):
+        """A YAML automation without an id cannot have a stored trace."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "on",
+            "attributes": {
+                "last_triggered": "2025-11-30T15:00:00Z",
+            },
+        }
+        client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"config": {"trace": {"stored_traces": 5}}},
+        }
+
+        result = await _gather_diagnostics(client, "automation.test", "automation")
+
+        assert result["entity_exists"] is True
+        assert result["trace_key_available"] is False
+        assert "no unique id" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
     async def test_automation_disabled(self):
@@ -444,8 +465,8 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
-        assert result["automation_exists"] is True
-        assert result["automation_enabled"] is False
+        assert result["entity_exists"] is True
+        assert result["entity_enabled"] is False
         assert "disabled" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
@@ -467,8 +488,8 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
-        assert result["automation_exists"] is True
-        assert result["automation_enabled"] is True
+        assert result["entity_exists"] is True
+        assert result["entity_enabled"] is True
         assert result["last_triggered"] is None
         assert "never been triggered" in result["suggestion"].lower()
 
@@ -480,7 +501,7 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
-        assert result["automation_exists"] is False
+        assert result["entity_exists"] is False
         assert "could not find" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
@@ -608,8 +629,8 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "script.test", "script")
 
-        assert result["automation_exists"] is True
-        assert result["automation_enabled"] is True
+        assert result["entity_exists"] is True
+        assert result["entity_enabled"] is True
         # For scripts, we should see "script" in suggestion, not "automation"
         assert "script" in result["suggestion"].lower()
         client.send_websocket_message.assert_awaited_once_with(
@@ -633,7 +654,7 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "script.test", "script")
 
-        assert result["automation_enabled"] is True
+        assert result["entity_enabled"] is True
         assert result["trace_storage_enabled"] is False
         assert "trace storage is disabled for this script" in (
             result["suggestion"].lower()
@@ -655,8 +676,8 @@ class TestGatherDiagnostics:
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
         # Should still return diagnostics even if config fetch fails
-        assert result["automation_exists"] is True
-        assert result["automation_enabled"] is True
+        assert result["entity_exists"] is True
+        assert result["entity_enabled"] is True
         # trace_storage_enabled defaults to True when we can't fetch config
         assert result["trace_storage_enabled"] is True
 
@@ -786,6 +807,56 @@ class TestTraceFetchPooledClient:
     #1813 item #5): no dedicated socket, structured errors preserved."""
 
     @pytest.mark.asyncio
+    async def test_script_entity_id_uses_script_domain(self):
+        """A script entity id drives trace/list in the script domain."""
+        list_result = {"success": True, "result": []}
+        client = _make_pooled_client(_dispatch(list_result=list_result))
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            entity_id="script.test"
+        )
+
+        assert result["success"] is True
+        trace_list_calls = [
+            call.args[0]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0]["type"] == "trace/list"
+        ]
+        assert trace_list_calls[0]["domain"] == "script"
+
+    @pytest.mark.asyncio
+    async def test_empty_list_gathers_diagnostics(self):
+        """An empty list path returns diagnostics from the item config."""
+        client = _make_pooled_client(
+            _dispatch(list_result={"success": True, "result": []})
+        )
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            entity_id="automation.test"
+        )
+
+        assert result["trace_count"] == 0
+        assert "diagnostics" in result
+        assert result["diagnostics"]["entity_exists"] is True
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_maps_to_structured_error(self):
+        """An unexpected failure is classified, not leaked as a raw exception."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("pooled connect exploded")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["success"] is False
+        assert "pooled connect exploded" in str(error)
+
+    @pytest.mark.asyncio
     async def test_list_drives_pooled_client(self):
         list_result = {
             "success": True,
@@ -800,7 +871,7 @@ class TestTraceFetchPooledClient:
         client = _make_pooled_client(_dispatch(list_result=list_result))
         tools = TraceTools(client)
 
-        result = await tools.ha_get_automation_traces(automation_id="automation.test")
+        result = await tools.ha_get_automation_traces(entity_id="automation.test")
 
         assert result["success"] is True
         assert result["trace_count"] == 1
@@ -827,7 +898,7 @@ class TestTraceFetchPooledClient:
         tools = TraceTools(client)
 
         result = await tools.ha_get_automation_traces(
-            automation_id="automation.test", run_id="r1"
+            entity_id="automation.test", run_id="r1"
         )
 
         assert result["success"] is True
@@ -851,7 +922,7 @@ class TestTraceFetchPooledClient:
         tools = TraceTools(client)
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(automation_id="automation.test")
+            await tools.ha_get_automation_traces(entity_id="automation.test")
 
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
@@ -865,7 +936,7 @@ class TestTraceFetchPooledClient:
         tools = TraceTools(client)
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(automation_id="automation.test")
+            await tools.ha_get_automation_traces(entity_id="automation.test")
 
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
@@ -884,7 +955,7 @@ class TestTraceFetchPooledClient:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_automation_traces(
-                automation_id="automation.test", run_id="r1"
+                entity_id="automation.test", run_id="r1"
             )
 
         error = json.loads(str(exc_info.value))
@@ -901,7 +972,7 @@ class TestTraceFetchPooledClient:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_automation_traces(
-                automation_id="automation.test", run_id="r1"
+                entity_id="automation.test", run_id="r1"
             )
 
         error = json.loads(str(exc_info.value))

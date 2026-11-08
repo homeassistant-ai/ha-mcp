@@ -22,6 +22,7 @@ from .util_helpers import is_connection_error_message
 logger = logging.getLogger(__name__)
 
 PARENT_CONTEXT_SCAN_LIMIT = 50
+LOGBOOK_ROW_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class ContextTraceMatch:
     match: Literal["trace", "parent"]
     scanned: int
     truncated: bool
+    scan_errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,8 +41,10 @@ class TraceLogbook:
     """Logbook rows for one trace run."""
 
     entries: list[dict[str, Any]]
-    transport: Literal["component", "rest"] | None
+    transport: Literal["component", "rest", "mixed"] | None
     warnings: list[str]
+    total: int = 0
+    truncated: bool = False
 
 
 def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> None:
@@ -126,10 +130,12 @@ async def _resolve_parent_context(
         )
 
     traces = result.get("result")
+    scan_errors: list[str] = []
+    if not isinstance(traces, list):
+        scan_errors.append("trace/list returned no row list")
+        traces = []
     candidates = [
-        trace
-        for trace in (traces if isinstance(traces, list) else [])
-        if isinstance(trace, dict) and trace.get("run_id")
+        trace for trace in traces if isinstance(trace, dict) and trace.get("run_id")
     ]
     candidates.sort(key=_trace_start, reverse=True)
     truncated = len(candidates) > PARENT_CONTEXT_SCAN_LIMIT
@@ -158,11 +164,14 @@ async def _resolve_parent_context(
                         "item_id": item_id,
                     },
                 )
+            scan_errors.append(f"{run_id}: {error}")
             continue
         trace_data = detail.get("result")
         context = trace_data.get("context") if isinstance(trace_data, dict) else None
         if isinstance(context, dict) and context.get("parent_id") == context_id:
-            return ContextTraceMatch(run_id, "parent", scanned, truncated)
+            return ContextTraceMatch(
+                run_id, "parent", scanned, truncated, tuple(scan_errors)
+            )
 
     suggestions = [
         "Pass the trace's own `context.id`, or the context id of the event "
@@ -176,6 +185,12 @@ async def _resolve_parent_context(
             f"Only the newest {PARENT_CONTEXT_SCAN_LIMIT} stored traces were "
             "scanned; increase stored_traces or pass the trace's run_id",
         )
+    if scan_errors:
+        suggestions.insert(
+            0,
+            "Some stored traces could not be read; retry after checking "
+            "the Home Assistant logs",
+        )
     raise_tool_error(
         create_error_response(
             ErrorCode.RESOURCE_NOT_FOUND,
@@ -186,6 +201,7 @@ async def _resolve_parent_context(
                 "item_id": item_id,
                 "scanned": scanned,
                 "scan_truncated": truncated,
+                "scan_errors": scan_errors,
             },
             suggestions=suggestions,
         )
@@ -196,17 +212,24 @@ async def fetch_trace_logbook(
     client: Any,
     trace: dict[str, Any],
 ) -> TraceLogbook:
-    """Fetch logbook rows for a trace's own context, component first.
+    """Fetch logbook rows for the run and its triggering context, component first.
 
     Core's ``trace/get`` no longer carries logbook entries. The native source
-    is Core's logbook processor filtered by the run's ``context.id``. The
-    component's ``ha_mcp_tools/logbook_events`` command runs that processor in
-    process; Core's REST ``/api/logbook`` is the fallback. The trace window is
-    the run's own start/finish, widened by one second before the start so the
-    triggering event is included.
+    is Core's logbook processor filtered by context. The run's own context
+    holds the automation/script rows; a triggering event or service call is in
+    the run's ``context.parent_id``, so both are queried. The component's
+    ``ha_mcp_tools/logbook_events`` command runs the processor in process;
+    Core's REST ``/api/logbook`` is the fallback. The trace window is widened
+    by two seconds on each side because recorder rows can land just outside
+    the action trace.
+
+    Rows are capped at ``LOGBOOK_ROW_LIMIT``; ``total`` and ``truncated`` tell
+    the caller what was left out.
     """
     context = trace.get("context")
-    context_id = context.get("id") if isinstance(context, dict) else None
+    if not isinstance(context, dict):
+        context = {}
+    context_id = context.get("id")
     if not context_id:
         return TraceLogbook(
             [],
@@ -215,11 +238,62 @@ async def fetch_trace_logbook(
         )
 
     start_time, end_time = _logbook_window(trace)
+    contexts: list[str] = []
+    parent_id = context.get("parent_id")
+    if isinstance(parent_id, str) and parent_id:
+        contexts.append(parent_id)
+    contexts.append(str(context_id))
+
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    warnings: list[str] = []
+    transports: set[str] = set()
+    for lookup_id in contexts:
+        entries, transport, context_warnings = await _fetch_logbook_context(
+            client, lookup_id, start_time, end_time
+        )
+        warnings.extend(context_warnings)
+        if transport:
+            transports.add(transport)
+        for row in entries:
+            key = (
+                row.get("context_id"),
+                row.get("when"),
+                row.get("name"),
+                row.get("message"),
+                row.get("entity_id"),
+                row.get("state"),
+                row.get("domain"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+
+    total = len(merged)
+    entries = merged[:LOGBOOK_ROW_LIMIT]
+    transport = "mixed" if len(transports) > 1 else (next(iter(transports), None))
+    return TraceLogbook(
+        entries,
+        transport,  # type: ignore[arg-type]
+        warnings,
+        total,
+        total > LOGBOOK_ROW_LIMIT,
+    )
+
+
+async def _fetch_logbook_context(
+    client: Any,
+    context_id: str,
+    start_time: str,
+    end_time: str,
+) -> tuple[list[dict[str, Any]], str | None, list[str]]:
+    """Read one context's logbook, component first with a REST fallback."""
     entries, warnings = await _fetch_component_logbook(
         client, context_id, start_time, end_time
     )
     if entries is not None:
-        return TraceLogbook(entries, "component", warnings)
+        return entries, "component", warnings
 
     try:
         rest_entries = await client.get_logbook(
@@ -229,12 +303,12 @@ async def fetch_trace_logbook(
         )
     except Exception as err:  # noqa: BLE001
         warnings.append(f"Could not read the trace logbook: {err}")
-        return TraceLogbook([], None, warnings)
+        return [], None, warnings
 
     if not isinstance(rest_entries, list):
         warnings.append("The REST logbook reply was not a row list.")
-        return TraceLogbook([], None, warnings)
-    return TraceLogbook(rest_entries, "rest", warnings)
+        return [], None, warnings
+    return rest_entries, "rest", warnings
 
 
 async def _fetch_component_logbook(

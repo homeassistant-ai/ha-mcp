@@ -116,7 +116,7 @@ class TestBareIdentifierConcealment:
             # the bare object ID when no entity has the given entity_id.
             pytest.param(
                 "ha_get_automation_traces",
-                {"automation_id": "script.come_home"},
+                {"entity_id": "script.come_home"},
                 _RENAMED_HIDDEN_SCRIPT,
                 id="trace-by-script-storage-key",
             ),
@@ -344,6 +344,8 @@ async def test_genuine_not_found_lists_only_visible_ids(
 
 def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     if param_name in ("script_id", "scene_id", "automation_id"):
+        return True
+    if param_name == "entity_id" and tool_name == "ha_get_automation_traces":
         return True
     # The automation config tools also take a bare config id as ``entity_id``.
     return (

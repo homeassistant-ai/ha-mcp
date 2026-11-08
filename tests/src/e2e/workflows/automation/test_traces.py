@@ -68,7 +68,7 @@ class TestAutomationTraces:
                 traces_data = await wait_for_tool_result(
                     mcp_client,
                     tool_name="ha_get_automation_traces",
-                    arguments={"automation_id": automation_id},
+                    arguments={"entity_id": automation_id},
                     predicate=lambda data: data.get("trace_count", 0) > 0,
                     timeout=120,
                     poll_interval=1,
@@ -77,7 +77,7 @@ class TestAutomationTraces:
                 run_id = traces_data["traces"][0]["run_id"]
                 detailed_data = await mcp.call_tool_success(
                     "ha_get_automation_traces",
-                    {"automation_id": automation_id, "run_id": run_id},
+                    {"entity_id": automation_id, "run_id": run_id},
                 )
 
             assert detailed_data["trigger"]["platform"] == "template"
@@ -150,7 +150,7 @@ class TestAutomationTraces:
         async def check_automation_traces():
             result = await mcp_client.call_tool(
                 "ha_get_automation_traces",
-                {"automation_id": automation_id},
+                {"entity_id": automation_id},
             )
             data = parse_mcp_result(result)
             return data.get("trace_count", 0) > 0
@@ -173,7 +173,7 @@ class TestAutomationTraces:
         # 4. Get traces for the automation
         traces_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
-            {"automation_id": automation_id},
+            {"entity_id": automation_id},
         )
         assert_mcp_success(traces_result)
         traces_data = parse_mcp_result(traces_result)
@@ -207,7 +207,7 @@ class TestAutomationTraces:
         if run_id:
             detailed_result = await mcp_client.call_tool(
                 "ha_get_automation_traces",
-                {"automation_id": automation_id, "run_id": run_id},
+                {"entity_id": automation_id, "run_id": run_id},
             )
             assert_mcp_success(detailed_result)
             detailed_data = parse_mcp_result(detailed_result)
@@ -236,6 +236,120 @@ class TestAutomationTraces:
 
             logger.info(
                 f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions"
+            )
+
+    async def test_blueprint_trace_preserves_inputs_and_config(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """A real blueprint trace keeps blueprint_inputs, last_step and config."""
+        test_light = await self._find_test_light_entity(mcp_client)
+        suffix = uuid.uuid4().hex[:8]
+        blueprint_path = f"e2e/trace_fields_{suffix}.yaml"
+        blueprint_yaml = f"""blueprint:
+  name: Trace Fields E2E {suffix}
+  description: Temporary blueprint for trace field verification.
+  domain: automation
+  input:
+    target_entity:
+      name: Target entity
+      selector:
+        entity: {{}}
+trigger:
+  - platform: event
+    event_type: trace_fields_{suffix}
+action:
+  - delay:
+      seconds: 0
+  - action: homeassistant.turn_on
+    target:
+      entity_id: !input target_entity
+"""
+        saved = await mcp_client.call_tool(
+            "ha_manage_blueprints",
+            {
+                "action": "save",
+                "domain": "automation",
+                "path": blueprint_path,
+                "yaml": blueprint_yaml,
+            },
+        )
+        assert_mcp_success(saved)
+
+        automation_id = None
+        try:
+            create_config = {
+                "alias": f"Trace Fields E2E {suffix}",
+                "use_blueprint": {
+                    "path": blueprint_path,
+                    "input": {"target_entity": test_light},
+                },
+                "trace": {"stored_traces": 5},
+                "initial_state": True,
+            }
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_automation", {"config": create_config}
+            )
+            assert_mcp_success(create_result)
+            create_data = parse_mcp_result(create_result)
+            automation_id = create_data.get("entity_id") or create_data.get(
+                "automation_id"
+            )
+            assert automation_id is not None
+            cleanup_tracker.track("automation", automation_id)
+
+            trigger_result = await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "automation",
+                    "service": "trigger",
+                    "entity_id": automation_id,
+                },
+            )
+            assert_mcp_success(trigger_result)
+
+            traces_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_automation_traces",
+                arguments={"entity_id": automation_id},
+                predicate=lambda data: data.get("trace_count", 0) > 0,
+                timeout=15,
+                poll_interval=0.5,
+                description="blueprint automation trace",
+            )
+
+            detail_result = await mcp_client.call_tool(
+                "ha_get_automation_traces",
+                {
+                    "entity_id": automation_id,
+                    "run_id": traces_data["traces"][0]["run_id"],
+                    "sections": "config",
+                },
+            )
+            assert_mcp_success(detail_result)
+            detail_data = parse_mcp_result(detail_result)
+
+            assert detail_data["last_step"].startswith("action/")
+            assert detail_data["blueprint_inputs"]["use_blueprint"]["input"] == {
+                "target_entity": test_light
+            }
+            assert "triggers" in detail_data["config"]
+            assert "actions" in detail_data["config"]
+        finally:
+            if automation_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"entity_id": automation_id},
+                )
+            await safe_call_tool(
+                mcp_client,
+                "ha_manage_blueprints",
+                {
+                    "action": "delete",
+                    "domain": "automation",
+                    "path": blueprint_path,
+                    "confirm": True,
+                },
             )
 
     async def test_event_context_resolves_to_triggered_run(
@@ -271,7 +385,7 @@ class TestAutomationTraces:
         traces_data = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
-            arguments={"automation_id": automation_id},
+            arguments={"entity_id": automation_id},
             predicate=lambda data: data.get("trace_count", 0) > 0,
             timeout=15,
             poll_interval=0.5,
@@ -281,7 +395,7 @@ class TestAutomationTraces:
         by_context_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
             {
-                "automation_id": automation_id,
+                "entity_id": automation_id,
                 "context_id": event_context_id,
             },
         )
@@ -339,7 +453,7 @@ class TestAutomationTraces:
         traces_data = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
-            arguments={"automation_id": automation_id},
+            arguments={"entity_id": automation_id},
             predicate=lambda data: data.get("trace_count", 0) > 0,
             timeout=15,
             poll_interval=0.5,
@@ -349,7 +463,7 @@ class TestAutomationTraces:
         detail_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
             {
-                "automation_id": automation_id,
+                "entity_id": automation_id,
                 "run_id": traces_data["traces"][0]["run_id"],
                 "detailed": True,
             },
@@ -404,7 +518,7 @@ class TestAutomationTraces:
         traces_data = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
-            arguments={"automation_id": automation_id},
+            arguments={"entity_id": automation_id},
             predicate=lambda data: (
                 data.get("diagnostics", {}).get("trace_storage_enabled") is False
             ),
@@ -458,7 +572,7 @@ class TestAutomationTraces:
         traces_data = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
-            arguments={"automation_id": automation_id},
+            arguments={"entity_id": automation_id},
             predicate=lambda data: data.get("trace_count", 0) > 0,
             timeout=15,
             poll_interval=0.5,
@@ -469,7 +583,7 @@ class TestAutomationTraces:
         detail_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
             {
-                "automation_id": automation_id,
+                "entity_id": automation_id,
                 "run_id": run_id,
                 "detailed": True,
             },
@@ -480,7 +594,7 @@ class TestAutomationTraces:
 
         by_context_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
-            {"automation_id": automation_id, "context_id": context_id},
+            {"entity_id": automation_id, "context_id": context_id},
         )
         assert_mcp_success(by_context_result)
         by_context_data = parse_mcp_result(by_context_result)
@@ -527,7 +641,7 @@ class TestAutomationTraces:
         # 3. Get traces (should be empty with diagnostics)
         traces_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
-            {"automation_id": automation_id},
+            {"entity_id": automation_id},
         )
         assert_mcp_success(traces_result)
         traces_data = parse_mcp_result(traces_result)
@@ -543,7 +657,7 @@ class TestAutomationTraces:
             assert diagnostics is not None, (
                 "Diagnostics should be included when traces are empty"
             )
-            assert "automation_exists" in diagnostics
+            assert "entity_exists" in diagnostics
             assert "suggestion" in diagnostics
 
             logger.info(f"Diagnostics received: {diagnostics.get('suggestion')}")
@@ -603,7 +717,7 @@ class TestAutomationTraces:
         async def check_traces():
             result = await mcp_client.call_tool(
                 "ha_get_automation_traces",
-                {"automation_id": script_entity_id},
+                {"entity_id": script_entity_id},
             )
             data = parse_mcp_result(result)
             return data.get("trace_count", 0) > 0
@@ -626,7 +740,7 @@ class TestAutomationTraces:
         # 4. Get traces for the script
         traces_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
-            {"automation_id": script_entity_id},
+            {"entity_id": script_entity_id},
         )
         assert_mcp_success(traces_result)
         traces_data = parse_mcp_result(traces_result)
@@ -676,7 +790,7 @@ class TestAutomationTraces:
         traces_data = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
-            arguments={"automation_id": script_entity_id},
+            arguments={"entity_id": script_entity_id},
             predicate=lambda data: (
                 data.get("diagnostics", {}).get("trace_storage_enabled") is False
             ),
@@ -686,7 +800,7 @@ class TestAutomationTraces:
         )
 
         assert traces_data["trace_count"] == 0
-        assert traces_data["diagnostics"]["automation_enabled"] is True
+        assert traces_data["diagnostics"]["entity_enabled"] is True
         assert traces_data["diagnostics"]["trace_storage_enabled"] is False
         assert "trace storage is disabled for this script" in (
             traces_data["diagnostics"]["suggestion"].lower()
@@ -702,7 +816,7 @@ class TestGetAutomationTracesNegativeInputs:
         result = await safe_call_tool(
             mcp_client,
             "ha_get_automation_traces",
-            {"automation_id": "sensor.some_entity"},
+            {"entity_id": "sensor.some_entity"},
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

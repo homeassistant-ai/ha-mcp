@@ -133,6 +133,27 @@ class TestResolveContextTrace:
 
         assert match.run_id == "good"
         assert match.scanned == 2
+        assert match.scan_errors == ("bad: The trace could not be found",)
+
+    @pytest.mark.asyncio
+    async def test_parent_scan_malformed_list_is_reported(self):
+        """A non-list trace/list reply is reported in the not-found error."""
+
+        def _dispatch(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                return {"success": True, "result": "not a list"}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_dispatch)
+
+        with pytest.raises(ToolError) as exc_info:
+            await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error["scan_errors"] == ["trace/list returned no row list"]
 
     @pytest.mark.asyncio
     async def test_parent_scan_detail_transport_failure_is_classified(self):
@@ -456,6 +477,120 @@ class TestFetchTraceLogbook:
         assert isinstance(string_timestamp_finish, str)
 
     @pytest.mark.asyncio
+    async def test_parent_context_rows_are_included(self):
+        """The triggering context's rows are merged before the run's own rows."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.send_websocket_message = AsyncMock(
+            side_effect=lambda message: {
+                "success": True,
+                "result": [
+                    {
+                        "name": "Parent row",
+                        "context_id": message["context_id"],
+                        "message": "triggered",
+                    }
+                ],
+            }
+        )
+
+        trace = {
+            "run_id": "r1",
+            "timestamp": {
+                "start": "2026-11-08T16:00:00+00:00",
+                "finish": "2026-11-08T16:00:01+00:00",
+            },
+            "context": {"id": "own-1", "parent_id": "parent-1"},
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={"logbook_events": True}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=True,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, trace)
+
+        assert [row["context_id"] for row in logbook.entries] == [
+            "parent-1",
+            "own-1",
+        ]
+        assert logbook.total == 2
+        assert logbook.truncated is False
+        assert logbook.transport == "component"
+
+    @pytest.mark.asyncio
+    async def test_logbook_rows_are_capped(self):
+        """The row cap reports the full total and a truncation flag."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"name": f"Row {i}"} for i in range(60)],
+            }
+        )
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={"logbook_events": True}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=True,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, self._trace())
+
+        assert len(logbook.entries) == 50
+        assert logbook.total == 60
+        assert logbook.truncated is True
+
+    @pytest.mark.asyncio
+    async def test_duplicate_logbook_rows_are_dropped(self):
+        """The parent and own context queries may return the same row once."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "name": "Same row",
+                        "context_id": "ctx",
+                        "message": "triggered",
+                        "when": "2026-11-08T16:00:00+00:00",
+                    }
+                ],
+            }
+        )
+        trace = {
+            "run_id": "r1",
+            "timestamp": {
+                "start": "2026-11-08T16:00:00+00:00",
+                "finish": "2026-11-08T16:00:01+00:00",
+            },
+            "context": {"id": "ctx", "parent_id": "parent"},
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={"logbook_events": True}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=True,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, trace)
+
+        assert len(logbook.entries) == 1
+        assert logbook.total == 1
+
+    @pytest.mark.asyncio
     async def test_rest_failure_returns_a_warning_and_empty_entries(self):
         """A failed logbook read degrades to a warning, not a trace failure."""
         client = _make_pooled_client(lambda mtype, message: {})
@@ -530,7 +665,7 @@ class TestTraceToolLogbook:
             ),
         ):
             result = await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test",
+                entity_id="automation.test",
                 run_id="r1",
                 detailed=True,
             )
@@ -552,7 +687,7 @@ class TestTraceToolLogbook:
             ),
         ):
             result = await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test",
+                entity_id="automation.test",
                 run_id="r1",
                 detailed=True,
             )
@@ -569,7 +704,7 @@ class TestTraceToolLogbook:
             AsyncMock(return_value=TraceLogbook([{"name": "Light"}], "rest", [])),
         ) as fetch:
             result = await TraceTools(client).ha_get_automation_traces(
-                automation_id="automation.test",
+                entity_id="automation.test",
                 run_id="r1",
                 sections="logbook",
             )

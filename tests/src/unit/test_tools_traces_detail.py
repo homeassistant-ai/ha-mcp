@@ -59,7 +59,7 @@ class TestFormatDetailedTrace:
         result = _format_detailed_trace("automation.test", "run_123", trace_data)
 
         assert result["success"] is True
-        assert result["automation_id"] == "automation.test"
+        assert result["entity_id"] == "automation.test"
         assert result["run_id"] == "run_123"
 
         # Verify Trigger
@@ -556,7 +556,7 @@ class TestFilterTraceSections:
 
     FULL_RESULT: ClassVar[dict[str, Any]] = {
         "success": True,
-        "automation_id": "automation.x",
+        "entity_id": "automation.x",
         "run_id": "1",
         "timestamp": {"start": "t0"},
         "state": "stopped",
@@ -584,7 +584,7 @@ class TestFilterTraceSections:
             assert dropped not in result
         for metadata_key in (
             "success",
-            "automation_id",
+            "entity_id",
             "run_id",
             "timestamp",
             "state",
@@ -620,7 +620,7 @@ class TestFilterTraceSections:
             assert key not in result
         for metadata_key in (
             "success",
-            "automation_id",
+            "entity_id",
             "run_id",
             "timestamp",
             "state",
@@ -691,7 +691,11 @@ class TestFormatDetailedTraceNativeFields:
         assert result["item_id"] == "trace_capture"
         assert result["not_triggered"] is True
         assert result["blueprint_inputs"] == {"target_entity": "light.fan_bulb_1"}
-        assert result["config"] == trace["config"]
+        assert result["config_summary"] == {
+            "alias": "Trace capture",
+            "mode": "single",
+        }
+        assert "config" not in result
         assert result["context"] == {
             "id": "ctx-1",
             "parent_id": None,
@@ -699,20 +703,23 @@ class TestFormatDetailedTraceNativeFields:
         }
 
     def test_detail_config_passes_raw_config_without_inventing_mode(self):
-        """A raw config with no mode is returned as-is, not given a default."""
-        result = _format_detailed_trace(
-            "automation.test",
-            "r1",
-            {
-                "run_id": "r1",
-                "state": "stopped",
-                "config": {"alias": "No mode"},
-                "trace": {},
-            },
+        """The default summary does not invent a mode; full config is opt-in."""
+        trace = {
+            "run_id": "r1",
+            "state": "stopped",
+            "config": {"alias": "No mode"},
+            "trace": {},
+        }
+
+        default = _format_detailed_trace("automation.test", "r1", trace)
+        with_config = _format_detailed_trace(
+            "automation.test", "r1", trace, sections="config"
         )
 
-        assert result["config"] == {"alias": "No mode"}
-        assert "config_summary" not in result
+        assert default["config_summary"] == {"alias": "No mode", "mode": None}
+        assert "config" not in default
+        assert with_config["config"] == {"alias": "No mode"}
+        assert "config_summary" not in with_config
 
     def test_detail_handles_null_config_and_trace(self):
         """A restored or unfinished trace can carry null config and trace."""

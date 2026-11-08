@@ -41,7 +41,7 @@ BARE_IDENTIFIER_ARGS: dict[str, tuple[str, str]] = {
 # Tools whose identifier carries its domain as a ``script.`` / ``automation.``
 # prefix but falls back to the bare key when no entity has that entity_id.
 PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
-    "ha_get_automation_traces": "automation_id",
+    "ha_get_automation_traces": "entity_id",
 }
 
 _SERVICE_TOOL = "ha_call_service"
