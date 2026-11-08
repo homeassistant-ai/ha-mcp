@@ -2,8 +2,8 @@ id: no-plain-service-register
 language: python
 rule:
   any:
-    - pattern: $HASS.services.async_register($$$)
-    - pattern: $HASS.services.register($$$)
+    - pattern: $REGISTRY.async_register($$$)
+    - pattern: $REGISTRY.register($$$)
 files:
   - "custom_components/ha_mcp_tools/**"
 message: |

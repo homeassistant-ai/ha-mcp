@@ -18,40 +18,50 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
 )
 from ha_mcp.settings_ui import build_settings_handlers
-from ha_mcp.settings_ui._handlers_fs import _component_error_reason
+
+
+@pytest.fixture(
+    params=[
+        (
+            # The token bootstrap is the first call Home Assistant refuses.
+            HomeAssistantAdminRequiredError(
+                "Service ha_mcp_tools.get_caller_token is admin-only in Home Assistant"
+            ),
+            "Service ha_mcp_tools.get_caller_token",
+        ),
+        (
+            HomeAssistantAuthError("Invalid token"),
+            "Could not reach the ha_mcp_tools component: Invalid token",
+        ),
+    ],
+    ids=["admin-refusal", "invalid-token"],
+)
+def reason_start(request, monkeypatch):
+    error, start = request.param
+    monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+    monkeypatch.setattr(tf, "call_mcp_tools_service", AsyncMock(side_effect=error))
+    return start
 
 
 @pytest.fixture
-def handlers(monkeypatch):
-    monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
-
-    async def refused(client, service, data):
-        # The token bootstrap is the first call Home Assistant refuses.
-        raise HomeAssistantAdminRequiredError(
-            "Service ha_mcp_tools.get_caller_token is admin-only in Home Assistant"
-        )
-
-    monkeypatch.setattr(tf, "call_mcp_tools_service", refused)
+def handlers():
     return build_settings_handlers(server=MagicMock())
 
 
-@pytest.mark.asyncio
-async def test_get_names_the_admin_refusal(handlers):
+async def test_get_tells_an_admin_refusal_from_other_auth_errors(
+    handlers, reason_start
+):
     resp = await handlers["get_fs_custom_paths"](MagicMock())
     body = json.loads(resp.body)
     assert body["available"] is False
-    assert body["reason"].startswith("Service ha_mcp_tools.get_caller_token")
+    assert body["reason"].startswith(reason_start)
 
 
-@pytest.mark.asyncio
-async def test_save_names_the_admin_refusal(handlers):
+async def test_save_tells_an_admin_refusal_from_other_auth_errors(
+    handlers, reason_start
+):
     req = MagicMock()
     req.json = AsyncMock(return_value={"paths": ["pyscript"]})
     resp = await handlers["save_fs_custom_paths"](req)
     assert resp.status_code == 502
-    message = json.loads(resp.body)["error"]["message"]
-    assert message.startswith("Service ha_mcp_tools.get_caller_token")
-
-
-def test_other_auth_errors_are_not_reported_as_admin_refusals():
-    assert _component_error_reason(HomeAssistantAuthError("Invalid token")) is None
+    assert json.loads(resp.body)["error"]["message"].startswith(reason_start)
