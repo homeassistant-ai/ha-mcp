@@ -68,8 +68,13 @@ class StoreRecordsRepairFlow(RepairsFlow):
         self, user_input: dict[str, str] | None = None
     ) -> data_entry_flow.FlowResult:
         """Keep the main repository's record and forget the other one."""
-        records = store_records.conflicting_records(self.hass) or []
+        records = store_records.conflicting_records(self.hass)
+        if records is None:
+            return self.async_abort(reason="store_unavailable")
         if not records:
+            # The store came back clean after the check last looked (a manual
+            # fix, or a store that loaded late); the card has nothing to do.
+            store_records.async_clear_store_records_issue(self.hass)
             return self.async_abort(reason="already_resolved")
         if user_input is not None:
             await store_records.async_resolve_store_records(self.hass)

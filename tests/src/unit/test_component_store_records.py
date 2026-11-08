@@ -128,12 +128,15 @@ async def test_fix_with_one_record_changes_nothing(monkeypatch):
     manager.data.async_write.assert_not_awaited()
 
 
-def test_an_unknown_manager_shape_is_left_alone(monkeypatch, issue_registry):
+def test_an_unknown_manager_shape_is_unknown_not_clean(monkeypatch, issue_registry):
+    """A manager the lookup cannot read says nothing about the records, so an
+    existing repair stays and the check reports it could not look."""
     hass = _hass_with(monkeypatch, SimpleNamespace(repositories=object()))
 
-    store_records.async_check_store_records(hass)
+    assert store_records.async_check_store_records(hass) is False
 
     issue_registry.async_create_issue.assert_not_called()
+    issue_registry.async_delete_issue.assert_not_called()
 
 
 async def test_a_failed_save_puts_the_records_back(monkeypatch):

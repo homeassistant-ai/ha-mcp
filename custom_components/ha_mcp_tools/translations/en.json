@@ -196,7 +196,8 @@
                     }
                 },
                 "abort": {
-                    "already_resolved": "HA-MCP is installed from one store listing now; nothing to fix."
+                    "already_resolved": "HA-MCP is installed from one store listing now; nothing to fix.",
+                    "store_unavailable": "The store (HACS or the Marketplace) is not loaded yet, so the listings cannot be checked. Try again in a few minutes."
                 }
             }
         }

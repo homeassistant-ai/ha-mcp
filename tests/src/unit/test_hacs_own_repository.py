@@ -255,4 +255,4 @@ async def test_two_installed_records_still_download_on_hacs():
     assert "homeassistant-ai/ha-mcp" in note and "Repairs" in note
     assert "restart" in note.lower()
     # The downloaded release may predate the repair: the way out is named too.
-    assert "manual route" in note
+    assert "manual route in the FAQ" in note

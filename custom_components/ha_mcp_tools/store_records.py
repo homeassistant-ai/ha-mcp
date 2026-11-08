@@ -48,15 +48,16 @@ def _store_manager(hass: HomeAssistant) -> Any | None:
     return hacs
 
 
-def _installed_own_records(manager: Any) -> list[Any]:
-    """The store's repository objects for this integration that are installed."""
+def _installed_own_records(manager: Any) -> list[Any] | None:
+    """The store's repository objects for this integration that are installed;
+    None when the manager cannot be asked, which is not the same as none."""
     records = []
     for full_name in OWN_REPOSITORIES:
         try:
             repository = manager.repositories.get_by_full_name(full_name)
         except Exception:
             _LOGGER.debug("Store manager lookup failed", exc_info=True)
-            return []
+            return None
         if repository is not None and getattr(repository.data, "installed", False):
             records.append(repository)
     return records
@@ -69,6 +70,8 @@ def conflicting_records(hass: HomeAssistant) -> list[str] | None:
     if manager is None:
         return None
     records = _installed_own_records(manager)
+    if records is None:
+        return None
     if len(records) < 2:
         return []
     return [str(repository.data.full_name) for repository in records]
@@ -85,7 +88,7 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
     if records is None:
         return False
     if not records:
-        ir.async_delete_issue(hass, DOMAIN, ISSUE_STORE_RECORDS_CONFLICT)
+        async_clear_store_records_issue(hass)
         return True
     _LOGGER.warning(
         "%s are all installed in the store and claim custom_components/%s; on "
@@ -114,6 +117,14 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
     return True
 
 
+@callback
+def async_clear_store_records_issue(hass: HomeAssistant) -> None:
+    """Drop the repair once the store shows one installed listing."""
+    from homeassistant.helpers import issue_registry as ir
+
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_STORE_RECORDS_CONFLICT)
+
+
 async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
     """Keep one record, the main repository when it is among them, and forget
     the others; returns the kept record's name, or None when nothing to do."""
@@ -121,7 +132,7 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
     if manager is None:
         return None
     records = _installed_own_records(manager)
-    if len(records) < 2:
+    if not records or len(records) < 2:
         return None
     kept = next(
         (r for r in records if str(r.data.full_name) == MAIN_REPOSITORY), records[0]
