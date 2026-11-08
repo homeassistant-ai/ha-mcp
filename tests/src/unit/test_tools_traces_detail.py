@@ -725,8 +725,8 @@ class TestFormatDetailedTraceNativeFields:
         assert with_config["config"] == {"alias": "No mode"}
         assert "config_summary" not in with_config
 
-    def test_not_triggered_trace_shape_from_core(self):
-        """Core's not-triggered trace fields survive the projection."""
+    def test_projection_preserves_not_triggered_fields(self):
+        """The projection keeps not-triggered fields when they are present."""
         result = _format_detailed_trace(
             "automation.diag_auto",
             "run-1",
@@ -762,6 +762,34 @@ class TestFormatDetailedTraceNativeFields:
         assert result["script_execution"] == "not_triggered"
         assert result["last_step"] == "trigger/0"
         assert result["config"]["triggers"] == []
+
+    def test_not_triggered_result_is_visible_in_trigger_section(self):
+        """The reason a trigger did not fire survives the projection."""
+        result = _format_detailed_trace(
+            "automation.diag_auto",
+            "run-1",
+            {
+                "not_triggered": True,
+                "script_execution": "not_triggered",
+                "trace": {
+                    "trigger/0": [
+                        {
+                            "path": "trigger/0",
+                            "result": {
+                                "reason": "numeric_state",
+                                "data": {"above": 10},
+                            },
+                        }
+                    ]
+                },
+            },
+            sections="trigger",
+        )
+
+        assert result["trigger"]["result"] == {
+            "reason": "numeric_state",
+            "data": {"above": 10},
+        }
 
     def test_detail_handles_null_config_and_trace(self):
         """A restored or unfinished trace can carry null config and trace."""

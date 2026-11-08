@@ -726,6 +726,33 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
     return {k: v for k, v in result.items() if k in keep_keys}
 
 
+def _trigger_info(trigger_step: dict[str, Any]) -> dict[str, Any]:
+    """Build the trigger summary from one trace step."""
+    trigger_vars = trigger_step.get("changed_variables", {}).get("trigger", {})
+    if not trigger_vars:
+        trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
+
+    info: dict[str, Any] = {}
+    if trigger_vars:
+        info = {
+            "platform": trigger_vars.get("platform"),
+            "description": trigger_vars.get("description"),
+        }
+        if "to_state" in trigger_vars:
+            info["to_state"] = (trigger_vars.get("to_state") or {}).get("state")
+        if "from_state" in trigger_vars:
+            info["from_state"] = (trigger_vars.get("from_state") or {}).get("state")
+        if "entity_id" in trigger_vars:
+            info["entity_id"] = trigger_vars["entity_id"]
+    if "error" in trigger_step:
+        info["error"] = trigger_step["error"]
+    # Core stores why a trigger did not fire under trigger/N[0].result.
+    # Keep it native instead of flattening the diagnostic to not_triggered.
+    if "result" in trigger_step:
+        info["result"] = trigger_step["result"]
+    return info
+
+
 def _populate_trigger_info(
     result: dict[str, Any],
     triggers: list[dict[str, Any]],
@@ -733,27 +760,9 @@ def _populate_trigger_info(
 ) -> None:
     """Extract trigger information and add to result dict."""
     if triggers:
-        trigger_step = triggers[0]
-        trigger_vars = trigger_step.get("changed_variables", {}).get("trigger", {})
-        if not trigger_vars:
-            trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
-
-        result["trigger"] = {
-            "platform": trigger_vars.get("platform"),
-            "description": trigger_vars.get("description"),
-        }
-        if "to_state" in trigger_vars:
-            result["trigger"]["to_state"] = (trigger_vars.get("to_state") or {}).get(
-                "state"
-            )
-        if "from_state" in trigger_vars:
-            result["trigger"]["from_state"] = (
-                trigger_vars.get("from_state") or {}
-            ).get("state")
-        if "entity_id" in trigger_vars:
-            result["trigger"]["entity_id"] = trigger_vars["entity_id"]
-        if "error" in trigger_step:
-            result["trigger"]["error"] = trigger_step["error"]
+        trigger_info = _trigger_info(triggers[0])
+        if trigger_info:
+            result["trigger"] = trigger_info
 
     if "trigger" not in result and "trigger" in trace:
         result["trigger"] = {"description": trace["trigger"]}
