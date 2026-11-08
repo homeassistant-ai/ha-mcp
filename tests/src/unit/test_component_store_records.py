@@ -277,11 +277,18 @@ def test_no_store_integration_means_no_retries(monkeypatch, issue_registry):
     assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
 
 
-def test_a_configured_store_is_waited_for_indefinitely(monkeypatch, issue_registry):
-    """An outage can outlast any fixed window; while a store entry exists the
-    check keeps asking, so the first load after it files the repair."""
+@pytest.mark.parametrize("store_domain", ["hacs", "marketplace"])
+def test_a_configured_store_is_waited_for_indefinitely(
+    monkeypatch, issue_registry, store_domain
+):
+    """An outage can outlast any fixed window; while a store entry exists for
+    either store the check keeps asking, so the first load after it files the
+    repair."""
     hass = _hass_with(monkeypatch, None)
     hass.data = {}
+    hass.config_entries.async_entries.side_effect = lambda domain: (
+        [MagicMock()] if domain == store_domain else []
+    )
     monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
     event = ModuleType("homeassistant.helpers.event")
     later = MagicMock()
