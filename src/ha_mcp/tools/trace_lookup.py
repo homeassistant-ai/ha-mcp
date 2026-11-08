@@ -92,8 +92,15 @@ async def resolve_context_trace(
     event or service context only appears as the trace's ``context.parent_id``.
     When the direct map has no entry, scan the item's stored traces by start
     time, newest first, and match that parent id. The scan is bounded; the
-    response says when the bound was hit instead of pretending the trace does
-    not exist.
+    response says when the bound was hit or a row could not be read instead of
+    pretending the trace does not exist.
+
+    This is intentionally a public-API scan. A component bridge could read
+    ``hass.data[DATA_TRACE]`` in process, but that couples a diagnostic
+    fallback to private Core storage and adds a versioned command for a path
+    with no public index. The bounded ``trace/list`` + ``trace/get`` read is
+    the native contract Core serves; revisiting it is a design change, not a
+    missing field.
     """
     result = await client.send_websocket_message(
         {"type": "trace/contexts", "domain": domain, "item_id": item_id}
@@ -176,7 +183,7 @@ async def _resolve_parent_context(
     suggestions = [
         "Pass the trace's own `context.id`, or the context id of the event "
         "or service call that triggered it",
-        "Use ha_get_automation_traces(automation_id=...) without context_id "
+        "Use ha_get_automation_traces(entity_id=...) without context_id "
         "to list recent traces",
     ]
     if truncated:
