@@ -43,7 +43,7 @@ _finalize = functools.partial(publisher.finalize_release, project=_PROJECT)
 
 
 @pytest.mark.parametrize(
-    "case", ["available", "no-files", "wrong-python", "removed-file"]
+    "case", ["available", "no-files", "wrong-python", "removed-file", "yanked"]
 )
 def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
     distribution = {
@@ -53,7 +53,7 @@ def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
         "requires_python": ">=3.13,<3.14" if case == "wrong-python" else ">=3.13,<3.15",
         "size": 42,
         "digests": {"sha256": "a" * 64},
-        "yanked": False,
+        "yanked": case == "yanked",
     }
     metadata = {
         "info": {"version": "9.1.1"},
@@ -75,6 +75,72 @@ def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
     assert publisher._pypi_ready("9.1.1", publisher._supported_pythons(_PROJECT)) is (
         case == "available"
     )
+
+
+@pytest.mark.parametrize(
+    ("project_requires", "wheel_requires", "ready"),
+    [
+        (">=3.13.1,<3.15", [">=3.13.1,<3.15"], True),
+        (">=3.13.1,<3.15", [">=3.14,<3.15"], False),
+        (">=3.13.1,<3.15", [">=3.13.2,<3.15"], False),
+        (">=3.13.1,<3.15", [">=3.13.1,<3.13.5", ">=3.13.6,<3.15"], False),
+        (">=3.13.1,<3.15", [">=3.13.1,<3.13.5", ">=3.13.5,<3.15"], True),
+        (
+            ">=3.13.1,!=3.13.5,<3.15",
+            [">=3.13.1,<3.13.5", ">=3.13.6,<3.15"],
+            True,
+        ),
+        (">=3.13,<3.15", ["==3.13", ">=3.14,<3.15"], False),
+        (">=3.13,<3.15", ["<=3.13", ">3.13,<3.15"], True),
+    ],
+    ids=[
+        "patch-floor",
+        "missing-minor",
+        "missing-floor",
+        "patch-gap",
+        "union",
+        "excluded-gap",
+        "zero-only-wheel",
+        "minor-boundary-union",
+    ],
+)
+def test_wheels_cover_every_admitted_python_patch_range(
+    monkeypatch, project_requires, wheel_requires, ready
+):
+    metadata = {
+        "info": {"version": "9.1.1"},
+        "urls": [
+            {
+                "filename": f"ha_mcp-9.1.1-{index}-py3-none-any.whl",
+                "packagetype": "bdist_wheel",
+                "size": 42,
+                "requires_python": requires,
+            }
+            for index, requires in enumerate(wheel_requires, 1)
+        ],
+    }
+    monkeypatch.setattr(
+        publisher.urllib.request,
+        "urlopen",
+        lambda request, timeout: io.BytesIO(json.dumps(metadata).encode()),
+    )
+    monkeypatch.setattr(publisher, "_distribution_available", lambda file: True)
+    project = {**_PROJECT, "requires-python": project_requires}
+    assert (
+        publisher._pypi_ready("9.1.1", publisher._supported_pythons(project)) is ready
+    )
+
+
+def test_patch_targets_match_minor_specific_pure_python_wheel_tags():
+    distribution = {
+        "filename": "ha_mcp-9.1.1-py313-none-any.whl",
+        "packagetype": "bdist_wheel",
+        "size": 42,
+        "requires_python": ">=3.13.1,<3.15",
+    }
+    assert publisher._wheel_pythons(distribution, "9.1.1", ("3.13.1", "3.14.0")) == {
+        "3.13.1"
+    }
 
 
 def _world(

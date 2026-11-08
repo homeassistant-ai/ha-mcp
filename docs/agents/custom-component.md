@@ -39,9 +39,17 @@ archive-based version, before activation. If a ZIP-enabled release needs asset
 recovery, use its exact checkout and preserve its manifest/pin; copy the same
 bytes to its mirror release. Never replace a usable counted asset.
 
+The version-specific manifest paths above are established for Marketplace and
+the reviewed current HACS implementation. HACS 2.0.5 can retain cached manifest
+state on its older first-install path; whether its version-selection UI can
+request a missing ZIP from an archive-based release remains unverified.
+Include that client/version case in activation testing instead of assuming
+that every HACS release refreshes its manifest identically.
+
 Stable SemVer creates a draft with the stamped ZIP; Release
 Publish publishes PyPI, verifies an available pure Python wheel for the Python
-versions declared by the released project's metadata, and checks the ZIP,
+versions declared by the released project's metadata, including patch-level
+bounds and exclusions, and checks the ZIP,
 then publishes the draft and advances `stable`. Release Publish supplies
 `hacs.json` and `pyproject.toml` from its tag checkout. The finalizer independently
 compares the tracked component directory with that tag, then downloads the

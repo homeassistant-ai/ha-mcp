@@ -22,7 +22,7 @@ from typing import Any
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 
 def _gh_json(
@@ -48,23 +48,64 @@ def _gh_json(
     return json.loads(result.stdout)
 
 
-def _supported_pythons(project: dict) -> tuple[str, ...]:
+def _python_probes(python: str, requirements: list[SpecifierSet]) -> tuple[str, ...]:
+    """Sample every stable-patch interval separated by a requirement boundary.
+
+    Patch membership can only change at a specifier's release boundary. Include
+    its neighbours and a point beyond the last boundary instead of imposing an
+    arbitrary maximum patch version.
+    """
+    minor = tuple(map(int, python.split(".")))
+    patches = {0, 1}  # A minor-only bound such as ==3.13 changes after patch zero.
+    for requirement in requirements:
+        for specifier in requirement:
+            try:
+                boundary = Version(specifier.version.removesuffix(".*")).release
+            except InvalidVersion:
+                continue  # An arbitrary === string cannot admit a Python release.
+            if boundary[:2] == minor and len(boundary) >= 3:
+                patch = boundary[2]
+                patches.update((max(0, patch - 1), patch, patch + 1))
+    return tuple(f"{python}.{patch}" for patch in sorted(patches))
+
+
+def _supported_pythons(project: dict) -> dict[str, SpecifierSet]:
     supported = SpecifierSet(project["requires-python"])
-    versions = tuple(
-        match[1]
+    versions = {
+        match[1]: supported
         for classifier in project["classifiers"]
         if (
             match := re.fullmatch(
                 r"Programming Language :: Python :: (\d+\.\d+)", classifier
             )
         )
-        and Version(match[1]) in supported
-    )
+        and any(
+            Version(probe) in supported
+            for probe in _python_probes(match[1], [supported])
+        )
+    }
     if not versions:
         raise ValueError(
             "The release project must declare its supported Python versions"
         )
     return versions
+
+
+def _python_targets(
+    pythons: dict[str, SpecifierSet], files: list[dict]
+) -> tuple[str, ...]:
+    wheel_requirements = []
+    for file in files:
+        try:
+            wheel_requirements.append(SpecifierSet(file.get("requires_python") or ""))
+        except InvalidSpecifier:
+            continue  # Malformed wheel metadata cannot contribute coverage.
+    return tuple(
+        probe
+        for python, supported in pythons.items()
+        for probe in _python_probes(python, [supported, *wheel_requirements])
+        if Version(probe) in supported
+    )
 
 
 def _wheel_pythons(file: dict, version: str, pythons: tuple[str, ...]) -> set[str]:
@@ -89,7 +130,8 @@ def _wheel_pythons(file: dict, version: str, pythons: tuple[str, ...]) -> set[st
         and any(
             t.platform == "any"
             and t.abi == "none"
-            and t.interpreter in {"py3", "py" + python.replace(".", "")}
+            and t.interpreter
+            in {"py" + python.split(".")[0], "py" + "".join(python.split(".")[:2])}
             for t in tags
         )
     }
@@ -109,7 +151,7 @@ def _distribution_available(file: dict) -> bool:
         )
 
 
-def _pypi_ready(version: str, pythons: tuple[str, ...]) -> bool:
+def _pypi_ready(version: str, pythons: dict[str, SpecifierSet]) -> bool:
     request = urllib.request.Request(
         f"https://pypi.org/pypi/ha-mcp/{urllib.parse.quote(version, safe='')}/json",
         headers={"User-Agent": "ha-mcp-release-finalizer"},
@@ -119,12 +161,13 @@ def _pypi_ready(version: str, pythons: tuple[str, ...]) -> bool:
             metadata = json.load(response)
         if metadata.get("info", {}).get("version") != version:
             return False
+        targets = _python_targets(pythons, metadata.get("urls", []))
         covered: set[str] = set()
         for file in metadata.get("urls", []):
-            usable = _wheel_pythons(file, version, pythons)
+            usable = _wheel_pythons(file, version, targets)
             if usable and _distribution_available(file):
                 covered.update(usable)
-        return covered == set(pythons)
+        return covered == set(targets)
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
@@ -148,7 +191,7 @@ def _required_zip(hacs: dict, component: dict, version: str) -> str | None:
 
 
 def _wait_for_pypi(
-    version: str, pythons: tuple[str, ...], attempts: int, delay: float
+    version: str, pythons: dict[str, SpecifierSet], attempts: int, delay: float
 ) -> None:
     for attempt in range(attempts):
         if _pypi_ready(version, pythons):
