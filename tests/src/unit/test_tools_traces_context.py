@@ -1,11 +1,13 @@
 """Context-id lookup tests for ha_get_automation_traces."""
 
 import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_traces import TraceTools
+from ha_mcp.tools.trace_lookup import ContextTraceMatch
 
 from .test_tools_traces import _dispatch, _make_pooled_client
 
@@ -47,12 +49,85 @@ class TestTraceContextLookup:
         assert result["success"] is True
         assert result["run_id"] == "r1"
         assert result["context_id"] == "ctx-1"
+        assert result["context_match"] == "trace"
+        assert result["context_scanned"] == 0
         sent_types = [
             call.args[0]["type"]
             for call in client.send_websocket_message.await_args_list
         ]
         assert "trace/contexts" in sent_types
         assert "trace/get" in sent_types
+
+    @pytest.mark.asyncio
+    async def test_parent_context_resolves_to_child_run(self):
+        """A triggering event context resolves through the trace's parent_id."""
+        details = {
+            "r1": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {},
+                "config": {"alias": "Test"},
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            }
+        }
+
+        def _d(mtype, message):
+            if mtype == "config/entity_registry/get":
+                return {"success": True, "result": {"unique_id": "uid_1"}}
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "run_id": "r1",
+                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                        }
+                    ],
+                }
+            if mtype == "trace/get":
+                return {
+                    "success": True,
+                    "result": details[message["run_id"]],
+                }
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            automation_id="automation.test", context_id="parent-1"
+        )
+
+        assert result["run_id"] == "r1"
+        assert result["context_id"] == "parent-1"
+        assert result["context_match"] == "parent"
+        assert result["context_scanned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_context_scan_truncated_is_reported(self):
+        """A bounded parent scan reports that older traces were not checked."""
+        detail_result = {
+            "success": True,
+            "result": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {},
+                "context": {"id": "own", "parent_id": "parent-1"},
+            },
+        }
+        client = _make_pooled_client(_dispatch(detail_result=detail_result))
+
+        with patch(
+            "ha_mcp.tools.tools_traces.resolve_context_trace",
+            AsyncMock(return_value=ContextTraceMatch("r1", "parent", 50, True)),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                automation_id="automation.test", context_id="parent-1"
+            )
+
+        assert result["context_scan_truncated"] is True
+        assert result["context_scanned"] == 50
 
     @pytest.mark.asyncio
     async def test_unknown_context_id_is_not_found(self):

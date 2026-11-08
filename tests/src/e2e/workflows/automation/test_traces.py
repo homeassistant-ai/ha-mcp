@@ -7,6 +7,7 @@ Verifies that ha_get_automation_traces returns non-empty traces after automation
 
 import logging
 import time
+import uuid
 from typing import Any
 
 import pytest
@@ -236,6 +237,132 @@ class TestAutomationTraces:
             logger.info(
                 f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions"
             )
+
+    async def test_event_context_resolves_to_triggered_run(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """The context_id from ha_call_event resolves to the child run."""
+        suffix = uuid.uuid4().hex[:8]
+        event_type = f"trace_parent_context_e2e_{suffix}"
+        create_config = test_data_factory.automation_config(
+            "Trace Parent Context E2E",
+            trigger=[{"platform": "event", "event_type": event_type}],
+            action=[{"delay": {"seconds": 0}}],
+            initial_state=True,
+        )
+
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation", {"config": create_config}
+        )
+        assert_mcp_success(create_result)
+        create_data = parse_mcp_result(create_result)
+        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
+        assert automation_id is not None
+        cleanup_tracker.track("automation", automation_id)
+
+        event_result = await mcp_client.call_tool(
+            "ha_call_event", {"event_type": event_type}
+        )
+        assert_mcp_success(event_result)
+        event_data = parse_mcp_result(event_result)
+        event_context_id = event_data["context_id"]
+        assert event_context_id is not None
+
+        traces_data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"automation_id": automation_id},
+            predicate=lambda data: data.get("trace_count", 0) > 0,
+            timeout=15,
+            poll_interval=0.5,
+            description="automation trace after event context",
+        )
+
+        by_context_result = await mcp_client.call_tool(
+            "ha_get_automation_traces",
+            {
+                "automation_id": automation_id,
+                "context_id": event_context_id,
+            },
+        )
+        assert_mcp_success(by_context_result)
+        by_context_data = parse_mcp_result(by_context_result)
+
+        assert by_context_data["context_match"] == "parent"
+        assert by_context_data["context_id"] == event_context_id
+        assert by_context_data["run_id"] == traces_data["traces"][0]["run_id"]
+        assert by_context_data["context_scanned"] >= 1
+
+    async def test_detailed_trace_includes_logbook(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """A detailed trace reads its logbook from Core, not trace/get."""
+        test_light = await self._find_test_light_entity(mcp_client)
+        automation_name = "Trace Logbook E2E"
+        create_config = test_data_factory.automation_config(
+            automation_name,
+            trigger=[
+                {
+                    "platform": "event",
+                    "event_type": "trace_logbook_e2e",
+                }
+            ],
+            action=[
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": test_light},
+                },
+                {"delay": {"seconds": 0}},
+            ],
+            initial_state=True,
+        )
+
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation", {"config": create_config}
+        )
+        assert_mcp_success(create_result)
+        create_data = parse_mcp_result(create_result)
+        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
+        assert automation_id is not None
+        cleanup_tracker.track("automation", automation_id)
+
+        trigger_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "automation",
+                "service": "trigger",
+                "entity_id": automation_id,
+            },
+        )
+        assert_mcp_success(trigger_result)
+
+        traces_data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"automation_id": automation_id},
+            predicate=lambda data: data.get("trace_count", 0) > 0,
+            timeout=15,
+            poll_interval=0.5,
+            description="automation trace for logbook",
+        )
+
+        detail_result = await mcp_client.call_tool(
+            "ha_get_automation_traces",
+            {
+                "automation_id": automation_id,
+                "run_id": traces_data["traces"][0]["run_id"],
+                "detailed": True,
+            },
+        )
+        assert_mcp_success(detail_result)
+        detail_data = parse_mcp_result(detail_result)
+
+        # The testcontainer recorder can be behind on committing this run's
+        # rows; live HAOS verified non-empty entries. This asserts the tool
+        # selected the native logbook path and surfaced where it came from.
+        assert "logbook_entries" in detail_data
+        assert detail_data["logbook_transport"] in ("component", "rest")
+        assert not detail_data.get("warnings")
 
     async def test_trace_storage_disabled_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory

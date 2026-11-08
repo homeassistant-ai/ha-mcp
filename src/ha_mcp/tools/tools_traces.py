@@ -26,7 +26,13 @@ from .helpers import (
 )
 from .tool_hints import read_only_hints
 from .trace_formatting import _requested_sections, _trace_start
-from .util_helpers import is_connection_error_message
+from .trace_lookup import (
+    ContextTraceMatch,
+    TraceLogbook,
+    _raise_trace_ws_failure,
+    fetch_trace_logbook,
+    resolve_context_trace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +68,10 @@ class TraceTools:
             str | None,
             Field(
                 description=(
-                    "The trace run's own context id, as returned in a detailed "
-                    "trace's `context.id`. Mutually exclusive with run_id. "
-                    "Parent/triggering contexts are not accepted."
+                    "Context id to resolve to its trace. Accepts the trace "
+                    "run's own `context.id` or the context id of the event or "
+                    "service call that triggered it. Mutually exclusive with "
+                    "run_id."
                 ),
                 default=None,
             ),
@@ -141,9 +148,10 @@ class TraceTools:
            including trigger info, condition results, action trace with timing,
            and context variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
-        3. Resolve a trace by its own context id (provide context_id): the same
-           detail view, selected by the `context.id` from a detailed trace.
-           Parent/triggering contexts are not accepted.
+        3. Resolve a trace by context (provide context_id): accepts the trace
+           run's own `context.id` or the context id of the event or service
+           call that triggered it. The response reports `context_match` as
+           `trace` or `parent`.
            ha_get_automation_traces("automation.motion_light", context_id="01J...")
         4. Add logbook entries and context metadata: detailed=True. Script-style
            action paths (sequence/, numeric) are always matched regardless of
@@ -169,7 +177,8 @@ class TraceTools:
                     context_id,
                     "context_id",
                     suggestions=[
-                        "Pass the trace's own `context.id` from a detailed trace",
+                        "Pass the trace's own `context.id` or the triggering "
+                        "event/service context id",
                         "Omit context_id to list recent traces",
                     ],
                     context={"automation_id": automation_id},
@@ -219,10 +228,12 @@ class TraceTools:
             )
 
             resolved_run_id = run_id
+            context_match: ContextTraceMatch | None = None
             if context_id is not None:
-                resolved_run_id = await _resolve_run_id_for_context(
+                context_match = await resolve_context_trace(
                     self._client, domain, item_id, context_id
                 )
+                resolved_run_id = context_match.run_id
 
             await safe_progress(
                 ctx,
@@ -242,8 +253,8 @@ class TraceTools:
                     sections=sections,
                     ctx=ctx,
                 )
-                if context_id is not None:
-                    detail["context_id"] = context_id
+                if context_match is not None:
+                    _add_context_match(detail, context_id, context_match)
                 return detail
             return await self._fetch_trace_list(
                 domain,
@@ -301,15 +312,22 @@ class TraceTools:
             )
 
         trace_data = result.get("result", {})
+        logbook: TraceLogbook | None = None
+        if detailed or "logbook" in _requested_sections(sections):
+            logbook = await fetch_trace_logbook(self._client, trace_data)
         await safe_progress(ctx, progress=3, total=3, message="formatting trace")
-        return _format_detailed_trace(
+        formatted = _format_detailed_trace(
             automation_id,
             run_id,
             trace_data,
             deduplicate=deduplicate,
             detailed=detailed,
             sections=sections,
+            logbook=logbook,
         )
+        if logbook is not None and logbook.warnings:
+            formatted.setdefault("warnings", []).extend(logbook.warnings)
+        return formatted
 
     async def _fetch_trace_list(
         self,
@@ -379,36 +397,17 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, TraceTools(client))
 
 
-def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> None:
-    """Raise the structured error for a failed trace WS command.
-
-    Since #1947 a dead transport raises out of ``send_websocket_message``
-    rather than arriving here, so this path sees the failures Home Assistant
-    answered with. Connection-shaped wording can still reach it (an error frame
-    or a message threaded through a response body), so it stays classified as
-    CONNECTION_FAILED rather than a generic SERVICE_CALL_FAILED. A genuine
-    trace-command failure (unknown item, no such run) keeps its
-    SERVICE_CALL_FAILED shape unchanged.
-    """
-    if is_connection_error_message(error_msg):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                str(error_msg),
-                context=context,
-                suggestions=[
-                    "Home Assistant may be restarting or unreachable — retry shortly",
-                    "Check the connection to Home Assistant",
-                ],
-            )
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            error_msg,
-            context=context,
-        )
-    )
+def _add_context_match(
+    detail: dict[str, Any],
+    context_id: str | None,
+    match: ContextTraceMatch,
+) -> None:
+    """Attach the context resolution metadata to a detailed trace."""
+    detail["context_id"] = context_id
+    detail["context_match"] = match.match
+    detail["context_scanned"] = match.scanned
+    if match.truncated:
+        detail["context_scan_truncated"] = True
 
 
 async def _resolve_trace_item_id(
@@ -457,48 +456,6 @@ async def _resolve_trace_item_id(
             f"using object_id: {fallback_object_id}"
         )
         return fallback_object_id
-
-
-async def _resolve_run_id_for_context(
-    client: Any,
-    domain: str,
-    item_id: str,
-    context_id: str,
-) -> str:
-    """Resolve a Core context id to the run_id of the trace that owns it."""
-    result = await client.send_websocket_message(
-        {"type": "trace/contexts", "domain": domain, "item_id": item_id}
-    )
-    if not result.get("success"):
-        _raise_trace_ws_failure(
-            result.get("error", "Failed to resolve trace context"),
-            {"context_id": context_id, "domain": domain, "item_id": item_id},
-        )
-
-    contexts = result.get("result")
-    entry = contexts.get(context_id) if isinstance(contexts, dict) else None
-    run_id = entry.get("run_id") if isinstance(entry, dict) else None
-    if not run_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"No trace found for context: {context_id}",
-                context={
-                    "context_id": context_id,
-                    "domain": domain,
-                    "item_id": item_id,
-                },
-                suggestions=[
-                    "Pass the `context.id` from a detailed trace of this "
-                    "automation or script",
-                    "Use ha_get_automation_traces(automation_id=...) "
-                    "without context_id to list recent traces",
-                    "Parent/triggering contexts identify the caller, not the "
-                    "trace run; use the trace's own context.id",
-                ],
-            )
-        )
-    return str(run_id)
 
 
 async def _gather_diagnostics(
@@ -707,10 +664,17 @@ def _add_optional_detail(
     *,
     detailed: bool,
     requested: set[str],
+    logbook: TraceLogbook | None = None,
 ) -> None:
     """Add logbook entries and context when detailed or explicitly requested."""
-    if (detailed or "logbook" in requested) and "logbook_entries" in trace:
-        result["logbook_entries"] = trace["logbook_entries"]
+    if detailed or "logbook" in requested:
+        entries = (
+            logbook.entries if logbook is not None else trace.get("logbook_entries")
+        )
+        if entries is not None:
+            result["logbook_entries"] = entries
+        if logbook is not None and logbook.transport is not None:
+            result["logbook_transport"] = logbook.transport
     if (detailed or "context" in requested) and trace.get("context"):
         result["context"] = trace["context"]
 
@@ -723,6 +687,7 @@ def _format_detailed_trace(
     deduplicate: bool = True,
     detailed: bool = False,
     sections: str | None = None,
+    logbook: TraceLogbook | None = None,
 ) -> dict[str, Any]:
     """Format detailed trace for AI consumption."""
     domain = "automation" if automation_id.startswith("automation.") else "script"
@@ -765,7 +730,13 @@ def _format_detailed_trace(
     # In detailed mode, include logbook entries that Home Assistant supplies
     # and the run's context metadata. Either can be requested explicitly
     # through `sections` without turning on detailed mode.
-    _add_optional_detail(result, trace, detailed=detailed, requested=requested)
+    _add_optional_detail(
+        result,
+        trace,
+        detailed=detailed,
+        requested=requested,
+        logbook=logbook,
+    )
 
     if sections:
         result = _filter_trace_sections(result, sections)
@@ -848,6 +819,7 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
         "domain",
         "item_id",
         "not_triggered",
+        "logbook_transport",
     }
     return {k: v for k, v in result.items() if k in keep_keys}
 

@@ -713,7 +713,11 @@ def _dispatch(*, list_result=None, detail_result=None, context_result=None):
         if mtype == "config/entity_registry/get":
             return {"success": True, "result": {"unique_id": "uid_1"}}
         if mtype == "trace/list":
-            return list_result
+            return (
+                list_result
+                if list_result is not None
+                else {"success": True, "result": []}
+            )
         if mtype == "trace/get":
             return detail_result
         if mtype == "trace/contexts":

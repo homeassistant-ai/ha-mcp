@@ -763,3 +763,20 @@ class TestFormatDetailedTraceNativeFields:
         )
 
         assert result["context"] == {"id": "ctx-1"}
+
+    def test_unknown_trace_path_is_ignored(self):
+        """A trace path outside trigger/condition/action is not categorized."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {
+                    "unknown/0": [{"path": "unknown/0", "result": {}}],
+                },
+            },
+        )
+
+        assert "action_trace" not in result
+        assert "condition_results" not in result
