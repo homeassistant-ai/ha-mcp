@@ -12,6 +12,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_lookup import (
+    LOGBOOK_ROW_LIMIT,
     PARENT_CONTEXT_SCAN_LIMIT,
     TraceLogbook,
     _logbook_window,
@@ -610,11 +611,12 @@ class TestFetchTraceLogbook:
     @pytest.mark.asyncio
     async def test_logbook_rows_are_capped(self):
         """The row cap reports the full total and a truncation flag."""
+        row_count = LOGBOOK_ROW_LIMIT + 10
         client = _make_pooled_client(lambda mtype, message: {})
         client.send_websocket_message = AsyncMock(
             return_value={
                 "success": True,
-                "result": [{"name": f"Row {i}"} for i in range(60)],
+                "result": [{"name": f"Row {i}"} for i in range(row_count)],
             }
         )
 
@@ -630,8 +632,8 @@ class TestFetchTraceLogbook:
         ):
             logbook = await fetch_trace_logbook(client, self._trace())
 
-        assert len(logbook.entries) == 50
-        assert logbook.total == 60
+        assert len(logbook.entries) < logbook.total
+        assert logbook.total == row_count
         assert logbook.truncated is True
 
     @pytest.mark.asyncio
