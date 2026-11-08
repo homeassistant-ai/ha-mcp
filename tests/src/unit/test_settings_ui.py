@@ -4761,7 +4761,7 @@ class TestFsCustomPathsEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_unavailable_on_component_non_success(self, monkeypatch):
-        # The component answered but with success=false (e.g. admin gate
+        # The component answered but with success=false (e.g. caller token
         # rejected) — degrade to available:false with the component's reason,
         # not a false available:true.
         import ha_mcp.tools.tools_filesystem as tf
@@ -4774,7 +4774,7 @@ class TestFsCustomPathsEndpoints:
                 "service_response": {
                     "success": False,
                     "error_code": "unauthorized",
-                    "error": "ha_mcp_tools.get_allowed_paths requires admin auth.",
+                    "error": "Unauthorized: caller token missing or invalid.",
                 }
             }
 
@@ -4784,7 +4784,7 @@ class TestFsCustomPathsEndpoints:
         assert resp.status_code == 200
         body = json.loads(resp.body)
         assert body["available"] is False
-        assert "admin" in body["reason"].lower()
+        assert "caller token" in body["reason"].lower()
 
     @pytest.mark.asyncio
     async def test_save_502_on_component_non_success(self, monkeypatch):
@@ -4797,7 +4797,7 @@ class TestFsCustomPathsEndpoints:
             return {
                 "service_response": {
                     "success": False,
-                    "error": "ha_mcp_tools.set_allowed_paths requires admin auth.",
+                    "error": "Unauthorized: caller token missing or invalid.",
                 }
             }
 

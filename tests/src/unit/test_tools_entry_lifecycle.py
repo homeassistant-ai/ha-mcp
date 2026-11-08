@@ -96,6 +96,15 @@ def _service_names(mock: MagicMock) -> set[str]:
     }
 
 
+def _admin_service_names(mock: MagicMock) -> set[str]:
+    """Service names registered as ``(hass, DOMAIN, <service>, ...)``."""
+    return {
+        call.args[2]
+        for call in mock.call_args_list
+        if len(call.args) >= 3 and call.args[1] == DOMAIN
+    }
+
+
 def _called_names(func: Any) -> set[str]:
     """Every callee expression in ``func``, as source text.
 
@@ -135,10 +144,14 @@ def tools_env(monkeypatch, store_backing):
             store_backing[self._key] = data
 
     register_commands = MagicMock(name="async_register_commands")
+    # Every service registers through Core's admin helper.
+    admin_register = MagicMock(name="async_register_admin_service")
     monkeypatch.setattr(comp, "Store", _FakeStore)
     monkeypatch.setattr(comp, "async_register_commands", register_commands)
     monkeypatch.setattr(comp, "async_register_entry_device", AsyncMock())
+    monkeypatch.setattr(comp.ha_service, "async_register_admin_service", admin_register)
     return SimpleNamespace(
+        admin_register=admin_register,
         register_commands=register_commands,
         storage=store_backing,
     )
@@ -159,8 +172,13 @@ class TestServiceRegistrationParity:
         entry = _make_entry()
 
         assert await comp._async_setup_tools_entry(hass, entry) is True
-        registered = _service_names(hass.services.async_register)
+        registered = _admin_service_names(tools_env.admin_register)
         assert registered, "the tools setup registered no services at all"
+        assert all(
+            call.args[0] is hass for call in tools_env.admin_register.call_args_list
+        )
+        # A plain registration would skip Core's admin check.
+        hass.services.async_register.assert_not_called()
 
         assert await comp._async_unload_tools_entry(hass, entry) is True
         removed = _service_names(hass.services.async_remove)
@@ -184,7 +202,7 @@ class TestServiceRegistrationParity:
         await comp._async_unload_tools_entry(hass, entry)
 
         pair = {comp.SERVICE_GET_EXTRA_YAML_KEYS, comp.SERVICE_SET_EXTRA_YAML_KEYS}
-        assert pair <= _service_names(hass.services.async_register)
+        assert pair <= _admin_service_names(tools_env.admin_register)
         assert pair <= _service_names(hass.services.async_remove)
 
 

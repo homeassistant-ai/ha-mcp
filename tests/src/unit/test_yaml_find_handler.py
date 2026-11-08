@@ -92,14 +92,38 @@ def test_handler_reports_config_load_failure(monkeypatch):
     assert result == {"success": False, "error": "bad config", "files": []}
 
 
-def test_register_find_yaml_key_uses_response_schema():
+def test_register_find_yaml_key_uses_response_schema(monkeypatch):
     hass = _hass()
+    admin_register = MagicMock()
+    monkeypatch.setattr(
+        yaml_find.ha_service, "async_register_admin_service", admin_register
+    )
     yaml_find.register_find_yaml_key(
         hass,
         caller_token_ok=lambda hass, call: True,
         unauthorized_response=lambda service: {"success": False},
     )
 
-    args, kwargs = hass.services.async_register.call_args
-    assert args[:2] == ("ha_mcp_tools", "find_yaml_key")
+    args, kwargs = admin_register.call_args
+    assert args[:3] == (hass, "ha_mcp_tools", "find_yaml_key")
     assert kwargs["schema"] is yaml_find.SERVICE_FIND_YAML_KEY_SCHEMA
+    hass.services.async_register.assert_not_called()
+
+
+def test_registered_handler_enforces_the_caller_token(monkeypatch):
+    admin_register = MagicMock()
+    monkeypatch.setattr(
+        yaml_find.ha_service, "async_register_admin_service", admin_register
+    )
+    yaml_find.register_find_yaml_key(
+        _hass(),
+        caller_token_ok=lambda hass, call: False,
+        unauthorized_response=lambda service: {"success": False, "service": service},
+    )
+
+    handler = admin_register.call_args.args[3]
+
+    assert asyncio.run(handler(_call())) == {
+        "success": False,
+        "service": "find_yaml_key",
+    }

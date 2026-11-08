@@ -1,0 +1,9 @@
+{
+  "reason": "Adds one requires_tools_entry test in tests/src/e2e/workflows/services/test_ha_mcp_tools_refusal.py (the admin-only registration also covers the write services, checked with write_file). It needs the File & YAML Tools entry, so it skips at collection on each of the four no-tools lanes and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

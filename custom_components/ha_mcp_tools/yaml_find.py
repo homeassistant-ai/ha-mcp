@@ -24,6 +24,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import service as ha_service
 
 from .const import DOMAIN
 from .yaml_rt import find_yaml_key_files
@@ -90,7 +91,8 @@ def register_find_yaml_key(
     unauthorized_response: Callable[[str], dict[str, Any]],
 ) -> None:
     """Register the read-only key finder on the tools entry."""
-    hass.services.async_register(
+    ha_service.async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_FIND_YAML_KEY,
         build_find_yaml_key_handler(

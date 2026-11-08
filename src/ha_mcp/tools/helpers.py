@@ -422,7 +422,7 @@ def _classify_exception(
                 error_msg,
                 suggestions=[
                     "Use a long-lived access token from an administrator's profile",
-                    "Or use the in-process server, which provisions its own admin token",
+                    "Or use the in-process server with an administrator token",
                 ],
                 context=context,
             )

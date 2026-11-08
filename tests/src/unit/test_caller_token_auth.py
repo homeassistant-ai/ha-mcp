@@ -44,7 +44,6 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _HASS_DATA_TOKEN_KEY,
     CALLER_TOKEN_FIELD,
     _build_get_caller_token_handler,
-    _caller_is_admin,
     _caller_token_ok,
     _unauthorized_response,
 )
@@ -121,50 +120,6 @@ class TestCallerTokenOk:
         assert _caller_token_ok(hass, call) is False
 
 
-class TestCallerIsAdmin:
-    """Bootstrap service is admin-gated explicitly (HA doesn't gate
-    service calls by default — verified against HA core)."""
-
-    @pytest.mark.asyncio
-    async def test_accepts_admin_user(self):
-        hass = MagicMock()
-        admin = MagicMock(is_admin=True)
-        hass.auth.async_get_user = AsyncMock(return_value=admin)
-        call = MagicMock()
-        call.context.user_id = "admin-uid"
-        assert await _caller_is_admin(hass, call) is True
-
-    @pytest.mark.asyncio
-    async def test_rejects_non_admin_user(self):
-        hass = MagicMock()
-        non_admin = MagicMock(is_admin=False)
-        hass.auth.async_get_user = AsyncMock(return_value=non_admin)
-        call = MagicMock()
-        call.context.user_id = "non-admin-uid"
-        assert await _caller_is_admin(hass, call) is False
-
-    @pytest.mark.asyncio
-    async def test_rejects_unknown_user_id(self):
-        """async_get_user returning None (deleted user, stale token) → reject."""
-        hass = MagicMock()
-        hass.auth.async_get_user = AsyncMock(return_value=None)
-        call = MagicMock()
-        call.context.user_id = "deleted-uid"
-        assert await _caller_is_admin(hass, call) is False
-
-    @pytest.mark.asyncio
-    async def test_no_user_context_is_trusted(self):
-        """call.context.user_id is None for system-internal events; HA's
-        own async_admin_handler_factory treats these as trusted, so we
-        match that convention rather than locking everyone out."""
-        hass = MagicMock()
-        hass.auth.async_get_user = AsyncMock()
-        call = MagicMock()
-        call.context.user_id = None
-        assert await _caller_is_admin(hass, call) is True
-        hass.auth.async_get_user.assert_not_awaited()
-
-
 class TestUnauthorizedResponse:
     """The structured 'unauthorized' reply the helper emits."""
 
@@ -239,7 +194,6 @@ class TestGetCallerTokenManifestVersion:
     async def test_version_less_manifest_reports_unreadable(self, monkeypatch):
         import custom_components.ha_mcp_tools as component
 
-        monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",
@@ -258,7 +212,6 @@ class TestGetCallerTokenManifestVersion:
     async def test_readable_manifest_reports_its_version(self, monkeypatch):
         import custom_components.ha_mcp_tools as component
 
-        monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",

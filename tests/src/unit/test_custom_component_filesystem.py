@@ -1530,8 +1530,9 @@ class TestEffectiveExtraAllowedKeys:
 
 
 class TestExtraYamlKeysHandlers:
-    """get/set_extra_yaml_keys: admin + token gated; set drops denied keys and
-    updates hass.data live so the union applies with no restart (#1887)."""
+    """get/set_extra_yaml_keys: token gated (admin-only via the registration);
+    set drops denied keys and updates hass.data live so the union applies with
+    no restart (#1887)."""
 
     async def test_set_persists_and_updates_hass_data(self, monkeypatch):
         import custom_components.ha_mcp_tools as comp
@@ -1543,7 +1544,6 @@ class TestExtraYamlKeysHandlers:
 
         monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)
         monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
-        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=True))
 
         hass = MagicMock()
         hass.data = {comp.DOMAIN: {}}
@@ -1562,7 +1562,6 @@ class TestExtraYamlKeysHandlers:
         import custom_components.ha_mcp_tools as comp
 
         monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
-        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=True))
         hass = MagicMock()
         hass.data = {comp.DOMAIN: {"extra_yaml_keys": ["alert2"]}}
         handler = comp._build_get_extra_yaml_keys_handler(hass)
@@ -1570,25 +1569,6 @@ class TestExtraYamlKeysHandlers:
         assert result["success"] is True
         assert result["keys"] == ["alert2"]
         assert "homeassistant" in result["deny_floor"]
-
-    async def test_set_rejects_non_admin(self, monkeypatch):
-        import custom_components.ha_mcp_tools as comp
-
-        monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
-        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=False))
-        save_calls = {"n": 0}
-
-        async def _save(hass, keys):
-            save_calls["n"] += 1
-
-        monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)
-        hass = MagicMock()
-        hass.data = {comp.DOMAIN: {}}
-        handler = comp._build_set_extra_yaml_keys_handler(hass)
-        result = await handler(MagicMock(data={"keys": ["alert2"]}))
-        assert result["success"] is False
-        assert result["error_code"] == "unauthorized"
-        assert save_calls["n"] == 0
 
     async def test_get_rejects_bad_token(self):
         import custom_components.ha_mcp_tools as comp

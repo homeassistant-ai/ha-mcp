@@ -28,6 +28,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import service as ha_service
 
 from .const import DOMAIN
 from .file_post_action import after_file_write
@@ -385,7 +386,8 @@ def register_edit_file(
     volume_root_for: Callable[[str], str | None],
 ) -> None:
     """Register edit_file on the tools entry."""
-    hass.services.async_register(
+    ha_service.async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_EDIT_FILE,
         build_edit_file_handler(

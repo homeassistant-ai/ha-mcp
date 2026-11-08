@@ -26,16 +26,22 @@ logger = logging.getLogger(__name__)
 
 
 def _component_error_reason(exc: Exception) -> str | None:
-    """Extract the human message from a structured ``ToolError``, else None.
+    """Return a readable reason for a component call failure, else None.
 
     ``raise_tool_error`` serializes the whole error envelope into the
     exception string, so rendering ``str(exc)`` verbatim shows the settings
     UI a raw JSON blob behind a misleading "could not reach" prefix — the
     hard-to-read surface from #1996. Thin seam over the shared extractor
     (imported lazily like the other tools imports in this module).
+
+    A non-admin token is refused by Home Assistant itself (the services are
+    admin-only); that is reported as-is, not as unreachable.
     """
+    from ..client.rest_client import HomeAssistantAdminRequiredError
     from ..tools.helpers import extract_structured_error_reason
 
+    if isinstance(exc, HomeAssistantAdminRequiredError):
+        return str(exc)
     return extract_structured_error_reason(exc)
 
 
@@ -103,7 +109,7 @@ async def _get_fs_custom_paths(
     try:
         result = await _fs_custom_paths_call(server, "get_allowed_paths", {})
     except Exception as exc:  # noqa: BLE001
-        logger.warning("fs-custom-paths GET could not reach ha_mcp_tools: %s", exc)
+        logger.warning("fs-custom-paths GET failed calling ha_mcp_tools: %s", exc)
         return _unavailable(
             _component_error_reason(exc)
             or f"Could not reach the ha_mcp_tools component: {exc}"
@@ -176,7 +182,7 @@ async def _save_fs_custom_paths(
             server, "set_allowed_paths", {"paths": paths}
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("fs-custom-paths POST could not reach ha_mcp_tools: %s", exc)
+        logger.warning("fs-custom-paths POST failed calling ha_mcp_tools: %s", exc)
         return JSONResponse(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
