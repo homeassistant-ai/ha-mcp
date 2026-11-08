@@ -514,6 +514,7 @@ class TestFormatDetailedTrace:
                     {
                         "path": "condition/0",
                         "result": {"result": None},
+                        "timestamp": "2026-11-08T16:00:00+00:00",
                         "error": "TemplateError: 'x' is undefined",
                     }
                 ]
@@ -522,6 +523,9 @@ class TestFormatDetailedTrace:
         result = _format_detailed_trace("automation.x", "1", trace)
         assert (
             result["condition_results"][0]["error"] == "TemplateError: 'x' is undefined"
+        )
+        assert (
+            result["condition_results"][0]["timestamp"] == "2026-11-08T16:00:00+00:00"
         )
 
     def test_trigger_step_error_surfaced(self):
@@ -720,6 +724,44 @@ class TestFormatDetailedTraceNativeFields:
         assert "config" not in default
         assert with_config["config"] == {"alias": "No mode"}
         assert "config_summary" not in with_config
+
+    def test_not_triggered_trace_shape_from_core(self):
+        """Core's not-triggered trace fields survive the projection."""
+        result = _format_detailed_trace(
+            "automation.diag_auto",
+            "run-1",
+            {
+                "last_step": "trigger/0",
+                "run_id": "run-1",
+                "state": "stopped",
+                "script_execution": "not_triggered",
+                "timestamp": {
+                    "start": "2026-11-08T16:00:00+00:00",
+                    "finish": "2026-11-08T16:00:01+00:00",
+                },
+                "domain": "automation",
+                "item_id": "diag_auto",
+                "not_triggered": True,
+                "trace": {
+                    "trigger/0": [
+                        {
+                            "path": "trigger/0",
+                            "result": {
+                                "reason": "mock_reason",
+                                "data": {"x": 1},
+                            },
+                        }
+                    ]
+                },
+                "config": {"id": "diag_auto", "triggers": []},
+            },
+            sections="config",
+        )
+
+        assert result["not_triggered"] is True
+        assert result["script_execution"] == "not_triggered"
+        assert result["last_step"] == "trigger/0"
+        assert result["config"]["triggers"] == []
 
     def test_detail_handles_null_config_and_trace(self):
         """A restored or unfinished trace can carry null config and trace."""

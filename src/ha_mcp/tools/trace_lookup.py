@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -16,7 +16,6 @@ from .log_sources_logbook import (
     LOGBOOK_EVENTS_CAPABILITY,
     LOGBOOK_EVENTS_COMMAND,
 )
-from .trace_formatting import _trace_start
 from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
@@ -99,8 +98,9 @@ async def resolve_context_trace(
     ``hass.data[DATA_TRACE]`` in process, but that couples a diagnostic
     fallback to private Core storage and adds a versioned command for a path
     with no public index. The bounded ``trace/list`` + ``trace/get`` read is
-    the native contract Core serves; revisiting it is a design change, not a
-    missing field.
+    the native contract Core serves; a 50-trace scan measured about 50 ms on
+    a local HA, and the bound keeps the worst case and response explicit.
+    Revisiting it is a design change, not a missing field.
     """
     result = await client.send_websocket_message(
         {"type": "trace/contexts", "domain": domain, "item_id": item_id}
@@ -120,66 +120,15 @@ async def resolve_context_trace(
     return await _resolve_parent_context(client, domain, item_id, context_id)
 
 
-async def _resolve_parent_context(
-    client: Any,
+def _raise_context_not_found(
+    context_id: str,
     domain: str,
     item_id: str,
-    context_id: str,
-) -> ContextTraceMatch:
-    """Scan stored traces for one whose context.parent_id matches."""
-    result = await client.send_websocket_message(
-        {"type": "trace/list", "domain": domain, "item_id": item_id}
-    )
-    if not result.get("success"):
-        _raise_trace_ws_failure(
-            result.get("error", "Failed to list traces for context lookup"),
-            {"context_id": context_id, "domain": domain, "item_id": item_id},
-        )
-
-    traces = result.get("result")
-    scan_errors: list[str] = []
-    if not isinstance(traces, list):
-        scan_errors.append("trace/list returned no row list")
-        traces = []
-    candidates = [
-        trace for trace in traces if isinstance(trace, dict) and trace.get("run_id")
-    ]
-    candidates.sort(key=_trace_start, reverse=True)
-    truncated = len(candidates) > PARENT_CONTEXT_SCAN_LIMIT
-    candidates = candidates[:PARENT_CONTEXT_SCAN_LIMIT]
-
-    scanned = 0
-    for trace in candidates:
-        scanned += 1
-        run_id = str(trace["run_id"])
-        detail = await client.send_websocket_message(
-            {
-                "type": "trace/get",
-                "domain": domain,
-                "item_id": item_id,
-                "run_id": run_id,
-            }
-        )
-        if not detail.get("success"):
-            error = detail.get("error")
-            if is_connection_error_message(error):
-                _raise_trace_ws_failure(
-                    error,
-                    {
-                        "context_id": context_id,
-                        "domain": domain,
-                        "item_id": item_id,
-                    },
-                )
-            scan_errors.append(f"{run_id}: {error}")
-            continue
-        trace_data = detail.get("result")
-        context = trace_data.get("context") if isinstance(trace_data, dict) else None
-        if isinstance(context, dict) and context.get("parent_id") == context_id:
-            return ContextTraceMatch(
-                run_id, "parent", scanned, truncated, tuple(scan_errors)
-            )
-
+    scanned: int,
+    truncated: bool,
+    scan_errors: list[str],
+) -> NoReturn:
+    """Raise the structured error for an unsuccessful parent-context scan."""
     suggestions = [
         "Pass the trace's own `context.id`, or the context id of the event "
         "or service call that triggered it",
@@ -212,6 +161,83 @@ async def _resolve_parent_context(
             },
             suggestions=suggestions,
         )
+    )
+
+
+async def _resolve_parent_context(
+    client: Any,
+    domain: str,
+    item_id: str,
+    context_id: str,
+) -> ContextTraceMatch:
+    """Scan stored traces for one whose context.parent_id matches."""
+    result = await client.send_websocket_message(
+        {"type": "trace/list", "domain": domain, "item_id": item_id}
+    )
+    if not result.get("success"):
+        _raise_trace_ws_failure(
+            result.get("error", "Failed to list traces for context lookup"),
+            {"context_id": context_id, "domain": domain, "item_id": item_id},
+        )
+
+    traces = result.get("result")
+    scan_errors: list[str] = []
+    if not isinstance(traces, list):
+        scan_errors.append("trace/list returned no row list")
+        traces = []
+    candidates = [
+        trace for trace in traces if isinstance(trace, dict) and trace.get("run_id")
+    ]
+    candidates.sort(key=_trace_start, reverse=True)
+    truncated = len(candidates) > PARENT_CONTEXT_SCAN_LIMIT
+    candidates = candidates[:PARENT_CONTEXT_SCAN_LIMIT]
+
+    scanned = 0
+    fallback_run_id: str | None = None
+    for trace in candidates:
+        scanned += 1
+        run_id = str(trace["run_id"])
+        detail = await client.send_websocket_message(
+            {
+                "type": "trace/get",
+                "domain": domain,
+                "item_id": item_id,
+                "run_id": run_id,
+            }
+        )
+        if not detail.get("success"):
+            error = detail.get("error")
+            if is_connection_error_message(error):
+                _raise_trace_ws_failure(
+                    error,
+                    {
+                        "context_id": context_id,
+                        "domain": domain,
+                        "item_id": item_id,
+                    },
+                )
+            scan_errors.append(f"{run_id}: {error}")
+            continue
+        trace_data = detail.get("result")
+        context = trace_data.get("context") if isinstance(trace_data, dict) else None
+        if isinstance(context, dict) and context.get("parent_id") == context_id:
+            if trace.get("not_triggered"):
+                # A not-triggered diagnostic is useful, but a real run for the
+                # same triggering context is the better match.
+                if fallback_run_id is None:
+                    fallback_run_id = run_id
+                continue
+            return ContextTraceMatch(
+                run_id, "parent", scanned, truncated, tuple(scan_errors)
+            )
+
+    if fallback_run_id is not None:
+        return ContextTraceMatch(
+            fallback_run_id, "parent", scanned, truncated, tuple(scan_errors)
+        )
+
+    _raise_context_not_found(
+        context_id, domain, item_id, scanned, truncated, scan_errors
     )
 
 
@@ -392,3 +418,29 @@ def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
     else:
         finish = now.isoformat()
     return start, finish
+
+
+def _trace_start(trace: dict[str, Any]) -> str:
+    """Return Core's start timestamp, or its finish, as a sortable string."""
+    timestamp = trace.get("timestamp")
+    if isinstance(timestamp, dict):
+        start = timestamp.get("start")
+        if isinstance(start, str):
+            return start
+        finish = timestamp.get("finish")
+        if isinstance(finish, str):
+            return finish
+        return ""
+    return timestamp if isinstance(timestamp, str) else ""
+
+
+def _requested_sections(sections: str | None) -> set[str]:
+    """Return the lower-cased section names requested by the caller."""
+    requested: set[str] = set()
+    if not sections:
+        return requested
+    for section in sections.split(","):
+        normalized = section.strip().lower()
+        if normalized:
+            requested.add(normalized)
+    return requested

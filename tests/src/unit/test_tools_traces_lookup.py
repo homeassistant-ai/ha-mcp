@@ -183,6 +183,60 @@ class TestResolveContextTrace:
         assert error["error"]["code"] == "CONNECTION_FAILED"
 
     @pytest.mark.asyncio
+    async def test_parent_context_prefers_a_run_over_not_triggered(self):
+        """A real run wins over a not-triggered diagnostic with the same parent."""
+        traces = [
+            {
+                "run_id": "diagnostic",
+                "not_triggered": True,
+                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
+            },
+            {
+                "run_id": "run",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            },
+        ]
+        details = {
+            "diagnostic": {
+                "run_id": "diagnostic",
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            },
+            "run": {
+                "run_id": "run",
+                "context": {"id": "own-2", "parent_id": "parent-1"},
+            },
+        }
+        client = _context_client(traces=traces, details=details)
+
+        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        assert match.run_id == "run"
+        assert match.match == "parent"
+
+    @pytest.mark.asyncio
+    async def test_parent_context_falls_back_to_not_triggered(self):
+        """A not-triggered diagnostic is returned when no run matches."""
+        traces = [
+            {
+                "run_id": "diagnostic",
+                "not_triggered": True,
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            }
+        ]
+        details = {
+            "diagnostic": {
+                "run_id": "diagnostic",
+                "context": {"id": "own", "parent_id": "parent-1"},
+            }
+        }
+        client = _context_client(traces=traces, details=details)
+
+        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        assert match.run_id == "diagnostic"
+        assert match.match == "parent"
+
+    @pytest.mark.asyncio
     async def test_parent_context_not_found(self):
         """No matching parent id returns a structured not-found error."""
         client = _context_client(
