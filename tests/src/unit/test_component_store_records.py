@@ -258,9 +258,28 @@ def test_a_disabled_hacs_is_unknown_not_clean(monkeypatch, issue_registry):
     issue_registry.async_delete_issue.assert_not_called()
 
 
-def test_retries_stop_after_the_limit(monkeypatch, issue_registry):
-    """A store that never loads is asked a bounded number of times, then the
-    guard clears so a later entry reload can start over."""
+def test_no_store_integration_means_no_retries(monkeypatch, issue_registry):
+    """A Core without HACS or the Marketplace has nothing to wait for: the
+    check ends at once and the guard clears."""
+    hass = _hass_with(monkeypatch, None)
+    hass.data = {}
+    hass.config_entries.async_entries.return_value = []
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    event = ModuleType("homeassistant.helpers.event")
+    later = MagicMock()
+    event.async_call_later = later
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
+
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+
+    later.assert_not_called()
+    assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
+
+
+def test_a_configured_store_is_waited_for_indefinitely(monkeypatch, issue_registry):
+    """An outage can outlast any fixed window; while a store entry exists the
+    check keeps asking, so the first load after it files the repair."""
     hass = _hass_with(monkeypatch, None)
     hass.data = {}
     monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
@@ -271,15 +290,12 @@ def test_retries_stop_after_the_limit(monkeypatch, issue_registry):
 
     store_records.async_schedule_store_records_check(hass)
     hass.bus.async_listen_once.call_args.args[1]()
-    while later.call_count and later.call_count <= store_records._STORE_RETRY_LIMIT:
-        pending = later.call_args.args[2]
-        count = later.call_count
-        pending(None)
-        if later.call_count == count:
-            break
+    for _ in range(40):
+        later.call_args.args[2](None)
 
-    assert later.call_count == store_records._STORE_RETRY_LIMIT
-    assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
+    assert later.call_count == 41
+    assert later.call_args.args[1] == store_records._STORE_RETRY_SECONDS
+    assert hass.data[DOMAIN][store_records._SCHEDULED_KEY] is True
 
 
 def test_a_store_that_loads_after_several_retries_is_checked(

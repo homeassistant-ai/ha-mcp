@@ -162,11 +162,17 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 
 
 _SCHEDULED_KEY = "store_records_check_scheduled"
-# A store that is not loaded when Home Assistant reports started is asked again
-# for about an hour: Core retries a not-ready Marketplace entry with a backoff
-# that caps at five minutes, and HACS retries a failed start after fifteen.
+# A configured store that is not loaded when Home Assistant reports started is
+# asked again every five minutes until it is: Core retries a not-ready
+# Marketplace entry with a backoff that caps at five minutes, HACS retries a
+# failed start after fifteen, and an outage can outlast both.
 _STORE_RETRY_SECONDS = 300
-_STORE_RETRY_LIMIT = 12
+_STORE_DOMAINS = ("marketplace", "hacs")
+
+
+def _store_configured(hass: HomeAssistant) -> bool:
+    """Whether a store integration exists at all, loaded or not."""
+    return any(hass.config_entries.async_entries(domain) for domain in _STORE_DOMAINS)
 
 
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
@@ -180,16 +186,16 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
     domain_data[_SCHEDULED_KEY] = True
 
     @callback
-    def _check(_event: Any = None, *, retries_left: int = _STORE_RETRY_LIMIT) -> None:
+    def _check(_event: Any = None) -> None:
         try:
             checked = async_check_store_records(hass)
         except Exception:
             _LOGGER.debug("Store record check failed", exc_info=True)
             checked = True
-        if not checked and retries_left:
+        if not checked and _store_configured(hass):
             # The flag stays set while the retry is pending, so another entry
             # registering meanwhile does not line up a second one.
-            _retry_later(hass, lambda _now: _check(retries_left=retries_left - 1))
+            _retry_later(hass, lambda _now: _check())
             return
         domain_data.pop(_SCHEDULED_KEY, None)
 
