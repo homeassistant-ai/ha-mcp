@@ -71,8 +71,8 @@ jobs:
   # overall conclusion skipped the mirror tag whenever any UNRELATED leg
   # failed (v7.12.2: an app image cache flake failed the release run and HACS
   # never got the component tag), so each leg keys on the one job it needs:
-  # The PyPI job publishes the stable GitHub release before finishing; the
-  # dev job publishes its pin. An unreadable job list cannot prove readiness.
+  # The PyPI job publishes the stable GitHub release before finishing; dev
+  # creation requires PyPI and attaches its ZIP. Unreadable jobs prove nothing.
   gate:
     runs-on: ubuntu-latest
     permissions:
@@ -124,7 +124,7 @@ jobs:
           if [ "$TRIGGER_WORKFLOW" = "Release Publish" ]; then
             job="Publish PyPI package"; leg=stable
           else
-            job="Publish PyPI (dev channel)"; leg=dev
+            job="Create GitHub pre-release"; leg=dev
           fi
           if ! conclusion=$(gh api \
             "repos/${{ github.repository }}/actions/runs/${TRIGGER_RUN_ID}/jobs?per_page=100" \

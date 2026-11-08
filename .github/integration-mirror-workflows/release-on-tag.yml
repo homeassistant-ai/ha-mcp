@@ -71,12 +71,15 @@ jobs:
           # notes file) as already-exists and reported green with no release
           # published (review finding). Now only a genuine duplicate no-ops;
           # a real create failure fails the job visibly.
-          if DRAFT=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
+          if DRAFT=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
             if [ "$DRAFT" = false ]; then
               echo "release already published; preserving its assets"
               exit 0
             fi
             echo "::error::An incomplete draft exists for ${GITHUB_REF_NAME}; inspect it before retrying."
+            exit 1
+          elif ! printf '%s' "$DRAFT" | grep -qi 'release not found'; then
+            echo "::error::Could not read release ${GITHUB_REF_NAME}: ${DRAFT}"
             exit 1
           fi
           ASSETS=()
