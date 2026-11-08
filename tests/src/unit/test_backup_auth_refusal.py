@@ -35,20 +35,29 @@ def _not_sent_after_auth_failure() -> HomeAssistantCommandNotSent:
     return error
 
 
+_FILE = ("file", "www/x.txt")
+
+
 @pytest.fixture(
     params=[
         (
             HomeAssistantAdminRequiredError("admin-only"),
             "AUTH_INSUFFICIENT_PERMISSIONS",
+            _FILE,
         ),
-        (HomeAssistantAuthError("Invalid token"), "AUTH_INVALID_TOKEN"),
-        (_not_sent_after_auth_failure(), "AUTH_INVALID_TOKEN"),
+        (HomeAssistantAuthError("Invalid token"), "AUTH_INVALID_TOKEN", _FILE),
+        (_not_sent_after_auth_failure(), "AUTH_INVALID_TOKEN", _FILE),
+        (
+            HomeAssistantAdminRequiredError("admin-only"),
+            "AUTH_INSUFFICIENT_PERMISSIONS",
+            ("yaml", "configuration.yaml::template"),
+        ),
     ],
-    ids=["non_admin", "rejected", "rejected_on_retry"],
+    ids=["non_admin", "rejected", "rejected_on_retry", "non_admin_yaml"],
 )
-def refusal(request: pytest.FixtureRequest) -> tuple[Any, str]:
-    """A client whose token bootstrap is refused, and the code that must surface."""
-    error, code = request.param
+def refusal(request: pytest.FixtureRequest) -> tuple[Any, str, tuple[str, str]]:
+    """A client whose token bootstrap is refused, the code that must surface, the target."""
+    error, code, target = request.param
     client: Any = _StubClient()
     client.get_services = AsyncMock(
         return_value=[
@@ -56,7 +65,7 @@ def refusal(request: pytest.FixtureRequest) -> tuple[Any, str]:
         ]
     )
     client.call_service = AsyncMock(side_effect=error)
-    return client, code
+    return client, code, target
 
 
 @pytest.fixture
@@ -72,9 +81,9 @@ def _code(exc: pytest.ExceptionInfo[ToolError]) -> str:
     return json.loads(str(exc.value))["error"]["code"]
 
 
-def _tool(ran: list[str], client: Any) -> Any:
+def _tool(ran: list[str], client: Any, domain: str) -> Any:
     @with_auto_backup(
-        domain="file",
+        domain=domain,
         id_param="path",
         mandatory=True,
         client=client,
@@ -88,13 +97,13 @@ def _tool(ran: list[str], client: Any) -> Any:
 
 @pytest.mark.usefixtures("settings")
 async def test_mandatory_write_reports_the_failure_and_stays_blocked(
-    refusal: tuple[Any, str],
+    refusal: tuple[Any, str, tuple[str, str]],
 ) -> None:
-    client, expected_code = refusal
+    client, expected_code, (domain, entity_id) = refusal
     ran: list[str] = []
 
     with pytest.raises(ToolError) as exc:
-        await _tool(ran, client)(path="www/x.txt")
+        await _tool(ran, client, domain)(path=entity_id)
 
     assert _code(exc) == expected_code
     assert exc.value.log_level == TOOL_ERROR_LOG_LEVEL
@@ -102,12 +111,12 @@ async def test_mandatory_write_reports_the_failure_and_stays_blocked(
 
 
 async def test_on_demand_capture_reports_the_failure(
-    refusal: tuple[Any, str], settings: _StubSettings
+    refusal: tuple[Any, str, tuple[str, str]], settings: _StubSettings
 ) -> None:
-    client, expected_code = refusal
+    client, expected_code, (domain, entity_id) = refusal
     mgr = get_backup_manager(client, settings)
 
     with pytest.raises(ToolError) as exc:
-        await capture_on_demand(mgr, "file", "www/x.txt")
+        await capture_on_demand(mgr, domain, entity_id)
 
     assert _code(exc) == expected_code
