@@ -6,6 +6,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_lookup import (
     PARENT_CONTEXT_SCAN_LIMIT,
@@ -490,6 +494,33 @@ class TestFetchTraceLogbook:
         assert any("component down" in warning for warning in logbook.warnings)
 
     @pytest.mark.asyncio
+    async def test_component_timeout_is_not_replayed_over_rest(self):
+        """A timed-out recorder query must not be re-run on REST."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        timeout = HomeAssistantCommandTimeout("component logbook timed out")
+        wrapped = HomeAssistantConnectionError("no answer from Home Assistant")
+        wrapped.__cause__ = timeout
+        client.send_websocket_message = AsyncMock(side_effect=wrapped)
+        client.get_logbook = AsyncMock(return_value=[{"name": "REST"}])
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={"logbook_events": True}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=True,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, self._trace())
+
+        assert logbook.entries == []
+        assert logbook.transport is None
+        assert any("timed out" in warning for warning in logbook.warnings)
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_component_non_list_reply_warns_and_uses_rest(self):
         """A component reply without a row list falls back to REST."""
         client = _make_pooled_client(lambda mtype, message: {})
@@ -619,7 +650,12 @@ class TestFetchTraceLogbook:
 
         with patch(
             "ha_mcp.tools.trace_lookup._fetch_component_logbook",
-            AsyncMock(side_effect=[([{"name": "Parent row"}], []), (None, [])]),
+            AsyncMock(
+                side_effect=[
+                    ([{"name": "Parent row"}], [], True),
+                    (None, [], True),
+                ]
+            ),
         ):
             logbook = await fetch_trace_logbook(client, trace)
 

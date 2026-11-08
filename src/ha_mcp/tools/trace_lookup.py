@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn, cast
 
+from ..client.rest_client import (
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
     component_supports,
@@ -15,6 +19,7 @@ from .helpers import raise_tool_error
 from .log_sources_logbook import (
     LOGBOOK_EVENTS_CAPABILITY,
     LOGBOOK_EVENTS_COMMAND,
+    _wrapped_timeout,
 )
 from .util_helpers import is_connection_error_message
 
@@ -325,11 +330,13 @@ async def _fetch_logbook_context(
     end_time: str,
 ) -> tuple[list[dict[str, Any]], str | None, list[str]]:
     """Read one context's logbook, component first with a REST fallback."""
-    entries, warnings = await _fetch_component_logbook(
+    entries, warnings, retry_rest = await _fetch_component_logbook(
         client, context_id, start_time, end_time
     )
     if entries is not None:
         return entries, "component", warnings
+    if not retry_rest:
+        return [], None, warnings
 
     try:
         rest_entries = await client.get_logbook(
@@ -347,21 +354,35 @@ async def _fetch_logbook_context(
     return rest_entries, "rest", warnings
 
 
+def _component_logbook_error(err: Exception) -> tuple[str, bool]:
+    """Turn a component read failure into a warning and a REST-retry choice."""
+    if isinstance(err, HomeAssistantCommandTimeout) or (
+        isinstance(err, HomeAssistantConnectionError) and _wrapped_timeout(err)
+    ):
+        return f"The component logbook read timed out: {err}", False
+    return f"The component logbook read failed: {err}", True
+
+
 async def _fetch_component_logbook(
     client: Any,
     context_id: str,
     start_time: str,
     end_time: str,
-) -> tuple[list[dict[str, Any]] | None, list[str]]:
-    """Try the component's logbook processor; return rows or warnings."""
+) -> tuple[list[dict[str, Any]] | None, list[str], bool]:
+    """Try the component's logbook processor.
+
+    The third value says whether the REST fallback may run. A timeout does
+    not retry: the recorder query can still be running, and re-issuing it
+    over REST adds a second slow scan instead of answering faster.
+    """
     warnings: list[str] = []
     try:
         caps = await get_component_caps(client)
     except Exception as err:  # noqa: BLE001
-        return None, [f"Could not probe the logbook component: {err}"]
+        return None, [f"Could not probe the logbook component: {err}"], True
 
     if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
-        return None, warnings
+        return None, warnings, True
 
     try:
         response = await client.send_websocket_message(
@@ -373,14 +394,15 @@ async def _fetch_component_logbook(
             }
         )
     except Exception as err:  # noqa: BLE001
-        return None, [f"The component logbook read failed: {err}"]
+        warning, retry_rest = _component_logbook_error(err)
+        return None, [warning], retry_rest
 
     if isinstance(response, dict) and response.get("success"):
         result = response.get("result")
         if isinstance(result, list):
-            return result, warnings
+            return result, warnings, True
         warnings.append("The component logbook reply did not contain a row list.")
-        return None, warnings
+        return None, warnings, True
 
     if isinstance(response, dict) and response.get("error_code") == "unknown_command":
         invalidate_caps(client)
@@ -389,7 +411,7 @@ async def _fetch_component_logbook(
     if reason:
         warning = f"{warning} ({reason})"
     warnings.append(warning)
-    return None, warnings
+    return None, warnings, True
 
 
 def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
