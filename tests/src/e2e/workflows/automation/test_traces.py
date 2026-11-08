@@ -237,6 +237,130 @@ class TestAutomationTraces:
                 f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions"
             )
 
+    async def test_trace_storage_disabled_diagnostics(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """stored_traces=0 reports disabled storage, not a generic empty result."""
+        automation_name = "Trace Storage Disabled E2E"
+        create_config = test_data_factory.automation_config(
+            automation_name,
+            trigger=[
+                {
+                    "platform": "event",
+                    "event_type": "trace_storage_disabled_e2e",
+                }
+            ],
+            action=[{"delay": {"seconds": 0}}],
+            trace={"stored_traces": 0},
+            initial_state=True,
+        )
+
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation", {"config": create_config}
+        )
+        assert_mcp_success(create_result)
+        create_data = parse_mcp_result(create_result)
+        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
+        assert automation_id is not None
+        cleanup_tracker.track("automation", automation_id)
+
+        trigger_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "automation",
+                "service": "trigger",
+                "entity_id": automation_id,
+            },
+        )
+        assert_mcp_success(trigger_result)
+
+        traces_data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"automation_id": automation_id},
+            predicate=lambda data: (
+                data.get("diagnostics", {}).get("trace_storage_enabled") is False
+            ),
+            timeout=15,
+            poll_interval=0.5,
+            description="trace storage disabled diagnostic",
+        )
+
+        assert traces_data["trace_count"] == 0
+        assert traces_data["diagnostics"]["trace_storage_enabled"] is False
+        assert "trace storage is disabled" in (
+            traces_data["diagnostics"]["suggestion"].lower()
+        )
+
+    async def test_context_lookup_returns_same_run(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """A context id resolves to the run that owns it."""
+        automation_name = "Trace Context Lookup E2E"
+        create_config = test_data_factory.automation_config(
+            automation_name,
+            trigger=[
+                {
+                    "platform": "event",
+                    "event_type": "trace_context_lookup_e2e",
+                }
+            ],
+            action=[{"delay": {"seconds": 0}}],
+            initial_state=True,
+        )
+
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation", {"config": create_config}
+        )
+        assert_mcp_success(create_result)
+        create_data = parse_mcp_result(create_result)
+        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
+        assert automation_id is not None
+        cleanup_tracker.track("automation", automation_id)
+
+        trigger_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "automation",
+                "service": "trigger",
+                "entity_id": automation_id,
+            },
+        )
+        assert_mcp_success(trigger_result)
+
+        traces_data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"automation_id": automation_id},
+            predicate=lambda data: data.get("trace_count", 0) > 0,
+            timeout=15,
+            poll_interval=0.5,
+            description="automation trace for context lookup",
+        )
+        run_id = traces_data["traces"][0]["run_id"]
+
+        detail_result = await mcp_client.call_tool(
+            "ha_get_automation_traces",
+            {
+                "automation_id": automation_id,
+                "run_id": run_id,
+                "detailed": True,
+            },
+        )
+        assert_mcp_success(detail_result)
+        detail_data = parse_mcp_result(detail_result)
+        context_id = detail_data["context"]["id"]
+
+        by_context_result = await mcp_client.call_tool(
+            "ha_get_automation_traces",
+            {"automation_id": automation_id, "context_id": context_id},
+        )
+        assert_mcp_success(by_context_result)
+        by_context_data = parse_mcp_result(by_context_result)
+
+        assert by_context_data["run_id"] == run_id
+        assert by_context_data["context_id"] == context_id
+
     async def test_empty_traces_with_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory
     ):
