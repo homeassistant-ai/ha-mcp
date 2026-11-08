@@ -251,23 +251,6 @@ jobs:
         exit 1
 
 
-    - name: Update stable git tag
-      if: steps.semantic.outputs.released == 'true'
-      run: |
-        # Move the 'stable' tag to point to the new release
-        VERSION="${{ steps.semantic.outputs.version }}"
-        echo "Updating 'stable' tag to point to v$VERSION"
-
-        # Delete existing stable tag (local and remote)
-        git tag -d stable 2>/dev/null || true
-        git push origin :refs/tags/stable 2>/dev/null || true
-
-        # Create new stable tag pointing to the release commit
-        git tag stable "v$VERSION"
-        git push origin stable
-
-        echo "✓ 'stable' tag now points to v$VERSION"
-
   # Build and push addon Docker images
   build-addon:
     needs: semantic-release

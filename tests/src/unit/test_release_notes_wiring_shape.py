@@ -16,6 +16,7 @@ so a match somewhere else in the file cannot stand in for that step's wiring.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -36,7 +37,10 @@ _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
 
 
 @pytest.mark.parametrize("available", [False, True])
-def test_stable_publication_waits_for_the_pinned_package(tmp_path, available):
+@pytest.mark.parametrize("zip_state", ["missing", "empty", "uploading", "uploaded"])
+def test_stable_publication_waits_for_the_pinned_package(
+    tmp_path, available, zip_state
+):
     release = yaml.safe_load(
         (_WORKFLOW_DIR / "release-publish.yml").read_text(encoding="utf-8")
     )
@@ -50,13 +54,35 @@ def test_stable_publication_waits_for_the_pinned_package(tmp_path, available):
         "Publish GitHub release"
     )
     calls = tmp_path / "calls"
+    assets = tmp_path / "assets.json"
+    assets.write_text(
+        json.dumps(
+            {
+                "assets": []
+                if zip_state == "missing"
+                else [
+                    {
+                        "name": "ha_mcp_tools.zip",
+                        "state": "uploaded" if zip_state != "uploading" else "new",
+                        "size": 0 if zip_state == "empty" else 100,
+                    }
+                ]
+            }
+        )
+    )
     stubs = (
         'curl() { [ "$AVAILABLE" = 1 ]; }\n'
         "sleep() { :; }\n"
-        'gh() { printf "%s\\n" "$*" >> "$CALLS"; }\n'
+        'gh() { if [ "$1 $2" = "release view" ]; then '
+        'while [ "$#" -gt 0 ]; do if [ "$1" = --jq ]; then jq -r "$2" "$ASSETS"; return; fi; shift; done; return 99; fi; '
+        'printf "%s\\n" "$*" >> "$CALLS"; }\n'
+        'git() { if [ "$1" = rev-parse ]; then echo release-commit; else printf "%s\\n" "$*" >> "$CALLS"; fi; }\n'
     )
     for name in ("Wait for the build on PyPI", "Publish GitHub release"):
         step = next(step for step in steps if step.get("name") == name)
+        assert step.get("if") is None, (
+            "The default success gate must protect visibility and publication together"
+        )
         result = subprocess.run(
             [shutil.which("bash") or "bash", "-e", "-c", stubs + step["run"]],
             env={
@@ -66,6 +92,9 @@ def test_stable_publication_waits_for_the_pinned_package(tmp_path, available):
                 "VERSION": "1.2.3",
                 "TAG": "v1.2.3",
                 "CALLS": calls.as_posix(),
+                "ASSETS": assets.as_posix(),
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GH_TOKEN": "test-token",
             },
             capture_output=True,
             text=True,
@@ -74,11 +103,30 @@ def test_stable_publication_waits_for_the_pinned_package(tmp_path, available):
         )
         if result.returncode:
             break
-    assert (result.returncode == 0) is available, result.stderr
-    if available:
-        assert calls.read_text().strip() == "release edit v1.2.3 --draft=false"
+    ready = available and zip_state == "uploaded"
+    assert (result.returncode == 0) is ready, result.stderr
+    if ready:
+        assert calls.read_text().splitlines() == [
+            "release edit v1.2.3 --draft=false",
+            "push --force https://x-access-token:test-token@github.com/owner/repo.git release-commit:refs/tags/stable",
+        ]
     else:
-        assert not calls.exists(), "A missing package must leave the release private"
+        assert not calls.exists(), (
+            "An unavailable package or ZIP must leave the release and stable ref unchanged"
+        )
+
+
+def test_stable_alias_moves_only_after_the_release_becomes_public():
+    assert "Update stable git tag" not in [
+        step.get("name") for step in _workflow()["jobs"]["semantic-release"]["steps"]
+    ]
+    release = yaml.safe_load((_WORKFLOW_DIR / "release-publish.yml").read_text())
+    publish = next(
+        step["run"]
+        for step in release["jobs"]["publish_pypi"]["steps"]
+        if step.get("name") == "Publish GitHub release"
+    )
+    assert publish.index("--draft=false") < publish.index("refs/tags/stable")
 
 
 def _workflow() -> dict[str, Any]:

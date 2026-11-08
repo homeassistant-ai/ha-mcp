@@ -181,7 +181,17 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.release_tag }}
-        run: gh release edit "$TAG" --draft=false
+        run: |
+          READY=$(gh release view "$TAG" --json assets \
+            --jq '[.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0)] | length')
+          if [ "$READY" != 1 ]; then
+            echo "::error::A complete ha_mcp_tools.zip is required; leaving the release draft."
+            exit 1
+          fi
+          gh release edit "$TAG" --draft=false
+          RELEASE_COMMIT=$(git rev-parse "${TAG}^{commit}")
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "${RELEASE_COMMIT}:refs/tags/stable"
 
   publish_docker:
     name: Publish Docker image

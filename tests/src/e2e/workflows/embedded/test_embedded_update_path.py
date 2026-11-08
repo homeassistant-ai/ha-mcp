@@ -82,6 +82,9 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
+from ha_mcp._vendor.mcp.types import CallToolResult
+
+from ...utilities.assertions import assert_mcp_success
 from ...utilities.streamable_http import parse_mcp_response
 
 _UPDATE_PATH_ENV = "E2E_UPDATE_PATH"
@@ -559,6 +562,25 @@ def update_path_ha(request):
     container: Any = None
     component_zip: Path | None = None
     try:
+        component_zip = config_path / "ha_mcp_tools.zip"
+        subprocess.run(
+            [
+                sys.executable,
+                str(_REPO_ROOT / "scripts" / "build_component_zip.py"),
+                "--output",
+                str(component_zip),
+            ],
+            env={
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith("GIT_")
+                },
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
+            check=True,
+        )
         if request.param == "stable":
             component_src = _export_released_component(work_dir / "released")
         else:
@@ -567,16 +589,6 @@ def update_path_ha(request):
             component_src = _REPO_ROOT / "custom_components" / _DOMAIN
             if not component_src.is_dir():
                 pytest.fail(f"working-tree component not found at {component_src}")
-            component_zip = config_path / "ha_mcp_tools.zip"
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(_REPO_ROOT / "scripts" / "build_component_zip.py"),
-                    "--output",
-                    str(component_zip),
-                ],
-                check=True,
-            )
 
         try:
             wheel, sentinel = _build_sentinel_wheel(work_dir / "wheel")
@@ -589,7 +601,9 @@ def update_path_ha(request):
 
         shutil.copy2(wheel, config_path / wheel.name)
         _seed_config(
-            config_path, component_src if component_zip is None else None, component_zip
+            config_path,
+            component_src if request.param == "stable" else None,
+            component_zip if request.param != "stable" else None,
         )
 
         container = (
@@ -731,14 +745,14 @@ class TestEmbeddedUpdatePath:
         )
 
         if update_path_ha["component_zip"]:
-            # Reinstall the distribution artifact over a configured instance,
+            # Upgrade the released component, or reinstall the same ZIP,
             # then prove the selected server build and config entry survive HA restart.
             reinstall_code = (
                 "from pathlib import Path; import zipfile; "
                 "p=Path('/config/custom_components/ha_mcp_tools/__init__.py'); "
-                "before=p.read_bytes(); p.unlink(); "
+                "expected=zipfile.ZipFile('/config/ha_mcp_tools.zip').read('__init__.py'); p.unlink(); "
                 "zipfile.ZipFile('/config/ha_mcp_tools.zip').extractall(p.parent); "
-                "assert p.read_bytes() == before"
+                "assert p.read_bytes() == expected"
             )
             installed = container.get_wrapped_container().exec_run(
                 ["python3", "-c", reinstall_code]
@@ -800,4 +814,7 @@ class TestEmbeddedUpdatePath:
                 response.headers.get("Content-Type", ""), response.content
             )
             assert called and "result" in called, response.text[:500]
-            assert not called["result"].get("isError"), called
+            assert_mcp_success(
+                CallToolResult.model_validate(called["result"]),
+                "ha_get_overview after ZIP install",
+            )

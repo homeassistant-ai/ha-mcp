@@ -107,6 +107,7 @@ gh() {
 @pytest.mark.parametrize("draft", [False, True])
 @pytest.mark.parametrize("mirror", [False, True])
 def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
+    mutations = tmp_path / "mutations"
     workflow = _RELEASE_ON_TAG if mirror else _WORKFLOWS / "publish-dev.yml"
     job = "release" if mirror else "create-prerelease"
     step_name = "Create release for tag" if mirror else "Create pre-release"
@@ -120,8 +121,10 @@ def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
             shutil.which("bash") or "bash",
             "-e",
             "-c",
-            'gh() { [ "$1 $2" = "api graphql" ] || return 99; '
+            'gh() { if [ "$1 $2" != "api graphql" ]; then printf "%s\\n" "$*" >> "$MUTATIONS"; return 99; fi; '
             'echo "lookup warning" >&2; printf "%s\\n" "$RELEASE_STATE"; };\n'
+            'git() { printf "%s\\n" "$*" >> "$MUTATIONS"; return 99; };\n'
+            'python3() { printf "%s\\n" "$*" >> "$MUTATIONS"; return 99; };\n'
             + step["run"],
         ],
         cwd=tmp_path,
@@ -132,6 +135,7 @@ def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
             "GITHUB_REPOSITORY": "owner/mirror",
             "VERSION": "1.0.0",
             "RELEASE_STATE": "draft" if draft else "published",
+            "MUTATIONS": mutations.as_posix(),
         },
         capture_output=True,
         text=True,
@@ -139,6 +143,9 @@ def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
         timeout=20,
     )
     assert (result.returncode == 0) is (not draft), result.stderr
+    assert not mutations.exists(), (
+        "Existing public or draft releases must not be mutated"
+    )
 
 
 @pytest.mark.parametrize("mirror", [False, True])

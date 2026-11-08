@@ -235,6 +235,15 @@ def _prepare_testcontainer_config(
                 "--output",
                 str(component_zip),
             ],
+            env={
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith("GIT_")
+                },
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
             check=True,
         )
         _install_custom_component(

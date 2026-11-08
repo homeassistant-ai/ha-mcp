@@ -16,6 +16,8 @@ Both HACS manifests select that asset in the same release that introduces it.
 SemVer creates the stamped stable ZIP and a draft GitHub release. Release
 Publish uploads the Python distribution, waits for PyPI to serve its version,
 then makes the GitHub release public. Docker promotion follows that job.
+Publication checks for a completed ZIP first and advances `stable` only after
+the GitHub release is public, so independent site rebuilds keep the published version.
 Development already waits for its package before publishing its stamped ZIP.
 There is no separate activation release.
 
@@ -23,6 +25,9 @@ The mirror follows the public stable release or the published dev build and
 copies its upstream ZIP when creating the mirror release. It does not rebuild
 the ZIP. A rerun leaves an existing public release and its download history
 alone; an incomplete draft fails visibly and requires inspection before retry.
+If the mirror tag exists but its release is missing, rerun the failed **Release
+on tag** workflow in the mirror while the upstream asset is available. A source
+sync dispatch skips an existing tag and does not create a new tag-push event.
 Do not overlap manual stable releases: finish or recover the current publisher
 before cutting the next one. Queued mirror runs converge on the public stable
 release. The site rebuilds after a successful Release Publish run.
