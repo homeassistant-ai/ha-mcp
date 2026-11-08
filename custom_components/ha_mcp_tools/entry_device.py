@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .const import COMPONENT_VERSION, DOMAIN
+from .store_records import async_schedule_store_records_check
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -24,6 +25,7 @@ async def async_register_entry_device(
     breaks setup. Tied to the config entry, so Home Assistant removes the
     device with it.
     """
+    async_schedule_store_records_check(hass)
     from homeassistant.helpers import device_registry as dr
     from homeassistant.loader import async_get_integration
 

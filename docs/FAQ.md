@@ -730,6 +730,37 @@ The split is deliberate: YAML *reads* sit behind the filesystem flag, and only Y
 
 The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first read and accept the warning in its UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the legacy distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
 
+### The store says "The ha_mcp_tools directory belongs to …" and HA-MCP will not update
+
+Two store records, `homeassistant-ai/ha-mcp` and the legacy mirror
+`homeassistant-ai/ha-mcp-integration`, are both marked installed, and both own
+`custom_components/ha_mcp_tools`. HACS allowed a download of the second one on
+top of the first (older ha-mcp servers suggested exactly that); the Marketplace
+in Home Assistant 2026.11 refuses to update either record, and refuses to
+uninstall one while any HA-MCP entry exists, disabled ones included.
+
+Open **Settings → System → Repairs**. A current HA-MCP integration shows
+**HA-MCP is installed from two store listings**; submitting it keeps
+`homeassistant-ai/ha-mcp` and marks the other record as not installed. Nothing
+is deleted and your entries stay. Then update HA-MCP from the store as usual.
+
+Without that repair card (an integration older than the one that added it),
+either:
+
+1. Delete every HA-MCP entry under **Settings → Devices & services**, uninstall
+   the duplicate record in the store, update the kept one, add the entries back
+   and restart. A re-added server entry gets a new connect URL unless you
+   re-enter the old webhook id and secret path overrides in its Configure
+   dialog.
+2. Keep the entries: with Core stopped (`ha core stop` in a terminal app), set
+   `"installed": false` on the duplicate record in
+   `/config/.storage/marketplace.repositories` (`hacs.repositories` on HACS),
+   start Core, then update the kept record.
+
+A mirror install that was never doubled needs none of this: it keeps updating
+from the mirror. `ha_manage_hacs` now routes a download of either repository to
+the one that is installed.
+
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
 **No.** The custom component's **HA-MCP Server** entry runs the whole ha-mcp server inside Home Assistant and is completely independent of the Home Assistant app. For remote access it registers its own built-in Home Assistant webhook, so you do not need the separate Webhook Proxy app either.

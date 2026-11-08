@@ -29,6 +29,10 @@ from .hacs_backend import (
     fetch_releases,
     raise_store_error,
 )
+from .hacs_own_repository import (
+    ownership_refusal_records,
+    route_own_repository_download,
+)
 from .hacs_registration import (
     HACS_ADD_REGISTRATION_TIMEOUT,
     HACS_REFRESH_TIMEOUT,
@@ -557,6 +561,10 @@ class HacsTools:
         )
         ws_client, api = await self._get_hacs_client()
 
+        repository_id, version, reroute_note = await route_own_repository_download(
+            ws_client, api, repository_id, version
+        )
+
         # Resolve GitHub path to numeric ID if needed
         actual_id, repo_name = await _resolve_hacs_repo_id(
             ws_client, api, repository_id
@@ -589,6 +597,7 @@ class HacsTools:
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
+                    **({"routing_note": reroute_note} if reroute_note else {}),
                 },
                 suggestions=[
                     "The download may still have completed on the HACS side — "
@@ -598,6 +607,7 @@ class HacsTools:
                 raise_error=True,
             )
         except HomeAssistantCommandError as cmd_err:
+            refusal = await ownership_refusal_records(ws_client, api, cmd_err)
             raise_store_error(
                 cmd_err,
                 {
@@ -605,7 +615,9 @@ class HacsTools:
                     "repository_id": repository_id,
                     "version": version,
                     "timeout_seconds": 60.0,
+                    **({"routing_note": reroute_note} if reroute_note else {}),
                 },
+                installed_records=refusal,
             )
 
         if not response.get("success"):
@@ -615,6 +627,7 @@ class HacsTools:
                     "command": api.command("install"),
                     "repository_id": repository_id,
                     "version": version,
+                    **({"routing_note": reroute_note} if reroute_note else {}),
                 },
                 raise_error=True,
             )
@@ -635,7 +648,8 @@ class HacsTools:
                 "data": result,
             },
         )
-        return {"success": True, **wrapped}
+        warnings = {"warnings": [reroute_note]} if reroute_note else {}
+        return {"success": True, **wrapped, **warnings}
 
     async def _hacs_remove(self, repository_id: str | None) -> dict[str, Any]:
         # Same up-front guard as ``_hacs_download``: an empty identifier

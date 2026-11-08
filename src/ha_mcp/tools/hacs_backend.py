@@ -5,6 +5,7 @@ integration and removes the ``hacs/*`` WebSocket commands. The HACS tools
 talk to whichever API the instance serves, Marketplace first.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
@@ -75,6 +76,47 @@ _GATE_SUGGESTIONS = {
         "Ask the user to confirm, then retry with confirm_replace_built_in=True.",
     ],
 }
+
+# Two store records claiming custom_components/ha_mcp_tools (#2993): the
+# Marketplace refuses to update either, and refuses to uninstall a record while
+# any HA-MCP config entry exists, disabled ones included. Both ways out were
+# checked on a live instance; neither can be driven through this server.
+DUPLICATE_RECORD_SUGGESTIONS = [
+    "A current HA-MCP integration files a repair for this under Settings > "
+    + "System > Repairs; its fix keeps homeassistant-ai/ha-mcp and marks the "
+    + "other record as not installed, with no change to entries or files. Ask "
+    + "the user to run it.",
+    "Without that repair: the store refuses to uninstall a record while any "
+    + "HA-MCP entry exists, disabled ones included, and this server cannot "
+    + "drive either route below. Ask the user before suggesting them.",
+    "Route 1 (no terminal): delete every HA-MCP entry under Settings > Devices "
+    + "& services, uninstall the duplicate record in the store, update the kept "
+    + "record, add the entries back and restart. An embedded server entry gets "
+    + "a new connect URL, so MCP clients reconnect.",
+    "Route 2 (keeps the entries): with Home Assistant Core stopped, set "
+    + '"installed": false on the duplicate record in '
+    + ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
+    + "start Core, then update the kept record.",
+]
+# Core's ``integration_owned`` message: "The {domain} directory belongs to
+# {owner}." The store sends no error code for it, so the whole sentence is
+# matched, owner as ``owner/repo``, never a fragment of some other message.
+_OWNED_DIRECTORY = re.compile(
+    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w-][\w.-]*?)\.?$"
+)
+
+
+def _owned_directory_suggestions(owner: str) -> list[str]:
+    """The store refused an install because another installed record owns the
+    integration's directory: the owner is the record to install or update."""
+    return [
+        f"{owner} already provides this integration. Update or reinstall it "
+        f'there: ha_manage_hacs(action="download", repository_id="{owner}").',
+        "To switch repositories instead, uninstall the owner first; the store "
+        "refuses that while any of the integration's config entries exist, so "
+        "ask the user before deleting entries under Settings > Devices & "
+        "services.",
+    ]
 
 
 @dataclass(frozen=True)
@@ -187,15 +229,37 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
     return HACS_API  # unreachable: raise_tool_error always raises
 
 
+def is_owned_directory_refusal(err: HomeAssistantCommandError) -> bool:
+    """Whether the store refused because another installed record owns the
+    integration's directory."""
+    return _OWNED_DIRECTORY.match(str(err).strip()) is not None
+
+
 def raise_store_error(
-    err: HomeAssistantCommandError, context: dict[str, Any]
+    err: HomeAssistantCommandError,
+    context: dict[str, Any],
+    *,
+    installed_records: list[str] | None = None,
 ) -> NoReturn:
     """Raise a store command failure; a Marketplace gate names the UI step.
 
     The gates are told apart by Core's error code: their messages ("Connect a
-    GitHub account ...") would otherwise read as a connection failure.
+    GitHub account ...") would otherwise read as a connection failure. An
+    ownership refusal names the owner to update, unless the owner is one of
+    ha-mcp's own records and ``installed_records`` shows two of them
+    installed: then neither can be updated and the suggestions are the way
+    out of that. A refusal naming some other integration's owner keeps the
+    owner hint whatever ha-mcp's own records look like.
     """
-    if suggestions := _GATE_SUGGESTIONS.get(err.code or ""):
+    suggestions = _GATE_SUGGESTIONS.get(err.code or "")
+    if match := _OWNED_DIRECTORY.match(str(err).strip()):
+        owners = {r.lower() for r in installed_records or []}
+        if len(owners) > 1 and match[1].lower() in owners:
+            suggestions = DUPLICATE_RECORD_SUGGESTIONS
+            context = {**context, "installed": installed_records}
+        else:
+            suggestions = _owned_directory_suggestions(match[1])
+    if suggestions:
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,

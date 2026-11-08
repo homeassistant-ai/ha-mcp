@@ -82,7 +82,10 @@ Searching for **HA-MCP** finds either name.
    An install from the earlier
    `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same
    releases; on the Marketplace, keep GitHub connected for background checks on
-   that custom repository. Or, without
+   that custom repository. Keep it on that one repository: the Marketplace
+   in Home Assistant 2026.11 allows one listing per integration, so do not
+   also download the main repository over it (`ha_manage_hacs` routes a
+   download of either to the installed one). Or, without
    HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
    into your Home Assistant `config/custom_components/` directory (so you end up
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.

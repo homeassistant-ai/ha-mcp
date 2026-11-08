@@ -185,6 +185,21 @@
                     "entry_removed": "The HA-MCP Server entry no longer exists."
                 }
             }
+        },
+        "store_records_conflict": {
+            "title": "HA-MCP is installed from two store listings",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Keep HA-MCP on one store listing?",
+                        "description": "HA-MCP is marked installed from both {records}. They carry the same integration (the second one is the older distribution mirror). The Marketplace in Home Assistant 2026.11 lets only one listing own an integration, so there neither of them can update HA-MCP; HACS still updates, but the upgrade to 2026.11 would leave HA-MCP stuck.\n\nSubmit keeps **{keep}**, the listing in the default catalog that needs no custom repository, and marks the other listing as not installed. Nothing is deleted: your HA-MCP entries, settings and files stay exactly as they are, and from now on updates show up under {keep} as usual."
+                    }
+                },
+                "abort": {
+                    "already_resolved": "HA-MCP is installed from one store listing now; nothing to fix.",
+                    "store_unavailable": "The store (HACS or the Marketplace) is not loaded yet, so the listings cannot be checked. Try again in a few minutes."
+                }
+            }
         }
     },
     "selector": {

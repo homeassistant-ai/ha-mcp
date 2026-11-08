@@ -9,12 +9,13 @@ from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
 
-from . import server_credentials
+from . import server_credentials, store_records
 from .const import (
     DATA_ADMIN_TOKEN,
     DATA_REINSTALL_REQUESTED,
     ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
+    ISSUE_STORE_RECORDS_CONFLICT,
     ISSUE_TOKEN_NEEDED,
 )
 
@@ -51,6 +52,40 @@ class LegacyOAuthRestartRepairFlow(RepairsFlow):
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema({}),
+        )
+
+
+class StoreRecordsRepairFlow(RepairsFlow):
+    """Forget the duplicate store record so the kept one can update (#2993)."""
+
+    async def async_step_init(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Open the confirmation step."""
+        return await self.async_step_confirm()
+
+    async def async_step_confirm(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Keep the main repository's record and forget the other one."""
+        records = store_records.conflicting_records(self.hass)
+        if records is None:
+            return self.async_abort(reason="store_unavailable")
+        if not records:
+            # The store came back clean after the check last looked (a manual
+            # fix, or a store that loaded late); the card has nothing to do.
+            store_records.async_clear_store_records_issue(self.hass)
+            return self.async_abort(reason="already_resolved")
+        if user_input is not None:
+            await store_records.async_resolve_store_records(self.hass)
+            return self.async_create_entry(data={})
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "records": " and ".join(records),
+                "keep": store_records.MAIN_REPOSITORY,
+            },
         )
 
 
@@ -174,4 +209,6 @@ async def async_create_fix_flow(
         )
     if issue_id == ISSUE_LEGACY_OAUTH_RESTART:
         return LegacyOAuthRestartRepairFlow()
+    if issue_id == ISSUE_STORE_RECORDS_CONFLICT:
+        return StoreRecordsRepairFlow()
     raise ValueError(f"no fix flow for repair issue {issue_id!r}")
