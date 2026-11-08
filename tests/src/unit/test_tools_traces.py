@@ -8,6 +8,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_traces import (
     TraceTools,
+    _format_detailed_trace,
     _format_trace_list,
     _gather_diagnostics,
     _resolve_trace_item_id,
@@ -274,6 +275,140 @@ class TestFormatTraceList:
 
         assert result["traces"][0]["execution"] == "finished"
 
+    def test_list_preserves_core_short_dict_fields(self):
+        """Every field Core's trace/list returns reaches the caller."""
+        core_trace = {
+            "last_step": "action/0",
+            "run_id": "r1",
+            "state": "stopped",
+            "script_execution": "finished",
+            "timestamp": {
+                "start": "2026-11-08T16:00:04.319026+00:00",
+                "finish": "2026-11-08T16:00:04.319959+00:00",
+            },
+            "domain": "automation",
+            "item_id": "trace_capture",
+            "trigger": None,
+            "not_triggered": True,
+        }
+
+        result = _format_trace_list("automation.test", [core_trace], 10)
+
+        assert result["traces"][0] == {**core_trace, "execution": "finished"}
+
+    def test_list_orders_mixed_not_triggered_by_core_start_time(self):
+        """Run and not-triggered traces page in Core's timestamp order."""
+        traces = [
+            {
+                "run_id": "run_middle",
+                "state": "stopped",
+                "timestamp": {
+                    "start": "2026-11-08T16:00:02+00:00",
+                    "finish": "2026-11-08T16:00:02.100000+00:00",
+                },
+            },
+            {
+                "run_id": "not_triggered_newest",
+                "state": "stopped",
+                "not_triggered": True,
+                "timestamp": {
+                    "start": "2026-11-08T16:00:04+00:00",
+                    "finish": "2026-11-08T16:00:04.100000+00:00",
+                },
+            },
+            {
+                "run_id": "run_oldest",
+                "state": "stopped",
+                "timestamp": {
+                    "start": "2026-11-08T16:00:01+00:00",
+                    "finish": "2026-11-08T16:00:01.100000+00:00",
+                },
+            },
+        ]
+
+        newest = _format_trace_list("automation.test", traces, 2)
+        oldest = _format_trace_list("automation.test", traces, 2, order="oldest")
+
+        assert [trace["run_id"] for trace in newest["traces"]] == [
+            "not_triggered_newest",
+            "run_middle",
+        ]
+        assert [trace["run_id"] for trace in oldest["traces"]] == [
+            "run_oldest",
+            "run_middle",
+        ]
+
+    def test_detail_preserves_core_extended_dict_fields(self):
+        """Every field Core's trace/get returns survives the detail projection."""
+        trace = {
+            "last_step": "action/0",
+            "run_id": "r1",
+            "state": "stopped",
+            "script_execution": "finished",
+            "timestamp": {
+                "start": "2026-11-08T16:00:04.319026+00:00",
+                "finish": "2026-11-08T16:00:04.319959+00:00",
+            },
+            "domain": "automation",
+            "item_id": "trace_capture",
+            "trigger": None,
+            "not_triggered": True,
+            "trace": {
+                "trigger": [{"path": "trigger", "changed_variables": {}}],
+                "action/0": [{"path": "action/0", "result": {}}],
+            },
+            "config": {"alias": "Trace capture", "mode": "single"},
+            "blueprint_inputs": {"target_entity": "light.fan_bulb_1"},
+            "context": {"id": "ctx-1", "parent_id": None, "user_id": None},
+        }
+
+        result = _format_detailed_trace("automation.test", "r1", trace, detailed=True)
+
+        assert result["last_step"] == "action/0"
+        assert result["domain"] == "automation"
+        assert result["item_id"] == "trace_capture"
+        assert result["not_triggered"] is True
+        assert result["blueprint_inputs"] == {"target_entity": "light.fan_bulb_1"}
+        assert result["context"] == {
+            "id": "ctx-1",
+            "parent_id": None,
+            "user_id": None,
+        }
+
+    def test_detail_handles_null_config_and_trace(self):
+        """A restored or unfinished trace can carry null config and trace."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "running",
+                "config": None,
+                "trace": None,
+            },
+        )
+
+        assert result["success"] is True
+        assert result["run_id"] == "r1"
+
+    def test_sections_context_without_detailed(self):
+        """Requesting the context section returns it without detailed."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "context": {"id": "ctx-1"},
+                "config": {"alias": "Trace capture"},
+                "trace": {},
+            },
+            sections="context",
+        )
+
+        assert result["context"] == {"id": "ctx-1"}
+        assert "config_summary" not in result
+
 
 class TestGatherDiagnostics:
     """Test _gather_diagnostics function.
@@ -478,7 +613,9 @@ class TestGatherDiagnostics:
         }
         client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"config": {"trace": {"stored_traces": 5}}},  # Trace storage enabled
+            "result": {
+                "config": {"trace": {"stored_traces": 5}}
+            },  # Trace storage enabled
         }
 
         result = await _gather_diagnostics(client, "automation.test", "automation")

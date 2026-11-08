@@ -534,6 +534,29 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
     )
 
 
+def _trace_start(trace: dict[str, Any]) -> str:
+    """Return Core's trace start timestamp as a sortable string."""
+    timestamp = trace.get("timestamp")
+    if isinstance(timestamp, dict):
+        start = timestamp.get("start")
+        if isinstance(start, str):
+            return start
+        finish = timestamp.get("finish")
+        if isinstance(finish, str):
+            return finish
+        return ""
+    return timestamp if isinstance(timestamp, str) else ""
+
+
+def _requested_sections(sections: str | None) -> set[str]:
+    """Return the lower-cased section names requested by the caller."""
+    if not sections:
+        return set()
+    return {
+        section.strip().lower() for section in sections.split(",") if section.strip()
+    }
+
+
 def _format_trace_list(
     automation_id: str,
     traces: list[dict[str, Any]],
@@ -553,39 +576,26 @@ def _format_trace_list(
         offset: Number of traces to skip from the start of the requested order
         order: 'newest' (default) returns most-recent first; 'oldest' chronological
     """
-    # HA's trace/list returns traces oldest-first. Pick a window from the end
-    # for newest-first, or from the start for oldest-first, with offset for
-    # pagination through stored traces beyond `limit`.
+    # HA's trace/list returns runs first, then not-triggered traces, so list
+    # position is not chronological. Sort by Core's own start timestamp before
+    # picking the newest or oldest window.
+    ordered = sorted(traces, key=_trace_start)
     if order == "newest":
-        end = len(traces) - offset
+        end = len(ordered) - offset
         start = max(end - limit, 0)
-        window = list(reversed(traces[start:end])) if end > 0 else []
+        window = list(reversed(ordered[start:end])) if end > 0 else []
     else:
-        window = traces[offset : offset + limit]
+        window = ordered[offset : offset + limit]
 
     formatted_traces = []
     for trace in window:
-        # Extract key information from trace
-        trace_info: dict[str, Any] = {
-            "run_id": trace.get("run_id"),
-            "timestamp": trace.get("timestamp"),
-            "state": trace.get("state"),
-        }
-
-        # Extract trigger description if available
-        trigger_str = trace.get("trigger")
-        if trigger_str:
-            trace_info["trigger"] = trigger_str
-
-        # Check for errors
-        error = trace.get("error")
-        if error:
-            trace_info["error"] = error
-
-        # Add script-specific execution duration
-        if "script_execution" in trace:
-            trace_info["execution"] = trace.get("script_execution")
-
+        if not isinstance(trace, dict):
+            continue
+        # Pass Core's short dict through instead of projecting a field
+        # allowlist; keep the concise execution alias for existing callers.
+        trace_info = dict(trace)
+        if "script_execution" in trace_info:
+            trace_info["execution"] = trace_info["script_execution"]
         formatted_traces.append(trace_info)
 
     result: dict[str, Any] = {
@@ -607,6 +617,29 @@ def _format_trace_list(
     return result
 
 
+def _add_core_summary_fields(result: dict[str, Any], trace: dict[str, Any]) -> None:
+    """Copy Core's extended-dict summary fields into the tool result."""
+    for key in ("last_step", "blueprint_inputs", "domain", "item_id"):
+        if key in trace:
+            result[key] = trace[key]
+    if trace.get("not_triggered"):
+        result["not_triggered"] = True
+
+
+def _add_optional_detail(
+    result: dict[str, Any],
+    trace: dict[str, Any],
+    *,
+    detailed: bool,
+    requested: set[str],
+) -> None:
+    """Add logbook entries and context when detailed or explicitly requested."""
+    if (detailed or "logbook" in requested) and "logbook_entries" in trace:
+        result["logbook_entries"] = trace["logbook_entries"]
+    if (detailed or "context" in requested) and trace.get("context"):
+        result["context"] = trace["context"]
+
+
 def _format_detailed_trace(
     automation_id: str,
     run_id: str,
@@ -626,15 +659,19 @@ def _format_detailed_trace(
         "state": trace.get("state"),
     }
 
-    raw_trace = trace.get("trace", {})
+    raw_trace = trace.get("trace") or {}
     triggers, conditions, actions = _classify_trace_steps(raw_trace, domain)
 
     _populate_trigger_info(result, triggers, trace)
     _populate_condition_results(result, conditions)
     _populate_action_trace(result, actions, deduplicate)
 
+    # Pass Core's extended-dict summary fields through. They describe the run
+    # independently of the action trace and were previously dropped.
+    _add_core_summary_fields(result, trace)
+
     # Add context with trigger variables for template debugging
-    config = trace.get("config", {})
+    config = trace.get("config") or {}
     if config:
         # Include config summary for context
         result["config_summary"] = {
@@ -650,13 +687,12 @@ def _format_detailed_trace(
     if trace.get("script_execution"):
         result["script_execution"] = trace["script_execution"]
 
-    # In detailed mode, include logbook entries and context metadata
-    # that are essential for debugging but omitted by default to save context.
-    if detailed:
-        if "logbook_entries" in trace:
-            result["logbook_entries"] = trace["logbook_entries"]
-        if trace.get("context"):
-            result["context"] = trace["context"]
+    requested = _requested_sections(sections)
+
+    # In detailed mode, include logbook entries that Home Assistant supplies
+    # and the run's context metadata. Either can be requested explicitly
+    # through `sections` without turning on detailed mode.
+    _add_optional_detail(result, trace, detailed=detailed, requested=requested)
 
     if sections:
         result = _filter_trace_sections(result, sections)
@@ -724,7 +760,7 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
         "logbook": "logbook_entries",
         "context": "context",
     }
-    requested = {s.strip().lower() for s in sections.split(",")}
+    requested = _requested_sections(sections)
     keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
     # Always keep metadata keys
     keep_keys |= {
@@ -734,6 +770,11 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
         "timestamp",
         "state",
         "script_execution",
+        "last_step",
+        "blueprint_inputs",
+        "domain",
+        "item_id",
+        "not_triggered",
     }
     return {k: v for k, v in result.items() if k in keep_keys}
 
