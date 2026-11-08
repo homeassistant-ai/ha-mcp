@@ -236,15 +236,18 @@ jobs:
         run: |
           TAG="v${VERSION}"
 
-          if DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>&1); then
-            if [ "$DRAFT" = false ]; then
-              echo "release already published; preserving its assets"
-              exit 0
-            fi
+          RELEASE=$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $tag: String!) { repository(owner: $owner, name: $name) { release(tagName: $tag) { isDraft } } }' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -f tag="$TAG" \
+            --jq '.data.repository.release | if . == null then "absent" elif .isDraft then "draft" else "published" end')
+          if [ "$RELEASE" = published ]; then
+            echo "release already published; preserving its assets"
+            exit 0
+          elif [ "$RELEASE" = draft ]; then
             echo "::error::An incomplete draft exists for ${TAG}; inspect it before retrying."
             exit 1
-          elif ! printf '%s' "$DRAFT" | grep -qi 'release not found'; then
-            echo "::error::Could not read release ${TAG}: ${DRAFT}"
+          elif [ "$RELEASE" != absent ]; then
+            echo "::error::Unexpected release lookup result: ${RELEASE}"
             exit 1
           fi
 

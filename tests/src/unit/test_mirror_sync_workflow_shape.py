@@ -46,7 +46,7 @@ def test_new_mirror_release_attaches_the_upstream_zip(tmp_path, tag, source_tag)
 gh() {
   printf '%s\n' "$*" >> "$CALLS"
   case "$1 $2" in
-    'release view') echo 'release not found' >&2; return 1 ;;
+    'api graphql') echo absent ;;
     'release download')
       [ "$3" = "$SOURCE_TAG" ] || return 2
       destination=.
@@ -120,8 +120,9 @@ def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
             shutil.which("bash") or "bash",
             "-e",
             "-c",
-            'gh() { [ "$1 $2" = "release view" ] || return 99; '
-            'printf "%s\\n" "$IS_DRAFT"; };\n' + step["run"],
+            'gh() { [ "$1 $2" = "api graphql" ] || return 99; '
+            'echo "lookup warning" >&2; printf "%s\\n" "$RELEASE_STATE"; };\n'
+            + step["run"],
         ],
         cwd=tmp_path,
         env={
@@ -130,7 +131,7 @@ def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
             "GITHUB_REF_NAME": "v1.0.0",
             "GITHUB_REPOSITORY": "owner/mirror",
             "VERSION": "1.0.0",
-            "IS_DRAFT": "true" if draft else "false",
+            "RELEASE_STATE": "draft" if draft else "published",
         },
         capture_output=True,
         text=True,
@@ -141,7 +142,10 @@ def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
 
 
 @pytest.mark.parametrize("mirror", [False, True])
-def test_release_lookup_failure_stops_before_any_release_or_tag_write(tmp_path, mirror):
+@pytest.mark.parametrize("error", ["HTTP 403: API rate limit", "release not found"])
+def test_release_lookup_failure_stops_before_any_release_or_tag_write(
+    tmp_path, mirror, error
+):
     workflow = _RELEASE_ON_TAG if mirror else _WORKFLOWS / "publish-dev.yml"
     job = "release" if mirror else "create-prerelease"
     name = "Create release for tag" if mirror else "Create pre-release"
@@ -150,8 +154,8 @@ def test_release_lookup_failure_stops_before_any_release_or_tag_write(tmp_path, 
     )
     mutations = tmp_path / "mutations"
     stub = (
-        'gh() { if [ "$1 $2" = "release view" ]; then '
-        'echo "HTTP 403: API rate limit" >&2; return 1; fi; '
+        'gh() { if [ "$1 $2" = "api graphql" ]; then '
+        'echo "$LOOKUP_ERROR" >&2; return 1; fi; '
         'printf "%s\\n" "$*" >> "$MUTATIONS"; };\n'
         'git() { printf "%s\\n" "$*" >> "$MUTATIONS"; };\n'
         'python3() { printf "%s\\n" "$*" >> "$MUTATIONS"; };\n'
@@ -166,6 +170,7 @@ def test_release_lookup_failure_stops_before_any_release_or_tag_write(tmp_path, 
             "GITHUB_REF_NAME": "v1.0.0",
             "GITHUB_REPOSITORY": "owner/repo",
             "MUTATIONS": mutations.as_posix(),
+            "LOOKUP_ERROR": error,
         },
         capture_output=True,
         text=True,
