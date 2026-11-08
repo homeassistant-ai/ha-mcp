@@ -44,7 +44,12 @@ from typing import Any
 import pytest
 from haos_runtime import HA_MCP_DEV_ADDON_SLUG, is_haos_inaddon_mode
 
-from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ..utilities.assertions import (
+    MCPAssertions,
+    parse_mcp_result,
+    safe_call_tool,
+)
+from ..utilities.cleanup import CleanupSteps
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 logger = logging.getLogger(__name__)
@@ -192,10 +197,11 @@ async def test_config_boot_roundtrip(mcp_client: Any) -> None:
             f"boot did not persist: expected {probe!r}, got {after.get('boot')!r}"
         )
     finally:
-        if original is not None:
-            await safe_call_tool(
-                mcp_client, "ha_manage_app", {"slug": slug, "boot": original}
-            )
+        with CleanupSteps() as cleanup, cleanup.step():
+            if original is not None:
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_manage_app", {"slug": slug, "boot": original}
+                )
 
 
 async def test_config_auto_update_roundtrip(mcp_client: Any) -> None:
@@ -226,9 +232,10 @@ async def test_config_auto_update_roundtrip(mcp_client: Any) -> None:
             f"{after.get('auto_update')!r}"
         )
     finally:
-        await safe_call_tool(
-            mcp_client, "ha_manage_app", {"slug": slug, "auto_update": original}
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_manage_app", {"slug": slug, "auto_update": original}
+            )
 
 
 async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
@@ -257,9 +264,10 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
             f"{after.get('watchdog')!r}"
         )
     finally:
-        await safe_call_tool(
-            mcp_client, "ha_manage_app", {"slug": slug, "watchdog": original}
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_manage_app", {"slug": slug, "watchdog": original}
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -338,21 +346,20 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
             await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
         finally:
             # Restore the app's original run state so sibling tests (and reruns)
-            # see the baked baseline regardless of how this test exited.
-            try:
-                detail = await safe_call_tool(mcp_client, "ha_get_app", {"slug": slug})
-                current = (detail.get("addon") or {}).get("state")
+            # see the baked baseline regardless of how this test exited. A
+            # state that could not be read counts as changed, so the restore
+            # is still attempted.
+            with CleanupSteps() as cleanup:
+                current = None
+                with cleanup.step():
+                    detail = await mcp.call_tool_success("ha_get_app", {"slug": slug})
+                    current = (detail.get("addon") or {}).get("state")
                 if current != original:
-                    restore_action = "start" if original == "started" else "stop"
-                    await safe_call_tool(
-                        mcp_client,
-                        "ha_manage_app",
-                        {"slug": slug, "action": restore_action},
-                    )
-            except Exception:  # pragma: no cover - cleanup best-effort
-                logger.exception(
-                    "Failed to restore AppDaemon to original state %s", original
-                )
+                    with cleanup.step():
+                        restore_action = "start" if original == "started" else "stop"
+                        await mcp.call_tool_success(
+                            "ha_manage_app", {"slug": slug, "action": restore_action}
+                        )
 
 
 # ---------------------------------------------------------------------------

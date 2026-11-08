@@ -15,6 +15,7 @@ from ha_mcp.tools.error_log_parsing import (
 )
 
 from ..utilities.assertions import MCPAssertions, safe_call_tool
+from ..utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -810,17 +811,16 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
         assert matching, f"Expected an entry for domain={target_domain}"
         assert matching[0]["level"] == "DEBUG"
     finally:
-        # Restore default
-        await safe_call_tool(
-            mcp_client,
-            "ha_call_service",
-            {
-                "domain": "logger",
-                "service": "set_level",
-                "data": {target_domain: "info"},
-                "wait": False,
-            },
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_call_service",
+                {
+                    "domain": "logger",
+                    "service": "set_level",
+                    "data": {target_domain: "info"},
+                    "wait": False,
+                },
+            )
 
 
 @pytest.mark.asyncio

@@ -5,18 +5,16 @@ exclusions, and retention of the original fixture failure when an xdist worker
 aborts while another worker is passing tests.
 """
 
-import os
 import re
-import subprocess
-import sys
 import textwrap
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from tests.src.doomed_run import DoomedRunDetector
+
+from ._pytest_subprocess import run_pytest
 
 
 def test_call_pass_resets_streak():
@@ -82,7 +80,6 @@ def test_default_threshold_is_50():
 
 def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
     """A worker exit must not hide the exception that doomed that worker."""
-    repo_root = Path(__file__).resolve().parents[3]
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     # Register the actual E2E hook, without registering its HA/container fixtures.
     (tmp_path / "conftest.py").write_text(
@@ -129,32 +126,17 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
     )
     empty_env = tmp_path / "empty.env"
     empty_env.write_text("", encoding="utf-8")
-    env = os.environ.copy()
-    env.pop("PYTEST_ADDOPTS", None)
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    env["PYTHONPATH"] = os.pathsep.join((str(repo_root), str(repo_root / "src")))
-    env["HAMCP_ENV_FILE"] = str(empty_env)
-    env["HA_MCP_CONFIG_DIR"] = str(tmp_path / "config")
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-p",
-            "xdist.plugin",
-            "-n2",
-            "--dist=loadscope",
-            "-vv",
-            "--confcutdir",
-            str(tmp_path),
-        ],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+    result = run_pytest(
+        tmp_path,
+        "-p",
+        "xdist.plugin",
+        "-n2",
+        "--dist=loadscope",
+        "-vv",
+        env={
+            "HAMCP_ENV_FILE": str(empty_env),
+            "HA_MCP_CONFIG_DIR": str(tmp_path / "config"),
+        },
     )
     output = result.stdout + result.stderr
     (tmp_path / "subprocess.log").write_text(output, encoding="utf-8")

@@ -49,6 +49,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
+from ..utilities.cleanup import CleanupSteps
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
@@ -302,44 +303,31 @@ async def screenshot_engine_started(
         await _wait_engine_serving(mcp_client)
         yield
     finally:
-        cleanup_errors: list[str] = []
-        try:
-            await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
-        except Exception as exc:  # noqa: BLE001
-            cleanup_errors.append(f"options restore failed: {exc!r}")
-
-        restore_action = "restart" if original_state == "started" else "stop"
-        try:
-            restore_result = await _addon_action(
-                mcp_client, SCREENSHOT_ADDON_SLUG, restore_action
-            )
-            if not restore_result.get("success"):
-                cleanup_errors.append(
+        # A fixture teardown sees no test outcome, so a failed step fails here
+        # even after a failed test.
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
+            with cleanup.step():
+                restore_action = "restart" if original_state == "started" else "stop"
+                restore_result = await _addon_action(
+                    mcp_client, SCREENSHOT_ADDON_SLUG, restore_action
+                )
+                assert restore_result.get("success"), (
                     f"state restore action failed: {restore_result!r}"
                 )
-        except Exception as exc:  # noqa: BLE001
-            cleanup_errors.append(f"state restore action failed: {exc!r}")
-
-        expected_state: str | frozenset[str] = (
-            "started" if original_state == "started" else STOPPED_STATES
-        )
-        try:
-            await _wait_for_state(
-                mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
-            )
-        except Exception as exc:  # noqa: BLE001
-            cleanup_errors.append(f"state verification failed: {exc!r}")
-
-        try:
-            restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
-            if dict(restored_detail.get("options") or {}) != original_options:
-                cleanup_errors.append("options verification failed")
-        except Exception as exc:  # noqa: BLE001
-            cleanup_errors.append(f"options verification failed: {exc!r}")
-
-        assert not cleanup_errors, (
-            "Fixture failed to restore screenshot engine: " + "; ".join(cleanup_errors)
-        )
+            with cleanup.step():
+                expected_state: str | frozenset[str] = (
+                    "started" if original_state == "started" else STOPPED_STATES
+                )
+                await _wait_for_state(
+                    mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
+                )
+            with cleanup.step():
+                restored = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+                assert dict(restored.get("options") or {}) == original_options, (
+                    "options verification failed"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -518,17 +506,18 @@ async def test_token_is_what_authenticates(
                 "authenticates (both produced the same image)."
             )
     finally:
-        await _set_options(mcp_client, slug, {"access_token": good_token})
-        restore_result = await _addon_action(mcp_client, slug, "restart")
-        assert restore_result.get("success"), "Valid-token restore restart failed"
-        await _wait_for_state(mcp_client, slug, "started")
-        await _wait_engine_serving(mcp_client, context="token restore")
-        # Confirm the valid token actually re-committed, so a leaked invalid
-        # token can't poison a retry's baseline within the session.
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert (detail.get("options") or {}).get("access_token", "") == good_token, (
-            "Restore of the valid token did not commit"
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _set_options(mcp_client, slug, {"access_token": good_token})
+            restore_result = await _addon_action(mcp_client, slug, "restart")
+            assert restore_result.get("success"), "Valid-token restore restart failed"
+            await _wait_for_state(mcp_client, slug, "started")
+            await _wait_engine_serving(mcp_client, context="token restore")
+            # Confirm the valid token actually re-committed, so a leaked invalid
+            # token can't poison a retry's baseline within the session.
+            detail = await _get_addon_detail(mcp_client, slug)
+            assert (detail.get("options") or {}).get(
+                "access_token", ""
+            ) == good_token, "Restore of the valid token did not commit"
 
 
 async def _engine_outcome_after_restart(mcp_client: Any) -> bytes | None:

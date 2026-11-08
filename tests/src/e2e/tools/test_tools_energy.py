@@ -13,7 +13,8 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ..utilities.assertions import MCPAssertions, assert_mcp_success
+from ..utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,7 @@ async def test_energy_add_device_roundtrip(mcp_client):
     run would otherwise hit RESOURCE_ALREADY_EXISTS.
     """
     stat = "sensor.test_e2e_add_device"
+    added = False
     try:
         add_result = await mcp_client.call_tool(
             "ha_manage_energy_prefs",
@@ -149,6 +151,7 @@ async def test_energy_add_device_roundtrip(mcp_client):
             },
         )
         assert_mcp_success(add_result)
+        added = True
         assert add_result.data["target_key"] == "device_consumption"
         assert add_result.data["new_count"] >= 1
 
@@ -163,17 +166,12 @@ async def test_energy_add_device_roundtrip(mcp_client):
             f"Added device should appear in subsequent get; got stats={stats}"
         )
     finally:
-        # Best-effort cleanup. remove_device on a missing entry raises
-        # RESOURCE_NOT_FOUND — swallow it so the original assertion error
-        # (if any) is what surfaces.
-        try:
-            await mcp_client.call_tool(
-                "ha_manage_energy_prefs",
-                {"mode": "remove_device", "stat_consumption": stat},
-            )
-        except ToolError as cleanup_err:
-            if "RESOURCE_NOT_FOUND" not in str(cleanup_err):
-                raise
+        with CleanupSteps() as cleanup, cleanup.step():
+            if added:
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_manage_energy_prefs",
+                    {"mode": "remove_device", "stat_consumption": stat},
+                )
 
 
 @pytest.mark.asyncio
@@ -261,7 +259,8 @@ async def test_energy_add_source_roundtrip(mcp_client):
             f"Added grid source should appear; got sources={sources}"
         )
     finally:
-        await _cleanup_test_source(mcp_client, stat)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _cleanup_test_source(mcp_client, stat)
 
 
 def _non_grid_source_payload(source_type: str, stat: str) -> dict:
@@ -302,7 +301,8 @@ async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
             for s in sources
         ), f"Added {source_type} source should appear; got sources={sources}"
     finally:
-        await _cleanup_test_source(mcp_client, stat)
+        with CleanupSteps() as cleanup, cleanup.step():
+            await _cleanup_test_source(mcp_client, stat)
 
 
 @pytest.mark.asyncio
@@ -367,15 +367,15 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
             f"Per-key set must persist; got device_consumption={verify_dc}"
         )
     finally:
-        # Restore original device_consumption under a fresh per-key hash.
-        cleanup_initial = await safe_call_tool(
-            mcp_client, "ha_manage_energy_prefs", {"mode": "get"}
-        )
-        if cleanup_initial.get("success"):
+        with CleanupSteps() as cleanup, cleanup.step():
+            # Restore original device_consumption under a fresh per-key hash.
+            mcp = MCPAssertions(mcp_client)
+            cleanup_initial = await mcp.call_tool_success(
+                "ha_manage_energy_prefs", {"mode": "get"}
+            )
             cleanup_per_key = cleanup_initial.get("config_hash_per_key", {})
             if "device_consumption" in cleanup_per_key:
-                await safe_call_tool(
-                    mcp_client,
+                await mcp.call_tool_success(
                     "ha_manage_energy_prefs",
                     {
                         "mode": "set",
@@ -433,9 +433,9 @@ async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
         assert record["has_sum"] is True
         assert "statistics_metadata" not in result["config"]
     finally:
-        if added:
-            await safe_call_tool(
-                mcp_client,
-                "ha_manage_energy_prefs",
-                {"mode": "remove_device", "stat_consumption": statistic_id},
-            )
+        with CleanupSteps() as cleanup, cleanup.step():
+            if added:
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_manage_energy_prefs",
+                    {"mode": "remove_device", "stat_consumption": statistic_id},
+                )

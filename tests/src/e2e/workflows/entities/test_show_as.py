@@ -8,7 +8,8 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import MCPAssertions, assert_mcp_success
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -273,25 +274,26 @@ class TestShowAsOnIntegrationEntity:
                 == 3
             )
         finally:
-            # Restore the override slot to its pre-test value (None or whatever
-            # it was) so we don't leak state to other tests sharing the demo
-            # entity inside this test container.
-            restore_dc = "" if original_override is None else original_override
-            await safe_call_tool(
-                mcp_client,
-                "ha_set_entity",
-                {"entity_id": self.TARGET, "device_class": restore_dc},
-            )
-            # Restore the sensor sub-options to their pre-test value so any
-            # demo-platform default we overwrote is put back intact. Skip the
-            # round-trip when there was nothing captured — sending an empty
-            # sub-dict would otherwise emit a no-op options={"sensor": {}} call.
-            if original_sensor_options:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_set_entity",
-                    {
-                        "entity_id": self.TARGET,
-                        "options": {"sensor": dict(original_sensor_options)},
-                    },
-                )
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    # Restore the override slot to its pre-test value (None or whatever
+                    # it was) so we don't leak state to other tests sharing the demo
+                    # entity inside this test container.
+                    restore_dc = "" if original_override is None else original_override
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_set_entity",
+                        {"entity_id": self.TARGET, "device_class": restore_dc},
+                    )
+                with cleanup.step():
+                    # Restore the sensor sub-options to their pre-test value so any
+                    # demo-platform default we overwrote is put back intact. Skip the
+                    # round-trip when there was nothing captured — sending an empty
+                    # sub-dict would otherwise emit a no-op options={"sensor": {}} call.
+                    if original_sensor_options:
+                        await MCPAssertions(mcp_client).call_tool_success(
+                            "ha_set_entity",
+                            {
+                                "entity_id": self.TARGET,
+                                "options": {"sensor": dict(original_sensor_options)},
+                            },
+                        )

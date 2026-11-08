@@ -22,6 +22,8 @@ from haos_runtime import (
     _home_assistant_ws_command,
 )
 
+from ..utilities.cleanup import CleanupSteps
+
 pytestmark = [pytest.mark.haos_only]
 
 _FLOW_TIMEOUT = 60.0
@@ -123,4 +125,5 @@ def test_core_discovers_and_connects_to_the_app(
             time.sleep(3)
         assert entry["config_entry"]["title"] == "ha-mcp"
     finally:
-        _rest(info, "DELETE", f"/api/config/config_entries/entry/{entry_id}")
+        with CleanupSteps() as cleanup, cleanup.step():
+            _rest(info, "DELETE", f"/api/config/config_entries/entry/{entry_id}")

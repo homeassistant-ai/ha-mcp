@@ -12,6 +12,7 @@ from ...utilities.assertions import (
     assert_mcp_success,
     safe_call_tool,
 )
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -564,12 +565,12 @@ class TestIntegrationManagement:
                     changed_entry
                 )
             finally:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "config": {"file_path": start_path},
-                    },
-                )
+                with CleanupSteps() as cleanup, cleanup.step():
+                    await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": self.RECONFIGURE_ENTRY_ID,
+                            "reconfigure": True,
+                            "config": {"file_path": start_path},
+                        },
+                    )

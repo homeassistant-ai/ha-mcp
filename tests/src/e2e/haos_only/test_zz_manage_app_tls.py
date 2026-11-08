@@ -36,6 +36,7 @@ from tests.src.haos_runtime import (
 
 from .._conftest_embedded import _wait_for_embedded_webhook_ready
 from ..utilities.assertions import MCPAssertions, safe_call_tool
+from ..utilities.cleanup import CleanupSteps
 from .test_manage_addon_modes import (
     NODERED_NAME,
     _resolve_slug,
@@ -281,38 +282,46 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(  # noqa: 
                 assert opened.get("status_code") == 200, opened
                 assert isinstance(opened.get("response"), list), opened
             finally:
-                if front_door_touched:
-                    await _set_front_door(mcp, assertions, slug, original_front_door)
+                with CleanupSteps() as cleanup, cleanup.step():
+                    if front_door_touched:
+                        await _set_front_door(
+                            mcp, assertions, slug, original_front_door
+                        )
     finally:
-        # If the configure socket closed while Core accepted the command, the
-        # assignment above may not have observed readiness. Probe briefly; if
-        # HTTPS never came up, wait for Core's five-minute trial auto-revert so
-        # the shared fixture never tears down while its expected HTTP URL is dark.
-        if tls_requested and not https_ready:
-            try:
-                _wait_http_ok(
-                    f"{https_base_url}/manifest.json", timeout=30, verify_ssl=False
-                )
-                https_ready = _wait_for_embedded_webhook_ready(
-                    https_webhook_url, timeout=180, verify=False
-                )
-                if not https_ready:
-                    _wait_http_ok(f"{http_base_url}/manifest.json", timeout=330)
-            except TimeoutError:
-                _wait_http_ok(f"{http_base_url}/manifest.json", timeout=330)
-        if tls_requested and https_ready:
-            assert configure_home_assistant_http(
-                https_base_url,
-                token,
-                original_http_config,
-                verify_ssl=False,
-            ), "Core did not schedule the HTTPS-to-HTTP restoration restart"
-            _wait_http_ok(f"{http_base_url}/manifest.json", timeout=300)
-            restored = get_home_assistant_http_config(http_base_url, token)
-            # A failure before TLS promotion restores the already-stable HTTP
-            # config by clearing pending, so promote only when one remains.
-            if restored.get("pending") is not None:
-                promote_home_assistant_http_config(http_base_url, token)
-                restored = get_home_assistant_http_config(http_base_url, token)
-            assert restored.get("pending") is None, restored
-            assert restored.get("active_config_type") == "stable", restored
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                # If the configure socket closed while Core accepted the command, the
+                # assignment above may not have observed readiness. Probe briefly; if
+                # HTTPS never came up, wait for Core's five-minute trial auto-revert so
+                # the shared fixture never tears down while its expected HTTP URL is dark.
+                if tls_requested and not https_ready:
+                    try:
+                        _wait_http_ok(
+                            f"{https_base_url}/manifest.json",
+                            timeout=30,
+                            verify_ssl=False,
+                        )
+                        https_ready = _wait_for_embedded_webhook_ready(
+                            https_webhook_url, timeout=180, verify=False
+                        )
+                        if not https_ready:
+                            _wait_http_ok(f"{http_base_url}/manifest.json", timeout=330)
+                    except TimeoutError:
+                        _wait_http_ok(f"{http_base_url}/manifest.json", timeout=330)
+            with cleanup.step():
+                if tls_requested and https_ready:
+                    assert configure_home_assistant_http(
+                        https_base_url,
+                        token,
+                        original_http_config,
+                        verify_ssl=False,
+                    ), "Core did not schedule the HTTPS-to-HTTP restoration restart"
+                    _wait_http_ok(f"{http_base_url}/manifest.json", timeout=300)
+                    restored = get_home_assistant_http_config(http_base_url, token)
+                    # A failure before TLS promotion restores the already-stable HTTP
+                    # config by clearing pending, so promote only when one remains.
+                    if restored.get("pending") is not None:
+                        promote_home_assistant_http_config(http_base_url, token)
+                        restored = get_home_assistant_http_config(http_base_url, token)
+                    assert restored.get("pending") is None, restored
+                    assert restored.get("active_config_type") == "stable", restored

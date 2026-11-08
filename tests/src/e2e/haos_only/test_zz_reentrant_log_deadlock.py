@@ -36,6 +36,7 @@ from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
 from ..utilities.assertions import MCPAssertions
+from ..utilities.cleanup import CleanupSteps
 from ..utilities.logger_seed import with_probe_logger_config
 
 logger = logging.getLogger(__name__)
@@ -189,10 +190,10 @@ def _restart_core() -> bool:
     Driven through the Supervisor CLI rather than HA's own restart service so
     it still works when Core's event loop is wedged — which is exactly the
     state this test's cleanup has to recover from. Falls back to restarting the
-    container directly, and never raises: this runs in a ``finally`` where an
-    exception would mask the real failure. The caller must not treat a later
-    readiness check as proof of a restart — the OLD process answers it just as
-    well — so a double failure is reported through the return value.
+    container directly, and never raises: a double failure is reported through
+    the return value, which the cleanup step asserts. The caller must not treat
+    a later readiness check as proof of a restart — the OLD process answers it
+    just as well.
     """
     try:
         result = ssh_exec(["sh", "-c", "ha core restart"], timeout=300.0)
@@ -303,7 +304,6 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
     config_yaml = f"{config_dir}/configuration.yaml"
     backup_yaml = f"{config_dir}/configuration.yaml.2357.bak"
 
-    body_failed = False
     try:
         _sh(f"cp {shlex.quote(config_yaml)} {shlex.quote(backup_yaml)}")
         _write_in_vm(f"{probe_dir}/__init__.py", PROBE_INIT_PY)
@@ -353,46 +353,27 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
             "the probe integration never emitted its debug record, so this run "
             f"did not exercise the re-entrant path (grep count: {fired!r})"
         )
-    except BaseException:
-        body_failed = True
-        raise
     finally:
         # Hand a healthy VM back to the rest of the worker's session. Later
         # modules on this xdist worker share it, so a restore that leaves the
         # probe config behind or a restart that leaves Core down is a failure
-        # of this test — unless the body already failed, in which case that
-        # failure must stay the one reported.
-        # Each step is attempted regardless of the previous one — a failed
-        # probe removal must not skip the config restore, and vice versa — and
-        # the first failure is what gets reported.
-        cleanup_error: Exception | None = None
-        for step in (
-            f"rm -rf {shlex.quote(probe_dir)}",
-            # The backup exists from the moment the body's first step ran; a
-            # failed mv here must not be papered over.
-            f"if [ -f {shlex.quote(backup_yaml)} ]; then "
-            f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)}; fi",
-        ):
-            try:
-                _sh(step)
-            except AssertionError as exc:
-                cleanup_error = cleanup_error or exc
-        # The Supervisor CLI restarts Core even when its loop is wedged. A
-        # restart that never happened leaves the probe loaded even though the
-        # old process still answers the readiness check below.
-        if not _restart_core():
-            cleanup_error = cleanup_error or AssertionError(
-                "Core restart failed during cleanup; the probe is still loaded"
-            )
-        try:
-            _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)
-        except TimeoutError as exc:
-            cleanup_error = cleanup_error or exc
-        if cleanup_error is not None:
-            if body_failed:
-                logger.error("probe cleanup did not fully recover: %s", cleanup_error)
-            else:
-                raise AssertionError(
-                    "probe cleanup did not fully recover the worker's VM, which "
-                    f"later modules share: {cleanup_error}"
-                ) from cleanup_error
+        # of this test.
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                _sh(f"rm -rf {shlex.quote(probe_dir)}")
+            with cleanup.step():
+                # The backup exists from the moment the body's first step ran; a
+                # failed mv here must not be papered over.
+                _sh(
+                    f"if [ -f {shlex.quote(backup_yaml)} ]; then "
+                    f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)}; fi"
+                )
+            with cleanup.step():
+                # The Supervisor CLI restarts Core even when its loop is wedged. A
+                # restart that never happened leaves the probe loaded even though
+                # the old process still answers the readiness check below.
+                assert _restart_core(), (
+                    "Core restart failed during cleanup; the probe is still loaded"
+                )
+            with cleanup.step():
+                _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)

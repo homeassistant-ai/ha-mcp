@@ -12,10 +12,12 @@ import logging
 import pytest
 
 from ...utilities.assertions import (
+    MCPAssertions,
     extract_error_message,
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -160,17 +162,16 @@ class TestManageTheme:
         finally:
             # Cleanup: restore container to clean state for sibling tests.
             # Reset light mode to 'default' and clear dark override with 'none'.
-            await safe_call_tool(
-                mcp_client,
-                "ha_manage_theme",
-                {"action": "set", "theme_name": "default"},
-            )
-            await safe_call_tool(
-                mcp_client,
-                "ha_manage_theme",
-                {"action": "set", "theme_name": "none", "mode": "dark"},
-            )
-            logger.info("Cleaned up theme state (reset to default/none)")
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_manage_theme", {"action": "set", "theme_name": "default"}
+                    )
+                with cleanup.step():
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_manage_theme",
+                        {"action": "set", "theme_name": "none", "mode": "dark"},
+                    )
 
     async def test_set_unknown_theme_fails(self, mcp_client):
         """action='set' with a non-installed theme surfaces HA's validation error."""
