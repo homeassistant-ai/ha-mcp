@@ -229,17 +229,33 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
     return HACS_API  # unreachable: raise_tool_error always raises
 
 
+def is_owned_directory_refusal(err: HomeAssistantCommandError) -> bool:
+    """Whether the store refused because another installed record owns the
+    integration's directory."""
+    return _OWNED_DIRECTORY.match(str(err).strip()) is not None
+
+
 def raise_store_error(
-    err: HomeAssistantCommandError, context: dict[str, Any]
+    err: HomeAssistantCommandError,
+    context: dict[str, Any],
+    *,
+    installed_records: list[str] | None = None,
 ) -> NoReturn:
     """Raise a store command failure; a Marketplace gate names the UI step.
 
     The gates are told apart by Core's error code: their messages ("Connect a
-    GitHub account ...") would otherwise read as a connection failure.
+    GitHub account ...") would otherwise read as a connection failure. An
+    ownership refusal names the owner to update, unless ``installed_records``
+    shows two of ha-mcp's own records installed: then neither can be updated
+    and the suggestions are the way out of that.
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
     if match := _OWNED_DIRECTORY.match(str(err).strip()):
-        suggestions = _owned_directory_suggestions(match[1])
+        if installed_records and len(installed_records) > 1:
+            suggestions = DUPLICATE_RECORD_SUGGESTIONS
+            context = {**context, "installed": installed_records}
+        else:
+            suggestions = _owned_directory_suggestions(match[1])
     if suggestions:
         raise_tool_error(
             create_error_response(

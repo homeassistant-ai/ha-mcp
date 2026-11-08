@@ -84,18 +84,46 @@ async def test_nothing_installed_keeps_the_requested_repository():
     ) == ("homeassistant-ai/ha-mcp", None, None)
 
 
-async def test_two_installed_records_are_refused_on_the_marketplace():
-    """The Marketplace refuses to update either record, so the request is
-    refused up front with the way out."""
+async def test_two_installed_records_on_the_marketplace_leave_the_decision_to_the_store():
+    """The Marketplace refuses the download itself; no handwritten copy of
+    its rule stands in front of it."""
     ws = _ws([_installed(MAIN, "v9.1.1"), _installed(MIRROR)])
+    target, version, note = await route_own_repository_download(
+        ws, StoreApi("marketplace"), "homeassistant-ai/ha-mcp", None
+    )
+    assert (target, version, note) == ("homeassistant-ai/ha-mcp", None, None)
+
+
+async def test_the_store_refusal_with_two_installed_records_gives_the_way_out():
+    """When the store's ownership refusal comes from a doubled install, the
+    owner it names cannot be updated either, so the suggestions are the
+    recovery routes rather than "update the owner"."""
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+    from ha_mcp.tools.hacs_backend import raise_store_error
+
+    err = HomeAssistantCommandError(
+        "The ha_mcp_tools directory belongs to homeassistant-ai/ha-mcp-integration"
+    )
     with pytest.raises(ToolError) as excinfo:
-        await route_own_repository_download(
-            ws, StoreApi("marketplace"), "homeassistant-ai/ha-mcp", None
+        raise_store_error(
+            err,
+            {"command": "marketplace/repository/install"},
+            installed_records=[
+                "homeassistant-ai/ha-mcp",
+                "homeassistant-ai/ha-mcp-integration",
+            ],
         )
-    message = str(excinfo.value)
-    assert "homeassistant-ai/ha-mcp" in message
-    assert "homeassistant-ai/ha-mcp-integration" in message
-    assert "Devices & services" in message
+    body = json.loads(str(excinfo.value))
+    suggestions = " ".join(body["error"]["suggestions"])
+    assert "Repairs" in suggestions and "Devices & services" in suggestions
+    assert (
+        'action="download", repository_id="homeassistant-ai/ha-mcp-integration"'
+        not in suggestions
+    )
+    assert body["installed"] == [
+        "homeassistant-ai/ha-mcp",
+        "homeassistant-ai/ha-mcp-integration",
+    ]
 
 
 async def test_download_of_the_main_repository_installs_from_the_mirror():

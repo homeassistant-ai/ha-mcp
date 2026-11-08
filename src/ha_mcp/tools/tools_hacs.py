@@ -29,7 +29,10 @@ from .hacs_backend import (
     fetch_releases,
     raise_store_error,
 )
-from .hacs_own_repository import route_own_repository_download
+from .hacs_own_repository import (
+    ownership_refusal_records,
+    route_own_repository_download,
+)
 from .hacs_registration import (
     HACS_ADD_REGISTRATION_TIMEOUT,
     HACS_REFRESH_TIMEOUT,
@@ -604,6 +607,7 @@ class HacsTools:
                 raise_error=True,
             )
         except HomeAssistantCommandError as cmd_err:
+            refusal = await ownership_refusal_records(ws_client, api, cmd_err)
             raise_store_error(
                 cmd_err,
                 {
@@ -613,6 +617,7 @@ class HacsTools:
                     "timeout_seconds": 60.0,
                     **({"routing_note": reroute_note} if reroute_note else {}),
                 },
+                installed_records=refusal,
             )
 
         if not response.get("success"):
@@ -643,10 +648,8 @@ class HacsTools:
                 "data": result,
             },
         )
-        answer: dict[str, Any] = {"success": True, **wrapped}
-        if reroute_note:
-            answer["warnings"] = [reroute_note]
-        return answer
+        warnings = {"warnings": [reroute_note]} if reroute_note else {}
+        return {"success": True, **wrapped, **warnings}
 
     async def _hacs_remove(self, repository_id: str | None) -> dict[str, Any]:
         # Same up-front guard as ``_hacs_download``: an empty identifier

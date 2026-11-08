@@ -20,7 +20,7 @@ from typing import Any
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..errors import ErrorCode, create_error_response
 from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
-from .hacs_backend import DUPLICATE_RECORD_SUGGESTIONS, StoreApi
+from .hacs_backend import StoreApi, is_owned_directory_refusal
 from .helpers import raise_tool_error
 
 MAIN_REPOSITORY = "homeassistant-ai/ha-mcp"
@@ -64,6 +64,31 @@ def _own_name(repo: dict[str, Any]) -> str | None:
     return None
 
 
+async def installed_own_records(
+    ws_client: Any, api: StoreApi
+) -> list[dict[str, Any]] | None:
+    """The store's records for ha-mcp's own repositories that are installed,
+    or None when the store could not be asked."""
+    try:
+        response = await ws_client.send_command(api.command("list"))
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout):
+        return None
+    listed = response.get("result") if isinstance(response, dict) else None
+    repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]
+    return [r for r in repos if _own_name(r) and r.get("installed")]
+
+
+async def ownership_refusal_records(
+    ws_client: Any, api: StoreApi, err: HomeAssistantCommandError
+) -> list[str] | None:
+    """For a store refusal, the installed own records' names, so the refusal
+    can be explained; None for any other error, with no store call."""
+    if not is_owned_directory_refusal(err):
+        return None
+    records = await installed_own_records(ws_client, api)
+    return [str(r.get("full_name")) for r in records or []]
+
+
 async def route_own_repository_download(
     ws_client: Any, api: StoreApi, repository_id: str, version: str | None
 ) -> tuple[str, str | None, str | None]:
@@ -74,40 +99,25 @@ async def route_own_repository_download(
     own, the installed one wins: a request for the other repository is
     rerouted to it, so the mirror keeps updating from the mirror and the main
     repository from the catalog, and a development ref is renamed the way the
-    target tags it. Two installed records are the deadlock the Marketplace
-    cannot resolve, so that is refused with the way out.
+    target tags it. With two installed records the store decides: the
+    Marketplace refuses the download itself and that refusal is explained
+    where it is raised; HACS still downloads, with a warning.
     """
     wanted = repository_id.strip().lower()
     wanted = OWN_REPOSITORY_IDS.get(wanted, wanted)
     if wanted not in {n.lower() for n in CANDIDATE_REPO_FULL_NAMES}:
         return repository_id, version, None
 
-    try:
-        response = await ws_client.send_command(api.command("list"))
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout):
+    installed = await installed_own_records(ws_client, api)
+    if installed is None:
         # The download itself reports the store's trouble, with its own context
         return repository_id, version, None
-    listed = response.get("result") if isinstance(response, dict) else None
-    repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]
-
-    installed = [r for r in repos if _own_name(r) and r.get("installed")]
     if len(installed) > 1:
-        names = " and ".join(str(r.get("full_name")) for r in installed)
         if api.is_marketplace:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"{names} are both installed and both claim "
-                    "custom_components/ha_mcp_tools, so the Marketplace refuses "
-                    "to update either of them. One repository has to own the "
-                    "integration.",
-                    suggestions=DUPLICATE_RECORD_SUGGESTIONS,
-                    context={
-                        "repository_id": repository_id,
-                        "installed": [r.get("full_name") for r in installed],
-                    },
-                )
-            )
+            # The Marketplace refuses this download itself; raise_store_error
+            # explains the refusal with the way out.
+            return repository_id, version, None
+        names = " and ".join(str(r.get("full_name")) for r in installed)
         # HACS never checked ownership, so the download still works there and
         # is the way to bring in the release whose repair keeps one listing.
         note = (
