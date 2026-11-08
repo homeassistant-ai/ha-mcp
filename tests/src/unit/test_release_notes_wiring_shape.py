@@ -253,7 +253,7 @@ def test_manual_force_requests_a_patch_release() -> None:
     assert semantic["with"]["force"] == "${{ inputs.force && 'patch' || '' }}"
 
 
-def test_release_publish_uses_the_same_releasable_commit_matcher() -> None:
+def test_release_publish_uses_the_triggering_semver_input_not_new_master() -> None:
     publish = yaml.safe_load(
         (_WORKFLOW_DIR / "release-publish.yml").read_text(encoding="utf-8")
     )
@@ -263,13 +263,8 @@ def test_release_publish_uses_the_same_releasable_commit_matcher() -> None:
         "release-publish.yml must have exactly one 'version' step in job 'prepare'"
     )
 
-    run = matches[0]["run"]
-    for pattern in (
-        "^(feat|fix|perf|refactor)(\\(.+\\))?!?:",
-        "^[a-z]+(\\(.+\\))?!:",
-        "^BREAKING[ -]CHANGE:",
-    ):
-        assert f"--grep='{pattern}'" in run
+    assert matches[0]["env"]["TRIGGER_SHA"] == "${{ github.event.workflow_run.head_sha }}"
+    assert matches[0]["env"]["MANUAL"] == "${{ github.event_name == 'workflow_dispatch' }}"
 
 
 def test_the_extractor_the_workflow_calls_exists() -> None:
