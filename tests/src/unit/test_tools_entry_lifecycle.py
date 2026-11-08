@@ -27,8 +27,8 @@ contract is covered by
 Home Assistant is stubbed via ``_embedded_stubs`` (imported first so the fakes
 are installed before the component module binds them); the collaborators the
 tools setup reaches for at call time — the ``.storage`` ``Store``, the device
-registry, the manifest read, the WS command registration — are replaced per
-test, so the whole lifecycle runs with no HA install and no I/O.
+registry, the manifest read, the WS command registration, Core's admin-service
+helper — are replaced per test, so the whole lifecycle runs with no HA install and no I/O.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from ._embedded_stubs import install
 install()
 
 import custom_components.ha_mcp_tools as comp  # noqa: E402
+from custom_components.ha_mcp_tools import file_ops  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
     DOMAIN,
@@ -131,6 +132,9 @@ def tools_env(monkeypatch, store_backing):
     the device registry, the manifest version read and the WebSocket command
     registration are all module-level names in the component, so patching them
     here keeps ``_async_setup_tools_entry`` runnable without Home Assistant.
+    Core's admin-service helper is patched on the service-helper module the
+    component shares with ``file_ops`` and ``yaml_find``, so it records their
+    registrations too.
     """
 
     class _FakeStore:
@@ -388,3 +392,56 @@ class TestWebSocketCommandSurface:
             "the shared ha_mcp_tools/* WS command surface must survive a "
             f"tools-entry unload, but it calls: {offenders}"
         )
+
+
+def _edit_call(token: str | None, path: str) -> MagicMock:
+    call = _make_call(token)
+    call.data.update({"path": path, "edits": [{"old": "a", "new": "b"}]})
+    return call
+
+
+class TestEditFileWiring:
+    """edit_file as the tools setup wires it, through the registered handler."""
+
+    @staticmethod
+    async def _registration(tools_env, tmp_path, store_backing) -> Any:
+        store_backing[comp._TOKEN_STORAGE_KEY] = {"token": "tok-abc"}
+        await comp._async_setup_tools_entry(_make_hass(tmp_path), _make_entry())
+        return next(
+            call
+            for call in tools_env.admin_register.call_args_list
+            if call.args[2] == file_ops.SERVICE_EDIT_FILE
+        )
+
+    async def test_registered_with_its_schema_for_a_response(
+        self, tools_env, tmp_path, store_backing
+    ):
+        """Core's admin helper defaults to an empty schema and no response."""
+        registration = await self._registration(tools_env, tmp_path, store_backing)
+
+        assert registration.kwargs["schema"] is file_ops.SERVICE_EDIT_FILE_SCHEMA
+        assert (
+            registration.kwargs["supports_response"] is file_ops.SupportsResponse.ONLY
+        )
+
+    async def test_handler_refuses_a_caller_without_the_token(
+        self, tools_env, tmp_path, store_backing
+    ):
+        """Core checks admin only for calls with a user; the token covers the rest."""
+        registration = await self._registration(tools_env, tmp_path, store_backing)
+
+        response = await registration.args[3](_edit_call(None, "www/card.js"))
+
+        assert response == comp._unauthorized_response(file_ops.SERVICE_EDIT_FILE)
+
+    async def test_handler_refuses_a_path_outside_the_allowlist(
+        self, tools_env, tmp_path, store_backing
+    ):
+        registration = await self._registration(tools_env, tmp_path, store_backing)
+
+        response = await registration.args[3](
+            _edit_call("tok-abc", "configuration.yaml")
+        )
+
+        assert response["success"] is False
+        assert "Write not allowed" in response["error"]
