@@ -41,10 +41,11 @@ from ..backup_manager import (
     _is_flow_helper_domain,
     get_backup_manager,
 )
+from ..client.rest_client import HomeAssistantAuthError
 from ..config import get_global_settings
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
-from .helpers import raise_tool_error
+from .helpers import exception_to_structured_error, raise_tool_error
 from .resource_patch import resource_write_lock
 
 logger = logging.getLogger(__name__)
@@ -172,11 +173,12 @@ def _component_refusal_cause(err: BaseException) -> ToolError | None:
     A mandatory pre-write snapshot reads the current content through the same
     File & YAML Tools services the wrapped write needs, so when the component
     refuses the call the capture fails FIRST and the write would be refused as
-    ``BACKUP_CAPTURE_FAILED``, burying the real error one level deep. Two
-    refusals are surfaced unchanged: ``COMPONENT_NOT_INSTALLED`` (no tools
-    entry, #2292) and ``PathNotAllowedError`` (the path is outside the
-    allowlist, #2908). Retrying the backup cannot succeed for either, and the
-    remediation is the component's, not the backup pipeline's.
+    ``BACKUP_CAPTURE_FAILED``, burying the real error one level deep. Three
+    refusals are surfaced: ``COMPONENT_NOT_INSTALLED`` (no tools entry, #2292)
+    and ``PathNotAllowedError`` (the path is outside the allowlist, #2908)
+    unchanged, and a Home Assistant auth error (these services are admin-only)
+    under its own code. Retrying the backup cannot succeed for any of them, and
+    the remediation is not the backup pipeline's.
     """
     seen: set[int] = set()
     # Worklist over BOTH chain links: an explicit ``raise ... from other``
@@ -192,6 +194,10 @@ def _component_refusal_cause(err: BaseException) -> ToolError | None:
         seen.add(id(cause))
         if isinstance(cause, PathNotAllowedError):
             return cause
+        if isinstance(cause, HomeAssistantAuthError):
+            return ToolError(
+                json.dumps(exception_to_structured_error(cause, raise_error=False))
+            )
         if isinstance(cause, ToolError):
             try:
                 payload = json.loads(str(cause))
