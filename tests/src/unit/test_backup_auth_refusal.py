@@ -20,6 +20,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantCommandNotSent,
 )
+from ha_mcp.errors import TOOL_ERROR_LOG_LEVEL
 from ha_mcp.tools.auto_backup import with_auto_backup
 from ha_mcp.tools.backup_on_demand import capture_on_demand
 
@@ -93,6 +94,7 @@ async def test_mandatory_write_reports_the_failure_and_stays_blocked(
         await _tool(ran)(path="www/x.txt")
 
     assert _code(exc) == expected_code
+    assert exc.value.log_level == TOOL_ERROR_LOG_LEVEL
     assert ran == []
 
 

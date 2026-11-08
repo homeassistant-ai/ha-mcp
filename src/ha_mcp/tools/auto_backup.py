@@ -196,7 +196,8 @@ def _component_refusal_cause(err: BaseException) -> ToolError | None:
             return cause
         if isinstance(cause, HomeAssistantAuthError):
             return ToolError(
-                json.dumps(exception_to_structured_error(cause, raise_error=False))
+                json.dumps(exception_to_structured_error(cause, raise_error=False)),
+                log_level=TOOL_ERROR_LOG_LEVEL,
             )
         if isinstance(cause, ToolError):
             try:
