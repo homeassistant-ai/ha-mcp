@@ -62,6 +62,16 @@ from .const import (
 )
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
+from .file_ops import (
+    SERVICE_EDIT_FILE,
+    _delete_file_sync,
+    _replace_file_sync,
+    register_edit_file,
+    run_file_job,
+    run_locked,
+    write_text_atomic,
+)
+from .file_post_action import after_file_write, reload_after_edit
 from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
 from .yaml_find import SERVICE_FIND_YAML_KEY, register_find_yaml_key
@@ -186,6 +196,7 @@ SERVICE_READ_FILE_SCHEMA = vol.Schema(
         # under ``parsed`` (ha_config_get_yaml's include_parsed, #1788). HA tags
         # are rendered to source form, never resolved.
         vol.Optional("include_parsed", default=False): cv.boolean,
+        vol.Optional("keep_line_endings", default=False): cv.boolean,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -1358,14 +1369,21 @@ def _list_files_sync(
     return {"files": files}
 
 
-def _read_file_sync(target_file: Path) -> dict[str, Any]:
-    """Bundle read_file blocking I/O for a single executor offload."""
+def _read_file_sync(
+    target_file: Path, keep_line_endings: bool = False
+) -> dict[str, Any]:
+    """Bundle read_file blocking I/O for a single executor offload.
+
+    ``keep_line_endings`` returns CRLF as stored (auto-backup); otherwise LF.
+    """
     if not target_file.exists():
         return {"_error": "not_found"}
     if not target_file.is_file():
         return {"_error": "not_a_file"}
     stat = target_file.stat()
-    content = target_file.read_text()
+    content = target_file.read_text(
+        encoding="utf-8", newline="" if keep_line_endings else None
+    )
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
 
 
@@ -1441,34 +1459,9 @@ def _write_file_sync(
         except ValueError:
             parent = str(target_file.parent)
         return {"_error": "no_parent", "parent": parent}
-    target_file.write_text(content)
+    target_file.write_bytes(content.encode("utf-8"))  # line endings as sent
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
-
-
-def _delete_file_sync(target_file: Path) -> dict[str, Any]:
-    """Bundle delete_file blocking I/O for a single executor offload."""
-    if not target_file.exists():
-        return {"_error": "not_found"}
-    if not target_file.is_file():
-        return {"_error": "not_a_file"}
-    stat = target_file.stat()
-    target_file.unlink()
-    return {"size": stat.st_size}
-
-
-def _replace_file_sync(target_file: Path, content: str) -> dict[str, Any]:
-    """Bundle whole-file replace I/O for a single executor offload.
-
-    mkdir parent + atomic temp-write + rename + stat, mirroring
-    ``_write_file_sync``. Used by edit_yaml_config(action="replace_file").
-    """
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file = target_file.with_suffix(".tmp")
-    tmp_file.write_text(content)
-    os.replace(str(tmp_file), str(target_file))
-    stat = target_file.stat()
-    return {"size": stat.st_size, "mtime": stat.st_mtime}
 
 
 # Pre-#1579 YAML backups live here (config-root dotdir, never under www/ —
@@ -2139,28 +2132,7 @@ async def _resolve_post_action(
     if kind == "lovelace_dashboard":
         post_info = {"post_action": "restart_required"}
     elif kind == "theme":
-        # Trigger frontend.reload_themes to load the theme change
-        try:
-            await hass.services.async_call(
-                "frontend",
-                "reload_themes",
-                {},
-                blocking=True,
-            )
-            post_info = {
-                "post_action": "reload_performed",
-                "reload_service": "frontend.reload_themes",
-            }
-        except Exception as reload_err:  # noqa: BLE001
-            post_info = {
-                "post_action": "reload_available",
-                "reload_service": "frontend.reload_themes",
-                "reload_error": str(reload_err),
-            }
-            _LOGGER.warning(
-                "frontend.reload_themes failed after theme edit: %s",
-                reload_err,
-            )
+        post_info = await reload_after_edit(hass, "frontend", "reload_themes")
     else:
         post_info = YAML_KEY_POST_ACTIONS.get(
             path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
@@ -2233,13 +2205,7 @@ async def _apply_yaml_key_edit(
             lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
         )
 
-        # Atomic write: write to temp file, then rename into place
-        def _atomic_write() -> None:
-            tmp_file = target_file.with_suffix(".tmp")
-            tmp_file.write_text(new_content)
-            os.replace(str(tmp_file), str(target_file))
-
-        await hass.async_add_executor_job(_atomic_write)
+        await hass.async_add_executor_job(write_text_atomic, target_file, new_content)
 
         stat = await hass.async_add_executor_job(target_file.stat)
         modified_dt = datetime.fromtimestamp(stat.st_mtime)
@@ -2320,8 +2286,11 @@ def _build_edit_yaml_config_handler(
         # validation, the atomic temp-write+rename, and the post-write config
         # check. No new files become writable; yaml_path is ignored here.
         if action == "replace_file":
-            return await _apply_replace_file(
-                hass, config_dir, rel_path, normalized, action, yaml_path, content
+            return await run_locked(
+                hass,
+                lambda: _apply_replace_file(
+                    hass, config_dir, rel_path, normalized, action, yaml_path, content
+                ),
             )
 
         gate_err = _check_packages_key_gate(call, yaml_path, is_package)
@@ -2344,17 +2313,21 @@ def _build_edit_yaml_config_handler(
         if content_err is not None:
             return content_err
 
-        return await _apply_yaml_key_edit(
+        # Shared with edit_file, which can write the same theme file.
+        return await run_locked(
             hass,
-            config_dir,
-            call,
-            rel_path,
-            normalized,
-            action,
-            yaml_path,
-            kind,
-            path_parts,
-            parsed_content,
+            lambda: _apply_yaml_key_edit(
+                hass,
+                config_dir,
+                call,
+                rel_path,
+                normalized,
+                action,
+                yaml_path,
+                kind,
+                path_parts,
+                parsed_content,
+            ),
         )
 
     return handle_edit_yaml_config
@@ -2717,6 +2690,18 @@ def _current_extra_dirs(hass: HomeAssistant) -> list[str]:
     return []
 
 
+def _write_denied(hass: HomeAssistant, rel_path: str) -> str | None:
+    """Return why ``rel_path`` may not be written, or None when it may."""
+    extra_dirs = _current_extra_dirs(hass)
+    config_dir = Path(hass.config.config_dir)
+    if _is_path_allowed_for_dir(config_dir, rel_path, ALLOWED_WRITE_DIRS, extra_dirs):
+        return None
+    _LOGGER.warning("Attempted to write to disallowed path: %s", rel_path)
+    return (
+        f"Write not allowed. Must be in: {', '.join(ALLOWED_WRITE_DIRS + extra_dirs)}"
+    )
+
+
 def _current_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
     """Return the live component-configured extra YAML write keys from hass.data."""
     domain_data = hass.data.get(DOMAIN)
@@ -2922,7 +2907,11 @@ def _build_read_file_handler(
                     tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES,
                 )
             else:
-                result = await hass.async_add_executor_job(_read_file_sync, target_file)
+                result = await hass.async_add_executor_job(
+                    _read_file_sync,
+                    target_file,
+                    call.data.get("keep_line_endings", False),
+                )
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
             return {
@@ -2981,21 +2970,15 @@ def _build_write_file_handler(
         overwrite = call.data.get("overwrite", False)
         create_dirs = call.data.get("create_dirs", True)
 
-        # Security check - only allow writes to specific directories
-        extra_dirs = _current_extra_dirs(hass)
-        if not _is_path_allowed_for_dir(
-            config_dir, rel_path, ALLOWED_WRITE_DIRS, extra_dirs
-        ):
-            _LOGGER.warning("Attempted to write to disallowed path: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Write not allowed. Must be in: {', '.join(ALLOWED_WRITE_DIRS + extra_dirs)}",
-            }
+        denied = _write_denied(hass, rel_path)
+        if denied is not None:
+            return {"success": False, "error": denied}
 
         target_file = config_dir / rel_path
 
         try:
-            result = await hass.async_add_executor_job(
+            result = await run_file_job(
+                hass,
                 _write_file_sync,
                 target_file,
                 content,
@@ -3041,6 +3024,7 @@ def _build_write_file_handler(
             "modified": modified_dt.isoformat(),
             "created": is_new,
             "message": f"File {'created' if is_new else 'updated'} successfully",
+            **(await after_file_write(hass, rel_path, size)),
         }
 
     return handle_write_file
@@ -3072,7 +3056,7 @@ def _build_delete_file_handler(
         target_file = config_dir / rel_path
 
         try:
-            result = await hass.async_add_executor_job(_delete_file_sync, target_file)
+            result = await run_file_job(hass, _delete_file_sync, target_file)
         except PermissionError:
             _LOGGER.error("Permission denied deleting: %s", rel_path)
             return {
@@ -3507,6 +3491,13 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 err,
             )
     register_find_yaml_key(hass, _caller_token_ok, _unauthorized_response)
+    register_edit_file(
+        hass,
+        caller_token_ok=_caller_token_ok,
+        unauthorized_response=_unauthorized_response,
+        write_denied=_write_denied,
+        volume_root_for=_volume_root_for,
+    )
     # Register all services with response support
     for service, schema, build_handler in (
         (
@@ -3596,6 +3587,7 @@ async def _async_unload_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     hass.services.async_remove(DOMAIN, SERVICE_FIND_YAML_KEY)
     hass.services.async_remove(DOMAIN, SERVICE_READ_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_WRITE_FILE)
+    hass.services.async_remove(DOMAIN, SERVICE_EDIT_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_DELETE_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_GET_CALLER_TOKEN)
     hass.services.async_remove(DOMAIN, SERVICE_GET_ALLOWED_PATHS)

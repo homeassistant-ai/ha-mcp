@@ -43,6 +43,9 @@ from ha_mcp.client.rest_client import (
     HomeAssistantError,
 )
 from ha_mcp.errors import ErrorCode, create_error_response
+
+# A lazy first import under _patch_services would keep its fakes for the whole run.
+from ha_mcp.tools import yaml_extra_keys
 from ha_mcp.tools.auto_backup import automation_backup_target, with_auto_backup
 
 # ---------------------------------------------------------------- fixtures
@@ -2105,6 +2108,7 @@ def _patch_services(
     monkeypatch.setattr(
         "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", fake_call
     )
+    monkeypatch.setattr(yaml_extra_keys, "call_mcp_tools_service", fake_call)
     monkeypatch.setattr(
         "ha_mcp.tools.util_helpers.unwrap_service_response", lambda r: r
     )
@@ -2264,11 +2268,9 @@ class TestYamlHandler:
         )
 
         client = _StubClient()
-
-        async def _ensure(_client, **_kwargs):
-            return "token"
-
+        _ensure = AsyncMock(return_value="token")
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
         fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.4"
 
         await bm._restore_yaml(client, "packages/alerts.yaml::alert2", "defaults: {}\n")
@@ -2291,11 +2293,9 @@ class TestYamlHandler:
         _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
 
         client = _StubClient()
-
-        async def _ensure(_client, **_kwargs):
-            return "token"
-
+        _ensure = AsyncMock(return_value="token")
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
         fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.3"
 
         with pytest.raises(ToolError) as excinfo:

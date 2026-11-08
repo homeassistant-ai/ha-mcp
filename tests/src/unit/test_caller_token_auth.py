@@ -927,7 +927,7 @@ class TestExtraYamlKeysVersionGate:
 
     @pytest.mark.asyncio
     async def test_gate_passes_on_current_component_via_bootstrap(self):
-        from ha_mcp.tools.tools_filesystem import (
+        from ha_mcp.tools.yaml_extra_keys import (
             MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS,
             assert_extra_yaml_keys_supported,
         )
@@ -939,7 +939,7 @@ class TestExtraYamlKeysVersionGate:
     @pytest.mark.asyncio
     async def test_gate_blocks_on_older_component_via_bootstrap(self):
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
-        from ha_mcp.tools.tools_filesystem import assert_extra_yaml_keys_supported
+        from ha_mcp.tools.yaml_extra_keys import assert_extra_yaml_keys_supported
 
         client = self._client("1.2.3")
         with pytest.raises(ToolError) as excinfo:
@@ -960,8 +960,8 @@ class TestExtraYamlKeysVersionGate:
             _CALLER_TOKEN_CACHE,
             _COMPONENT_VERSION_CACHE,
             _fetch_caller_token,
-            assert_extra_yaml_keys_supported,
         )
+        from ha_mcp.tools.yaml_extra_keys import assert_extra_yaml_keys_supported
 
         reported = {"version": "1.2.3"}
         client = _make_client_with_token("gate-token")
@@ -1018,14 +1018,13 @@ class TestEffectiveExtraYamlWriteKeys:
     async def _run(
         self, monkeypatch, *, version, env, store_response=None, store_raises=False
     ):
-        from ha_mcp.tools import tools_filesystem as fsmod
+        from ha_mcp.tools import tools_filesystem
+        from ha_mcp.tools import yaml_extra_keys as fsmod
 
         client = self._client(store_response, store_raises)
-
-        async def _ensure(_client, **_kwargs):
-            return "eff-token"
-
+        _ensure = AsyncMock(return_value="eff-token")
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        monkeypatch.setattr(tools_filesystem, "_ensure_caller_token", _ensure)
         fsmod._COMPONENT_VERSION_CACHE[client] = version
         return await fsmod.effective_extra_yaml_write_keys(client, self._settings(env))
 

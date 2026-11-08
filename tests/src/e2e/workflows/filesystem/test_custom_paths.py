@@ -15,7 +15,6 @@ the MCP client invokes — the same HA instance backs both.
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 
 import pytest
@@ -32,36 +31,6 @@ logger = logging.getLogger(__name__)
 # Drives ha_mcp_tools.set_allowed_paths and the file tools, all of which
 # register only in the "File & YAML Tools" config entry (#2292).
 pytestmark = pytest.mark.requires_tools_entry
-
-FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
-
-
-@pytest.fixture(scope="module")
-def _filesystem_feature_flag(ha_container_with_fresh_config):
-    """Enable the filesystem feature flag for this module (see the sibling
-    suites' identical fixtures)."""
-    os.environ[FEATURE_FLAG] = "true"
-    yield
-    os.environ.pop(FEATURE_FLAG, None)
-
-
-@pytest.fixture
-async def mcp_client_fs(
-    _filesystem_feature_flag,
-    mcp_server,
-    mcp_client,
-    ha_container_with_fresh_config,
-):
-    """Yield an MCP client with filesystem tools available, in every lane."""
-    if mcp_server is None:
-        yield mcp_client
-        return
-
-    from ha_mcp._vendor.fastmcp import Client
-
-    client = Client(mcp_server.mcp)
-    async with client:
-        yield client
 
 
 @pytest.mark.filesystem

@@ -49,6 +49,16 @@ in the same PR, to the release that will carry it: the number
 next release from `master` on any branch, so count the PR's own commit type:
 a `feat:` on a `master` that only has fixes pending raises the minor).
 
+The floor applies to every filesystem tool, so an optional feature must not
+raise it: users who don't need the feature would be forced to update. Such a
+feature gates on its own signal and prompts for the update only when it is used,
+as `ha_write_file(edits=...)` does by finding `edit_file` in the service registry
+(`_assert_file_edits_supported`). Prefer the registry over a version here,
+because a version is wrong in both directions: an unreleased build (master, E2E,
+the dev environment) reports the previous release's number while already
+carrying the service, and a dev pre-release reports the next release's number
+(see above), including one cut before the service existed.
+
 Every development pre-release cut while that release is pending reports the
 same plain number, so the floor cannot tell a pre-release that has the new
 service from an earlier one that lacks it. Only an external server (app,
