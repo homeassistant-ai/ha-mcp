@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.tags import compatible_tags
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 from packaging.version import InvalidVersion, Version
 
@@ -123,16 +124,17 @@ def _wheel_pythons(file: dict, version: str, pythons: tuple[str, ...]) -> set[st
     if name != "ha-mcp" or found_version != Version(version):
         return set()
     # HA-MCP publishes a pure Python wheel: it must cover both supported HA CPUs.
+    pure_tags = {t for t in tags if t.platform == "any" and t.abi == "none"}
     return {
         python
         for python in pythons
         if Version(python) in requires
-        and any(
-            t.platform == "any"
-            and t.abi == "none"
-            and t.interpreter
-            in {"py" + python.split(".")[0], "py" + "".join(python.split(".")[:2])}
-            for t in tags
+        and pure_tags.intersection(
+            compatible_tags(
+                python_version=Version(python).release[:2],
+                interpreter="cp" + "".join(python.split(".")[:2]),
+                platforms=["any"],
+            )
         )
     }
 

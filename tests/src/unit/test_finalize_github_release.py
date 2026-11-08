@@ -43,7 +43,8 @@ _finalize = functools.partial(publisher.finalize_release, project=_PROJECT)
 
 
 @pytest.mark.parametrize(
-    "case", ["available", "no-files", "wrong-python", "removed-file", "yanked"]
+    "case",
+    ["available", "no-files", "wrong-python", "removed-file", "yanked", "cpython"],
 )
 def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
     distribution = {
@@ -59,6 +60,11 @@ def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
         "info": {"version": "9.1.1"},
         "urls": [] if case == "no-files" else [distribution],
     }
+    if case == "cpython":
+        metadata["urls"] = [
+            {**distribution, "filename": f"ha_mcp-9.1.1-cp{minor}-none-any.whl"}
+            for minor in ("313", "314")
+        ]
 
     class Response(io.BytesIO):
         status = 200
@@ -73,7 +79,7 @@ def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
 
     monkeypatch.setattr(publisher.urllib.request, "urlopen", urlopen)
     assert publisher._pypi_ready("9.1.1", publisher._supported_pythons(_PROJECT)) is (
-        case == "available"
+        case in {"available", "cpython"}
     )
 
 
@@ -84,6 +90,7 @@ def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
         (">=3.13.1,<3.15", [">=3.14,<3.15"], False),
         (">=3.13.1,<3.15", [">=3.13.2,<3.15"], False),
         (">=3.13.1,<3.15", [">=3.13.1,<3.13.5", ">=3.13.6,<3.15"], False),
+        (">=3.13.1,<3.15", ["<=3.13.5", ">=3.13.10,<3.15"], False),
         (">=3.13.1,<3.15", [">=3.13.1,<3.13.5", ">=3.13.5,<3.15"], True),
         (
             ">=3.13.1,!=3.13.5,<3.15",
@@ -98,6 +105,7 @@ def test_pypi_metadata_cannot_expose_an_uninstallable_pin(monkeypatch, case):
         "missing-minor",
         "missing-floor",
         "patch-gap",
+        "interior-gap",
         "union",
         "excluded-gap",
         "zero-only-wheel",
@@ -131,16 +139,30 @@ def test_wheels_cover_every_admitted_python_patch_range(
     )
 
 
-def test_patch_targets_match_minor_specific_pure_python_wheel_tags():
+@pytest.mark.parametrize(
+    ("tag", "covered"),
+    [
+        ("py313-none-any", {"3.13.1", "3.14.0"}),
+        ("cp313-none-any", {"3.13.1"}),
+        ("cp314-none-any", {"3.14.0"}),
+        ("py312-none-any", {"3.13.1", "3.14.0"}),
+        ("cp312-none-any", set()),
+        ("cp313-cp313-any", set()),
+        ("cp313-none-manylinux_2_17_x86_64", set()),
+        ("py315-none-any", set()),
+        ("py2-none-any", set()),
+    ],
+)
+def test_patch_targets_require_compatible_portable_wheel_tags(tag, covered):
     distribution = {
-        "filename": "ha_mcp-9.1.1-py313-none-any.whl",
+        "filename": f"ha_mcp-9.1.1-{tag}.whl",
         "packagetype": "bdist_wheel",
         "size": 42,
         "requires_python": ">=3.13.1,<3.15",
     }
-    assert publisher._wheel_pythons(distribution, "9.1.1", ("3.13.1", "3.14.0")) == {
-        "3.13.1"
-    }
+    assert (
+        publisher._wheel_pythons(distribution, "9.1.1", ("3.13.1", "3.14.0")) == covered
+    )
 
 
 def _world(
