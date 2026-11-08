@@ -1,6 +1,7 @@
 """Native context and logbook lookup tests for trace debugging."""
 
 import json
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -263,6 +264,54 @@ class TestResolveContextTrace:
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert error["scanned"] == 1
         assert error["scan_truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_scan_matches_the_requested_context_id(self):
+        """A stale trace/contexts map still resolves the trace's own context."""
+        client = _context_client(
+            traces=[
+                {"run_id": "r1", "timestamp": {"start": "2026-11-08T16:00:01+00:00"}}
+            ],
+            details={"r1": {"run_id": "r1", "context": {"id": "ctx-1"}}},
+        )
+
+        match = await resolve_context_trace(client, "automation", "uid", "ctx-1")
+
+        assert match.run_id == "r1"
+        assert match.match == "trace"
+
+    @pytest.mark.asyncio
+    async def test_parent_scan_reports_rows_without_a_run_id(self):
+        """A stored row the scan cannot read is reported in the not-found error."""
+        client = _context_client(
+            traces=[
+                {"timestamp": {"start": "2026-11-08T16:00:01+00:00"}},
+                "junk",
+            ]
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        error = json.loads(str(exc_info.value))
+        assert error["scan_errors"] == ["trace/list row without a run_id"]
+
+    @pytest.mark.asyncio
+    async def test_parent_scan_ignores_a_malformed_detail(self):
+        """A trace/get result that is not a mapping cannot match a context."""
+        client = _context_client(
+            traces=[
+                {"run_id": "r1", "timestamp": {"start": "2026-11-08T16:00:01+00:00"}}
+            ],
+            details={"r1": "junk"},
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error["scanned"] == 1
 
     @pytest.mark.asyncio
     async def test_parent_context_scan_is_bounded(self):
@@ -546,7 +595,7 @@ class TestFetchTraceLogbook:
         assert any("not contain a row list" in warning for warning in logbook.warnings)
 
     def test_logbook_window_handles_invalid_and_missing_timestamps(self):
-        """Malformed or missing trace timestamps still produce a usable window."""
+        """Malformed or missing trace timestamps still produce an ordered window."""
         invalid_start, invalid_finish = _logbook_window(
             {"timestamp": {"start": "not-a-date", "finish": "also-bad"}}
         )
@@ -554,13 +603,56 @@ class TestFetchTraceLogbook:
         string_timestamp_start, string_timestamp_finish = _logbook_window(
             {"timestamp": "not-a-dict"}
         )
+        bad_start, good_finish = _logbook_window(
+            {
+                "timestamp": {
+                    "start": "not-a-date",
+                    "finish": "2026-11-08T16:00:00+00:00",
+                }
+            }
+        )
+        good_start, bad_finish = _logbook_window(
+            {
+                "timestamp": {
+                    "start": "2026-11-08T16:00:00+00:00",
+                    "finish": "also-bad",
+                }
+            }
+        )
+        reversed_start, reversed_finish = _logbook_window(
+            {
+                "timestamp": {
+                    "start": "2026-11-08T16:00:05+00:00",
+                    "finish": "2026-11-08T16:00:00+00:00",
+                }
+            }
+        )
+        naive_start, naive_finish = _logbook_window(
+            {
+                "timestamp": {
+                    "start": "2026-11-08T16:00:00",
+                    "finish": "2026-11-08T16:00:01",
+                }
+            }
+        )
 
-        assert isinstance(invalid_start, str)
-        assert isinstance(invalid_finish, str)
-        assert isinstance(missing_start, str)
-        assert isinstance(missing_finish, str)
-        assert isinstance(string_timestamp_start, str)
-        assert isinstance(string_timestamp_finish, str)
+        for start, finish in (
+            (invalid_start, invalid_finish),
+            (missing_start, missing_finish),
+            (string_timestamp_start, string_timestamp_finish),
+            (bad_start, good_finish),
+            (good_start, bad_finish),
+            (reversed_start, reversed_finish),
+            (naive_start, naive_finish),
+        ):
+            parsed_start = datetime.fromisoformat(start)
+            parsed_finish = datetime.fromisoformat(finish)
+            assert parsed_start < parsed_finish
+            assert parsed_finish - parsed_start <= timedelta(minutes=2)
+
+        assert datetime.fromisoformat(good_finish) == datetime.fromisoformat(
+            "2026-11-08T16:00:02+00:00"
+        )
 
     @pytest.mark.asyncio
     async def test_parent_context_rows_are_included(self):
@@ -706,6 +798,51 @@ class TestFetchTraceLogbook:
         assert logbook.total == 1
 
     @pytest.mark.asyncio
+    async def test_rows_that_differ_by_device_are_kept(self):
+        """Two device events with the same projection and time stay distinct."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.send_websocket_message = AsyncMock(
+            side_effect=lambda message: {
+                "success": True,
+                "result": [
+                    {
+                        "name": "Button",
+                        "context_id": "ctx",
+                        "message": "triggered",
+                        "when": "2026-11-08T16:00:00+00:00",
+                        "domain": "zha",
+                        "device_id": "d1"
+                        if message["context_id"] == "parent"
+                        else "d2",
+                    }
+                ],
+            }
+        )
+        trace = {
+            "run_id": "r1",
+            "timestamp": {
+                "start": "2026-11-08T16:00:00+00:00",
+                "finish": "2026-11-08T16:00:01+00:00",
+            },
+            "context": {"id": "own", "parent_id": "parent"},
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={"logbook_events": True}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=True,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, trace)
+
+        assert [row["device_id"] for row in logbook.entries] == ["d1", "d2"]
+        assert logbook.total == 2
+
+    @pytest.mark.asyncio
     async def test_rest_failure_returns_a_warning_and_empty_entries(self):
         """A failed logbook read degrades to a warning, not a trace failure."""
         client = _make_pooled_client(lambda mtype, message: {})
@@ -827,3 +964,23 @@ class TestTraceToolLogbook:
         fetch.assert_awaited_once()
         assert result["logbook_entries"] == [{"name": "Light"}]
         assert result["logbook_transport"] == "rest"
+
+    @pytest.mark.asyncio
+    async def test_sections_without_logbook_skip_the_read(self):
+        """An explicit section list without logbook never queries the recorder."""
+        client = self._client()
+
+        with patch(
+            "ha_mcp.tools.tools_traces.fetch_trace_logbook",
+            AsyncMock(return_value=TraceLogbook([{"name": "Light"}], "rest", [])),
+        ) as fetch:
+            result = await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test",
+                run_id="r1",
+                detailed=True,
+                sections="context",
+            )
+
+        fetch.assert_not_awaited()
+        assert "logbook_entries" not in result
+        assert result["context"] == {"id": "ctx-1"}

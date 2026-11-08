@@ -1,5 +1,6 @@
 """Native context and logbook lookups for trace debugging."""
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -169,6 +170,38 @@ def _raise_context_not_found(
     )
 
 
+def _scan_candidates(traces: Any, scan_errors: list[str]) -> list[dict[str, Any]]:
+    """Return the readable trace rows newest first, recording the skipped ones."""
+    if not isinstance(traces, list):
+        scan_errors.append("trace/list returned no row list")
+        return []
+    candidates: list[dict[str, Any]] = []
+    for trace in traces:
+        if not isinstance(trace, dict):
+            continue
+        if not trace.get("run_id"):
+            # A row without a run_id cannot be read, so say so instead of
+            # letting the scan look like it covered every stored trace.
+            scan_errors.append("trace/list row without a run_id")
+            continue
+        candidates.append(trace)
+    candidates.sort(key=_trace_start, reverse=True)
+    return candidates
+
+
+def _match_kind(context: Any, context_id: str) -> Literal["trace", "parent"] | None:
+    """Say how one stored trace's context matches the requested context id."""
+    if not isinstance(context, dict):
+        return None
+    if context.get("parent_id") == context_id:
+        return "parent"
+    # trace/contexts can answer before a concurrent restoration finishes, so the
+    # scan also honours the run's own context id.
+    if context.get("id") == context_id:
+        return "trace"
+    return None
+
+
 async def _resolve_parent_context(
     client: Any,
     domain: str,
@@ -187,13 +220,7 @@ async def _resolve_parent_context(
 
     traces = result.get("result")
     scan_errors: list[str] = []
-    if not isinstance(traces, list):
-        scan_errors.append("trace/list returned no row list")
-        traces = []
-    candidates = [
-        trace for trace in traces if isinstance(trace, dict) and trace.get("run_id")
-    ]
-    candidates.sort(key=_trace_start, reverse=True)
+    candidates = _scan_candidates(traces, scan_errors)
     truncated = len(candidates) > PARENT_CONTEXT_SCAN_LIMIT
     candidates = candidates[:PARENT_CONTEXT_SCAN_LIMIT]
 
@@ -225,7 +252,8 @@ async def _resolve_parent_context(
             continue
         trace_data = detail.get("result")
         context = trace_data.get("context") if isinstance(trace_data, dict) else None
-        if isinstance(context, dict) and context.get("parent_id") == context_id:
+        kind = _match_kind(context, context_id)
+        if kind == "parent":
             if trace.get("not_triggered"):
                 # A not-triggered diagnostic is useful, but a real run for the
                 # same triggering context is the better match.
@@ -234,6 +262,10 @@ async def _resolve_parent_context(
                 continue
             return ContextTraceMatch(
                 run_id, "parent", scanned, truncated, tuple(scan_errors)
+            )
+        if kind == "trace":
+            return ContextTraceMatch(
+                run_id, "trace", scanned, truncated, tuple(scan_errors)
             )
 
     if fallback_run_id is not None:
@@ -283,7 +315,7 @@ async def fetch_trace_logbook(
     contexts.append(str(context_id))
 
     merged: list[dict[str, Any]] = []
-    seen: set[tuple[Any, ...]] = set()
+    seen: set[str] = set()
     warnings: list[str] = []
     transports: set[str] = set()
     for lookup_id in contexts:
@@ -294,15 +326,9 @@ async def fetch_trace_logbook(
         if transport:
             transports.add(transport)
         for row in entries:
-            key = (
-                row.get("context_id"),
-                row.get("when"),
-                row.get("name"),
-                row.get("message"),
-                row.get("entity_id"),
-                row.get("state"),
-                row.get("domain"),
-            )
+            # Compare the whole native row: two device events can share the
+            # projected fields and timestamp and still be distinct.
+            key = json.dumps(row, sort_keys=True, default=str)
             if key in seen:
                 continue
             seen.add(key)
@@ -415,31 +441,41 @@ async def _fetch_component_logbook(
 
 
 def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
-    """Return a slightly widened start/finish for the logbook query.
+    """Return a bounded start/finish for the logbook query.
 
     The trace's own timestamps bracket the action trace, while the recorder's
     logbook row for the triggering event can land just outside that window.
-    Context filtering keeps the widened window scoped to this run.
+    Context filtering keeps the widened window scoped to this run. A malformed
+    or missing timestamp is replaced from the other bound, so both reads still
+    receive an ordered window of roughly one minute instead of failing.
     """
     timestamp = trace.get("timestamp")
-    start = timestamp.get("start") if isinstance(timestamp, dict) else None
-    finish = timestamp.get("finish") if isinstance(timestamp, dict) else None
-    now = datetime.now(UTC)
-    if isinstance(start, str):
-        try:
-            start = (datetime.fromisoformat(start) - timedelta(seconds=2)).isoformat()
-        except ValueError:
-            pass
-    else:
-        start = (now - timedelta(minutes=1)).isoformat()
-    if isinstance(finish, str):
-        try:
-            finish = (datetime.fromisoformat(finish) + timedelta(seconds=2)).isoformat()
-        except ValueError:
-            pass
-    else:
-        finish = now.isoformat()
-    return start, finish
+    start = _trace_datetime(
+        timestamp.get("start") if isinstance(timestamp, dict) else None
+    )
+    finish = _trace_datetime(
+        timestamp.get("finish") if isinstance(timestamp, dict) else None
+    )
+    if finish is None:
+        finish = (
+            start + timedelta(minutes=1) if start is not None else datetime.now(UTC)
+        )
+    if start is None or start >= finish:
+        start = finish - timedelta(minutes=1)
+    start -= timedelta(seconds=2)
+    finish += timedelta(seconds=2)
+    return start.isoformat(), finish.isoformat()
+
+
+def _trace_datetime(value: Any) -> datetime | None:
+    """Parse a trace timestamp into an aware datetime, or None when unusable."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _trace_start(trace: dict[str, Any]) -> str:

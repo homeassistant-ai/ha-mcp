@@ -333,8 +333,11 @@ class TraceTools:
             )
 
         trace_data = result.get("result", {})
+        requested = _requested_sections(sections)
         logbook: TraceLogbook | None = None
-        if detailed or "logbook" in _requested_sections(sections):
+        # An explicit section list decides on its own: detailed=True must not
+        # spend a slow recorder query on rows the caller then filters out.
+        if "logbook" in requested or (detailed and not requested):
             logbook = await fetch_trace_logbook(self._client, trace_data)
         await safe_progress(ctx, progress=3, total=3, message="formatting trace")
         formatted = _format_detailed_trace(
