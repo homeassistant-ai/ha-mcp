@@ -735,6 +735,109 @@ action:
             traces_data["diagnostics"]["suggestion"].lower()
         )
 
+    async def test_not_triggered_trace_keeps_core_diagnostics(
+        self, mcp_client, cleanup_tracker
+    ):
+        """A non-firing purpose-specific trigger keeps Core's reason."""
+        suffix = uuid.uuid4().hex[:8]
+        light_id = await self._find_test_light_entity(mcp_client)
+        automation_id = None
+        try:
+            create_config = {
+                "alias": f"Trace Not Triggered {suffix}",
+                "trigger": [
+                    {
+                        "trigger": "light.brightness_changed",
+                        "target": {"entity_id": light_id},
+                        "options": {"threshold": {"type": "any"}},
+                    }
+                ],
+                "action": [{"delay": {"seconds": 0}}],
+                "mode": "single",
+                "trace": {"stored_traces": 5},
+                "initial_state": True,
+            }
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_automation", {"config": create_config}
+            )
+            create_data = assert_mcp_success(
+                create_result, "Create not-triggered automation"
+            )
+            automation_id = create_data.get("entity_id") or create_data.get(
+                "automation_id"
+            )
+            assert automation_id is not None
+            cleanup_tracker.track("automation", automation_id)
+
+            turn_on_result = await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    "entity_id": light_id,
+                },
+            )
+            assert_mcp_success(turn_on_result, "Turn the light on")
+
+            async def _light_is_on() -> bool:
+                state = await safe_call_tool(
+                    mcp_client, "ha_get_state", {"entity_id": light_id}
+                )
+                return state.get("data", {}).get("state") == "on"
+
+            await wait_for_condition(
+                _light_is_on,
+                timeout=10,
+                condition_name=f"{light_id} to turn on",
+            )
+
+            turn_off_result = await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "light",
+                    "service": "turn_off",
+                    "entity_id": light_id,
+                },
+            )
+            assert_mcp_success(turn_off_result, "Turn the light off")
+
+            traces_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_automation_traces",
+                arguments={"entity_id": automation_id},
+                predicate=lambda data: any(
+                    trace.get("not_triggered") for trace in data.get("traces", [])
+                ),
+                timeout=15,
+                poll_interval=0.5,
+                description="not-triggered automation trace",
+            )
+            run_id = next(
+                trace["run_id"]
+                for trace in traces_data["traces"]
+                if trace.get("not_triggered")
+            )
+
+            detail_result = await mcp_client.call_tool(
+                "ha_get_automation_traces",
+                {"entity_id": automation_id, "run_id": run_id, "sections": "trigger"},
+            )
+            detail = assert_mcp_success(detail_result, "Read not-triggered trace")
+
+            assert detail["not_triggered"] is True
+            assert detail["script_execution"] == "not_triggered"
+            assert detail["last_step"] == "trigger/0"
+            trigger_result = detail["trigger"]["result"]
+            assert trigger_result["reason"]
+            assert isinstance(trigger_result["data"], dict)
+        finally:
+            if automation_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"entity_id": automation_id},
+                )
+
 
 @pytest.mark.automation
 class TestGetAutomationTracesNegativeInputs:
