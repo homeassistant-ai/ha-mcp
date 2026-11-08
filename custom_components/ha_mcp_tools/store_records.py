@@ -117,7 +117,6 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
     return True
 
 
-@callback
 def async_clear_store_records_issue(hass: HomeAssistant) -> None:
     """Drop the repair once the store shows one installed listing."""
     from homeassistant.helpers import issue_registry as ir
