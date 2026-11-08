@@ -999,10 +999,6 @@
     "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient",
     "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient"
   ],
-  "f9dc41bb2096": [
-    "tests/src/e2e/workflows/filesystem/test_custom_paths.py::_bootstrap_token",
-    "tests/src/e2e/workflows/filesystem/test_yaml_config.py::_bootstrap_caller_token"
-  ],
   "fb4c92e7dc7f": [
     "tests/src/unit/test_ws_connect_auth_classification.py::manager",
     "tests/src/unit/test_ws_pool_loop_change_1994.py::manager",
