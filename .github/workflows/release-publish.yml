@@ -123,7 +123,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/ha-mcp
     permissions:
-      contents: read
+      contents: write  # Publish the prepared GitHub release after PyPI is visible.
       id-token: write  # Required for PyPI trusted publishing
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -156,9 +156,36 @@ jobs:
           packages-dir: dist
           skip-existing: true
 
+      - name: Wait for the build on PyPI
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "https://pypi.org/pypi/ha-mcp/${VERSION}/json"; then
+              echo "PyPI serves ha-mcp ${VERSION}"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::PyPI never served ha-mcp ${VERSION}; leaving the release draft."
+          exit 1
+
+      - name: Generate GitHub App token for publication
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+        continue-on-error: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: gh release edit "$TAG" --draft=false
+
   publish_docker:
     name: Publish Docker image
-    needs: prepare
+    needs: [prepare, publish_pypi]
     if: ${{ needs.prepare.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:

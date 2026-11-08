@@ -5,6 +5,7 @@ import logging
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -226,12 +227,23 @@ def _prepare_testcontainer_config(
     # component. The mcp_proxy install above is untouched either way.
     no_tools_entry = _is_no_tools_entry_selected()
     if not no_tools_entry or embedded:
+        component_zip = config_path / "ha_mcp_tools.zip"
+        subprocess.run(
+            [
+                sys.executable,
+                str(repo_root / "scripts" / "build_component_zip.py"),
+                "--output",
+                str(component_zip),
+            ],
+            check=True,
+        )
         _install_custom_component(
             config_path,
             repo_root / "custom_components" / "ha_mcp_tools",
             "ha_mcp_tools",
             "HA-MCP File & YAML Tools",
             seed_entry=not no_tools_entry,
+            component_zip=component_zip,
         )
 
     # Embedded backend: build the checkout's wheel into /config, install the

@@ -15,7 +15,7 @@ Two scenarios run, parametrized over the component source (see the
   tag. Proves a NEW server release won't break EXISTING installs — the #1783 /
   #1785 shipping risk, where a component version already in the field is updated
   to the server this checkout produces.
-- ``component@working-tree``: the component as it stands in THIS checkout. Proves
+- ``component@working-tree``: the release ZIP built from THIS checkout. Proves
   the PR itself doesn't regress the component's own update machinery (purge,
   reload, force-install) — caught on the introducing PR instead of surfacing
   later, once ``stable`` moves to include it.
@@ -64,14 +64,17 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
 import tomllib
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +123,7 @@ pytestmark = [
             f"{_UPDATE_PATH_ENV}=1 (its CI job does, with -m update_path) to run it"
         ),
     ),
-    pytest.mark.timeout(_PHASE2_READY_TIMEOUT_S + 300),
+    pytest.mark.timeout(2 * _PHASE2_READY_TIMEOUT_S + _API_READY_TIMEOUT_S + 300),
 ]
 
 _DOMAIN = "ha_mcp_tools"
@@ -263,8 +266,10 @@ def _build_sentinel_wheel(dest_dir: Path) -> tuple[Path, str]:
     return wheels[0], sentinel
 
 
-def _seed_config(config_path: Path, component_src: Path) -> None:
-    """Install the RELEASED component + seed a server entry that installs from PyPI.
+def _seed_config(
+    config_path: Path, component_src: Path | None, component_zip: Path | None = None
+) -> None:
+    """Install a released folder or current ZIP, then seed a PyPI server entry.
 
     The seeded ``pip_spec`` is EMPTY: ``_resolve_pip_spec`` then resolves the bare
     ``ha-mcp`` distribution, so the first bring-up installs the newest PyPI stable
@@ -274,7 +279,12 @@ def _seed_config(config_path: Path, component_src: Path) -> None:
 
     dest = config_path / "custom_components" / _DOMAIN
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(component_src, dest, dirs_exist_ok=True)
+    if component_zip is not None:
+        with zipfile.ZipFile(component_zip) as archive:
+            archive.extractall(dest)
+    else:
+        assert component_src is not None
+        shutil.copytree(component_src, dest, dirs_exist_ok=True)
 
     storage_file = config_path / ".storage" / "core.config_entries"
     data = json.loads(storage_file.read_text())
@@ -524,8 +534,7 @@ def update_path_ha(request):
     - ``stable``: the ``ha_mcp_tools`` component at the released ``stable`` git
       tag (git-archive export) — proves a new server release won't break existing
       installs.
-    - ``head``: the working tree's ``custom_components/ha_mcp_tools`` (the same
-      source ``_conftest_seed._install_custom_component`` copies) — proves the PR's
+    - ``head``: a release ZIP of the tracked working-tree component — proves the PR's
       own component update machinery still works.
 
     Both containers run sequentially in one job. Yields a context dict once the
@@ -548,16 +557,26 @@ def update_path_ha(request):
     work_dir = Path(tempfile.mkdtemp(prefix="ha_mcp_update_path_"))
     config_path = Path(tempfile.mkdtemp(prefix="ha_mcp_update_path_cfg_"))
     container: Any = None
+    component_zip: Path | None = None
     try:
         if request.param == "stable":
             component_src = _export_released_component(work_dir / "released")
         else:
-            # Working-tree component, sourced the same way
-            # _conftest_seed._install_custom_component does (the copytree in _seed_config below
-            # installs it into the container's custom_components).
+            # Build the actual release artifact, rather than letting a source
+            # copy hide a packaging omission.
             component_src = _REPO_ROOT / "custom_components" / _DOMAIN
             if not component_src.is_dir():
                 pytest.fail(f"working-tree component not found at {component_src}")
+            component_zip = config_path / "ha_mcp_tools.zip"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(_REPO_ROOT / "scripts" / "build_component_zip.py"),
+                    "--output",
+                    str(component_zip),
+                ],
+                check=True,
+            )
 
         try:
             wheel, sentinel = _build_sentinel_wheel(work_dir / "wheel")
@@ -569,7 +588,9 @@ def update_path_ha(request):
             pytest.fail(f"could not build the sentinel wheel: {err}\nstderr:\n{stderr}")
 
         shutil.copy2(wheel, config_path / wheel.name)
-        _seed_config(config_path, component_src)
+        _seed_config(
+            config_path, component_src if component_zip is None else None, component_zip
+        )
 
         container = (
             DockerContainer(HA_TEST_IMAGE)
@@ -612,6 +633,7 @@ def update_path_ha(request):
             "wheel_name": wheel.name,
             "phase1_version": phase1_version,
             "container": container,
+            "component_zip": component_zip is not None,
         }
     finally:
         if container is not None:
@@ -707,3 +729,75 @@ class TestEmbeddedUpdatePath:
             f"ha_get_state missing from tools/list; got {sorted(names)[:20]}\n"
             f"Container logs:\n{_dump_logs(container)}"
         )
+
+        if update_path_ha["component_zip"]:
+            # Reinstall the distribution artifact over a configured instance,
+            # then prove the selected server build and config entry survive HA restart.
+            reinstall_code = (
+                "from pathlib import Path; import zipfile; "
+                "p=Path('/config/custom_components/ha_mcp_tools/__init__.py'); "
+                "before=p.read_bytes(); p.unlink(); "
+                "zipfile.ZipFile('/config/ha_mcp_tools.zip').extractall(p.parent); "
+                "assert p.read_bytes() == before"
+            )
+            installed = container.get_wrapped_container().exec_run(
+                ["python3", "-c", reinstall_code]
+            )
+            assert installed.exit_code == 0, installed.output.decode()
+            previous_url = base_url
+            wrapped = container.get_wrapped_container()
+            wrapped.restart(timeout=30)
+            wrapped.reload()
+            base_url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(8123)}"
+            logging.getLogger(__name__).info(
+                "HA restart address: %s -> %s", previous_url, base_url
+            )
+            headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
+            try:
+                _wait_http_ok(f"{base_url}/api/", headers, _API_READY_TIMEOUT_S)
+            except AssertionError as err:
+                raise AssertionError(
+                    f"{err}\nContainer logs:\n{_dump_logs(container)}"
+                ) from err
+            version, session_id = _wait_for_server(
+                base_url, _PHASE2_READY_TIMEOUT_S, expected_version=sentinel
+            )
+            assert version == sentinel, (
+                f"ZIP reinstall lost the selected server build: {version!r}; {_dump_logs(container)}"
+            )
+            response = requests.get(
+                f"{base_url}/api/config/config_entries/entry",
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            entries = [e for e in response.json() if e["domain"] == _DOMAIN]
+            assert any(
+                e["entry_id"] == _ENTRY_ID and e["state"] == "loaded" for e in entries
+            )
+            read_server_entries_code = (
+                "import json; "
+                "entries=json.load(open('/config/.storage/core.config_entries'))['data']['entries']; "
+                "print(json.dumps([e['entry_id'] for e in entries "
+                "if e['domain']=='ha_mcp_tools' and e['data'].get('entry_type')=='server']))"
+            )
+            stored = container.get_wrapped_container().exec_run(
+                ["python3", "-c", read_server_entries_code]
+            )
+            assert stored.exit_code == 0, stored.output.decode()
+            assert json.loads(stored.output) == [_ENTRY_ID]
+            response = _mcp_post(
+                base_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "ha_get_overview", "arguments": {}},
+                },
+                session_id=session_id,
+            )
+            called = parse_mcp_response(
+                response.headers.get("Content-Type", ""), response.content
+            )
+            assert called and "result" in called, response.text[:500]
+            assert not called["result"].get("isError"), called

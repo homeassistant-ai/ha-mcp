@@ -16,10 +16,14 @@ so a match somewhere else in the file cannot stand in for that step's wiring.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +33,52 @@ _STEP = "Create draft GitHub release"
 _WORKFLOW = "semver-release.yml"
 _OUT_RE = re.compile(r"extract_release_notes\.py[^\n]*--out\s+(\S+)")
 _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_stable_publication_waits_for_the_pinned_package(tmp_path, available):
+    release = yaml.safe_load(
+        (_WORKFLOW_DIR / "release-publish.yml").read_text(encoding="utf-8")
+    )
+    steps = release["jobs"]["publish_pypi"]["steps"]
+    names = [step.get("name") for step in steps]
+    assert "Publish GitHub release" not in [
+        step.get("name") for step in _workflow()["jobs"]["semantic-release"]["steps"]
+    ]
+    assert names.index("Publish to PyPI") < names.index("Wait for the build on PyPI")
+    assert names.index("Wait for the build on PyPI") < names.index(
+        "Publish GitHub release"
+    )
+    calls = tmp_path / "calls"
+    stubs = (
+        'curl() { [ "$AVAILABLE" = 1 ]; }\n'
+        "sleep() { :; }\n"
+        'gh() { printf "%s\\n" "$*" >> "$CALLS"; }\n'
+    )
+    for name in ("Wait for the build on PyPI", "Publish GitHub release"):
+        step = next(step for step in steps if step.get("name") == name)
+        result = subprocess.run(
+            [shutil.which("bash") or "bash", "-e", "-c", stubs + step["run"]],
+            env={
+                **os.environ,
+                "BASH_ENV": os.devnull,
+                "AVAILABLE": "1" if available else "0",
+                "VERSION": "1.2.3",
+                "TAG": "v1.2.3",
+                "CALLS": calls.as_posix(),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        if result.returncode:
+            break
+    assert (result.returncode == 0) is available, result.stderr
+    if available:
+        assert calls.read_text().strip() == "release edit v1.2.3 --draft=false"
+    else:
+        assert not calls.exists(), "A missing package must leave the release private"
 
 
 def _workflow() -> dict[str, Any]:
