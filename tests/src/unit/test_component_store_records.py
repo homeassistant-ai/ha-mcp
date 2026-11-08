@@ -219,12 +219,13 @@ def test_a_disabled_hacs_is_unknown_not_clean(monkeypatch, issue_registry):
     issue_registry.async_delete_issue.assert_not_called()
 
 
-@pytest.mark.parametrize("store_domain", ["hacs", "marketplace"])
 def _listening_hass(monkeypatch, store_entries):
     """A hass whose store manager is absent and whose store entries can be
     subscribed to; returns hass and the list of listeners registered."""
     hass = _hass_with(monkeypatch, None)
     hass.data = {}
+    # The real loop runs a call_soon callback on its next turn; here at once.
+    hass.loop.call_soon.side_effect = lambda cb, *args: cb(*args)
     listeners = []
 
     def entry(domain):

@@ -306,3 +306,54 @@ async def test_another_integrations_refusal_keeps_its_owner_hint_on_a_doubled_in
     suggestions = " ".join(json.loads(str(excinfo.value))["error"]["suggestions"])
     assert 'repository_id="someone/hue"' in suggestions
     assert "Repairs" not in suggestions
+
+
+async def test_a_refused_download_on_a_doubled_marketplace_carries_the_way_out():
+    """Through the download tool itself: the store's ownership refusal on a
+    doubled install reaches the caller with the recovery routes, because the
+    tool looks up the installed records behind the refusal."""
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+    repos = [_installed(MAIN, "v9.1.1"), _installed(MIRROR)]
+    ws = MagicMock()
+
+    async def send_command(command, **_kwargs):
+        if command.endswith("repositories/list"):
+            return {"success": True, "result": repos}
+        if command.endswith("repository/install"):
+            raise HomeAssistantCommandError(
+                "The ha_mcp_tools directory belongs to homeassistant-ai/ha-mcp-integration"
+            )
+        return {"success": True, "result": {}}
+
+    ws.send_command = AsyncMock(side_effect=send_command)
+
+    async def identity(_client, data):
+        return data
+
+    with (
+        patch(
+            "ha_mcp.tools.tools_hacs.detect_store_api",
+            new=AsyncMock(return_value=StoreApi("marketplace")),
+        ),
+        patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=AsyncMock(return_value=ws),
+        ),
+        patch("ha_mcp.tools.tools_hacs.add_timezone_metadata", new=identity),
+        patch(
+            "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+            new=AsyncMock(return_value=_installed(MAIN, "v9.1.1")),
+        ),
+        pytest.raises(ToolError) as excinfo,
+    ):
+        await HacsTools(MagicMock()).ha_manage_hacs(
+            action="download", repository_id="homeassistant-ai/ha-mcp"
+        )
+
+    body = json.loads(str(excinfo.value))
+    assert "Repairs" in " ".join(body["error"]["suggestions"])
+    assert body["installed"] == [
+        "homeassistant-ai/ha-mcp",
+        "homeassistant-ai/ha-mcp-integration",
+    ]

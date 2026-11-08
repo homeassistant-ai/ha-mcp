@@ -180,8 +180,11 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
 
     @callback
     def _done() -> None:
+        # Deferred: this can run from inside Core's walk over the entry's
+        # state-change listeners, and removing ours mid-walk would skip the
+        # listener registered after it.
         for unsubscribe in unsubscribers:
-            unsubscribe()
+            hass.loop.call_soon(unsubscribe)
         unsubscribers.clear()
         domain_data.pop(_SCHEDULED_KEY, None)
 
@@ -205,8 +208,9 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
         if not entries:
             _done()
             return
-        # HACS that disabled itself after a failed restore keeps its entry
-        # loaded and retries on its own; that case waits for the next start.
+        # HACS whose start failed leaves its entry in setup error and retries
+        # on its own 15 minutes later without changing the entry's state; that
+        # case waits for the next start.
         unsubscribers.extend(entry.async_on_state_change(_check) for entry in entries)
 
     try:
