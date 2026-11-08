@@ -296,7 +296,7 @@ class TestGatherDiagnostics:
         }
         client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"stored_traces": 5},
+            "result": {"config": {"trace": {"stored_traces": 5}}},
         }
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
@@ -324,7 +324,7 @@ class TestGatherDiagnostics:
         # Return valid config so the pooled send_websocket_message is awaited
         client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"stored_traces": 5},
+            "result": {"config": {"trace": {"stored_traces": 5}}},
         }
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
@@ -347,7 +347,7 @@ class TestGatherDiagnostics:
         # Return valid config so the pooled send_websocket_message is awaited
         client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"stored_traces": 5},
+            "result": {"config": {"trace": {"stored_traces": 5}}},
         }
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
@@ -381,13 +381,51 @@ class TestGatherDiagnostics:
         }
         client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"stored_traces": 0},
+            "result": {"config": {"trace": {"stored_traces": 0}}},
         }
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
         assert result["trace_storage_enabled"] is False
         assert "trace storage is disabled" in result["suggestion"].lower()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config_response",
+        [
+            {"success": True, "result": {}},
+            {"success": True, "result": {"config": {}}},
+            {"success": True, "result": {"config": {"trace": {}}}},
+            {"success": True, "result": {"config": None}},
+            {"success": True, "result": "not-a-dict"},
+            {"success": False, "error": "unknown command"},
+        ],
+        ids=[
+            "no-config-key",
+            "no-trace-key",
+            "no-stored-traces-key",
+            "null-config",
+            "malformed-result",
+            "failed-command",
+        ],
+    )
+    async def test_trace_storage_defaults_enabled_when_config_lacks_trace(
+        self, config_response
+    ):
+        """An automation without an explicit stored_traces value keeps traces."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "on",
+            "attributes": {
+                "id": "test_unique_id",
+                "last_triggered": "2025-11-30T15:00:00Z",
+            },
+        }
+        client.send_websocket_message.return_value = config_response
+
+        result = await _gather_diagnostics(client, "automation.test", "automation")
+
+        assert result["trace_storage_enabled"] is True
 
     @pytest.mark.asyncio
     async def test_script_domain(self):
@@ -440,7 +478,7 @@ class TestGatherDiagnostics:
         }
         client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"stored_traces": 5},  # Trace storage enabled
+            "result": {"config": {"trace": {"stored_traces": 5}}},  # Trace storage enabled
         }
 
         result = await _gather_diagnostics(client, "automation.test", "automation")

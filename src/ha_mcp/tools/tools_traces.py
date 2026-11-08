@@ -492,10 +492,19 @@ async def _is_trace_storage_enabled(
                 {"type": "automation/config", "entity_id": automation_id}
             )
             if config_result.get("success"):
-                config = config_result.get("result", {})
-                # stored_traces defaults to True if not specified
-                stored_traces = config.get("stored_traces")
-                if stored_traces is not None and stored_traces <= 0:
+                # Core returns {"result": {"config": raw_config}}; the
+                # stored_traces setting lives under raw_config["trace"].
+                result = config_result.get("result")
+                raw_config = result.get("config") if isinstance(result, dict) else None
+                trace_config = (
+                    raw_config.get("trace") if isinstance(raw_config, dict) else None
+                )
+                stored_traces = (
+                    trace_config.get("stored_traces")
+                    if isinstance(trace_config, dict)
+                    else None
+                )
+                if isinstance(stored_traces, int) and stored_traces <= 0:
                     return False
     except Exception as e:  # noqa: BLE001
         logger.debug(f"Could not get automation config: {e}")
