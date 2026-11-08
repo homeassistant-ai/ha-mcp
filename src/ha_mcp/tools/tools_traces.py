@@ -636,11 +636,14 @@ def _trace_start(trace: dict[str, Any]) -> str:
 
 def _requested_sections(sections: str | None) -> set[str]:
     """Return the lower-cased section names requested by the caller."""
+    requested: set[str] = set()
     if not sections:
-        return set()
-    return {
-        section.strip().lower() for section in sections.split(",") if section.strip()
-    }
+        return requested
+    for section in sections.split(","):
+        normalized = section.strip().lower()
+        if normalized:
+            requested.add(normalized)
+    return requested
 
 
 def _format_trace_list(
