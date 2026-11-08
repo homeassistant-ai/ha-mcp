@@ -219,10 +219,12 @@ class TestServiceDiscovery:
             f"section fields should carry Core's keys, got {sorted(additional_fields)}"
         )
         assert "color_name" in additional_fields
+        assert "brightness" in additional_fields
 
-        # Core's common light.turn_on fields must survive the shaping. These two
-        # come from the captured 2026.11 payload; there is no `brightness` key
-        # (Core exposes brightness_pct / brightness_step_pct instead).
+        # Core's common light.turn_on fields must survive the shaping.
+        # `brightness` is a section field inside `additional_fields`, not a
+        # top-level one, so only the top-level pair is asserted here; the
+        # section itself is checked above.
         expected_fields = {"brightness_pct", "color_temp_kelvin"}
         assert expected_fields <= set(fields), (
             f"light.turn_on is missing Core fields: {sorted(expected_fields - set(fields))}"
@@ -269,6 +271,49 @@ class TestServiceDiscovery:
         )
 
         logger.info("Translated text and response metadata test passed")
+
+    async def test_core_catalog_shape_from_kitchen_sink(self, mcp_client):
+        """Core's own catalog shape reaches the tool, verified against real Core.
+
+        kitchen_sink ships translated service, field and section text with
+        description placeholders, a translated field example, a collapsed
+        section and required flags; the seeded config loads it on every lane.
+        These assertions live here, against the pinned Core image, rather than
+        in a hand-maintained copy of Core's catalog.
+        """
+        logger.info("Testing: Core catalog shape from kitchen_sink")
+
+        result = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "kitchen_sink", "detail_level": "full"},
+        )
+        data = assert_mcp_success(result, "kitchen_sink catalog")
+        services = data.get("services", {})
+        assert "kitchen_sink.test_service_1" in services, sorted(services)
+        service = services["kitchen_sink.test_service_1"]
+
+        # Service-level placeholders resolve in the name and description.
+        assert service["name"] == "Test action foo"
+        assert service["description"] == "Fake action for testing bar"
+
+        fields = service["fields"]
+        field_1 = fields["field_1"]
+        assert field_1["name"] == "Field 1 beer"
+        assert field_1["description"] == "Number of seconds milk"
+        assert field_1["example"] == "Example: https://example.com"
+        assert field_1["required"] is True
+        assert fields["field_2"]["example"] == "Field 2 example"
+
+        section = fields["additional_fields"]
+        assert section["name"] == "Additional options"
+        assert section["collapsed"] is True
+        assert {"field_3", "field_4"} <= set(section["fields"])
+        assert "example" not in section["fields"]["field_3"]
+
+        for field in fields.values():
+            assert "type" not in field, f"Field {field['name']} carries a derived type"
+
+        logger.info("Core catalog shape test passed")
 
     async def test_nonexistent_domain(self, mcp_client):
         """

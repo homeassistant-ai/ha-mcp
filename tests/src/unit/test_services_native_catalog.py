@@ -1,10 +1,12 @@
-"""Native service-catalog shaping: translations, sections, filters and response.
+"""Service-catalog shaping: the server's own translation, section and fallback rules.
 
-The fixture is real Home Assistant 2026.11.0 output, so these tests fail when the
-server stops passing through a contract Core already serves. The defect they
-pin: ``ha_list_services`` advertised title-cased names, empty descriptions and a
-hand-derived ``type`` while Core supplied translated text, section fields,
-per-field ``filter`` and the service's ``response`` shape.
+The inputs here are deliberately small and hand-written to exercise the server's
+logic; they are **not** Home Assistant's catalog and must not be presented as
+Core data. Core's real shape (translated service/field/section text,
+description placeholders, a translated field example, a collapsed section and
+``response``) is asserted against a live Core image in
+``tests/src/e2e/workflows/services/test_list_services.py``, where the pinned
+image and the seeded ``kitchen_sink`` integration provide it.
 """
 
 from __future__ import annotations
@@ -19,8 +21,110 @@ from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import component_api
 from ha_mcp.tools.tools_services import _process_services
 
-from ._services_catalog_fixture import SERVICES, TRANSLATIONS
 from .test_ha_list_services_component_routing import _build_list_services
+
+_SELECT_OPTIONS = ["red", "green", "blue", "yellow", "orange", "purple"]
+
+
+def _catalog() -> list[dict[str, Any]]:
+    """A synthetic catalog shaped like Core's payload, not a copy of it."""
+    return [
+        {
+            "domain": "demo",
+            "services": {
+                "translated": {
+                    "fields": {
+                        "duration": {
+                            "filter": {"supported_features": [32]},
+                            "selector": {
+                                "number": {
+                                    "min": 0,
+                                    "max": 300,
+                                    "unit_of_measurement": "seconds",
+                                }
+                            },
+                            "advanced": False,
+                            "default": False,
+                        },
+                        "mode": {
+                            "required": True,
+                            "selector": {
+                                "select": {
+                                    "options": [
+                                        {"value": value, "label": value.title()}
+                                        for value in _SELECT_OPTIONS
+                                    ]
+                                }
+                            },
+                        },
+                        "section": {
+                            "collapsed": True,
+                            "fields": {"nested": {"selector": {"text": {}}}},
+                        },
+                        "plain_section": {
+                            "fields": {"nested": {"selector": {"text": {}}}},
+                        },
+                        "example_translated": {
+                            "example": "[1, 1]",
+                            "selector": {"object": {"multiple": False}},
+                        },
+                        "example_core": {
+                            "example": "2020-01-01",
+                            "selector": {"date": {}},
+                        },
+                        "example_none": {"example": None, "selector": {"date": {}}},
+                    },
+                    "description_placeholders": {"who": "you"},
+                    "response": {"optional": False},
+                },
+                "untranslated": {
+                    "name": "Core name",
+                    "description": "Core description.",
+                    "fields": {
+                        "core_field": {
+                            "name": "Core field name",
+                            "description": "Core field text.",
+                        }
+                    },
+                },
+                "dynamic": {
+                    "description": "Dynamic text for {who}.",
+                    "description_placeholders": {"who": "you"},
+                },
+                "untitled": {"fields": {"some_key": {"selector": {"text": {}}}}},
+            },
+        },
+        {"domain": "other", "services": {"thing": {"fields": {}}}},
+    ]
+
+
+def _translations() -> dict[str, str]:
+    return {
+        "component.demo.services.translated.name": "Translated name for {who}",
+        "component.demo.services.translated.description": (
+            "Translated description for {who}."
+        ),
+        "component.demo.services.translated.fields.duration.name": "Duration",
+        "component.demo.services.translated.fields.duration.description": (
+            "How long it runs."
+        ),
+        "component.demo.services.translated.fields.mode.name": "Mode",
+        "component.demo.services.translated.fields.mode.description": "Pick a mode.",
+        "component.demo.services.translated.sections.section.name": "Section",
+        "component.demo.services.translated.sections.section.description": (
+            "Section description."
+        ),
+        "component.demo.services.translated.fields.nested.name": "Nested",
+        "component.demo.services.translated.fields.example_translated.name": (
+            "Example field"
+        ),
+        "component.demo.services.translated.fields.example_translated.description": (
+            "Has a translated example."
+        ),
+        "component.demo.services.translated.fields.example_translated.example": (
+            "Example: {who}"
+        ),
+    }
 
 
 def _process(
@@ -29,10 +133,11 @@ def _process(
     query: str | None = None,
     detail_level: str = "full",
     translations: dict[str, str] | None = None,
+    catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return _process_services(
-        rest_services=SERVICES,
-        translations=TRANSLATIONS if translations is None else translations,
+        rest_services=_catalog() if catalog is None else catalog,
+        translations=_translations() if translations is None else translations,
         domain_filter=domain,
         query_filter=query,
         limit=200,
@@ -45,244 +150,248 @@ def _service(result: dict[str, Any], key: str) -> dict[str, Any]:
     return result["services"][key]
 
 
-def test_service_name_and_description_come_from_flat_translations() -> None:
-    turn_on = _service(_process(domain="light"), "light.turn_on")
+def test_translated_text_wins_and_placeholders_resolve() -> None:
+    service = _service(_process(domain="demo"), "demo.translated")
+    fields = service["fields"]
 
-    assert turn_on["name"] == "Turn on light"
-    assert turn_on["description"].startswith("Turns on one or more lights")
-
-
-def test_field_name_and_description_come_from_flat_translations() -> None:
-    fields = _service(_process(domain="light"), "light.turn_on")["fields"]
-
-    assert fields["brightness_pct"]["name"] == "Brightness"
-    assert fields["brightness_pct"]["description"].startswith(
-        "Number indicating the percentage of full brightness"
-    )
+    assert service["name"] == "Translated name for you"
+    assert service["description"] == "Translated description for you."
+    assert fields["duration"]["name"] == "Duration"
+    assert fields["duration"]["description"] == "How long it runs."
 
 
-def test_core_name_and_description_survive_when_no_translation_exists() -> None:
-    """Dynamic services carry their text in Core's description, not strings.json."""
-    script = _service(_process(domain="script"), "script.on_the_way_home")
+def test_section_keeps_its_name_collapsed_flag_and_nested_fields() -> None:
+    fields = _service(_process(domain="demo"), "demo.translated")["fields"]
+    section = fields["section"]
 
-    assert script["name"] == "On the Way Home"
-    assert script["description"].startswith("Notifies both phones")
-
-
-def test_title_case_is_only_the_last_resort() -> None:
-    turn_off = _service(_process(domain="switch"), "switch.turn_off")
-
-    assert turn_off["name"] == "Turn Off"
-    assert turn_off["description"] == ""
-
-
-def test_description_placeholders_resolve_in_field_text() -> None:
-    fields = _service(_process(domain="zwave_js"), "zwave_js.invoke_cc_api")["fields"]
-
-    description = fields["method_name"]["description"]
-    assert "https://zwave-js.github.io/node-zwave-js/" in description
-    assert "{api_docs_url}" not in description
-
-
-def test_unknown_placeholders_and_literal_braces_survive() -> None:
-    translations = copy.deepcopy(TRANSLATIONS)
-    translations[
-        "component.zwave_js.services.invoke_cc_api.fields.method_name.description"
-    ] = 'Docs at {api_docs_url}; schema {"a": 1}; missing {other_placeholder}.'
-
-    fields = _service(
-        _process(domain="zwave_js", translations=translations),
-        "zwave_js.invoke_cc_api",
-    )["fields"]
-
-    description = fields["method_name"]["description"]
-    assert "Docs at https://zwave-js.github.io/node-zwave-js/" in description
-    assert '{"a": 1}' in description
-    assert "{other_placeholder}" in description
-
-
-def test_service_response_shape_is_passed_through() -> None:
-    assert _service(_process(domain="calendar"), "calendar.get_events")["response"] == {
-        "optional": False
-    }
-    assert _service(_process(domain="conversation"), "conversation.process")[
-        "response"
-    ] == {"optional": True}
-    assert _service(_process(domain="script"), "script.on_the_way_home")[
-        "response"
-    ] == {"optional": True}
-
-
-def test_summary_keeps_response_but_omits_fields() -> None:
-    get_events = _service(
-        _process(domain="calendar", detail_level="summary"), "calendar.get_events"
-    )
-
-    assert get_events["response"] == {"optional": False}
-    assert "fields" not in get_events
-
-
-def test_section_entry_keeps_nested_fields_and_collapsed() -> None:
-    fields = _service(_process(domain="light"), "light.turn_on")["fields"]
-    section = fields["additional_fields"]
-
-    assert section["name"] == "Additional options"
+    assert section["name"] == "Section"
     assert section["collapsed"] is True
-    assert set(section["fields"]) == {"rgbw_color", "color_name"}
-
-    rgbw = section["fields"]["rgbw_color"]
-    assert rgbw["name"] == "RGBW-color"
-    assert rgbw["description"].startswith("The color in RGBW format")
-    assert rgbw["example"] == "[255, 100, 100, 50]"
-    assert rgbw["selector"] == {"object": {"multiple": False}}
-    assert rgbw["filter"]["attribute"]["supported_color_modes"]
+    assert section["fields"]["nested"]["name"] == "Nested"
 
 
 def test_section_without_collapsed_keeps_only_what_core_sent() -> None:
-    fields = _service(_process(domain="climate"), "climate.set_temperature")["fields"]
-    section = fields["temperature_range"]
+    fields = _service(_process(domain="demo"), "demo.translated")["fields"]
+    section = fields["plain_section"]
 
-    assert section["name"] == "Temperature range"
     assert "collapsed" not in section
-    assert section["fields"]["target_temp_high"]["name"] == "Upper target temperature"
+    assert "nested" in section["fields"]
 
 
-def test_field_filter_is_passed_through() -> None:
-    transition = _service(_process(domain="light"), "light.turn_on")["fields"][
-        "transition"
-    ]
+def test_field_rules_are_passed_through_not_reinterpreted() -> None:
+    fields = _service(_process(domain="demo"), "demo.translated")["fields"]
 
-    assert transition["filter"] == {"supported_features": [32]}
-    assert transition["selector"]["number"]["unit_of_measurement"] == "seconds"
-
-
-def test_false_valued_advanced_and_default_are_not_dropped() -> None:
-    fields = _service(_process(domain="script"), "script.voice_play_music")["fields"]
-
-    assert fields["radio_mode"]["advanced"] is False
-    assert fields["radio_mode"]["default"] is False
+    assert fields["duration"]["filter"] == {"supported_features": [32]}
+    assert fields["duration"]["advanced"] is False
+    assert fields["duration"]["default"] is False
+    assert "required" not in fields["duration"]
+    assert fields["mode"]["required"] is True
 
 
-def test_required_is_reported_only_when_core_sends_it() -> None:
-    light_fields = _service(_process(domain="light"), "light.turn_on")["fields"]
-    conversation_fields = _service(
-        _process(domain="conversation"), "conversation.process"
-    )["fields"]
-    fan_fields = _service(_process(domain="fan"), "fan.increase_speed")["fields"][
-        "additional_fields"
-    ]["fields"]
+def test_select_options_are_not_flattened_or_truncated() -> None:
+    options = _service(_process(domain="demo"), "demo.translated")["fields"]["mode"][
+        "selector"
+    ]["select"]["options"]
 
-    assert "required" not in light_fields["transition"]
-    assert conversation_fields["text"]["required"] is True
-    assert fan_fields["percentage_step"]["required"] is False
+    assert len(options) == len(_SELECT_OPTIONS)
+    assert options[0] == {"value": "red", "label": "Red"}
 
 
-def test_derived_type_and_synthetic_example_are_gone() -> None:
-    fields = _service(_process(domain="light"), "light.turn_on")["fields"]
+def test_no_derived_type_or_synthetic_example() -> None:
+    fields = _service(_process(domain="demo"), "demo.translated")["fields"]
 
     for field in fields.values():
         assert "type" not in field
-        if "fields" in field:
-            for nested in field["fields"].values():
-                assert "type" not in nested
-
-    assert "example" not in fields["brightness_pct"]
-    assert "example" not in fields["transition"]
+    assert "example" not in fields["duration"]
 
 
-def test_translated_field_example_wins_over_core_and_resolves_placeholders() -> None:
-    """Core has a translated ``fields.<field>.example``; the frontend prefers it."""
-    field = _service(_process(domain="zwave_js"), "zwave_js.invoke_cc_api")["fields"][
-        "parameters"
+def test_translated_example_wins_and_resolves_placeholders() -> None:
+    fields = _service(_process(domain="demo"), "demo.translated")["fields"]
+
+    assert fields["example_translated"]["example"] == "Example: you"
+    assert fields["example_core"]["example"] == "2020-01-01"
+    assert "example" not in fields["example_none"]
+
+
+def test_response_survives_summary_and_full_but_fields_do_not() -> None:
+    full = _service(_process(domain="demo"), "demo.translated")
+    summary = _service(
+        _process(domain="demo", detail_level="summary"), "demo.translated"
+    )
+
+    assert full["response"] == {"optional": False}
+    assert summary["response"] == {"optional": False}
+    assert "fields" not in summary
+
+
+def test_untranslated_service_keeps_core_name_and_description() -> None:
+    service = _service(_process(domain="demo"), "demo.untranslated")
+
+    assert service["name"] == "Core name"
+    assert service["description"] == "Core description."
+
+
+def test_field_text_falls_back_to_core_payload() -> None:
+    field = _service(_process(domain="demo"), "demo.untranslated")["fields"][
+        "core_field"
     ]
 
-    assert field["example"].startswith("Example: [1, 1]")
-    assert "https://zwave-js.github.io/node-zwave-js/" in field["example"]
-    assert "{api_docs_url}" not in field["example"]
+    assert field["name"] == "Core field name"
+    assert field["description"] == "Core field text."
 
 
-def test_null_core_example_is_omitted() -> None:
-    """A ``None`` example from Core becomes an omitted key, never ``example: null``."""
+def test_title_case_is_the_last_resort() -> None:
+    field = _service(_process(domain="demo"), "demo.untitled")["fields"]["some_key"]
+
+    assert field["name"] == "Some Key"
+    assert field["description"] == ""
+
+
+def test_query_matches_translated_text() -> None:
+    result = _process(query="translated description")
+
+    assert "demo.translated" in result["services"]
+    assert "demo.untranslated" not in result["services"]
+
+
+def test_unknown_placeholders_and_literal_braces_survive() -> None:
+    translations = copy.deepcopy(_translations())
+    translations["component.demo.services.translated.fields.duration.description"] = (
+        'Runs for {who}; schema {"a": 1}; missing {other_placeholder}.'
+    )
+
+    description = _service(
+        _process(domain="demo", translations=translations), "demo.translated"
+    )["fields"]["duration"]["description"]
+
+    assert description == 'Runs for you; schema {"a": 1}; missing {other_placeholder}.'
+
+
+def test_service_level_placeholders_resolve_in_core_text() -> None:
+    service = _service(_process(domain="demo"), "demo.dynamic")
+
+    assert service["description"] == "Dynamic text for you."
+
+
+def test_null_core_description_normalizes_to_empty_string() -> None:
     catalog = [
         {
             "domain": "demo",
             "services": {
-                "no_example": {
-                    "fields": {"field_1": {"example": None, "selector": {"text": {}}}}
+                "nulls": {
+                    "description": None,
+                    "fields": {"field_1": {"description": None, "selector": {}}},
                 }
             },
         }
     ]
 
-    field = _process_services(
-        rest_services=catalog, translations={}, limit=200, detail_level="full"
-    )["services"]["demo.no_example"]["fields"]["field_1"]
+    service = _service(_process(catalog=catalog, translations={}), "demo.nulls")
 
-    assert "example" not in field
+    assert service["description"] == ""
+    assert service["fields"]["field_1"]["description"] == ""
 
 
-def test_field_text_falls_back_to_core_payload() -> None:
-    """Dynamic services carry field text in Core's own payload, not translations.
-
-    ``or field_info.get("name")`` / ``.get("description")`` are load-bearing: the
-    derived label is the title-cased field key, so "radio_mode" would read
-    "Radio Mode" and the description would be empty without them.
-    """
+def test_drifted_field_payloads_are_skipped_not_fatal() -> None:
+    """A shape drift in one field must not take the whole catalog down."""
     catalog = [
         {
-            "domain": "script",
+            "domain": "drift",
             "services": {
-                "dynamic": {
+                "not_a_mapping": {"fields": "not-a-mapping"},
+                "mixed": {
                     "fields": {
-                        "radio_mode": {
-                            "name": "Radio mode",
-                            "description": "Core's own field text.",
-                            "selector": {"boolean": {}},
-                        }
+                        "good": {"selector": {}},
+                        "bad": "not-a-mapping",
                     }
-                }
+                },
             },
         }
     ]
 
-    field = _process_services(
-        rest_services=catalog, translations={}, limit=200, detail_level="full"
-    )["services"]["script.dynamic"]["fields"]["radio_mode"]
+    result = _process(catalog=catalog, translations={})
 
-    assert field["name"] == "Radio mode"
-    assert field["description"] == "Core's own field text."
+    assert result["services"]["drift.not_a_mapping"]["fields"] == {}
+    assert set(result["services"]["drift.mixed"]["fields"]) == {"good"}
 
 
-def test_service_level_placeholders_resolve_in_the_description() -> None:
-    """``description_placeholders`` apply to service text, not only field text."""
-    translations = copy.deepcopy(TRANSLATIONS)
-    translations["component.zwave_js.services.invoke_cc_api.description"] = (
-        "Calls a Command Class API. See {api_docs_url}."
+def test_discarded_field_metadata_is_labelled_incomplete() -> None:
+    """Dropping non-mapping field metadata must be reported, not swallowed."""
+    catalog = [
+        {
+            "domain": "drift",
+            "services": {
+                "not_a_mapping": {"fields": "not-a-mapping"},
+                "mixed": {
+                    "fields": {
+                        "good": {"selector": {}},
+                        "bad": "not-a-mapping",
+                    }
+                },
+            },
+        }
+    ]
+    warnings: list[str] = []
+
+    _process_services(
+        rest_services=catalog,
+        translations={},
+        limit=200,
+        detail_level="full",
+        warnings=warnings,
     )
 
-    description = _service(
-        _process(domain="zwave_js", translations=translations),
-        "zwave_js.invoke_cc_api",
-    )["description"]
-
-    assert description.startswith("Calls a Command Class API.")
-    assert "https://zwave-js.github.io/node-zwave-js/" in description
-    assert "{api_docs_url}" not in description
+    assert len(warnings) == 1
+    assert "incomplete" in warnings[0]
+    assert "drift.not_a_mapping.fields" in warnings[0]
+    assert "drift.mixed.fields.bad" in warnings[0]
 
 
-def test_select_options_are_not_flattened_or_truncated() -> None:
-    options = _service(_process(domain="light"), "light.turn_on")["fields"][
-        "additional_fields"
-    ]["fields"]["color_name"]["selector"]["select"]["options"]
+def test_shaped_field_metadata_adds_no_incomplete_warning() -> None:
+    warnings: list[str] = []
 
-    assert len(options) == 6
-    assert options[0] == {"value": "red", "label": "Red"}
+    _process_services(
+        rest_services=_catalog(),
+        translations=_translations(),
+        limit=200,
+        detail_level="full",
+        warnings=warnings,
+    )
+
+    assert warnings == []
 
 
-def test_query_matches_translated_descriptions() -> None:
-    result = _process(query="turns on one or more lights")
+class _LegacyClient:
+    """A client without the component, so the REST + translation path runs."""
 
-    assert "light.turn_on" in result["services"]
+    def __init__(
+        self,
+        *,
+        language: str | None = "en",
+        config: dict[str, Any] | None = None,
+        raise_on_config: bool = False,
+    ) -> None:
+        self.base_url = "http://ha.local:8123"
+        self.token = "tok"
+        self.config = (
+            config
+            if config is not None
+            else ({"language": language} if language else None)
+        )
+        self.raise_on_config = raise_on_config
+        self.translation_messages: list[dict[str, Any]] = []
+        component_api._store_caps(self, None)
+
+    async def get_config(self) -> dict[str, Any]:
+        if self.raise_on_config:
+            raise HomeAssistantAPIError("config unavailable")
+        return self.config or {}
+
+    async def get_services(self) -> list[dict[str, Any]]:
+        return _catalog()
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        self.translation_messages.append(dict(msg))
+        return {"success": True, "result": {"resources": _translations()}}
 
 
 @pytest.mark.asyncio
@@ -326,145 +435,3 @@ async def test_config_without_a_language_uses_english_and_warns(
     assert client.translation_messages[0]["language"] == "en"
     assert any("language" in warning for warning in result.get("warnings", []))
     assert "no usable language" in caplog.text
-
-
-def test_null_core_description_normalizes_to_empty_string() -> None:
-    """Core serves ``description: null`` for some ESPHome fields; keep a string."""
-    catalog = [
-        {
-            "domain": "esphome",
-            "services": {
-                "led": {
-                    "description": None,
-                    "fields": {
-                        "red": {"description": None, "selector": {"number": {}}}
-                    },
-                }
-            },
-        }
-    ]
-
-    result = _process_services(
-        rest_services=catalog,
-        translations={},
-        limit=200,
-        detail_level="full",
-    )
-
-    service = result["services"]["esphome.led"]
-    assert service["description"] == ""
-    assert service["fields"]["red"]["description"] == ""
-
-
-def test_drifted_field_payloads_are_skipped_not_fatal() -> None:
-    """A shape drift in one field must not take the whole catalog down."""
-    catalog = [
-        {
-            "domain": "drift",
-            "services": {
-                "not_a_mapping": {"fields": "not-a-mapping"},
-                "mixed": {
-                    "fields": {
-                        "good": {"selector": {}},
-                        "bad": "not-a-mapping",
-                    }
-                },
-            },
-        }
-    ]
-
-    result = _process_services(
-        rest_services=catalog,
-        translations={},
-        limit=200,
-        detail_level="full",
-    )
-
-    assert result["services"]["drift.not_a_mapping"]["fields"] == {}
-    assert set(result["services"]["drift.mixed"]["fields"]) == {"good"}
-
-
-def test_discarded_field_metadata_is_labelled_incomplete() -> None:
-    """Dropping non-mapping field metadata must be reported, not swallowed.
-
-    ``_process_service_fields`` cannot shape a payload that is not a mapping, so
-    the entry loses those fields. Serving that shorter list silently claims Core
-    sent nothing; the response has to say the description is incomplete.
-    """
-    catalog = [
-        {
-            "domain": "drift",
-            "services": {
-                "not_a_mapping": {"fields": "not-a-mapping"},
-                "mixed": {
-                    "fields": {
-                        "good": {"selector": {}},
-                        "bad": "not-a-mapping",
-                    }
-                },
-            },
-        }
-    ]
-    warnings: list[str] = []
-
-    _process_services(
-        rest_services=catalog,
-        translations={},
-        limit=200,
-        detail_level="full",
-        warnings=warnings,
-    )
-
-    assert len(warnings) == 1
-    assert "incomplete" in warnings[0]
-    assert "drift.not_a_mapping.fields" in warnings[0]
-    assert "drift.mixed.fields.bad" in warnings[0]
-
-
-def test_shaped_field_metadata_adds_no_incomplete_warning() -> None:
-    """A healthy catalog must not carry the drift label."""
-    warnings: list[str] = []
-
-    _process_services(
-        rest_services=SERVICES,
-        translations=TRANSLATIONS,
-        limit=200,
-        detail_level="full",
-        warnings=warnings,
-    )
-
-    assert warnings == []
-
-
-class _LegacyClient:
-    """A client without the component, so the REST + translation path runs."""
-
-    def __init__(
-        self,
-        *,
-        language: str | None = "en",
-        config: dict[str, Any] | None = None,
-        raise_on_config: bool = False,
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.config = (
-            config
-            if config is not None
-            else ({"language": language} if language else None)
-        )
-        self.raise_on_config = raise_on_config
-        self.translation_messages: list[dict[str, Any]] = []
-        component_api._store_caps(self, None)
-
-    async def get_config(self) -> dict[str, Any]:
-        if self.raise_on_config:
-            raise HomeAssistantAPIError("config unavailable")
-        return self.config or {}
-
-    async def get_services(self) -> list[dict[str, Any]]:
-        return SERVICES
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        self.translation_messages.append(dict(msg))
-        return {"success": True, "result": {"resources": TRANSLATIONS}}
