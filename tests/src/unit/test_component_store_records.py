@@ -280,3 +280,40 @@ def test_retries_stop_after_the_limit(monkeypatch, issue_registry):
 
     assert later.call_count == store_records._STORE_RETRY_LIMIT
     assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
+
+
+def test_a_store_that_loads_after_several_retries_is_checked(
+    monkeypatch, issue_registry
+):
+    """The retries are not just a timer: when the store turns up on a later
+    attempt its records are read, the repair is filed and the guard clears."""
+    manager = _manager(
+        _repository(store_records.MAIN_REPOSITORY, True),
+        _repository(store_records.MIRROR_REPOSITORY, True),
+    )
+    attempts = {"n": 0}
+
+    def late_manager(_hass):
+        attempts["n"] += 1
+        return manager if attempts["n"] > 3 else None
+
+    monkeypatch.setattr(store_records, "_store_manager", late_manager)
+    hass = MagicMock()
+    hass.data = {}
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
+    event = ModuleType("homeassistant.helpers.event")
+    later = MagicMock()
+    event.async_call_later = later
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
+
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+    while not issue_registry.async_create_issue.called:
+        later.call_args.args[2](None)
+
+    assert later.call_count == 3
+    assert (
+        issue_registry.async_create_issue.call_args.args[2]
+        == ISSUE_STORE_RECORDS_CONFLICT
+    )
+    assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
