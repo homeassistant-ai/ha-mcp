@@ -89,6 +89,10 @@ slow host or network:
   not a positive whole number of seconds fails the run instead of silently
   falling back to the budget it was meant to escape. CI leaves it unset: its
   runners are not the slow case this knob exists for.
+- `HA_E2E_BASE_HOST=<host>` replaces `localhost` in the testcontainer URL. Set
+  it when pytest runs inside a container and the sibling testcontainer's
+  published port is reachable through the Docker bridge address, not the test
+  process's localhost. CI leaves it unset.
 
 Do not set `HOMEASSISTANT_URL` manually before testcontainer E2E tests.
 `tests/.env.test` contains placeholders, and the fixture supplies the real

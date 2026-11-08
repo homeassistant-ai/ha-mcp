@@ -36,6 +36,7 @@ def _unset_boot_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every test starts from the stock, unconfigured lane."""
     monkeypatch.delenv(_conftest_knobs.PIP_CACHE_ENV_VAR, raising=False)
     monkeypatch.delenv(_conftest_knobs.READY_TIMEOUT_ENV_VAR, raising=False)
+    monkeypatch.delenv(_conftest_knobs.BASE_HOST_ENV_VAR, raising=False)
 
 
 def _config_dir(tmp_path: Path, requirements: list[str]) -> Path:
@@ -327,3 +328,29 @@ def test_the_plain_container_lane_gets_the_cache_without_the_wheel(
         for install in installs
     )
     assert _WHEEL not in script
+
+
+# ---------------------------------------------------------------------------
+# HA_E2E_BASE_HOST
+# ---------------------------------------------------------------------------
+
+
+def test_the_base_host_defaults_to_localhost() -> None:
+    """An unset knob keeps the URL every lane has always used."""
+    assert _conftest_knobs.resolve_base_host() == "localhost"
+
+
+@pytest.mark.parametrize("raw", ["192.0.2.10", "host.docker.internal", " 192.0.2.10 "])
+def test_the_base_host_uses_the_override(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_conftest_knobs.BASE_HOST_ENV_VAR, raw)
+    assert _conftest_knobs.resolve_base_host() == raw.strip()
+
+
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_a_blank_base_host_falls_back_to_localhost(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_conftest_knobs.BASE_HOST_ENV_VAR, raw)
+    assert _conftest_knobs.resolve_base_host() == "localhost"

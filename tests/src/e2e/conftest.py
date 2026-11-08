@@ -64,6 +64,7 @@ from ._conftest_haos import (
     _haos_post_boot_setup,
     _prepare_haos_image,
 )
+from ._conftest_knobs import resolve_base_host
 from ._conftest_readiness import (
     _HA_CONTAINER_KEY,
     pytest_runtest_makereport,  # noqa: F401  (pytest hook)
@@ -277,7 +278,7 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
 
         # Get the dynamically assigned port
         host_port = container.get_exposed_port(8123)
-        base_url = f"http://localhost:{host_port}"
+        base_url = f"http://{resolve_base_host()}:{host_port}"
 
         # Set environment variables for the dynamic URL so WebSocket client uses correct port
         os.environ["HOMEASSISTANT_URL"] = base_url
