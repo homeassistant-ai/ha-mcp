@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "ha-mcp"
-version = "9.1.1"
+version = "9.1.2"
 description = "Configure and automate Home Assistant with Claude, ChatGPT, and other AI assistants."
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
