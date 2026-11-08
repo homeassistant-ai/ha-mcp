@@ -18,13 +18,13 @@ def build(component: Path, output: Path) -> None:
     entries = subprocess.check_output(
         ["git", "-C", str(component), "ls-files", "--stage", "-z", "--", "."]
     ).split(b"\0")
-    files = []
+    files: list[tuple[str, int]] = []
     for entry in filter(None, entries):
-        metadata, name = entry.split(b"\t", 1)
-        mode, _, stage = metadata.split()
-        if mode not in {b"100644", b"100755"} or stage != b"0":
+        metadata, raw_name = entry.split(b"\t", 1)
+        raw_mode, _, stage = metadata.split()
+        if raw_mode not in {b"100644", b"100755"} or stage != b"0":
             raise ValueError("The integration must contain regular, resolved Git files")
-        files.append((name.decode("utf-8"), int(mode, 8)))
+        files.append((raw_name.decode("utf-8"), int(raw_mode, 8)))
     if not {"manifest.json", "__init__.py"}.issubset(name for name, _ in files):
         raise ValueError("The tracked integration lacks manifest.json or __init__.py")
     output.parent.mkdir(parents=True, exist_ok=True)
