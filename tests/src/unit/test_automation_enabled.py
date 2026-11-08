@@ -86,7 +86,6 @@ async def _update(
         None,
         wait,
         tools_config_automations.BestPracticeCheckResult(),
-        {},
         False,
         **runtime,
     )

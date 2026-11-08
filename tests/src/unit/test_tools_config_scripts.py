@@ -514,9 +514,6 @@ class TestScriptUpsertResolvedThreading:
         client.upsert_script_config = AsyncMock(
             return_value={"success": True, "script_id": "storage_key"}
         )
-        # Reference validator (#940) walks these during set_script.
-        client.get_services = AsyncMock(return_value=[])
-        client.get_states = AsyncMock(return_value=[])
         return client
 
     @pytest.fixture
@@ -557,6 +554,7 @@ class TestScriptUpsertResolvedThreading:
         args, kwargs = mock_client.upsert_script_config.call_args
         assert kwargs.get("resolved_id") == "storage_key"
         assert args[1] == "renamed_script"
+        assert "references_unchecked" in result["validation"]
 
     async def test_renamed_config_hash_no_alias_forwards_caller_id_for_alias(
         self, tools, mock_client

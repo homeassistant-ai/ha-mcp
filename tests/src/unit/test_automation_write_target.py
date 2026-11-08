@@ -15,8 +15,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools import component_automation, component_config_reads
-from ha_mcp.tools.reference_validator import validate_config_references
+from ha_mcp.tools import component_automation
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
 from ._component_routing_helpers import make_ws, patch_ws
@@ -200,139 +199,6 @@ async def test_load_failure_is_read_from_the_automations_own_issue(
         )
 
     assert got["validation"] == validation
-
-
-# --- target references ------------------------------------------------------------
-
-_REF_CAPS = {**_CAPS, "capabilities": ["reference_data", "reference_data_targets"]}
-_LIGHT_SERVICES = [{"domain": "light", "services": {"turn_on": {}}}]
-
-
-async def _references(
-    reply: dict[str, Any] | None, config: dict[str, Any]
-) -> dict[str, Any]:
-    ws = make_ws(
-        "ha_mcp_tools/reference_data",
-        info_result=_NO_CAPS if reply is None else _REF_CAPS,
-        cmd_result=reply,
-    )
-    with patch_ws(ws, component_config_reads):
-        return await validate_config_references(Client(), config)
-
-
-@pytest.mark.parametrize(
-    ("reply", "unchecked"),
-    [
-        (None, ["area", "device", "label"]),
-        (
-            {
-                "services": _LIGHT_SERVICES,
-                "entity_ids": [],
-                "device_ids": ["d1"],
-                "area_ids": ["kitchen"],
-            },
-            ["label"],
-        ),
-    ],
-    ids=["without-component", "component-without-label-ids"],
-)
-async def test_targets_left_unchecked_are_named(
-    reply: dict[str, Any] | None, unchecked: list[str]
-) -> None:
-    """An empty warning list read as "every target exists" while device,
-    area, floor and label ids were never compared with a registry."""
-    config = {
-        "actions": [
-            {
-                "action": "light.turn_on",
-                "target": {
-                    "device_id": "d1",
-                    "area_id": ["kitchen", "hall"],
-                    "label_id": "night",
-                },
-            }
-        ]
-    }
-
-    result = await _references(reply, config)
-
-    assert result["unchecked_target_kinds"] == unchecked
-
-
-async def test_cores_match_sentinels_are_not_unknown_targets() -> None:
-    """Core accepts ``none`` and ``all`` as targets; they were warned as
-    missing registry items. The values come from Core through the component,
-    never from a list kept here."""
-    reply: dict[str, Any] = {
-        "services": _LIGHT_SERVICES,
-        "entity_ids": [],
-        "device_ids": [],
-        "area_ids": [],
-        "floor_ids": [],
-        "label_ids": [],
-        "match_sentinels": ["none", "all"],
-    }
-    config = {
-        "actions": [
-            {
-                "action": "light.turn_on",
-                "target": {"entity_id": "none", "area_id": "all"},
-            }
-        ]
-    }
-
-    result = await _references(reply, config)
-
-    assert result["warnings"] == []
-
-
-async def test_a_service_or_event_field_named_like_a_target_is_not_checked() -> None:
-    """``device_id`` inside ``event_data`` or a service's ``data`` is that
-    service's or event's own field; it was warned as a missing device."""
-    reply: dict[str, Any] = {
-        "services": _LIGHT_SERVICES,
-        "entity_ids": [],
-        "device_ids": [],
-        "area_ids": [],
-        "floor_ids": [],
-        "label_ids": [],
-    }
-    config = {
-        "actions": [
-            {"event": "vendor_event", "event_data": {"device_id": "vendor-local"}},
-            {"action": "light.turn_on", "data": {"area_id": "zone-7"}},
-        ]
-    }
-
-    result = await _references(reply, config)
-
-    assert result["warnings"] == []
-    assert "unchecked_target_kinds" not in result
-
-
-async def test_an_entity_id_inside_a_data_block_is_still_checked() -> None:
-    """``entity_id`` inside a service's ``data`` still names an entity, so a
-    missing one is warned there as it always was; only the four target kinds
-    stop being read inside data blocks."""
-    reply: dict[str, Any] = {
-        "services": _LIGHT_SERVICES,
-        "entity_ids": ["light.kitchen"],
-        "device_ids": [],
-        "area_ids": [],
-        "floor_ids": [],
-        "label_ids": [],
-    }
-    config = {
-        "actions": [
-            {"action": "light.turn_on", "data": {"entity_id": "light.gone"}},
-        ]
-    }
-
-    result = await _references(reply, config)
-
-    assert [(w["path"], w["value"]) for w in result["warnings"]] == [
-        ("actions[0].data.entity_id", "light.gone")
-    ]
 
 
 # --- component refusals -------------------------------------------------------------

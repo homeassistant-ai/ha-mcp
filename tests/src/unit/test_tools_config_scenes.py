@@ -26,11 +26,11 @@ from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 @pytest.fixture
 def mock_client():
-    """Mock client that satisfies the upsert / get / reference-validator paths."""
+    """Mock client that satisfies the upsert / get paths."""
     client = MagicMock()
-    # Credential-less so the entity_lookup / reference_data component gate
-    # short-circuits (get_component_caps returns None): these tests pin the
-    # legacy registry-list / get_services paths, not the component route.
+    # Credential-less so the component gate short-circuits (get_component_caps
+    # returns None): entity resolution takes the legacy registry-list path and
+    # the references are reported unchecked.
     client.base_url = None
     client.token = None
     client.upsert_scene_config = AsyncMock(
@@ -51,8 +51,6 @@ def mock_client():
             "entity_id": "scene.test_scene",
         }
     )
-    # validate_config_references reaches for these — keep them empty-but-callable.
-    client.get_services = AsyncMock(return_value=[])
     client.get_states = AsyncMock(return_value=[])
     # Default registry list returns empty — entity resolution falls
     # back to f"scene.{scene_id}". Individual tests override as needed.
@@ -194,6 +192,7 @@ class TestScenePostWriteRegistration:
 
         assert result["success"] is True
         lookup.assert_not_awaited()
+        assert "references_unchecked" in result["validation"]
 
 
 class TestSceneToolsValidation:

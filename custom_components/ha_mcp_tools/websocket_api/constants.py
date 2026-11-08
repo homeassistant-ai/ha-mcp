@@ -9,6 +9,7 @@ from homeassistant.generated.config_flows import FLOWS
 from .. import (
     automation_config,
     card_definitions,
+    config_references,
     core_contract,
     entity_restore,
     helper_collections,
@@ -169,7 +170,8 @@ CAPABILITIES: list[str] = [
     "services_list",
     "reference_data",
     # A flag on reference_data: gates its opt-in ``include_targets`` (device,
-    # area, floor and label registry ids for the reference validator).
+    # area, floor and label registry ids for the reference validator of
+    # servers released before ``config_references``).
     "reference_data_targets",
     # Core's own logbook processor run in-process (REST flags: ISO ``when``,
     # entity names) with the entity/device/context filter set; the server's
@@ -215,6 +217,7 @@ CAPABILITIES: list[str] = [
     core_contract.INTEGRATION_CAPABILITY,
     todo_items.CAPABILITY,
     automation_config.CAPABILITY,
+    config_references.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]
 

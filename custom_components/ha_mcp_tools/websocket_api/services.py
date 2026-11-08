@@ -166,13 +166,13 @@ def _translation_key_domain(key: Any) -> str | None:
 # ha_mcp_tools/reference_data
 # =============================================================================
 def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return the service index + entity-id universe the reference validator reads.
+    """The service index + entity-id universe older servers' validators read.
 
-    ``services`` is the REST ``/api/services`` list shape ``build_service_index``
-    consumes — reusing :func:`_overview_services`, whose per-service bodies are
-    EMPTY dicts (the index only reads service-name keys). ``entity_ids`` is every
-    ``hass.states.async_all()`` id (the ``build_entity_set`` universe). Pure,
-    synchronous, no prep — both are in-memory reads.
+    ``services`` is the REST ``/api/services`` list shape — reusing
+    :func:`_overview_services`, whose per-service bodies are EMPTY dicts (those
+    validators index only the names). ``entity_ids`` is every
+    ``hass.states.async_all()`` id. Pure, synchronous, no prep — both are
+    in-memory reads.
 
     A drifted service registry (``hass.services.async_services()`` raised / renamed
     → non-``Mapping``) or state machine (``hass.states.async_all`` absent / renamed)

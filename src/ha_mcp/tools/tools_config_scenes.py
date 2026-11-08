@@ -56,7 +56,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .reference_validator import validate_config_references
+from .reference_validator import validate_config_references as ref_check
 from .scene_discovery import discover_scenes
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
@@ -970,6 +970,7 @@ class ConfigSceneTools:
         # ``resolved_id`` is the storage key (write target); ``scene_id``
         # stays the caller id so a missing ``name`` defaults caller-facing
         # rather than to the storage key (#1935).
+        references = await ref_check(self._client, transformed_config, "scene")
         # Scene writes reload every scene; activation has to follow that reload.
         async with config_reload_waiter(
             self._client, "scene_reloaded", enabled=activate
@@ -1047,6 +1048,7 @@ class ConfigSceneTools:
             canonical_files=_SCENE_SKILL_FILES,
             referenced_files=None,
         )
+        merge_validation_meta(response, references)
         return response
 
     @staticmethod
@@ -1261,10 +1263,7 @@ class ConfigSceneTools:
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
 
-        # Cross-check literal service and entity references against the
-        # live registries. Soft warnings only.
-        validation_meta = await validate_config_references(self._client, config_dict)
-
+        references = await ref_check(self._client, config_dict, "scene")
         # ``resolved_id`` is already the storage key (from the hash-verify
         # fetch or the resolve above) — pass it as the write target to skip
         # the redundant re-resolve. ``scene_id`` stays the caller id so a
@@ -1323,7 +1322,7 @@ class ConfigSceneTools:
         if activate:
             await self._activate_scene(result, entity_id, standalone=False)
 
-        merge_validation_meta(result, validation_meta)
+        merge_validation_meta(result, references)
 
         # Issue #1168 R3 blocker 6: build response from ``resolved_id``
         # so the outer ``scene_id`` always matches the storage key.

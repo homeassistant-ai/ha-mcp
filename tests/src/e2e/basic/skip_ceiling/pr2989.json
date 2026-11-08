@@ -1,0 +1,7 @@
+{
+  "reason": "#2989 adds three requires_component_surface tests in tests/src/e2e/workflows/automation/test_native_contract.py: an entity target Core's target lookup does not offer, a blueprint input Home Assistant does not have, and script and scene references it does not have. Only the component's config_references can ask Core about an unsaved config, so all three skip at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon) and run everywhere else.",
+  "deltas": {
+    "container_no_tools": 3,
+    "haos_inaddon_no_tools": 3
+  }
+}

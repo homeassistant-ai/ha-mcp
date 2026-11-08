@@ -11,7 +11,7 @@ edits in parallel) so the two task branches merge cleanly; the Fake* fixtures an
 * ``services_list`` — REST ``/api/services`` reshape with the ``domain`` exact
   filter and domain-scoped translation filtering (no ``query`` coarse-filter).
 * ``reference_data`` — the service index + entity-id universe the reference
-  validator's ``build_service_index`` / ``build_entity_set`` consume.
+  validators of servers released before ``config_references`` read.
 * ``search`` ``visibility`` param — the pure ``_visibility_hidden_set`` mirroring
   the server's ``hidden_entity_ids`` (each dimension in isolation, allow-mode, the
   injectable Assist dimension) + its hard-exclude placement in ``_do_search``.
@@ -30,10 +30,6 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-
-# The service index the server's reference validator builds off reference_data
-# (importable without the HA stubs — pure, like ha_mcp.tools.tools_search).
-from ha_mcp.tools.reference_validator import build_entity_set, build_service_index
 
 # Import EVERYTHING component-side (including ``wsapi`` itself) THROUGH the sibling
 # module — importing it installs the ``homeassistant.*`` MagicMock stubs and forces
@@ -696,18 +692,12 @@ class TestReferenceData:
 
     def test_service_index_and_entity_set_parity(self):
         res = wsapi._do_reference_data(self._hass(), {})
-        # The REST-list services feed build_service_index unchanged.
-        assert build_service_index(res["services"]) == {
+        # The REST /api/services list shape: one row per domain.
+        assert {e["domain"]: set(e["services"]) for e in res["services"]} == {
             "light": {"turn_on", "turn_off"},
             "climate": {"set_temperature"},
         }
-        # entity_ids feed build_entity_set. build_entity_set expects the /api/states
-        # dict shape, but reference_data returns a flat id list; assert the ids.
         assert set(res["entity_ids"]) == {"light.a", "sensor.b"}
-        assert build_entity_set([{"entity_id": eid} for eid in res["entity_ids"]]) == {
-            "light.a",
-            "sensor.b",
-        }
 
     def test_service_bodies_are_empty_dicts(self):
         res = wsapi._do_reference_data(self._hass(), {})
