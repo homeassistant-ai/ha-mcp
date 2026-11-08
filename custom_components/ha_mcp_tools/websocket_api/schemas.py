@@ -255,7 +255,11 @@ def _services_list_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_SERVICES_LIST,
         vol.Optional("domain"): vol.Any(str, None),
-        vol.Optional("language", default="en"): str,
+        # No default: ``_services_list_prep`` must see an omitted ``language`` so
+        # it can read ``hass.config.language``. Voluptuous defaults are applied
+        # before the prep runs, so ``default="en"`` would pin every
+        # non-English instance to English.
+        vol.Optional("language"): str,
     }
 
 

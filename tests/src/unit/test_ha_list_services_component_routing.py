@@ -85,6 +85,9 @@ class RoutingClient:
         self.legacy_rest_calls += 1
         return [dict(e) for e in _LEGACY_REST_SERVICES]
 
+    async def get_config(self) -> dict[str, Any]:
+        return {"language": "en"}
+
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         if msg.get("type") == "frontend/get_translations":
             self.legacy_ws_calls += 1
@@ -145,18 +148,16 @@ async def test_component_preferred_skips_legacy_fetches() -> None:
 
     assert resp["success"] is True
     assert "light.turn_on" in resp["services"]
-    # ``_build_service_entry``'s translation lookup keys by the bare
-    # ``component.<domain>.services.<service>`` prefix, which never matches the
-    # flat ``...name``/``...description``-suffixed keys this fixture (and real
-    # HA translations) actually use — so the name always falls back to the
-    # title-cased service name, identically on both paths.
-    assert resp["services"]["light.turn_on"]["name"] == "Turn On"
+    # The component now reports names from Core's flat translation map.
+    assert resp["services"]["light.turn_on"]["name"] == "Turn on"
     assert client.legacy_rest_calls == 0
     assert client.legacy_ws_calls == 0
     assert len(_services_list_calls(ws)) == 1
     call = _services_list_calls(ws)[0]
     assert call.kwargs["domain"] == "light"
-    assert call.kwargs["language"] == "en"
+    # The component reads hass.config.language in-process, so the server no
+    # longer forces "en" over the wire.
+    assert "language" not in call.kwargs
     assert "query" not in call.kwargs
 
 

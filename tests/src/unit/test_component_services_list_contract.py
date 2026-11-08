@@ -100,6 +100,9 @@ class RoutingClient:
             for domain, services in _DESCRIPTIONS.items()
         ]
 
+    async def get_config(self) -> dict[str, Any]:
+        return {"language": "en"}
+
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         if msg.get("type") == "frontend/get_translations":
             self.legacy_ws_calls += 1
@@ -237,11 +240,9 @@ async def test_domain_filter_and_pagination_parity(
 async def test_translation_sourced_name_lookup_identical_both_paths(
     _fake_descriptions_and_translations: None,
 ) -> None:
-    """The (no-op, by construction) translation-name lookup behaves identically
-    from either source: ``_build_service_entry`` keys the lookup by the bare
-    ``component.<domain>.services.<service>`` prefix, which never matches the
-    flat ``...name``-suffixed keys either path supplies, so both fall back to
-    the title-cased service name — pinned equal rather than assumed."""
+    """The flat translation lookup resolves identically from either source:
+    both paths supply the same Core resources map, so ``Turn on`` wins over the
+    title-cased fallback on the component and legacy routes alike."""
     ws = _real_services_list_ws(FakeHass())
     component_client = RoutingClient()
     legacy_client = RoutingClient()
@@ -254,7 +255,7 @@ async def test_translation_sourced_name_lookup_identical_both_paths(
     assert (
         component_resp["services"]["light.turn_on"]["name"]
         == legacy_resp["services"]["light.turn_on"]["name"]
-        == "Turn On"
+        == "Turn on"
     )
 
 
