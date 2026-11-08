@@ -22,6 +22,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     safe_progress,
+    validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints
 from .util_helpers import is_connection_error_message
@@ -53,6 +54,16 @@ class TraceTools:
             str | None,
             Field(
                 description="Specific trace run_id to retrieve detailed trace.",
+                default=None,
+            ),
+        ] = None,
+        context_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Context ID to resolve to its trace run and return that "
+                    "run's detail. Mutually exclusive with run_id."
+                ),
                 default=None,
             ),
         ] = None,
@@ -128,13 +139,39 @@ class TraceTools:
            including trigger info, condition results, action trace with timing,
            and context variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
-        3. Add logbook entries and context metadata: detailed=True. Script-style
+        3. Resolve a context id to its trace (provide context_id): the same
+           detail view, selected by the context that produced the run.
+           ha_get_automation_traces("automation.motion_light", context_id="01J...")
+        4. Add logbook entries and context metadata: detailed=True. Script-style
            action paths (sequence/, numeric) are always matched regardless of
            this flag.
-        4. Variables at every step (trigger sets and null entries are still
+        5. Variables at every step (trigger sets and null entries are still
            omitted): deduplicate=False.
         """
         try:
+            if run_id is not None and context_id is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "run_id and context_id are mutually exclusive",
+                        context={"run_id": run_id, "context_id": context_id},
+                        suggestions=[
+                            "Pass run_id to fetch a specific stored trace",
+                            "Pass context_id to resolve the trace for a context",
+                        ],
+                    )
+                )
+            if context_id is not None:
+                context_id = validate_identifier_not_empty(
+                    context_id,
+                    "context_id",
+                    suggestions=[
+                        "Pass the context id from the run's context metadata",
+                        "Omit context_id to list recent traces",
+                    ],
+                    context={"automation_id": automation_id},
+                )
+
             # Determine domain from entity_id
             if automation_id.startswith("automation."):
                 domain = "automation"
@@ -155,7 +192,7 @@ class TraceTools:
 
             logger.debug(
                 f"ha_get_automation_traces starting: id={automation_id} "
-                f"run_id={run_id or '<list>'}",
+                f"run_id={run_id or '<list>'} context_id={context_id or '<none>'}",
             )
             await safe_progress(
                 ctx,
@@ -178,24 +215,33 @@ class TraceTools:
                 self._client, automation_id, object_id
             )
 
+            resolved_run_id = run_id
+            if context_id is not None:
+                resolved_run_id = await _resolve_run_id_for_context(
+                    self._client, domain, item_id, context_id
+                )
+
             await safe_progress(
                 ctx,
                 progress=1,
                 total=3,
-                message=f"fetching trace {'detail' if run_id else 'list'}",
+                message=(f"fetching trace {'detail' if resolved_run_id else 'list'}"),
             )
 
-            if run_id:
-                return await self._fetch_trace_detail(
+            if resolved_run_id:
+                detail = await self._fetch_trace_detail(
                     domain,
                     item_id,
                     automation_id,
-                    run_id,
+                    resolved_run_id,
                     deduplicate=deduplicate,
                     detailed=detailed,
                     sections=sections,
                     ctx=ctx,
                 )
+                if context_id is not None:
+                    detail["context_id"] = context_id
+                return detail
             return await self._fetch_trace_list(
                 domain,
                 item_id,
@@ -408,6 +454,46 @@ async def _resolve_trace_item_id(
             f"using object_id: {fallback_object_id}"
         )
         return fallback_object_id
+
+
+async def _resolve_run_id_for_context(
+    client: Any,
+    domain: str,
+    item_id: str,
+    context_id: str,
+) -> str:
+    """Resolve a Core context id to the run_id of the trace that owns it."""
+    result = await client.send_websocket_message(
+        {"type": "trace/contexts", "domain": domain, "item_id": item_id}
+    )
+    if not result.get("success"):
+        _raise_trace_ws_failure(
+            result.get("error", "Failed to resolve trace context"),
+            {"context_id": context_id, "domain": domain, "item_id": item_id},
+        )
+
+    contexts = result.get("result")
+    entry = contexts.get(context_id) if isinstance(contexts, dict) else None
+    run_id = entry.get("run_id") if isinstance(entry, dict) else None
+    if not run_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"No trace found for context: {context_id}",
+                context={
+                    "context_id": context_id,
+                    "domain": domain,
+                    "item_id": item_id,
+                },
+                suggestions=[
+                    "Use ha_get_automation_traces(automation_id=...) "
+                    "without context_id to list recent traces",
+                    "Check that the context_id belongs to a run of this "
+                    "automation or script",
+                ],
+            )
+        )
+    return str(run_id)
 
 
 async def _gather_diagnostics(
