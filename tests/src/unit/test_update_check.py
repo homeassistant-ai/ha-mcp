@@ -9,6 +9,7 @@ import pytest
 
 from ha_mcp import update_check
 from ha_mcp.update_check import (
+    PyPIRelease,
     UpdateInfo,
     _is_newer,
     get_update_info,
@@ -16,7 +17,7 @@ from ha_mcp.update_check import (
 )
 
 
-def _no_network(package: str) -> str | None:
+def _no_network(package: str) -> PyPIRelease | None:
     raise AssertionError("_fetch_latest_from_pypi should not be called on this path")
 
 
@@ -102,7 +103,9 @@ class TestGetUpdateInfoGating:
         ENABLED — only truthy values disable it, so a user setting =0/=false to
         'keep it on' isn't surprised."""
         monkeypatch.setenv(update_check.DISABLE_ENV, val)
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.9.0")
+        monkeypatch.setattr(
+            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.9.0")
+        )
         result = get_update_info()
         if enabled:
             assert result is not None  # the check ran
@@ -137,9 +140,9 @@ class TestGetUpdateInfoChannels:
     ) -> None:
         captured: dict[str, str] = {}
 
-        def fetch(package: str) -> str | None:
+        def fetch(package: str) -> PyPIRelease | None:
             captured["package"] = package
-            return "7.9.0"
+            return PyPIRelease("7.9.0")
 
         monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
         info = get_update_info()
@@ -153,9 +156,9 @@ class TestGetUpdateInfoChannels:
         package and surfaces newer dev builds (matching the add-on dev channel)."""
         captured: dict[str, str] = {}
 
-        def fetch(package: str) -> str | None:
+        def fetch(package: str) -> PyPIRelease | None:
             captured["package"] = package
-            return "7.8.0.dev720"
+            return PyPIRelease("7.8.0.dev720")
 
         monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev714")
         monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
@@ -167,7 +170,9 @@ class TestGetUpdateInfoChannels:
     def test_up_to_date_reports_not_available(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.8.0")
+        monkeypatch.setattr(
+            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.8.0")
+        )
         info = get_update_info()
         assert info is not None and info.update_available is False
 
@@ -257,7 +262,9 @@ class TestAddonSupervisorSource:
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev443")
         monkeypatch.setattr(
-            update_check, "_fetch_latest_from_pypi", lambda _p: "7.8.0.dev500"
+            update_check,
+            "_fetch_latest_from_pypi",
+            lambda _p: PyPIRelease("7.8.0.dev500"),
         )
         info = get_update_info()
         assert info is not None and info.update_available is True
@@ -310,9 +317,9 @@ class TestInMemoryMemo:
     def test_memoized_until_cleared(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
 
-        def fetch(package: str) -> str | None:
+        def fetch(package: str) -> PyPIRelease | None:
             calls.append(package)
-            return "7.9.0"
+            return PyPIRelease("7.9.0")
 
         monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
         get_update_info()
@@ -343,7 +350,9 @@ class TestFetchLatestFromPypi:
             return FakeResp()
 
         monkeypatch.setattr(update_check.httpx, "get", fake_get)
-        assert update_check._fetch_latest_from_pypi("ha-mcp-dev") == "7.8.0.dev720"
+        assert update_check._fetch_latest_from_pypi("ha-mcp-dev") == PyPIRelease(
+            "7.8.0.dev720"
+        )
         assert seen["url"] == "https://pypi.org/pypi/ha-mcp-dev/json"
 
     def test_http_error_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -373,7 +382,9 @@ class TestGetUpdateField:
     async def test_returns_dict_when_update_available(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.9.0")
+        monkeypatch.setattr(
+            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.9.0")
+        )
         field = await update_check.get_update_field()
         assert field == {
             "current": "7.8.0",
@@ -408,7 +419,9 @@ class TestGetUpdateField:
         """Once the memo is warm (currsize > 0 — the common post-startup case),
         get_update_field calls get_update_info directly and must NOT offload to a
         thread (only the cold first call does)."""
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.9.0")
+        monkeypatch.setattr(
+            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.9.0")
+        )
         # Prime the memo so the warm branch is the one exercised below.
         assert update_check.get_update_info() is not None
         assert update_check.get_update_info.cache_info().currsize == 1
@@ -470,3 +483,83 @@ class TestEmbeddedUpdateHint:
         assert "HACS" in hint
         assert "update entity" not in hint
         assert "pip install" not in hint
+
+
+class TestReleaseNeedsNewerPython:
+    """pip and uv skip a release whose requires_python excludes the running
+    Python, silently; a plain upgrade hint would reinstall the old version."""
+
+    @pytest.fixture(autouse=True)
+    def _pip_install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
+        monkeypatch.setattr(update_check.platform, "python_version", lambda: "3.13.7")
+
+    def test_fetch_reads_requires_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class FakeResp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {"info": {"version": "9.2.0", "requires_python": ">=3.14"}}
+
+        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
+        assert update_check._fetch_latest_from_pypi("ha-mcp") == PyPIRelease(
+            "9.2.0", ">=3.14"
+        )
+
+    async def test_status_field_names_the_python_and_the_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            update_check,
+            "_fetch_latest_from_pypi",
+            lambda _p: PyPIRelease("9.2.0", ">=3.14,<3.15"),
+        )
+        field = await update_check.get_update_field()
+        assert field is not None
+        assert field["python_required"] == "3.14"
+        assert field["upgrade_command"] == "uvx --python 3.14 ha-mcp@latest"
+
+    def test_startup_hint_gives_the_uvx_command_not_pip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
+        hint = update_command_hint("9.1.2", info)
+        assert "Python 3.14" in hint
+        assert "uvx --python 3.14 ha-mcp@latest" in hint
+        assert "pip install" not in hint
+
+    async def test_supported_python_keeps_the_plain_notice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            update_check,
+            "_fetch_latest_from_pypi",
+            lambda _p: PyPIRelease("9.2.0", ">=3.13"),
+        )
+        field = await update_check.get_update_field()
+        assert field == {
+            "current": "7.8.0",
+            "latest": "9.2.0",
+            "update_available": True,
+        }
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.13")
+        assert (
+            update_command_hint("9.1.2", info) == "Upgrade with: pip install -U ha-mcp."
+        )
+
+    def test_docker_image_update_still_pulls_the_image(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The new image ships its own Python; the pull is still the fix."""
+        monkeypatch.setattr(update_check, "_running_in_docker", lambda: True)
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
+        assert update_check.required_python(info) is None
+        assert "docker pull" in update_command_hint("9.1.2", info)
+
+    @pytest.mark.parametrize(
+        ("spec", "floor"),
+        [(">=3.14,<3.15", "3.14"), ("~=3.14.2", "3.14"), (">=3", "3.0"), ("<4", None)],
+    )
+    def test_python_floor(self, spec: str, floor: str | None) -> None:
+        assert update_check._python_floor(spec) == floor

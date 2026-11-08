@@ -1035,7 +1035,7 @@ class UpdateTools:
         failure, but later batch targets were not started. Confirm per entity
         with action='get'; finished updates drop out of 'list', which also
         returns ha_mcp_update — this MCP server's own update status {current,
-        latest, update_available}, so a newer ha-mcp release can be flagged.
+        latest, update_available, python_required/upgrade_command on a newer Python}.
 
         EXAMPLES:
         - Pre-update analysis: ha_manage_updates(action="get", entity_ids=["update.home_assistant_core_update"], include_release_notes=True)

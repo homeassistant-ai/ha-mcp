@@ -32,10 +32,12 @@ import asyncio
 import functools
 import logging
 import os
+import platform
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import httpx
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from ._version import (
@@ -69,6 +71,17 @@ class UpdateInfo:
     current: str
     latest: str
     update_available: bool
+    # PyPI's ``requires_python`` for ``latest``; None where PyPI is not the
+    # reference (the add-on) or the release does not declare one.
+    requires_python: str | None = None
+
+
+@dataclass(frozen=True)
+class PyPIRelease:
+    """A package's latest version on PyPI and the Python it requires."""
+
+    version: str
+    requires_python: str | None = None
 
 
 def _is_disabled() -> bool:
@@ -103,8 +116,8 @@ def _is_newer(latest: str, current: str) -> bool:
         return False
 
 
-def _fetch_latest_from_pypi(package: str) -> str | None:
-    """Fetch ``package``'s latest published version from PyPI, or None on failure."""
+def _fetch_latest_from_pypi(package: str) -> PyPIRelease | None:
+    """Fetch ``package``'s latest release from PyPI, or None on failure."""
     try:
         # follow_redirects=True mirrors the sibling fetch in tools_updates.py and
         # survives any future PyPI redirect (the JSON API serves 200 directly today).
@@ -114,8 +127,17 @@ def _fetch_latest_from_pypi(package: str) -> str | None:
             follow_redirects=True,
         )
         resp.raise_for_status()
-        version = resp.json()["info"]["version"]
-        return version if isinstance(version, str) else None
+        info = resp.json()["info"]
+        version = info["version"]
+        if not isinstance(version, str):
+            return None
+        requires_python = info.get("requires_python")
+        return PyPIRelease(
+            version=version,
+            requires_python=requires_python
+            if isinstance(requires_python, str) and requires_python
+            else None,
+        )
     except (httpx.HTTPError, KeyError, ValueError, TypeError) as err:
         logger.debug("ha-mcp update check skipped (PyPI fetch failed: %s)", err)
         return None
@@ -183,13 +205,14 @@ def _resolve_update_info() -> UpdateInfo | None:
     # A dev install (``.dev`` version) tracks the renamed ``ha-mcp-dev`` package;
     # a stable install tracks ``ha-mcp``.
     package = _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE
-    latest = _fetch_latest_from_pypi(package)
-    if latest is None:
+    release = _fetch_latest_from_pypi(package)
+    if release is None:
         return None
     return UpdateInfo(
         current=current,
-        latest=latest,
-        update_available=_is_newer(latest, current),
+        latest=release.version,
+        update_available=_is_newer(release.version, current),
+        requires_python=release.requires_python,
     )
 
 
@@ -218,6 +241,62 @@ class UpdateField(TypedDict):
     current: str
     latest: str
     update_available: bool
+    # Set when the update cannot install on the running Python (see
+    # ``required_python``): the minor version it needs and how to run it.
+    python_required: NotRequired[str]
+    upgrade_command: NotRequired[str]
+
+
+def _python_floor(requires_python: str) -> str | None:
+    """The lowest ``major.minor`` a ``requires_python`` spec admits, if it has one."""
+    try:
+        specifiers = SpecifierSet(requires_python)
+    except InvalidSpecifier:
+        return None
+    floors = []
+    for spec in specifiers:
+        if spec.operator in (">=", "~=", "=="):
+            try:
+                release = Version(spec.version.rstrip(".*")).release
+            except InvalidVersion:
+                continue
+            floors.append(release[:2] if len(release) > 1 else (release[0], 0))
+    if not floors:
+        return None
+    major, minor = max(floors)
+    return f"{major}.{minor}"
+
+
+def required_python(info: UpdateInfo) -> str | None:
+    """The Python ``major.minor`` the update needs when this interpreter can't run it.
+
+    Only a pip / uvx install is stuck on its interpreter: pip and uv skip a
+    release whose ``requires_python`` excludes the running Python without an
+    error, so a plain upgrade command would reinstall the old version. Docker,
+    app (add-on) and in-process installs get their Python from the image or
+    from Home Assistant, so their usual update path still applies.
+    """
+    if (
+        not info.update_available
+        or info.requires_python is None
+        or is_embedded()
+        or is_running_in_addon()
+        or _running_in_docker()
+    ):
+        return None
+    try:
+        if SpecifierSet(info.requires_python).contains(
+            platform.python_version(), prereleases=True
+        ):
+            return None
+    except InvalidSpecifier:
+        return None
+    return _python_floor(info.requires_python)
+
+
+def _uvx_command(python: str) -> str:
+    # uvx downloads a uv-managed interpreter for --python when none is installed.
+    return f"uvx --python {python} ha-mcp@latest"
 
 
 async def get_update_field() -> UpdateField | None:
@@ -244,19 +323,33 @@ async def get_update_field() -> UpdateField | None:
         return None
     if info is None:
         return None
-    return {
+    field: UpdateField = {
         "current": info.current,
         "latest": info.latest,
         "update_available": info.update_available,
     }
+    if python := required_python(info):
+        field["python_required"] = python
+        field["upgrade_command"] = _uvx_command(python)
+    return field
 
 
 def _running_in_docker() -> bool:
     return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
 
-def update_command_hint(current: str) -> str:
-    """Return a deployment- and channel-aware one-liner for how to upgrade."""
+def update_command_hint(current: str, info: UpdateInfo | None = None) -> str:
+    """Return a deployment- and channel-aware one-liner for how to upgrade.
+
+    With ``info``, a release the running Python cannot install gets the
+    Python it needs and the command that runs it instead of a pip hint.
+    """
+    if info is not None and (python := required_python(info)):
+        return (
+            f"This release needs Python {python}; you are on "
+            f"{platform.python_version()}. Run it with: {_uvx_command(python)} "
+            f'(in the MCP client config: "--python", "{python}").'
+        )
     if is_embedded():
         # In-process (custom component) server: each component release
         # installs its own server build when Home Assistant restarts.
