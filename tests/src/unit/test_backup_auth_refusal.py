@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -45,16 +46,17 @@ def _not_sent_after_auth_failure() -> HomeAssistantCommandNotSent:
     ],
     ids=["non_admin", "rejected", "rejected_on_retry"],
 )
-def expected_code(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> str:
+def refusal(request: pytest.FixtureRequest) -> tuple[Any, str]:
+    """A client whose token bootstrap is refused, and the code that must surface."""
     error, code = request.param
-
-    async def refused(_client: Any, _service: str, _data: dict[str, Any]) -> Any:
-        raise error
-
-    monkeypatch.setattr("ha_mcp.tools.tools_filesystem.call_mcp_tools_service", refused)
-    return code
+    client: Any = _StubClient()
+    client.get_services = AsyncMock(
+        return_value=[
+            {"domain": "ha_mcp_tools", "services": {"get_caller_token": {}}},
+        ]
+    )
+    client.call_service = AsyncMock(side_effect=error)
+    return client, code
 
 
 @pytest.fixture
@@ -70,12 +72,12 @@ def _code(exc: pytest.ExceptionInfo[ToolError]) -> str:
     return json.loads(str(exc.value))["error"]["code"]
 
 
-def _tool(ran: list[str]) -> Any:
+def _tool(ran: list[str], client: Any) -> Any:
     @with_auto_backup(
         domain="file",
         id_param="path",
         mandatory=True,
-        client=_StubClient(),
+        client=client,
     )
     async def tool(*, path: str) -> str:
         ran.append(path)
@@ -86,12 +88,13 @@ def _tool(ran: list[str]) -> Any:
 
 @pytest.mark.usefixtures("settings")
 async def test_mandatory_write_reports_the_failure_and_stays_blocked(
-    expected_code: str,
+    refusal: tuple[Any, str],
 ) -> None:
+    client, expected_code = refusal
     ran: list[str] = []
 
     with pytest.raises(ToolError) as exc:
-        await _tool(ran)(path="www/x.txt")
+        await _tool(ran, client)(path="www/x.txt")
 
     assert _code(exc) == expected_code
     assert exc.value.log_level == TOOL_ERROR_LOG_LEVEL
@@ -99,9 +102,10 @@ async def test_mandatory_write_reports_the_failure_and_stays_blocked(
 
 
 async def test_on_demand_capture_reports_the_failure(
-    expected_code: str, settings: _StubSettings
+    refusal: tuple[Any, str], settings: _StubSettings
 ) -> None:
-    mgr = get_backup_manager(_StubClient(), settings)
+    client, expected_code = refusal
+    mgr = get_backup_manager(client, settings)
 
     with pytest.raises(ToolError) as exc:
         await capture_on_demand(mgr, "file", "www/x.txt")
