@@ -56,6 +56,10 @@ def _make_mcp() -> FastMCP:
     async def ha_config_remove_automation(entity_id: str) -> dict:
         return {"entity_id": entity_id, "warnings": ["Backup skipped."]}
 
+    @mcp.tool()
+    async def ha_get_automation_traces(entity_id: str) -> dict:
+        return {"tool": "ha_get_automation_traces", "entity_id": entity_id}
+
     return mcp
 
 
@@ -105,6 +109,7 @@ async def test_the_old_names_stay_out_of_the_catalog():
         "ha_manage_blueprints",
         "ha_config_get_automation",
         "ha_config_remove_automation",
+        "ha_get_automation_traces",
     }
     assert not listed & set(RENAMED_TOOLS)
 
@@ -232,6 +237,20 @@ def test_every_tool_that_renamed_identifier_keeps_it_callable():
         "ha_config_set_automation",
         "ha_config_remove_automation",
     }
+
+
+@pytest.mark.asyncio
+async def test_the_trace_tool_keeps_automation_id_callable():
+    """The trace tool renamed automation_id; a cached client still sends it."""
+    result = await _make_mcp().call_tool(
+        "ha_get_automation_traces", {"automation_id": "automation.trace"}
+    )
+
+    assert result.structured_content["tool"] == "ha_get_automation_traces"
+    assert result.structured_content["entity_id"] == "automation.trace"
+    assert any(
+        "automation_id" in warning for warning in result.structured_content["warnings"]
+    )
 
 
 @pytest.mark.asyncio
