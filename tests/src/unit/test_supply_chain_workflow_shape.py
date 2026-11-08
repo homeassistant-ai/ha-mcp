@@ -274,10 +274,10 @@ def test_python_runtime_automation_is_digest_only() -> None:
     version_rule = next(
         rule
         for rule in python_rules
-        if rule.get("allowedVersions") == "/^3\\.13-slim$/"
+        if rule.get("allowedVersions") == "/^3\\.14-slim$/"
     )
     assert "matchFileNames" not in version_rule, (
-        "every Python Dockerfile must inherit the coordinated 3.13-slim baseline"
+        "every Python Dockerfile must inherit the coordinated 3.14-slim baseline"
     )
 
     proxy_rule = next(rule for rule in python_rules if rule.get("enabled") is False)

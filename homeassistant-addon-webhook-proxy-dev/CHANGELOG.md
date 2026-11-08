@@ -9,6 +9,11 @@ history from before the fork.
 -->
 
 
+## v3.0.6.dev2 (2026-11-09)
+
+- The app (add-on) image is built on Python 3.14 (`python:3.14-slim`).
+
+
 ## v3.0.6.dev1 (2026-11-09)
 
 Version line rebased onto stable 3.0.5 by the promotion workflow. The tool

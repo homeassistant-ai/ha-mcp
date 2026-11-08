@@ -709,7 +709,7 @@ class HaMcpCallTool(llm.Tool):
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> JsonObjectType:
+    ) -> Any:
         """Forward the call when the target is exposed; unknown-tool otherwise."""
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}

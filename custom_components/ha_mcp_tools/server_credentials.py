@@ -14,7 +14,7 @@ release created itself, and only when its config entry is deleted.
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .const import (
     DATA_ACCESS_TOKEN,
@@ -130,10 +130,14 @@ async def async_credential_from_input(
     if not (username and password):
         raise CredentialRefused("credentials_needed")
     from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
-    from homeassistant.auth.providers.homeassistant import InvalidAuth
+    from homeassistant.auth.providers.homeassistant import (
+        HassAuthProvider,
+        InvalidAuth,
+    )
 
-    provider = next(
-        (p for p in hass.auth.auth_providers if p.type == "homeassistant"), None
+    provider = cast(
+        HassAuthProvider | None,
+        next((p for p in hass.auth.auth_providers if p.type == "homeassistant"), None),
     )
     if provider is None:
         raise CredentialRefused("invalid_login")

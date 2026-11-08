@@ -9,15 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from ._embedded_stubs import install
+from custom_components.ha_mcp_tools import llm_api
 
-install()
-
-from custom_components.ha_mcp_tools import llm_api  # noqa: E402
-
-from ._llm_api_helpers import (  # noqa: E402
+from ._llm_api_helpers import (
     CoreToolResult,
     fake_session,
+    llm_context,
     make_hass,
     tool_entry,
 )
@@ -40,7 +37,7 @@ async def test_tool_hidden_after_the_list_was_built_is_refused(
         tool = llm_api.HaMcpTool("ha_search", "Search", {"_converted": {}}, _URL)
         tool_input = llm_api.llm.ToolInput("ha_search", {"query": "kitchen"})
 
-    out = await tool.async_call(make_hass(), tool_input, llm_api.llm.LLMContext())
+    out = await tool.async_call(make_hass(), tool_input, llm_context())
 
     session.call_tool.assert_not_awaited()
     assert out.error is True

@@ -19,12 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_setup as esetup
+from custom_components.ha_mcp_tools.const import (
     DATA_ACCESS_ENABLED,
     DOMAIN,
 )

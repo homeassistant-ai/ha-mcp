@@ -14,7 +14,6 @@ import pytest
 from ha_mcp.utils.config_hash import compute_config_hash
 
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _FakeWSApi,
@@ -437,7 +436,6 @@ async def test_another_writer_during_persistence_returns_latest_readback(edit):
 def test_new_command_is_registered_and_admin_gated(edit, monkeypatch):
     transport = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", transport)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     wsapi.async_register_commands(FakeHass())
     command = "ha_mcp_tools/dashboard_edit"
     assert "dashboard_edit" in wsapi._do_info(FakeHass())["capabilities"]

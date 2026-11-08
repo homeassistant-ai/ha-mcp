@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.13"
+  PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
   HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.0"
@@ -324,6 +324,9 @@ jobs:
       # pip to replace the image-shipped copy in place — the torn-install
       # window). Check the current E2E image AND the HACS minimum: a Core
       # image update must not silently strand users on the supported floor.
+      # For the image's Core, uv.lock must also hold Core's exact pin for every
+      # runtime package, so the Docker/app images and the embedded install run
+      # the same versions.
       # This is direct-dependency coverage at the endpoints. Existing current
       # Core/beta E2E lanes cover actual installs and runtime compatibility.
       # Rules unit-tested offline in
@@ -342,11 +345,15 @@ jobs:
         minimum=$(python3 -c 'import json; print(json.load(open("hacs.json"))["homeassistant"])')
         [[ "$minimum" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$ ]]
         failed=0
-        for ha_version in "${HA_IMAGE_GHCR##*:}" "$minimum"; do
+        image="${HA_IMAGE_GHCR##*:}"
+        for ha_version in "$image" "$minimum"; do
           status=0
+          lock=()
+          # uv.lock tracks the image's Core (the dev group pins it), not the floor.
+          [ "$ha_version" = "$image" ] && lock=(--lock uv.lock)
           uv run --no-project --with packaging python \
             scripts/check_ha_constraint_alignment.py \
-            --ha-version "$ha_version" || status=$?
+            --ha-version "$ha_version" "${lock[@]}" || status=$?
           if [ "$status" -eq 78 ]; then
             echo "::warning::could not reach HA ${ha_version} constraints - dependency alignment for this version was not verified"
           elif [ "$status" -ne 0 ]; then
@@ -482,7 +489,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.13.6-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.13.6-python3.14-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6

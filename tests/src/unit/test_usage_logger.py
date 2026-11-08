@@ -211,6 +211,20 @@ class TestUsageLoggerDefaults:
         logger.shutdown()
 
 
+def test_shutdown_wakes_the_idle_writer_at_once(tmp_path, monkeypatch) -> None:
+    """An idle writer used to sleep out a full 0.1 s poll before it saw the
+    stop flag, so every shutdown (each server stop, each unit test) waited."""
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+    logger = UsageLogger()
+    thread = logger._logger_thread
+    assert thread is not None and thread.is_alive()
+
+    logger._stop_event.set()
+    thread.join(timeout=0.05)
+
+    assert not thread.is_alive()
+
+
 class TestUsageLoggerConstants:
     """Test constants are properly defined."""
 

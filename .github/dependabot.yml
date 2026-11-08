@@ -56,6 +56,10 @@ updates:
       - dependency-name: "mcp"
         update-types:
           - "version-update:semver-major"
+      # The dev group's Core and its test package follow the e2e image's Core
+      # version; Renovate bumps them with the image pin and re-locks.
+      - dependency-name: "homeassistant"
+      - dependency-name: "pytest-homeassistant"
     groups:
       # Group dev dependencies together
       dev-dependencies:

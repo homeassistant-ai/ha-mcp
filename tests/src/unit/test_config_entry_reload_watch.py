@@ -32,7 +32,7 @@ def _frame(entry: dict[str, Any], *, change: str | None = "updated") -> dict[str
     return {"id": 1, "type": "event", "event": [{"type": change, "entry": entry}]}
 
 
-def _queue_of(*frames: dict[str, Any]) -> "asyncio.Queue[dict[str, Any]]":
+def _queue_of(*frames: dict[str, Any]) -> asyncio.Queue[dict[str, Any]]:
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     for frame in frames:
         queue.put_nowait(frame)

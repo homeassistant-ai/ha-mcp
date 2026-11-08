@@ -1,4 +1,4 @@
-"""The registry the bake's local add-on builds pull ``python:3.13-slim`` from.
+"""The registry the bake's local add-on builds pull ``python:3.14-slim`` from.
 
 Supervisor builds a local add-on from its Dockerfile with no build args
 (``build.yaml`` is no longer read, see

@@ -4,62 +4,35 @@ The command runs Core's own ``EventProcessor`` (with the REST flags: ISO
 ``when`` values, ``include_entity_name=True``) off the event loop, encodes the
 result message in the same executor job (Core's own approach) and mirrors
 Core's ``logbook/get_events`` validation. These tests pin the parts the
-component owns against a stubbed HA: validation, the filter combination rules,
+component owns against Core's real modules: validation, the filter combination rules,
 the processor flags, the executor hand-off, and the pre-serialized result seam.
 """
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
-
-class _StubHomeAssistantError(Exception):
-    """Stand-in for core's ``HomeAssistantError`` in the stubbed env."""
-
-
-# Stub the HA modules the component surface imports (the same MagicMock pattern
-# the sibling component test modules install); ``conftest`` supplies the
-# logbook/recorder/websocket_api/json chain at module import.
-for _mod in (
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_mod, MagicMock())
-
-_exceptions = MagicMock()
-_exceptions.HomeAssistantError = _StubHomeAssistantError
-sys.modules.setdefault("homeassistant.exceptions", _exceptions)
-
-import custom_components.ha_mcp_tools.websocket_api as ws_pkg  # noqa: E402
-from custom_components.ha_mcp_tools.websocket_api import (  # noqa: E402
+import custom_components.ha_mcp_tools.websocket_api as ws_pkg
+from custom_components.ha_mcp_tools.websocket_api import (
     logbook as component_logbook,
 )
-from custom_components.ha_mcp_tools.websocket_api.seam import (  # noqa: E402
+from custom_components.ha_mcp_tools.websocket_api.seam import (
     PreSerializedResult,
 )
 
-from ._component_ws_api import wsapi  # noqa: E402  (installs stubs, loads surface)
-from ._component_ws_fakes import _FakeConnection, _FakeWSApi  # noqa: E402
+from ._component_ws_api import wsapi
+from ._component_ws_fakes import _FakeConnection, _FakeWSApi
 
 FIXED_NOW = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
 
 
 def _ha_error() -> type[BaseException]:
-    """The registered ``HomeAssistantError`` stub (full-suite import order)."""
-    return sys.modules["homeassistant.exceptions"].HomeAssistantError
+    return HomeAssistantError
 
 
 def _hass(*, logbook: bool = True) -> MagicMock:

@@ -1,12 +1,8 @@
-"""Shared setup for the webhook-proxy app tests.
+"""App (add-on) tests run under Core's test plugin, like the unit tree.
 
-The dev flavor imports ``homeassistant.util.aiohttp.MockRequest`` at module
-load (#2696). ``_embedded_stubs.install()`` registers that module, with the one
-``MockRequest`` stand-in the repository keeps, and ``_install_runtime_stubs``
-never overwrites those keys — so installing it here is what lets the dev flavor
-import under ``tests/addon`` alone.
+The webhook-proxy component imports Home Assistant at module load; Core is a
+dev dependency, so the real modules serve it. See ``tests/src/unit/conftest.py``
+for why the plugin is loaded here rather than from its entry point.
 """
 
-from tests.src.unit._embedded_stubs import install
-
-install()
+pytest_plugins = ["pytest_homeassistant.plugins"]

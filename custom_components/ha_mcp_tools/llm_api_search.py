@@ -17,7 +17,7 @@ from .llm_tool_metadata import declare_metadata, tool_result
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
-    from homeassistant.util.json import JsonObjectType
+    from homeassistant.util.json import JsonValueType
 
 # Names of the meta-tools synthesized for the tool-search mode. ha_search_tools
 # deliberately matches the server's own tool-search terminology (see the
@@ -88,7 +88,7 @@ class HaMcpSearchTool(llm.Tool):
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> JsonObjectType:
+    ) -> Any:
         """Return full entries for ``tools``, compact hits for ``query``, or an
         error when neither is given.
 
@@ -141,11 +141,11 @@ class HaMcpSearchTool(llm.Tool):
             hit["params"] = tool["params"]
         return hit
 
-    def _full(self, names: list[str]) -> JsonObjectType:
+    def _full(self, names: list[str]) -> Any:
         """Full entries for *names* in the order given; an error when none
         of them is an exposed tool."""
         by_name = {t["name"]: t for t in self._catalog}
-        results = [
+        results: list[JsonValueType] = [
             self._stub(n)
             if n in self._pinned and n in by_name
             else by_name.get(n)
@@ -161,7 +161,7 @@ class HaMcpSearchTool(llm.Tool):
             error=not any(n in by_name for n in names),
         )
 
-    def _search(self, query_words: list[str]) -> JsonObjectType:
+    def _search(self, query_words: list[str]) -> Any:
         """Return the top-scoring exposed tools as compact entries."""
         scored = sorted(
             (
@@ -171,7 +171,7 @@ class HaMcpSearchTool(llm.Tool):
             key=lambda pair: pair[0],
             reverse=True,
         )
-        results = [
+        results: list[JsonValueType] = [
             self._stub(t["name"]) if t["name"] in self._pinned else self._hit(t)
             for score, t in scored[:_SEARCH_RESULT_LIMIT]
             if score > 0

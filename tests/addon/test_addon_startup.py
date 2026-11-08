@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
+import pytest_socket
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
@@ -663,6 +664,11 @@ class TestAddonStartup:
     def build_image(self):
         """Build the addon image once before all tests in this class."""
         _build_addon_image()
+
+    @pytest.fixture(autouse=True)
+    def docker_socket(self, socket_enabled):
+        """Let Core's test plugin pass the Docker daemon's Unix socket through."""
+        pytest_socket.socket_allow_hosts(["127.0.0.1"], allow_unix_socket=True)
 
     @pytest.fixture
     def addon_config(self, tmp_path):

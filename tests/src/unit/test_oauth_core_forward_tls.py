@@ -7,11 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
+import custom_components.ha_mcp_tools.oauth_autoapprove as aa
 
 
 class _CoreAnswer:

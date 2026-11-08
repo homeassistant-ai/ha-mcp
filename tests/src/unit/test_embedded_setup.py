@@ -6,8 +6,7 @@ keep running), connect-URL surfacing, teardown, and credential revocation on
 removal. The integration is always-on — the config entry existing means the
 server runs — so there is no enable/disable gate here.
 
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (which also puts
-the component package on sys.path). The server manager and webhook
+The server manager and webhook
 register/unregister functions are patched so these tests exercise only the
 orchestration decisions.
 """
@@ -22,11 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_setup as esetup
 
 # Captured before any test patches it so the connect-URL tests can restore the
 # real implementation regardless of the module-level spy.

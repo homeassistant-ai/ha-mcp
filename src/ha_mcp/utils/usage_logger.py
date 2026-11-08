@@ -505,8 +505,8 @@ class UsageLogger:
                         # only taken off the queue.
                         self._log_queue.task_done()
                 else:
-                    # Sleep briefly to avoid busy waiting
-                    threading.Event().wait(0.1)
+                    # Wait briefly to avoid busy waiting; shutdown() wakes it at once.
+                    self._stop_event.wait(0.1)
             except Exception as e:  # noqa: BLE001
                 # Silent error handling to avoid disrupting MCP server
                 print(f"Usage logger error: {e}")

@@ -6,48 +6,39 @@ PKCE exchange, cosmetic opaque token) views, the ``AutoApproveProvider`` code
 lifecycle, and — most importantly — the open-redirect gate layered on top of
 :func:`oauth_redirect_allowlist.is_redirect_allowed` (only callbacks on the
 administrator's allowlist are redirected to; anything else is refused in place).
-
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs``. ``yarl`` (an
-aiohttp dependency also absent here) is stubbed with the tiny
-``URL.update_query`` surface ``_redirect_with`` uses — same convention as
-``test_oauth_legacy_component.py``.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
-import importlib
 import secrets
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiohttp import test_utils
+from aiohttp import web as aiohttp_web
 
-from ._embedded_stubs import install
+import custom_components.ha_mcp_tools.oauth_autoapprove as aa
+from custom_components.ha_mcp_tools import (
+    oauth_dcr,
+    oauth_ha_auth,
+    oauth_legacy,
+)
+from custom_components.ha_mcp_tools.const import (
+    DATA_WEBHOOK,
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    DOMAIN,
+    OAUTH_BASE,
+    WEBHOOK_AUTH_LEGACY,
+)
 
-install()
+from ._embedded_helpers import response_json
 
-
-class _FakeURL:
-    """Stand-in for ``yarl.URL`` covering only ``update_query`` + ``str()``."""
-
-    def __init__(self, url: str) -> None:
-        self._url = url
-
-    def update_query(self, params: dict[str, str]) -> _FakeURL:
-        sep = "&" if "?" in self._url else "?"
-        query = "&".join(f"{k}={v}" for k, v in params.items())
-        return _FakeURL(f"{self._url}{sep}{query}" if query else self._url)
-
-    def with_query(self, params) -> _FakeURL:
-        query = "&".join(f"{k}={v}" for k, v in params.items())
-        return _FakeURL(f"{self._url}?{query}" if query else self._url)
-
-    def __str__(self) -> str:
-        return self._url
-
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 CORE_TOKEN_BODY = b'{"access_token":"x"}'
 
@@ -97,25 +88,6 @@ class _CoreTokenSession:
             raise self.error
         return _CoreTokenResponse(self.body, self.status)
 
-
-if "yarl" not in sys.modules:
-    _yarl = ModuleType("yarl")
-    _yarl.URL = _FakeURL  # type: ignore[attr-defined]
-    sys.modules["yarl"] = _yarl
-
-import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
-from custom_components.ha_mcp_tools import (  # noqa: E402
-    oauth_dcr,
-    oauth_ha_auth,
-    oauth_legacy,
-)
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
-    DATA_WEBHOOK,
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
-    DOMAIN,
-    OAUTH_BASE,
-    WEBHOOK_AUTH_LEGACY,
-)
 
 CLAUDE_CLIENT_ID = "https://claude.ai/api/mcp/client_metadata"
 CLAUDE_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
@@ -186,11 +158,6 @@ def _parse_location(location: str) -> tuple[str, dict[str, str]]:
     return base, flat
 
 
-def _module_is(name: str, root: str) -> bool:
-    """Return whether a module name is ``root`` or one of its children."""
-    return name == root or name.startswith(f"{root}.")
-
-
 def _mode_cfg(
     mode: str,
     *,
@@ -233,35 +200,8 @@ def _mode_cfg(
 @pytest.fixture
 async def unified_view_client_factory():
     """Build real aiohttp clients around the two unified scoped OAuth views."""
-    # Ensure every component module the view imports lazily is first loaded
-    # against the shared stubs. The real aiohttp/yarl modules below are only for
-    # this HTTP-level harness and must not leak into the rest of the unit suite.
-    for module_name in (
-        "custom_components.ha_mcp_tools.mcp_webhook",
-        "custom_components.ha_mcp_tools.oauth_ha_auth",
-    ):
-        importlib.import_module(module_name)
-
-    package_roots = ("aiohttp", "yarl")
-    saved_modules = {
-        name: module
-        for name, module in tuple(sys.modules.items())
-        if any(_module_is(name, root) for root in package_roots)
-    }
-    for name in saved_modules:
-        sys.modules.pop(name, None)
-
     clients = []
-    stub_aiohttp = aa.aiohttp
-    stub_autoapprove_web = aa.web
-    stub_legacy_web = oauth_legacy.web
     try:
-        aiohttp = importlib.import_module("aiohttp")
-        aiohttp_web = importlib.import_module("aiohttp.web")
-        test_utils = importlib.import_module("aiohttp.test_utils")
-        aa.aiohttp = aiohttp
-        aa.web = aiohttp_web
-        oauth_legacy.web = aiohttp_web
 
         async def factory(
             *,
@@ -303,13 +243,6 @@ async def unified_view_client_factory():
     finally:
         for client in clients:
             await client.close()
-        aa.aiohttp = stub_aiohttp
-        aa.web = stub_autoapprove_web
-        oauth_legacy.web = stub_legacy_web
-        for name in tuple(sys.modules):
-            if any(_module_is(name, root) for root in package_roots):
-                sys.modules.pop(name, None)
-        sys.modules.update(saved_modules)
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +415,7 @@ class TestTokenView:
             )
         )
         assert resp.status == 200
-        body = resp.json_body
+        body = response_json(resp)
         assert body["token_type"] == "Bearer"
         assert body["access_token"]
         assert isinstance(body["expires_in"], int)
@@ -510,7 +443,7 @@ class TestTokenView:
             )
         )
         assert resp.status == 400
-        assert resp.json_body["error"] == "invalid_grant"
+        assert response_json(resp)["error"] == "invalid_grant"
 
     async def test_code_is_one_time_at_token_endpoint(self):
         provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
@@ -528,7 +461,7 @@ class TestTokenView:
         assert first.status == 200
         second = await view.post(_token_request(dict(form)))
         assert second.status == 400
-        assert second.json_body["error"] == "invalid_grant"
+        assert response_json(second)["error"] == "invalid_grant"
 
     async def test_missing_params_returns_invalid_request(self):
         provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
@@ -547,14 +480,14 @@ class TestTokenView:
             )
         )
         assert resp.status == 400
-        assert resp.json_body["error"] == "invalid_request"
+        assert response_json(resp)["error"] == "invalid_request"
 
     async def test_unsupported_grant_type_rejected(self):
         hass = _live_hass()
         view = aa.AutoApproveTokenView(hass)
         resp = await view.post(_token_request({"grant_type": "refresh_token"}))
         assert resp.status == 400
-        assert resp.json_body["error"] == "unsupported_grant_type"
+        assert response_json(resp)["error"] == "unsupported_grant_type"
 
 
 # ---------------------------------------------------------------------------
@@ -618,7 +551,7 @@ class TestFullFlow:
             )
         )
         assert token_resp.status == 200
-        assert token_resp.json_body["access_token"]
+        assert response_json(token_resp)["access_token"]
 
 
 class TestRfc9207MetadataAdvertisement:

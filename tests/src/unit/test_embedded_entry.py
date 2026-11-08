@@ -6,9 +6,7 @@ retired server update entity (the server now arrives with the component
 release, #2427), and the ``ha_mcp_tools/*`` WebSocket command surface the
 server entry registers up front (issue #2289).
 
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (imported first so
-the fakes are installed before the component module binds them). The lazily
-imported ``embedded_setup`` / ``ui_panel`` collaborators are replaced with
+The lazily imported ``embedded_setup`` / ``ui_panel`` collaborators are replaced with
 fakes so the entry-point wiring is exercised in isolation.
 """
 
@@ -22,13 +20,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.embedded_entry as eentry  # noqa: E402
-from custom_components.ha_mcp_tools import const  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_entry as eentry
+from custom_components.ha_mcp_tools import const
+from custom_components.ha_mcp_tools.const import (
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DOMAIN,

@@ -3,26 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-# The component imports Home Assistant at module import; unit tests run without it.
-sys.modules.setdefault("homeassistant", SimpleNamespace())
-for _module in (
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_module, MagicMock())
-
-from custom_components.ha_mcp_tools import yaml_find  # noqa: E402
+from custom_components.ha_mcp_tools import yaml_find
 
 yaml_find.YAML_CONFIG_FILE = "configuration.yaml"
 

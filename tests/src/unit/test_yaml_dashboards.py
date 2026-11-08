@@ -1,33 +1,15 @@
 """Unit tests for YAML-mode dashboard validators in ha_mcp_tools."""
 
 import asyncio
-import sys
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock as MM
 
 import pytest
 
-# Mock HA imports before importing the module
-sys.modules["voluptuous"] = MagicMock()
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.components"] = MagicMock()
-sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
-sys.modules["homeassistant.config"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function (production code decorates real closures with
-# it - a clobbered auto-mock attribute would silently replace them). This
-# file doesn't care what's already there, only that something importable is.
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
-sys.modules["homeassistant.helpers.storage"] = MagicMock()
-sys.modules["homeassistant.loader"] = MagicMock()
-
-from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD
+from custom_components.ha_mcp_tools.const import (
     DASHBOARD_URL_PATH_PATTERN,
     DOMAIN,
     RESERVED_DASHBOARD_URL_PATHS,

@@ -1,11 +1,13 @@
 """Collection hooks of the E2E suite: backend marker skips and the doomed-run hook."""
 
+import inspect
 import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pytest_asyncio import is_async_test
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
@@ -22,6 +24,37 @@ from ._conftest_embedded import (
     _is_no_tools_entry_selected,
 )
 from .utilities.topology import component_surface_available
+
+_SESSION_LOOP = pytest.mark.asyncio(loop_scope="session")
+
+
+def _run_async_tests_on_session_loop(items: list[Any]) -> None:
+    """Run every E2E async test on the session loop its fixtures share.
+
+    The project default is a loop per test (Core's unit-test plugin needs it);
+    the session-scoped servers and clients here live on one loop for the run.
+    ``pytest_fixture_setup`` below puts the async fixtures on the same loop.
+    """
+    for item in items:
+        if is_async_test(item):
+            item.add_marker(_SESSION_LOOP, append=False)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_fixture_setup(fixturedef: Any, request: Any) -> Any:
+    """Run every E2E async fixture on the session loop, like the tests.
+
+    pytest-asyncio reads a fixture's loop from the ``_loop_scope`` attribute
+    its ``fixture(loop_scope=...)`` decorator sets, before falling back to the
+    project default, so plain ``@pytest.fixture`` async fixtures here get the
+    session loop without each one naming it.
+    """
+    func = fixturedef.func
+    if (
+        inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)
+    ) and getattr(func, "_loop_scope", None) is None:
+        func._loop_scope = "session"
+    return (yield)
 
 
 def _move_haos_tls_items_last(items: list[Any]) -> None:
@@ -157,6 +190,7 @@ def pytest_collection_modifyitems(config, items):
       inaddon); the server-entry-only lanes still run it.
     """
     del config
+    _run_async_tests_on_session_loop(items)
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
     haos_stdio = haos and is_haos_stdio_mode()

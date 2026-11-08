@@ -9,8 +9,7 @@ mid-``__anext__`` (``RuntimeError: aclose(): asynchronous generator is
 already running``) and ``loop.close()`` destroyed the survivors ("Task was
 destroyed but it is pending!"), one error pair per entry reload.
 
-Home Assistant and aiohttp are stubbed via ``_embedded_stubs``; the
-``shutdown_server_resources`` tests use the real ``ha_mcp`` package (which
+The ``shutdown_server_resources`` tests use the real ``ha_mcp`` package (which
 imports neither), monkeypatched at its own module seams.
 """
 
@@ -22,12 +21,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
 
-from ._embedded_stubs import install
-
-# Install stubs before importing the component module (isort barrier).
-install()
-
-import custom_components.ha_mcp_tools.embedded_worker_teardown as wt  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_worker_teardown as wt
 
 
 def _park_reader_and_watcher(

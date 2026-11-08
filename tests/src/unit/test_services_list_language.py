@@ -15,17 +15,13 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+import voluptuous as vol
 
-# Import through the sibling module: importing it installs the
-# ``homeassistant.*`` MagicMock stubs and forces the REAL voluptuous into
-# ``sys.modules`` first, so the component package (which imports homeassistant)
-# is never hoisted above the stub install.
-from .test_component_ws_search import _REAL_VOL, FakeHass, wsapi
+from .test_component_ws_search import FakeHass, wsapi
 
 
 def _validated(monkeypatch: pytest.MonkeyPatch, msg: dict) -> dict:
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-    return _REAL_VOL.Schema(wsapi._services_list_schema())(msg)
+    return vol.Schema(wsapi._services_list_schema())(msg)
 
 
 def test_schema_leaves_an_omitted_language_unset(

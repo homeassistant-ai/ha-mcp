@@ -1419,7 +1419,7 @@ def stage_screenshot_engine_source(qcow2: Path) -> None:
     Supervisor's local store (slug ``local_puppet``). The source is the in-repo
     ``screenshot_engine_mock/`` directory, copied verbatim: its config.yaml has
     no ``image:`` field (so Supervisor builds from the local Dockerfile) and the
-    Dockerfile (``python:3.13-slim`` + a stdlib server) needs no patch or
+    Dockerfile (``python:3.14-slim`` + a stdlib server) needs no patch or
     ``image:`` strip. ``install_screenshot_engine`` builds it during the running
     phase — a fast, reliable build (unlike balloob's Chromium image, which broke
     the bake under floating Supervisor versions).
@@ -1638,7 +1638,7 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     )
     # 900s matches the dev-addon timeout. Webhook-proxy build is much
     # cheaper (no uv sync, stdlib-only start.py) but keep the headroom in
-    # case the python:3.13-slim base layer pull is slow on first install.
+    # case the python:3.14-slim base layer pull is slow on first install.
     _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pin mcp_server_url to the dev addon's host-network URL so the
@@ -1678,7 +1678,7 @@ def install_screenshot_engine(ws: HAWebSocket) -> str:
     The add-on source is staged into /supervisor/addons/local/puppet/ before
     first boot (``stage_screenshot_engine_source``), so Supervisor's local-store
     scanner picks it up as ``local_puppet``. We reload the store to be explicit,
-    then install — which builds the mock's small python:3.13-slim image into the
+    then install — which builds the mock's small python:3.14-slim image into the
     cached qcow2. No balloob repo or submodule is involved; the in-repo
     ``screenshot_engine_mock/`` dir is the only source.
 
@@ -1696,7 +1696,7 @@ def install_screenshot_engine(ws: HAWebSocket) -> str:
     slug = SCREENSHOT_ENGINE_SLUG
     LOG.info(
         "Installing mock screenshot engine (slug=%s) — building its small "
-        "python:3.13-slim image into the qcow2...",
+        "python:3.14-slim image into the qcow2...",
         slug,
     )
     _install_addon_with_retry(ws, slug, timeout=300.0)
@@ -2607,7 +2607,7 @@ def build(work_dir: Path, output: Path) -> None:
     stage_webhook_proxy_addon_source(qcow2)
     # The screenshot engine is a tiny in-repo MOCK (screenshot_engine_mock/)
     # staged as a local add-on; install_screenshot_engine builds it (a fast
-    # python:3.13-slim image) into the cached qcow2 during the running phase
+    # python:3.14-slim image) into the cached qcow2 during the running phase
     # below. See SCREENSHOT_ENGINE_MOCK_DIR for why the mock replaced balloob's
     # heavy Chromium Puppet add-on.
     stage_screenshot_engine_source(qcow2)

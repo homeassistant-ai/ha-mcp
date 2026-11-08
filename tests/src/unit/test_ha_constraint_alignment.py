@@ -10,6 +10,7 @@ version the e2e lanes test.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -27,7 +28,7 @@ _CONSTRAINTS_SAMPLE = """
 websockets>=15.0.1
 httpx==0.28.1
 PyJWT==2.12.1
-grpcio==1.72.1;python_version<'3.14'
+grpcio==1.72.1;python_version>='3.11'
 not a requirement line
 """
 
@@ -118,6 +119,133 @@ class TestRepoPyprojectIsAligned:
             dependencies, checker.parse_requirement_lines(frozen_2026_9_0)
         )
         assert violations == []
+
+
+_LOCK_SAMPLE = """
+version = 1
+
+[[package]]
+name = "ha-mcp"
+version = "1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "pydantic", extra = ["email"] },
+    { name = "httpx" },
+]
+
+[package.dev-dependencies]
+dev = [{ name = "openai" }]
+
+[[package]]
+name = "pydantic"
+version = "2.13.5"
+dependencies = [{ name = "pydantic-core" }]
+
+[package.optional-dependencies]
+email = [{ name = "email-validator" }]
+
+[[package]]
+name = "pydantic-core"
+version = "2.46.5"
+
+[[package]]
+name = "email-validator"
+version = "2.3.0"
+
+[[package]]
+name = "httpx"
+version = "0.28.1"
+dependencies = [{ name = "httpx" }]
+
+[[package]]
+name = "openai"
+version = "3.37.0"
+"""
+
+
+class TestLockAlignment:
+    def test_closure_follows_extras_and_leaves_out_dev_tools(self):
+        locked = checker.locked_runtime_versions(_LOCK_SAMPLE)
+        assert locked == {
+            "pydantic": "2.13.5",
+            "pydantic-core": "2.46.5",
+            "email-validator": "2.3.0",
+            "httpx": "0.28.1",
+        }
+
+    def test_runtime_package_off_ha_pin_names_the_sync_command(self):
+        violations = checker.check_lock_alignment(
+            checker.locked_runtime_versions(_LOCK_SAMPLE),
+            checker.parse_requirement_lines("pydantic==2.14.1\nhttpx==0.28.1\n"),
+        )
+        assert len(violations) == 1
+        assert "pydantic==2.14.1" in violations[0]
+        assert "--sync-lock" in violations[0]
+
+    def test_dev_tool_off_ha_pin_is_not_a_violation(self):
+        violations = checker.check_lock_alignment(
+            checker.locked_runtime_versions(_LOCK_SAMPLE),
+            checker.parse_requirement_lines("openai==3.26.0\n"),
+        )
+        assert violations == []
+
+    def test_loose_ha_constraint_does_not_bind_the_lock(self):
+        violations = checker.check_lock_alignment(
+            checker.locked_runtime_versions(_LOCK_SAMPLE),
+            checker.parse_requirement_lines("pydantic>=2\n"),
+        )
+        assert violations == []
+
+    def test_main_fails_on_lock_drift_only_when_lock_is_given(self, tmp_path):
+        lock = tmp_path / "uv.lock"
+        lock.write_text(_LOCK_SAMPLE, encoding="utf-8")
+        constraints = tmp_path / "cons.txt"
+        constraints.write_text("pydantic-core==2.50.1\n", encoding="utf-8")
+        assert checker.main(["--constraints-file", str(constraints)]) == 0
+        assert (
+            checker.main(["--constraints-file", str(constraints), "--lock", str(lock)])
+            == 1
+        )
+
+
+class TestSyncLock:
+    def test_relocks_each_runtime_package_onto_ha_pin(self, tmp_path, monkeypatch):
+        lock = tmp_path / "uv.lock"
+        lock.write_text(_LOCK_SAMPLE, encoding="utf-8")
+        commands: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            lock.write_text(
+                _LOCK_SAMPLE.replace('version = "2.13.5"', 'version = "2.14.1"'),
+                encoding="utf-8",
+            )
+
+        monkeypatch.setattr(checker.subprocess, "run", fake_run)
+        constraints = checker.parse_requirement_lines(
+            "pydantic==2.14.1\nopenai==3.26.0\nhttpx==0.28.1\n"
+        )
+        assert checker.sync_lock(lock, constraints) == 0
+        assert commands == [["uv", "lock", "--upgrade-package", "pydantic==2.14.1"]]
+
+    def test_reports_a_pin_the_relock_could_not_reach(self, tmp_path, monkeypatch):
+        lock = tmp_path / "uv.lock"
+        lock.write_text(_LOCK_SAMPLE, encoding="utf-8")
+        monkeypatch.setattr(checker.subprocess, "run", lambda *a, **k: None)
+        constraints = checker.parse_requirement_lines("pydantic==2.14.1\n")
+        assert checker.sync_lock(lock, constraints) == 1
+
+    def test_dev_group_core_pins_follow_the_e2e_image(self):
+        """Renovate moves all three together; uv.lock is checked against this Core."""
+        image = re.search(
+            r'^_DEFAULT_HA_TEST_IMAGE = "ghcr\.io/home-assistant/home-assistant:(.+)"$',
+            (_REPO_ROOT / "tests" / "test_constants.py").read_text(encoding="utf-8"),
+            re.M,
+        )
+        assert image is not None
+        pyproject = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert checker.dev_group_core_version(pyproject) == image.group(1)
+        assert f'"pytest-homeassistant=={image.group(1)}"' in pyproject
 
 
 class TestMarkerAndOperatorHandling:

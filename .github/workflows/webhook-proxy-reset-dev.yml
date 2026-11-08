@@ -19,11 +19,16 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install ha-mcp, ruff + pytest
-        # The unit conftest imports ha_mcp (its helper-flow fixtures).
-        run: pip install -e . ruff pytest pytest-asyncio pytest-timeout
+        # The unit conftest imports ha_mcp and loads Core's test plugin, so
+        # install the dev group's pinned pytest-homeassistant (it brings pytest
+        # and Core).
+        run: |
+          set -euo pipefail
+          pin=$(python3 -c 'import tomllib; print(next(d for d in tomllib.load(open("pyproject.toml", "rb"))["dependency-groups"]["dev"] if isinstance(d, str) and d.startswith("pytest-homeassistant==")))')
+          pip install -e . ruff pytest-timeout "$pin"
 
       - name: Run the reset transform in place
         id: reset

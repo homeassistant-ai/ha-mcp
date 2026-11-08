@@ -8,12 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import entry_device  # noqa: E402
-from custom_components.ha_mcp_tools.const import COMPONENT_VERSION  # noqa: E402
+from custom_components.ha_mcp_tools import entry_device
+from custom_components.ha_mcp_tools.const import COMPONENT_VERSION
 
 
 @pytest.fixture

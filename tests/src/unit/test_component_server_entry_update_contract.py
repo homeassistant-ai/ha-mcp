@@ -22,8 +22,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+import voluptuous as vol
+from homeassistant.exceptions import HomeAssistantError
 
-from . import test_component_ws_search as _base
 from .test_component_ws_search import (
     FakeConfigEntry,
     FakeHass,
@@ -32,8 +33,6 @@ from .test_component_ws_search import (
     _Unauthorized,
     wsapi,
 )
-
-_REAL_VOL = _base._REAL_VOL
 
 
 class _RecordingConfigEntries:
@@ -184,12 +183,6 @@ async def test_prep_no_server_entry_raises() -> None:
         domain="ha_mcp_tools", data={"entry_type": "tools"}, entry_id="tools1"
     )
     hass = _BgHass([tools])
-    # Resolve HomeAssistantError at call time from whatever ``homeassistant.exceptions``
-    # is installed now — the prep's function-local import resolves the same stub, but a
-    # different test's ``_embedded_stubs.install()`` may have replaced the module since
-    # ``_base`` cached ``_StubHomeAssistantError`` (full-suite ordering).
-    from homeassistant.exceptions import HomeAssistantError
-
     with pytest.raises(HomeAssistantError):
         await wsapi._server_entry_update_prep(
             hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
@@ -201,7 +194,6 @@ async def test_prep_no_server_entry_raises() -> None:
 async def test_prep_requires_pip_spec() -> None:
     """A frame without pip_spec raises (defence-in-depth over the server)."""
     hass = _BgHass([_server_entry(options={"channel": "stable"})])
-    from homeassistant.exceptions import HomeAssistantError
 
     with pytest.raises(HomeAssistantError):
         await wsapi._server_entry_update_prep(
@@ -216,7 +208,6 @@ async def test_prep_refuses_a_channel_only_frame_with_the_hacs_hint() -> None:
     ``update_source(channel=...)``. Each component release now pins its server,
     so the frame is refused with where development builds come from instead."""
     hass = _BgHass([_server_entry(options={"channel": "stable"})])
-    from homeassistant.exceptions import HomeAssistantError
 
     with pytest.raises(HomeAssistantError, match="Pre-release"):
         await wsapi._server_entry_update_prep(
@@ -344,7 +335,6 @@ class TestServerEntryUpdateAdminGate:
     def _handler(self, monkeypatch: Any) -> Any:
         fake = _FakeWSApi()
         monkeypatch.setattr(wsapi, "websocket_api", fake)
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
         wsapi.async_register_commands(FakeHass())
         return fake.registered[wsapi.WS_SERVER_ENTRY_UPDATE]
 
@@ -366,8 +356,7 @@ class TestServerEntryUpdateAdminGate:
 # =============================================================================
 class TestServerEntryUpdateSchema:
     def test_accepts_channel_and_pip_spec(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
+        schema = vol.Schema(wsapi._server_entry_update_schema())
         out = schema(
             {
                 "type": wsapi.WS_SERVER_ENTRY_UPDATE,
@@ -379,17 +368,15 @@ class TestServerEntryUpdateSchema:
         assert out["pip_spec"] == "ha-mcp==1.0.0"
 
     def test_accepts_stable_channel(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
+        schema = vol.Schema(wsapi._server_entry_update_schema())
         out = schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "stable"})
         assert out["channel"] == "stable"
 
     def test_rejects_bogus_channel(self, monkeypatch: Any) -> None:
         # channel is gated to the known set (defence-in-depth over the server's own
         # validation) — a bogus channel is rejected by the schema itself.
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
+        schema = vol.Schema(wsapi._server_entry_update_schema())
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "nightly"})
 
     def test_type_only_validates_prep_enforces_at_least_one(
@@ -397,21 +384,18 @@ class TestServerEntryUpdateSchema:
     ) -> None:
         # The schema alone permits neither field (voluptuous cannot express
         # "at least one of"); the prep is what rejects an empty delta.
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
+        schema = vol.Schema(wsapi._server_entry_update_schema())
         out = schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE})
         assert out == {"type": wsapi.WS_SERVER_ENTRY_UPDATE}
 
     def test_rejects_multiline_pip_spec(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
+        schema = vol.Schema(wsapi._server_entry_update_schema())
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "a\nb"})
 
     def test_rejects_overlong_pip_spec(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
+        schema = vol.Schema(wsapi._server_entry_update_schema())
+        with pytest.raises(vol.Invalid):
             schema(
                 {
                     "type": wsapi.WS_SERVER_ENTRY_UPDATE,
@@ -420,7 +404,6 @@ class TestServerEntryUpdateSchema:
             )
 
     def test_rejects_extra_keys(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
+        schema = vol.Schema(wsapi._server_entry_update_schema())
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "bogus": "x"})

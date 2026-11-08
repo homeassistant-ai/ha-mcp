@@ -110,6 +110,24 @@ component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
 
+## Unit Tests Run on Real Home Assistant Core
+
+`tests/src/unit/` and `tests/addon/` import Core from the dev group
+(`homeassistant`, pinned with `pytest-homeassistant` to the e2e image's Core)
+and run under Core's own test plugin, which their `conftest.py` loads; its
+entry point is blocked in `pyproject.toml`, so E2E sessions never load it.
+Import Core's real modules: never put `sys.modules` stand-ins in place of
+`homeassistant.*`, `aiohttp` or `voluptuous`. A test that needs a running Core
+uses the plugin's `hass` fixture and `MockConfigEntry`. The plugin enforces,
+for every test:
+
+- a fresh event loop (the E2E tree keeps one session loop, see
+  `src/e2e/_conftest_collection.py`);
+- no sockets: a test that runs its own loopback listener requests
+  `socket_enabled`, and only `127.0.0.1` accepts connections;
+- no thread, task or timer left behind (`_no_threads_left_by_the_test` in
+  `src/unit/conftest.py` stops the per-process ones).
+
 ## Test Design Rules
 
 Every test under `tests/` follows these. Reviewers check new and changed

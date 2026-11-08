@@ -1,9 +1,7 @@
 """Unit tests for the ha_mcp_tools in-process WebSocket command surface.
 
-Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
-``test_custom_component_filesystem.py``): the ``homeassistant.*`` imports are
-stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
-fake hass / registry objects injected through the ``_resolve_registries`` seam.
+The pure ``_do_*`` functions are exercised with fake hass / registry objects
+injected through the ``_resolve_registries`` seam, against Core's real modules.
 
 Covers the v1.2.1 command surface (info / search / overview / helpers_list /
 states / blueprint_get / device_get / device_list / entity_enrich / exposure;
@@ -30,16 +28,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
+import voluptuous as vol
+from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.ha_mcp_tools.websocket_api import (
+    config_entries as _ws_config_entries,
+)
+
+# Server-side scoring path the component must stay in parity with.
+from ha_mcp.tools.search.entities import _match_exact_search_entity
+from ha_mcp.utils.fuzzy_search import calculate_ratio
+
+from ._component_ws_api import COMPONENT_VERSION, wsapi
 from ._component_ws_fakes import (
     FakeFragment,
     FakeRegEntry,
@@ -49,52 +56,6 @@ from ._component_ws_fakes import (
     _Unauthorized,
     fake_json_bytes,
 )
-
-# Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
-# a MagicMock at import time); the schema/registration tests need a real one.
-sys.modules.pop("voluptuous", None)
-import voluptuous as _REAL_VOL  # noqa: E402
-
-# Stub the HA modules the component imports. The pure search functions never
-# touch them (registries arrive via the monkeypatched _resolve_registries seam).
-for _mod in (
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_mod, MagicMock())
-
-
-class _StubHomeAssistantError(Exception):
-    """Stand-in for core's ``HomeAssistantError``.
-
-    ``websocket_api.system`` imports ``homeassistant.exceptions.HomeAssistantError``
-    function-locally when a read fails; the module is MagicMock-stubbed like the
-    rest of ``homeassistant.*``, so pin a real exception class as its
-    ``HomeAssistantError`` attribute so the raise path is exercisable.
-    """
-
-
-_exceptions_stub = MagicMock()
-_exceptions_stub.HomeAssistantError = _StubHomeAssistantError
-sys.modules.setdefault("homeassistant.exceptions", _exceptions_stub)
-
-from custom_components.ha_mcp_tools.websocket_api import (  # noqa: E402
-    config_entries as _ws_config_entries,
-)
-
-# Server-side scoring path the component must stay in parity with.
-from ha_mcp.tools.search.entities import _match_exact_search_entity  # noqa: E402
-from ha_mcp.utils.fuzzy_search import calculate_ratio  # noqa: E402
-
-from ._component_ws_api import COMPONENT_VERSION, wsapi  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -1871,7 +1832,6 @@ class TestMatchTypeTaxonomy:
 def functional_ws(monkeypatch):
     fake = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", fake)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     monkeypatch.setattr(
         wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
     )
@@ -1985,15 +1945,12 @@ class TestRegistrationAndAdminGate:
         if command == wsapi.WS_ENTITY_LOOKUP:
             # Deterministic stub binding for the function-local import (same
             # full-suite ordering guard as the other raises-tests).
-            monkeypatch.setitem(
-                sys.modules, "homeassistant.exceptions", _exceptions_stub
-            )
             # A bare FakeHass resolves no entity registry, and entity_lookup's
             # whole answer IS that substrate — the drift guard correctly raises
             # (→ command error → the server's legacy fallback). The admin gate
             # provably admitted the call because the raise comes from the pure
             # handler; result-shape coverage lives in TestEntityLookup.
-            with pytest.raises(_StubHomeAssistantError):
+            with pytest.raises(HomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
         hass = FakeHass()
@@ -2009,8 +1966,7 @@ class TestRegistrationAndAdminGate:
 
 class TestSchemaValidation:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._search_schema())
+        return vol.Schema(wsapi._search_schema())
 
     def test_valid_params_apply_defaults(self, monkeypatch):
         """Apply stable defaults to valid search parameters."""
@@ -2033,7 +1989,7 @@ class TestSchemaValidation:
             }
         )
         assert out["result_fields"] == ["is_group", "member_entity_ids"]
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(
                 {
                     "type": wsapi.WS_SEARCH,
@@ -2052,7 +2008,7 @@ class TestSchemaValidation:
     )
     def test_malformed_params_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
 
@@ -2060,8 +2016,7 @@ class TestNewCommandSchemas:
     """Voluptuous validation for overview / helpers_list."""
 
     def _schema(self, monkeypatch, schema_fn):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(schema_fn())
+        return vol.Schema(schema_fn())
 
     def test_overview_defaults(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._overview_schema)
@@ -2071,7 +2026,7 @@ class TestNewCommandSchemas:
 
     def test_overview_malformed_rejected(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._overview_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_OVERVIEW, "include_notifications": "yes"})
 
     def test_helpers_list_defaults(self, monkeypatch):
@@ -2088,7 +2043,7 @@ class TestNewCommandSchemas:
     )
     def test_helpers_list_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._helpers_list_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_states_requires_entity_ids_list(self, monkeypatch):
@@ -2106,7 +2061,7 @@ class TestNewCommandSchemas:
     )
     def test_states_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._states_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_blueprint_get_valid(self, monkeypatch):
@@ -2132,7 +2087,7 @@ class TestNewCommandSchemas:
     )
     def test_blueprint_get_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_device_get_requires_device_id(self, monkeypatch):
@@ -2151,7 +2106,7 @@ class TestNewCommandSchemas:
 
     def test_device_get_include_entities_must_be_bool(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._device_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(
                 {
                     "type": wsapi.WS_DEVICE_GET,
@@ -2169,7 +2124,7 @@ class TestNewCommandSchemas:
     )
     def test_device_get_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._device_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_device_list_valid(self, monkeypatch):
@@ -2179,7 +2134,7 @@ class TestNewCommandSchemas:
 
     def test_device_list_rejects_extra_keys(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._device_list_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_DEVICE_LIST, "area_id": "x"})
 
     # --- config_entries ---------------------------------------------------------
@@ -2205,7 +2160,7 @@ class TestNewCommandSchemas:
     )
     def test_config_entries_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._config_entries_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     # --- registry_lookup --------------------------------------------------------
@@ -2239,7 +2194,7 @@ class TestNewCommandSchemas:
     )
     def test_registry_lookup_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._registry_lookup_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     # --- system_snapshot --------------------------------------------------------
@@ -2253,7 +2208,7 @@ class TestNewCommandSchemas:
 
     def test_system_snapshot_malformed_rejected(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._system_snapshot_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_SYSTEM_SNAPSHOT, "include_states": "yes"})
 
     # --- entity_lookup ----------------------------------------------------------
@@ -2275,7 +2230,7 @@ class TestNewCommandSchemas:
     )
     def test_entity_lookup_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._entity_lookup_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     # --- registries -------------------------------------------------------------
@@ -2306,7 +2261,7 @@ class TestNewCommandSchemas:
     )
     def test_registries_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._registries_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
 
@@ -3661,18 +3616,16 @@ class TestRegistryLookup:
         # "no matches" (issue #1813 M2 tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
         # Pin the stub so the function-local ``from homeassistant.exceptions
-        # import HomeAssistantError`` binds _StubHomeAssistantError even when an
+        # import HomeAssistantError`` binds HomeAssistantError even when an
         # earlier-collected module already replaced sys.modules["homeassistant.
         # exceptions"] with its own plain MagicMock.
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registry_lookup(FakeHass(), {})
 
     def test_empty_entity_ids_list_raises(self, monkeypatch):
         # An explicit empty list is likewise "no target", not "zero results".
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registry_lookup(FakeHass(), {"entity_ids": []})
 
 
@@ -3836,8 +3789,7 @@ class TestEntityLookup:
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: wsapi._RegistryView()
         )
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_entity_lookup(FakeHass(), {"unique_id": "x"})
 
 
@@ -4018,16 +3970,14 @@ class TestRegistries:
         # tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(wsapi, "_category_registry", lambda h: FakeCategoryReg({}))
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(FakeHass(), {"registries": ["category"]})
 
     def test_category_requested_with_empty_scopes_list_raises(self, monkeypatch):
         # An explicit empty category_scopes list is likewise rejected.
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(wsapi, "_category_registry", lambda h: FakeCategoryReg({}))
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(
                 FakeHass(), {"registries": ["category"], "category_scopes": []}
             )
@@ -4051,8 +4001,7 @@ class TestRegistries:
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: wsapi._RegistryView()
         )
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(FakeHass(), {"registries": ["area"]})
 
     def test_drifted_category_registry_raises(self, monkeypatch):
@@ -4060,8 +4009,7 @@ class TestRegistries:
         # scoped category request must RAISE, not serve {scope: []} per scope.
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(wsapi, "_category_registry", lambda h: None)
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(
                 FakeHass(),
                 {"registries": ["category"], "category_scopes": ["automation"]},

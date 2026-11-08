@@ -108,6 +108,7 @@ jobs:
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
           RENOVATE_REPOSITORIES: ${{ github.repository }}
-          # Only these isolated generators may run; they cannot invoke a shell.
-          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$"]'
+          # Only these isolated generators and the lock refresh may run; they cannot
+          # invoke a shell.
+          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$", "^uv lock$", "^uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment\\.py --sync-lock$"]'
           RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS: "false"

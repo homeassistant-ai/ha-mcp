@@ -183,7 +183,7 @@ def _bind_host_selector() -> SelectSelector:
     )
 
 
-class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
+class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the config flow for the HA-MCP custom component (both entry types)."""
 
     VERSION = 1

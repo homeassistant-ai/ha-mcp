@@ -9,7 +9,8 @@ description = "Configure and automate Home Assistant with Claude, ChatGPT, and o
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
 # interpreter when run in-process by the ha_mcp_tools component (HA
-# core-2026.7 ships Python 3.14). src/ stays 3.13-compatible.
+# core-2026.7 ships Python 3.14). src/ stays 3.13-compatible: ruff targets the
+# floor, while CI, the images and the dev environment run 3.14.
 requires-python = ">=3.13,<3.15"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -154,6 +155,13 @@ follow_imports = "skip"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
+# Core 2026.11 installs probatio as ``voluptuous`` at import; the component and
+# the webhook proxy run on both, so voluptuous schemas stay untyped rather than
+# typed as either.
+module = ["voluptuous", "voluptuous.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
 module = [
     "annotatedyaml.*",
     "homeassistant.*",
@@ -276,6 +284,17 @@ addopts = [
     "--maxfail=3",
     "-ra",
     "--durations=10",
+    # Core's test plugin (pytest-homeassistant, dev group) blocks sockets,
+    # fails tests that leave threads or tasks behind, and needs a fresh event
+    # loop per test. The unit and app (add-on) trees load it from their
+    # conftest; E2E sessions, which share one loop and reach real containers,
+    # must not get it from the installed entry point.
+    "-p",
+    "no:pytest_homeassistant",
+    # respx's entry point imports httpx before Home Assistant can alias it to
+    # httpx2, which Core refuses at import. Core's plugin imports respx itself.
+    "-p",
+    "no:respx",
 ]
 
 # Test markers
@@ -332,13 +351,13 @@ markers = [
     "requires_component_surface: needs an active ha_mcp_tools config entry - skipped on the no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled); #2584",
 ]
 
-# Async support - session-scoped loop lets session-scoped fixtures
-# (mcp_server, mcp_client, ha_client) share one event loop with tests.
-# Without this, each test gets a new loop and session-scoped httpx
-# clients fail with "Event loop is closed".
+# A fresh event loop per test, as Core's test plugin requires. The E2E tree
+# runs its tests and fixtures on one session loop instead (session-scoped
+# mcp_server, mcp_client and ha_client share it); see
+# tests/src/e2e/_conftest_collection.py.
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "session"
-asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
 
 # Per-test timeout (pytest-timeout). A stuck server-side await otherwise
 # stalls the run silently until the JOB timeout - observed as a 22-minute
@@ -378,13 +397,15 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-    # Real aiohttp so tests can pin the ClientTimeout defaults the custom
-    # component's relay and the webhook-proxy addon rely on (both are stubbed
-    # in unit tests; nothing else would catch stub drift). NOT a runtime
-    # dependency — src/ never imports aiohttp; HA core provides it in-process.
-    # Floor = the aiohttp HA core 2026.6 pins (2026.7 pins 3.14.1, 2026.8.dev
-    # pins 3.14.3), so the version tested here is one a supported HA runs.
-    "aiohttp>=3.13.5",
+    # Real Home Assistant Core and Core's own test package: unit tests run
+    # against Core's modules and its `hass` fixture instead of hand-written
+    # fakes, and uv.lock resolves Core's exact pins for the packages ha-mcp
+    # shares with the embedded install. Both stay on the Core version of the
+    # e2e image (tests/test_constants.py); Renovate bumps all three together.
+    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+    "homeassistant==2026.11.0",
+    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+    "pytest-homeassistant==2026.11.0",
     # Test infrastructure imports the SHARED websockets directly (the HAOS
     # runtime harness, the image bake, wait_helpers) to talk to Home
     # Assistant's own WebSocket API — that is test tooling driving HA, not
@@ -403,20 +424,12 @@ dev = [
     # Exercise the component's real sandbox thread affinity in focused unit tests.
     "quickjs-ng==0.17.0.2",
     "pytest-rerunfailures>=15.0",
-    # Real voluptuous for the config-flow tests (the component's
-    # config_flow imports it; HA provides it at runtime, tests need it here).
-    "voluptuous>=0.15.2",
     # Real voluptuous-openapi for the embedded e2e LLM-API test: it converts
     # the REAL tool-schema catalog exactly like llm_api.py does at runtime.
     # HA core shipped it through 2026.8; from 2026.9 the component manifest
-    # is what installs it. Unit tests stub it.
+    # is what installs it. aiohttp, voluptuous and probatio (what core 2026.9
+    # converts with) come with homeassistant above.
     "voluptuous-openapi>=0.4.1",
-    # What core 2026.9 switched to, and converts with when the manifest
-    # requirement above is missing. Needed to assert the round trip an
-    # LLM-API tool schema actually makes there (#2361): voluptuous-openapi
-    # alone cannot show the defect, since it spells an exclusive bound in the
-    # numeric form Anthropic accepts.
-    "probatio>=0.11.4",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
     "lefthook>=1.10.0",
@@ -431,6 +444,11 @@ dev = [
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
 ]
+
+[tool.uv]
+# The dev group's homeassistant requires Python >=3.14.2; the published
+# package keeps >=3.13, so only the lock is narrowed.
+environments = ["python_full_version >= '3.14.2'"]
 
 [tool.uv.sources]
 hamcp-test-env = { path = "tests/test-env", editable = true }

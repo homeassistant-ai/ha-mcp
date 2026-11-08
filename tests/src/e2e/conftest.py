@@ -55,6 +55,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 
 from ._conftest_collection import (
     pytest_collection_modifyitems,  # noqa: F401  (pytest hook)
+    pytest_fixture_setup,  # noqa: F401  (pytest hook)
     pytest_runtest_logreport,  # noqa: F401  (pytest hook)
 )
 from ._conftest_embedded import _is_embedded_backend_selected

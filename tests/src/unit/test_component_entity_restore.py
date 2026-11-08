@@ -17,13 +17,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import voluptuous as vol
 
-# The sibling module installs the homeassistant.* stubs the component needs, so
-# the component modules are imported only after it.
 from ha_mcp import backup_entities
 
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _Unauthorized,
@@ -417,7 +415,7 @@ def test_each_command_runs_its_own_handler(parents: Any) -> None:
     wired = SimpleNamespace(**vars(ER), async_get=lambda hass: registry)
     handlers = {
         schema["type"]: do_fn
-        for schema, do_fn, _prep in er_mod.command_specs(_REAL_VOL, wired)
+        for schema, do_fn, _prep in er_mod.command_specs(vol, wired)
     }
     read = handlers[er_mod.WS_ENTITY_ENTRY]
     write = handlers[er_mod.WS_ENTITY_RESTORE]
@@ -463,7 +461,7 @@ def test_the_servers_message_passes_the_command_schema(monkeypatch) -> None:
             None, "light.desk", "reg-desk", "light.lamp", current, SNAPSHOT
         )
     )
-    schema = _REAL_VOL.Schema(er_mod.command_specs(_REAL_VOL, ER)[1][0])
+    schema = vol.Schema(er_mod.command_specs(vol, ER)[1][0])
 
     [message] = sent
     assert schema(message) == message
@@ -475,5 +473,5 @@ def test_the_servers_message_passes_the_command_schema(monkeypatch) -> None:
         {**message, "settings": {**message["settings"], "labels": [1]}},
         {key: value for key, value in message.items() if key != "settings"},
     ):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(broken)

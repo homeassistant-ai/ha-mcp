@@ -2,27 +2,29 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
+import json
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from aiohttp import test_utils
+from aiohttp import web as aiohttp_web
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import oauth_dcr  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_dcr
+from custom_components.ha_mcp_tools.const import (
     DATA_WEBHOOK,
     DOMAIN,
 )
-from custom_components.ha_mcp_tools.oauth_dcr import (  # noqa: E402
+from custom_components.ha_mcp_tools.oauth_dcr import (
     CFG_DCR_SIGNING_KEY,
     DcrRegisterView,
     client_redirect_uris,
     mint_client_id,
 )
+
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 KEY = b"k" * 32
 OTHER_KEY = b"x" * 32
@@ -60,35 +62,11 @@ def test_non_dcr_client_id_rejects():
     assert client_redirect_uris(KEY, "hamcp-dcr-notablob") is None
 
 
-def _module_is(name: str, root: str) -> bool:
-    """Return whether a module name is ``root`` or one of its children."""
-    return name == root or name.startswith(f"{root}.")
-
-
 @pytest.fixture
 async def dcr_view_client_factory():
-    """Build real aiohttp clients around a fake HA view registration.
-
-    The shared embedded-component stubs replace ``aiohttp`` in ``sys.modules``.
-    Load the real package only for this fixture, then restore the exact module
-    table so this HTTP-level harness and the stub-driven component tests can
-    coexist in the full unit suite.
-    """
-    package_roots = ("aiohttp", "yarl")
-    saved_modules = {
-        name: module
-        for name, module in tuple(sys.modules.items())
-        if any(_module_is(name, root) for root in package_roots)
-    }
-    for name in saved_modules:
-        sys.modules.pop(name, None)
-
+    """Build real aiohttp clients around a fake HA view registration."""
     clients = []
-    stub_web = oauth_dcr.web
     try:
-        aiohttp_web = importlib.import_module("aiohttp.web")
-        test_utils = importlib.import_module("aiohttp.test_utils")
-        oauth_dcr.web = aiohttp_web
 
         async def factory(
             *,
@@ -125,11 +103,6 @@ async def dcr_view_client_factory():
     finally:
         for client in clients:
             await client.close()
-        oauth_dcr.web = stub_web
-        for name in tuple(sys.modules):
-            if any(_module_is(name, root) for root in package_roots):
-                sys.modules.pop(name, None)
-        sys.modules.update(saved_modules)
 
 
 async def test_register_404s_when_no_dcr_key_live(dcr_view_client_factory):
@@ -177,12 +150,21 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
         assert resp.status == 400, bad
 
 
-async def test_register_rejects_deeply_nested_json_body(dcr_view_client_factory):
+async def test_register_rejects_deeply_nested_json_body(
+    dcr_view_client_factory, monkeypatch
+):
     """#2218 review: json.loads raises RecursionError on a deeply nested body
     — malformed metadata answers 400, never a 500. The payload stays UNDER
     MAX_DCR_BODY_BYTES so it reaches the parse rather than being turned away
-    by the size guard added later (#2219 review round 3)."""
+    by the size guard added later (#2219 review round 3). Where that happens
+    depends on the interpreter's stack (Python 3.14 parses this body on
+    glibc), so the parser's RecursionError is forced."""
     client = await dcr_view_client_factory(dcr_key=KEY)
+    monkeypatch.setattr(
+        oauth_dcr,
+        "json",
+        SimpleNamespace(loads=MagicMock(side_effect=RecursionError), dumps=json.dumps),
+    )
     nesting = 10_000
     payload = "[" * nesting + "]" * nesting
     assert len(payload) < oauth_dcr.MAX_DCR_BODY_BYTES

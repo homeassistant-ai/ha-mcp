@@ -70,7 +70,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.13"
+  PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: /tmp/.uv-cache
   # libguestfs defaults to libvirt which isn't running on GitHub-hosted
   # runners (per-user libvirtd socket missing for the unprivileged

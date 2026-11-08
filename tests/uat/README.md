@@ -15,7 +15,7 @@ echo '{"test_prompt":"Search for light entities. Report how many you found."}' \
   | uv run python tests/uat/run_uat.py --agents gemini
 ```
 
-Commands must be prefixed with `uv run python` — the repo targets Python 3.13 via uv.
+Commands must be prefixed with `uv run python` — the repo targets Python 3.14 via uv.
 
 For OpenAI-compatible endpoints (LM Studio, Ollama, vLLM), the `--base-url` must include the `/v1` suffix, e.g. `http://172.19.0.1:1234/v1`. LM Studio requires the model to be loaded in its UI first; Ollama auto-loads on demand.
 

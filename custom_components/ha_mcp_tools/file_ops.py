@@ -15,7 +15,7 @@ import logging
 import os
 import posixpath
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -332,7 +332,7 @@ def build_edit_file_handler(
     unauthorized_response: Callable[[str], dict[str, Any]],
     write_denied: Callable[[HomeAssistant, str], str | None],
     volume_root_for: Callable[[str], str | None],
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the edit_file service handler."""
     config_dir = Path(hass.config.config_dir)
 
