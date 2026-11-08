@@ -31,13 +31,13 @@ uploads are replaced before a recovered draft is published. The upstream
 source lookup still requires a published release.
 
 HACS/Marketplace select the asset through `zip_release` and `filename` in
-`hacs.json`. Enable these only after **every selectable stable, dev and mirror
-release, including older versions**, has the ZIP. HACS may reuse the latest
-manifest for an older version selected at first install; checking only the
-latest release is insufficient. Keep the activation PR draft until this is
-verified against both stable and pre-release version choices. Backfill missing
-assets from each exact release checkout, preserving its manifest/pin; copy the
-same bytes to its mirror release. Never replace a usable counted asset.
+`hacs.json` at the selected version's ref. A release enabling ZIP installation
+must have its asset before publication; older versions whose own manifest
+selects repository archives keep that installation path and need no ZIP
+backfill. Verify stable and pre-release version choices, including an older
+archive-based version, before activation. If a ZIP-enabled release needs asset
+recovery, use its exact checkout and preserve its manifest/pin; copy the same
+bytes to its mirror release. Never replace a usable counted asset.
 
 Stable SemVer creates a draft with the stamped ZIP; Release
 Publish publishes PyPI, verifies an available pure Python wheel for the Python
