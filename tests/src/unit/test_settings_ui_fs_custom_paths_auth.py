@@ -19,16 +19,13 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.settings_ui import build_settings_handlers
 
+# The token bootstrap is the first call Home Assistant refuses.
+_ADMIN_REFUSAL = "Service ha_mcp_tools.get_caller_token is admin-only in Home Assistant"
+
 
 @pytest.fixture(
     params=[
-        (
-            # The token bootstrap is the first call Home Assistant refuses.
-            HomeAssistantAdminRequiredError(
-                "Service ha_mcp_tools.get_caller_token is admin-only in Home Assistant"
-            ),
-            "Service ha_mcp_tools.get_caller_token",
-        ),
+        (HomeAssistantAdminRequiredError(_ADMIN_REFUSAL), _ADMIN_REFUSAL),
         (
             HomeAssistantAuthError("Invalid token"),
             "Could not reach the ha_mcp_tools component: Invalid token",
@@ -36,11 +33,11 @@ from ha_mcp.settings_ui import build_settings_handlers
     ],
     ids=["admin-refusal", "invalid-token"],
 )
-def reason_start(request, monkeypatch):
-    error, start = request.param
+def expected_reason(request, monkeypatch):
+    error, reason = request.param
     monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
     monkeypatch.setattr(tf, "call_mcp_tools_service", AsyncMock(side_effect=error))
-    return start
+    return reason
 
 
 @pytest.fixture
@@ -49,19 +46,19 @@ def handlers():
 
 
 async def test_get_tells_an_admin_refusal_from_other_auth_errors(
-    handlers, reason_start
+    handlers, expected_reason
 ):
     resp = await handlers["get_fs_custom_paths"](MagicMock())
     body = json.loads(resp.body)
     assert body["available"] is False
-    assert body["reason"].startswith(reason_start)
+    assert body["reason"] == expected_reason
 
 
 async def test_save_tells_an_admin_refusal_from_other_auth_errors(
-    handlers, reason_start
+    handlers, expected_reason
 ):
     req = MagicMock()
     req.json = AsyncMock(return_value={"paths": ["pyscript"]})
     resp = await handlers["save_fs_custom_paths"](req)
     assert resp.status_code == 502
-    assert json.loads(resp.body)["error"]["message"].startswith(reason_start)
+    assert json.loads(resp.body)["error"]["message"] == expected_reason
