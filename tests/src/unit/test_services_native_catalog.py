@@ -419,7 +419,10 @@ async def test_unreadable_config_uses_english_and_warns(
         result = await _build_list_services(client)()
 
     assert client.translation_messages[0]["language"] == "en"
-    assert any("language" in warning for warning in result.get("warnings", []))
+    assert any(
+        "service descriptions may be untranslated: language unavailable" in warning
+        for warning in result.get("warnings", [])
+    )
     assert "Could not read the configured language" in caplog.text
 
 
@@ -433,5 +436,8 @@ async def test_config_without_a_language_uses_english_and_warns(
         result = await _build_list_services(client)()
 
     assert client.translation_messages[0]["language"] == "en"
-    assert any("language" in warning for warning in result.get("warnings", []))
+    assert any(
+        "service descriptions may be untranslated: language unavailable" in warning
+        for warning in result.get("warnings", [])
+    )
     assert "no usable language" in caplog.text
