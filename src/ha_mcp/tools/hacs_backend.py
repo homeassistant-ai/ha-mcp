@@ -245,13 +245,16 @@ def raise_store_error(
 
     The gates are told apart by Core's error code: their messages ("Connect a
     GitHub account ...") would otherwise read as a connection failure. An
-    ownership refusal names the owner to update, unless ``installed_records``
-    shows two of ha-mcp's own records installed: then neither can be updated
-    and the suggestions are the way out of that.
+    ownership refusal names the owner to update, unless the owner is one of
+    ha-mcp's own records and ``installed_records`` shows two of them
+    installed: then neither can be updated and the suggestions are the way
+    out of that. A refusal naming some other integration's owner keeps the
+    owner hint whatever ha-mcp's own records look like.
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
     if match := _OWNED_DIRECTORY.match(str(err).strip()):
-        if installed_records and len(installed_records) > 1:
+        owners = {r.lower() for r in installed_records or []}
+        if len(owners) > 1 and match[1].lower() in owners:
             suggestions = DUPLICATE_RECORD_SUGGESTIONS
             context = {**context, "installed": installed_records}
         else:

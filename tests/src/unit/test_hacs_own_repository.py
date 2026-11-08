@@ -284,3 +284,25 @@ async def test_two_installed_records_still_download_on_hacs():
     assert "restart" in note.lower()
     # The downloaded release may predate the repair: the way out is named too.
     assert "manual route in the FAQ" in note
+
+
+async def test_another_integrations_refusal_keeps_its_owner_hint_on_a_doubled_install():
+    """Both HA-MCP listings installed, but the refused download was for some
+    other integration: that owner is the one to update, HA-MCP's repair
+    routes would not help."""
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+    from ha_mcp.tools.hacs_backend import raise_store_error
+
+    err = HomeAssistantCommandError("The hue_fork directory belongs to someone/hue")
+    with pytest.raises(ToolError) as excinfo:
+        raise_store_error(
+            err,
+            {"command": "marketplace/repository/install"},
+            installed_records=[
+                "homeassistant-ai/ha-mcp",
+                "homeassistant-ai/ha-mcp-integration",
+            ],
+        )
+    suggestions = " ".join(json.loads(str(excinfo.value))["error"]["suggestions"])
+    assert 'repository_id="someone/hue"' in suggestions
+    assert "Repairs" not in suggestions
