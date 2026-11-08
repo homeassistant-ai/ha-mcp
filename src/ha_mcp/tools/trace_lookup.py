@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -279,10 +279,13 @@ async def fetch_trace_logbook(
 
     total = len(merged)
     entries = merged[:LOGBOOK_ROW_LIMIT]
-    transport = "mixed" if len(transports) > 1 else (next(iter(transports), None))
+    transport = cast(
+        Literal["component", "rest", "mixed"] | None,
+        "mixed" if len(transports) > 1 else next(iter(transports), None),
+    )
     return TraceLogbook(
         entries,
-        transport,  # type: ignore[arg-type]
+        transport,
         warnings,
         total,
         total > LOGBOOK_ROW_LIMIT,

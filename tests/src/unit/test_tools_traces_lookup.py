@@ -550,6 +550,29 @@ class TestFetchTraceLogbook:
         assert logbook.truncated is True
 
     @pytest.mark.asyncio
+    async def test_mixed_transports_are_reported(self):
+        """One context from the component and one from REST reports mixed."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.get_logbook = AsyncMock(return_value=[{"name": "Own row"}])
+        trace = {
+            "run_id": "r1",
+            "timestamp": {
+                "start": "2026-11-08T16:00:00+00:00",
+                "finish": "2026-11-08T16:00:01+00:00",
+            },
+            "context": {"id": "own", "parent_id": "parent"},
+        }
+
+        with patch(
+            "ha_mcp.tools.trace_lookup._fetch_component_logbook",
+            AsyncMock(side_effect=[([{"name": "Parent row"}], []), (None, [])]),
+        ):
+            logbook = await fetch_trace_logbook(client, trace)
+
+        assert logbook.transport == "mixed"
+        assert logbook.total == 2
+
+    @pytest.mark.asyncio
     async def test_duplicate_logbook_rows_are_dropped(self):
         """The parent and own context queries may return the same row once."""
         client = _make_pooled_client(lambda mtype, message: {})

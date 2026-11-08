@@ -35,7 +35,7 @@ async def main() -> None:
     unique_id = f"trace_logbook_live_{suffix}"
     entity_id = None
     try:
-        states = await client._request("GET", "/states")
+        states = await client.get_states()
         light = next(
             state["entity_id"]
             for state in states
