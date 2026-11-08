@@ -338,6 +338,66 @@ class TestFormatTraceList:
             "run_middle",
         ]
 
+    def test_list_orders_traces_with_finish_only_and_malformed_timestamps(self):
+        """A missing start falls back to finish, then to an empty sort key."""
+        traces = [
+            {
+                "run_id": "finish_only",
+                "state": "stopped",
+                "timestamp": {"finish": "2026-11-08T16:00:02+00:00"},
+            },
+            {
+                "run_id": "missing_both",
+                "state": "stopped",
+                "timestamp": {},
+            },
+            {
+                "run_id": "start_only",
+                "state": "stopped",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            },
+        ]
+
+        newest = _format_trace_list("automation.test", traces, 3)
+
+        assert [trace["run_id"] for trace in newest["traces"]] == [
+            "finish_only",
+            "start_only",
+            "missing_both",
+        ]
+
+    def test_list_skips_non_dict_trace_entries(self):
+        """A malformed Core row is skipped instead of crashing the list."""
+        result = _format_trace_list(
+            "automation.test",
+            [
+                {"run_id": "r1", "state": "stopped", "timestamp": {}},
+                "not-a-trace",
+            ],
+            10,
+        )
+
+        assert [trace["run_id"] for trace in result["traces"]] == ["r1"]
+        assert result["trace_count"] == 1
+
+    def test_detail_includes_logbook_entries_when_requested(self):
+        """The logbook section returns entries when Core supplies them."""
+        result = _format_detailed_trace(
+            "automation.test",
+            "r1",
+            {
+                "run_id": "r1",
+                "state": "stopped",
+                "logbook_entries": [{"name": "Trace capture", "message": "turned on"}],
+                "trace": {},
+            },
+            sections="logbook",
+        )
+
+        assert result["logbook_entries"] == [
+            {"name": "Trace capture", "message": "turned on"}
+        ]
+
     def test_detail_preserves_core_extended_dict_fields(self):
         """Every field Core's trace/get returns survives the detail projection."""
         trace = {

@@ -667,7 +667,9 @@ def _format_trace_list(
     """
     # HA's trace/list returns runs first, then not-triggered traces, so list
     # position is not chronological. Sort by Core's own start timestamp before
-    # picking the newest or oldest window.
+    # picking the newest or oldest window. Drop malformed rows before sorting
+    # so one bad element cannot take down the whole page.
+    traces = [trace for trace in traces if isinstance(trace, dict)]
     ordered = sorted(traces, key=_trace_start)
     if order == "newest":
         end = len(ordered) - offset
@@ -678,8 +680,6 @@ def _format_trace_list(
 
     formatted_traces = []
     for trace in window:
-        if not isinstance(trace, dict):
-            continue
         # Pass Core's short dict through instead of projecting a field
         # allowlist; keep the concise execution alias for existing callers.
         trace_info = dict(trace)
