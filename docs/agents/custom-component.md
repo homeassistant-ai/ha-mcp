@@ -31,6 +31,8 @@ sync dispatch skips an existing tag and does not create a new tag-push event.
 Do not overlap manual stable releases: finish or recover the current publisher
 before cutting the next one. Queued mirror runs converge on the public stable
 release. The site rebuilds after a successful Release Publish run.
+The publisher builds the version tag even when ordinary PRs have advanced
+master; automatic no-op SemVer runs are gated by their input commit's ancestry.
 
 Existing component E2E fixtures install this ZIP. The update-path suite keeps
 its released archive baseline and checks ZIP install, update, reinstall over

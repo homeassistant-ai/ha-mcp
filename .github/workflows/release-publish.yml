@@ -30,15 +30,14 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      # Guard against the workflow_run trigger firing on odd-week SemVer Release
-      # runs that were correctly gated out. A SemVer Release whose biweekly-gate
-      # / check-changes / semantic-release jobs all skipped still ends with
-      # conclusion=success (skipped != failed), which would otherwise republish
-      # the existing stable version from master HEAD with whatever post-tag
-      # commits have accumulated — same :stable / :latest label, different bits.
-      # Publish only when master HEAD is at the latest stable tag's commit.
-      - name: Verify master is at the latest stable tag
+      # Odd-week and no-change SemVer runs succeed without cutting a tag.
+      # The release commit must follow the triggering run's input. New PRs
+      # merged after that tag do not invalidate an already cut release.
+      - name: Resolve the stable release produced after the SemVer input
         id: version
+        env:
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
@@ -80,28 +79,15 @@ jobs:
           TAG_SHA=$(git rev-list -n 1 "$LATEST_TAG")
           HEAD_SHA=$(git rev-parse HEAD)
 
-          # Normal release weeks: semver-release tags the release commit, then
-          # pushes follow-up housekeeping commits to master (changelog sync,
-          # addon version bump — all `[skip ci]`). HEAD != tag in that case,
-          # but the release IS current. Mirror semver-release.yml's check-changes
-          # logic: block only if there are releasable commits
-          # on master since the tag that would have produced a new version.
-          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline -E \
-            --grep='^(feat|fix|perf|refactor)(\(.+\))?!?:' \
-            --grep='^[a-z]+(\(.+\))?!:' \
-            --grep='^BREAKING[ -]CHANGE:' || true)
-
-          if [ -n "$RELEASABLE" ]; then
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              echo "::notice::Manual dispatch: unreleased commits exist on master since $LATEST_TAG. Forcing republish of $LATEST_TAG from the tag ref (master HEAD $HEAD_SHA is being ignored)."
-              echo "## Release Publish — forced republish" >> "$GITHUB_STEP_SUMMARY"
-              echo "Building \`$LATEST_TAG\` ($TAG_SHA); unreleased commits on master were ignored." >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "::notice::Unreleased commits exist on master since $LATEST_TAG; no new release to publish — skipping."
+          if [ "$MANUAL" != true ]; then
+            if [ -z "$TRIGGER_SHA" ]; then
+              echo "::error::Missing the triggering SemVer input commit."
+              exit 1
+            fi
+            if [ "$TAG_SHA" = "$TRIGGER_SHA" ] || ! git merge-base --is-ancestor "$TRIGGER_SHA" "$TAG_SHA"; then
+              echo "::notice::No stable release was cut after the triggering SemVer input; skipping."
               echo "should_publish=false" >> "$GITHUB_OUTPUT"
               echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
-              echo "master has releasable commits since the latest stable tag \`$LATEST_TAG\` but no new tag was cut, so republishing \`$LATEST_TAG\` would be misleading." >> "$GITHUB_STEP_SUMMARY"
-              echo "This is expected on biweekly-gate odd weeks; the re-triggered \`workflow_run\` is being correctly ignored." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
           fi
@@ -111,7 +97,7 @@ jobs:
           echo "## Release Publish — $VERSION" >> "$GITHUB_STEP_SUMMARY"
           echo "Building from tag \`$LATEST_TAG\` ($TAG_SHA)." >> "$GITHUB_STEP_SUMMARY"
           if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
-            echo "(master HEAD is $HEAD_SHA — post-tag housekeeping commits only, no releasable changes.)" >> "$GITHUB_STEP_SUMMARY"
+            echo "(master HEAD $HEAD_SHA has advanced; its post-tag commits are not being published.)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   publish_pypi:
@@ -182,11 +168,14 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
-          READY=$(gh release view "$TAG" --json assets \
-            --jq '[.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0)] | length')
-          if [ "$READY" != 1 ]; then
-            echo "::error::A complete ha_mcp_tools.zip is required; leaving the release draft."
-            exit 1
+          ZIP_RELEASE=$(python3 -c 'import json; print(json.load(open("hacs.json")).get("zip_release", False))')
+          if [ "$ZIP_RELEASE" = True ]; then
+            READY=$(gh release view "$TAG" --json assets \
+              --jq '[.assets[] | select(.name == "ha_mcp_tools.zip" and .state == "uploaded" and .size > 0)] | length')
+            if [ "$READY" != 1 ]; then
+              echo "::error::A complete ha_mcp_tools.zip is required; leaving the release draft."
+              exit 1
+            fi
           fi
           gh release edit "$TAG" --draft=false
           RELEASE_COMMIT=$(git rev-parse "${TAG}^{commit}")

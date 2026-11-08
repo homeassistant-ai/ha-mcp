@@ -19,8 +19,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +40,9 @@ _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
 
 @pytest.mark.parametrize("available", [False, True])
 @pytest.mark.parametrize("zip_state", ["missing", "empty", "uploading", "uploaded"])
+@pytest.mark.parametrize("zip_release", [False, True])
 def test_stable_publication_waits_for_the_pinned_package(
-    tmp_path, available, zip_state
+    tmp_path, available, zip_state, zip_release
 ):
     release = yaml.safe_load(
         (_WORKFLOW_DIR / "release-publish.yml").read_text(encoding="utf-8")
@@ -55,6 +58,7 @@ def test_stable_publication_waits_for_the_pinned_package(
     )
     calls = tmp_path / "calls"
     assets = tmp_path / "assets.json"
+    (tmp_path / "hacs.json").write_text(json.dumps({"zip_release": zip_release}))
     assets.write_text(
         json.dumps(
             {
@@ -84,7 +88,16 @@ def test_stable_publication_waits_for_the_pinned_package(
             "The default success gate must protect visibility and publication together"
         )
         result = subprocess.run(
-            [shutil.which("bash") or "bash", "-e", "-c", stubs + step["run"]],
+            [
+                shutil.which("bash") or "bash",
+                "-e",
+                "-c",
+                stubs
+                + step["run"].replace(
+                    "python3 ", shlex.quote(Path(sys.executable).as_posix()) + " "
+                ),
+            ],
+            cwd=tmp_path,
             env={
                 **os.environ,
                 "BASH_ENV": os.devnull,
@@ -103,7 +116,7 @@ def test_stable_publication_waits_for_the_pinned_package(
         )
         if result.returncode:
             break
-    ready = available and zip_state == "uploaded"
+    ready = available and (not zip_release or zip_state == "uploaded")
     assert (result.returncode == 0) is ready, result.stderr
     if ready:
         assert calls.read_text().splitlines() == [
@@ -127,6 +140,65 @@ def test_stable_alias_moves_only_after_the_release_becomes_public():
         if step.get("name") == "Publish GitHub release"
     )
     assert publish.index("--draft=false") < publish.index("refs/tags/stable")
+
+
+@pytest.mark.parametrize("trigger", ["release", "noop", "at_tag", "manual"])
+def test_new_master_commits_do_not_hide_a_release_cut_by_semver(tmp_path, trigger):
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+
+    git("init", "-q", "-b", "master")
+    git("config", "user.name", "Release test")
+    git("config", "user.email", "release@example.invalid")
+    (tmp_path / "pyproject.toml").write_text('version = "1.2.3"\n')
+    git("add", ".")
+    git("commit", "-qm", "fix: release input")
+    release_input = git("rev-parse", "HEAD")
+    git("commit", "--allow-empty", "-qm", "chore(release): 1.2.3")
+    git("tag", "v1.2.3")
+    release_commit = git("rev-parse", "HEAD")
+    git(
+        "commit", "--allow-empty", "-qm", "fix: ordinary PR merged during the app build"
+    )
+    step = next(
+        s
+        for s in yaml.safe_load((_WORKFLOW_DIR / "release-publish.yml").read_text())[
+            "jobs"
+        ]["prepare"]["steps"]
+        if s.get("id") == "version"
+    )
+    output = tmp_path / "output"
+    run = step["run"].replace(
+        "${{ github.event_name }}",
+        "workflow_dispatch" if trigger == "manual" else "workflow_run",
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", run],
+        check=False,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "BASH_ENV": os.devnull,
+            "MANUAL": "true" if trigger == "manual" else "false",
+            "TRIGGER_SHA": {
+                "release": release_input,
+                "noop": git("rev-parse", "HEAD"),
+                "at_tag": release_commit,
+                "manual": "",
+            }[trigger],
+            "GITHUB_OUTPUT": output.as_posix(),
+            "GITHUB_STEP_SUMMARY": (tmp_path / "summary").as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        f"should_publish={'true' if trigger in {'release', 'manual'} else 'false'}"
+        in output.read_text()
+    )
+    assert "release_tag=v1.2.3" in output.read_text()
 
 
 def _workflow() -> dict[str, Any]:
