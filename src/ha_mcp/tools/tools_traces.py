@@ -109,7 +109,8 @@ class TraceTools:
                     "Valid values: trigger, conditions, actions, config, error, "
                     "logbook, context. 'config' returns the full historical "
                     "config; 'logbook' reads Core's logbook for the run. Omit "
-                    "to return all sections. Example: 'actions' or "
+                    "to return all default sections; the full config still "
+                    "requires sections='config'. Example: 'actions' or "
                     "'trigger,conditions'."
                 ),
                 default=None,
