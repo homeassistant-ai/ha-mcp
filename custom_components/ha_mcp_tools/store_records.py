@@ -162,42 +162,52 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 
 
 _SCHEDULED_KEY = "store_records_check_scheduled"
-# A configured store that is not loaded when Home Assistant reports started is
-# asked again every five minutes until it is: Core retries a not-ready
-# Marketplace entry with a backoff that caps at five minutes, HACS retries a
-# failed start after fifteen, and an outage can outlast both.
-_STORE_RETRY_SECONDS = 300
 _STORE_DOMAINS = ("marketplace", "hacs")
-
-
-def _store_configured(hass: HomeAssistant) -> bool:
-    """Whether a store integration exists at all, loaded or not."""
-    return any(hass.config_entries.async_entries(domain) for domain in _STORE_DOMAINS)
 
 
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
     """Run the check once Home Assistant has started, when the store is up.
 
     Both entry types register through here, so a pending check is shared; once
-    it has run, a later entry reload schedules a fresh one."""
+    it has run, a later entry reload schedules a fresh one. A store whose entry
+    is not loaded yet (still setting up, retrying, or disabled and enabled
+    later) is checked the moment that entry changes state."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(_SCHEDULED_KEY):
         return
     domain_data[_SCHEDULED_KEY] = True
+    unsubscribers: list[Any] = []
+
+    @callback
+    def _done() -> None:
+        for unsubscribe in unsubscribers:
+            unsubscribe()
+        unsubscribers.clear()
+        domain_data.pop(_SCHEDULED_KEY, None)
 
     @callback
     def _check(_event: Any = None) -> None:
         try:
             checked = async_check_store_records(hass)
         except Exception:
-            _LOGGER.debug("Store record check failed", exc_info=True)
+            _LOGGER.warning("Store record check failed", exc_info=True)
             checked = True
-        if not checked and _store_configured(hass):
-            # The flag stays set while the retry is pending, so another entry
-            # registering meanwhile does not line up a second one.
-            _retry_later(hass, lambda _now: _check())
+        if checked:
+            _done()
             return
-        domain_data.pop(_SCHEDULED_KEY, None)
+        if unsubscribers:
+            return
+        entries = [
+            entry
+            for domain in _STORE_DOMAINS
+            for entry in hass.config_entries.async_entries(domain)
+        ]
+        if not entries:
+            _done()
+            return
+        # HACS that disabled itself after a failed restore keeps its entry
+        # loaded and retries on its own; that case waits for the next start.
+        unsubscribers.extend(entry.async_on_state_change(_check) for entry in entries)
 
     try:
         from homeassistant.helpers.start import async_at_started
@@ -206,11 +216,3 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
         hass.bus.async_listen_once("homeassistant_started", _check)
         return
     async_at_started(hass, _check)
-
-
-def _retry_later(hass: HomeAssistant, action: Any) -> None:
-    try:
-        from homeassistant.helpers.event import async_call_later
-    except ImportError:
-        return
-    async_call_later(hass, _STORE_RETRY_SECONDS, action)

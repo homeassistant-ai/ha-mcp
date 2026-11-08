@@ -203,45 +203,6 @@ def test_startup_runs_the_check_through_at_started(monkeypatch, issue_registry):
     )
 
 
-def test_no_store_yet_leaves_the_issue_and_asks_again(monkeypatch, issue_registry):
-    """A store that has not loaded is unknown, not clean: the issue stays and
-    one retry is scheduled."""
-    hass = _hass_with(monkeypatch, None)
-    hass.data = {}
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
-    event = ModuleType("homeassistant.helpers.event")
-    later = MagicMock()
-    event.async_call_later = later
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
-
-    store_records.async_schedule_store_records_check(hass)
-    hass.bus.async_listen_once.call_args.args[1]()
-
-    issue_registry.async_delete_issue.assert_not_called()
-    later.assert_called_once()
-
-
-def test_a_registration_during_the_pending_retry_adds_no_second_retry(
-    monkeypatch, issue_registry
-):
-    """Two entries setting up while the store is still unavailable share the
-    one pending retry instead of each warning later."""
-    hass = _hass_with(monkeypatch, None)
-    hass.data = {}
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
-    event = ModuleType("homeassistant.helpers.event")
-    later = MagicMock()
-    event.async_call_later = later
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
-
-    store_records.async_schedule_store_records_check(hass)
-    hass.bus.async_listen_once.call_args.args[1]()
-    store_records.async_schedule_store_records_check(hass)
-
-    assert hass.bus.async_listen_once.call_count == 1
-    later.assert_called_once()
-
-
 def test_a_disabled_hacs_is_unknown_not_clean(monkeypatch, issue_registry):
     """HACS that failed its restore has an empty repository list until it
     retries; the issue must not be cleared on that."""
@@ -258,85 +219,88 @@ def test_a_disabled_hacs_is_unknown_not_clean(monkeypatch, issue_registry):
     issue_registry.async_delete_issue.assert_not_called()
 
 
-def test_no_store_integration_means_no_retries(monkeypatch, issue_registry):
-    """A Core without HACS or the Marketplace has nothing to wait for: the
-    check ends at once and the guard clears."""
+@pytest.mark.parametrize("store_domain", ["hacs", "marketplace"])
+def _listening_hass(monkeypatch, store_entries):
+    """A hass whose store manager is absent and whose store entries can be
+    subscribed to; returns hass and the list of listeners registered."""
     hass = _hass_with(monkeypatch, None)
     hass.data = {}
-    hass.config_entries.async_entries.return_value = []
+    listeners = []
+
+    def entry(domain):
+        e = MagicMock()
+        e.domain = domain
+        unsubscribe = MagicMock()
+        e.async_on_state_change.side_effect = lambda cb: (
+            listeners.append((e, cb, unsubscribe)),
+            unsubscribe,
+        )[1]
+        return e
+
+    entries = {d: [entry(d)] for d in store_entries}
+    hass.config_entries.async_entries.side_effect = lambda d: entries.get(d, [])
     monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
-    event = ModuleType("homeassistant.helpers.event")
-    later = MagicMock()
-    event.async_call_later = later
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
+    return hass, listeners
+
+
+def test_no_store_integration_means_nothing_to_wait_for(monkeypatch, issue_registry):
+    """A Core without HACS or the Marketplace: the check ends at once and the
+    guard clears."""
+    hass, listeners = _listening_hass(monkeypatch, [])
 
     store_records.async_schedule_store_records_check(hass)
     hass.bus.async_listen_once.call_args.args[1]()
 
-    later.assert_not_called()
+    assert listeners == []
+    issue_registry.async_delete_issue.assert_not_called()
     assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
 
 
 @pytest.mark.parametrize("store_domain", ["hacs", "marketplace"])
-def test_a_configured_store_is_waited_for_indefinitely(
+def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
     monkeypatch, issue_registry, store_domain
 ):
-    """An outage can outlast any fixed window; while a store entry exists for
-    either store the check keeps asking, so the first load after it files the
-    repair."""
-    hass = _hass_with(monkeypatch, None)
-    hass.data = {}
-    hass.config_entries.async_entries.side_effect = lambda domain: (
-        [MagicMock()] if domain == store_domain else []
-    )
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
-    event = ModuleType("homeassistant.helpers.event")
-    later = MagicMock()
-    event.async_call_later = later
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
-
-    store_records.async_schedule_store_records_check(hass)
-    hass.bus.async_listen_once.call_args.args[1]()
-    for _ in range(40):
-        later.call_args.args[2](None)
-
-    assert later.call_count == 41
-    assert later.call_args.args[1] == store_records._STORE_RETRY_SECONDS
-    assert hass.data[DOMAIN][store_records._SCHEDULED_KEY] is True
-
-
-def test_a_store_that_loads_after_several_retries_is_checked(
-    monkeypatch, issue_registry
-):
-    """The retries are not just a timer: when the store turns up on a later
-    attempt its records are read, the repair is filed and the guard clears."""
+    """The store entry still setting up, retrying or re-enabled later: the
+    check runs again on its state change, files the repair once the manager
+    answers, then lets go of the entry."""
+    hass, listeners = _listening_hass(monkeypatch, [store_domain])
     manager = _manager(
         _repository(store_records.MAIN_REPOSITORY, True),
         _repository(store_records.MIRROR_REPOSITORY, True),
     )
-    attempts = {"n": 0}
-
-    def late_manager(_hass):
-        attempts["n"] += 1
-        return manager if attempts["n"] > 3 else None
-
-    monkeypatch.setattr(store_records, "_store_manager", late_manager)
-    hass = MagicMock()
-    hass.data = {}
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.start", None)
-    event = ModuleType("homeassistant.helpers.event")
-    later = MagicMock()
-    event.async_call_later = later
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.event", event)
 
     store_records.async_schedule_store_records_check(hass)
     hass.bus.async_listen_once.call_args.args[1]()
-    while not issue_registry.async_create_issue.called:
-        later.call_args.args[2](None)
+    assert len(listeners) == 1
+    issue_registry.async_delete_issue.assert_not_called()
+    assert hass.data[DOMAIN][store_records._SCHEDULED_KEY] is True
 
-    assert later.call_count == 3
+    _entry, on_change, unsubscribe = listeners[0]
+    on_change()  # a state change while the store still is not loaded
+    issue_registry.async_create_issue.assert_not_called()
+    unsubscribe.assert_not_called()
+
+    monkeypatch.setattr(store_records, "_store_manager", lambda _hass: manager)
+    on_change()  # the entry reached loaded
+
     assert (
         issue_registry.async_create_issue.call_args.args[2]
         == ISSUE_STORE_RECORDS_CONFLICT
     )
+    unsubscribe.assert_called_once()
     assert store_records._SCHEDULED_KEY not in hass.data[DOMAIN]
+
+
+def test_a_registration_while_waiting_adds_no_second_listener(
+    monkeypatch, issue_registry
+):
+    """Two entries setting up while the store is not loaded share the one
+    pending check instead of each subscribing to the store."""
+    hass, listeners = _listening_hass(monkeypatch, ["hacs"])
+
+    store_records.async_schedule_store_records_check(hass)
+    hass.bus.async_listen_once.call_args.args[1]()
+    store_records.async_schedule_store_records_check(hass)
+
+    assert hass.bus.async_listen_once.call_count == 1
+    assert len(listeners) == 1
