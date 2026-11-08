@@ -329,9 +329,7 @@ def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
         if step.get("name") == "Delete old dev releases (keep last 5)"
     )
 
-    assert (
-        'gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG"' in create_run
-    )
+    # Creation preserves an already-public release; only aged builds are pruned.
     assert (
         'gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$tag"'
         in cleanup_run

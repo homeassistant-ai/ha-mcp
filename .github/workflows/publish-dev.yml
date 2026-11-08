@@ -260,8 +260,8 @@ jobs:
           **PyPI (dev channel):** \`pip install ha-mcp-dev\`
           EOF
 
-          # Forced both ways: a re-run holds this tag from the checkout's
-          # fetch, and the remote one stays if its deletion above failed.
+          # Retry an unpublished tag left by a failed create. Public releases
+          # exit above so their assets and download history are preserved.
           git tag -f "$TAG" HEAD
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
           gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
