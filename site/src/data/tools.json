@@ -2264,7 +2264,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon, which Home Assistant keeps on update as the zone dialog does: it can be changed but not removed. A storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, as the helper's own dialog stores it, and the entity registry is left alone; otherwise (person, tag, or another type without the ha_mcp_tools component) it goes into the entity registry. An icon override in the entity registry is set or cleared with ha_set_entity. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
           "default": null
         },
         "area_id": {
@@ -4824,7 +4824,7 @@
   {
     "name": "ha_get_zone",
     "title": "Get Zone",
-    "description": "Get zone information - list all zones or get details for a specific one.\n\nWithout a zone_id: Lists all Home Assistant zones with their coordinates and radius.\nWith a zone_id: Returns detailed configuration for a specific zone.\n\nEXAMPLES:\n- List all zones: ha_get_zone()\n- Get specific zone: ha_get_zone(zone_id=\"office\")\n- Same zone by entity_id: ha_get_zone(zone_id=\"zone.office\")\n\nZones outside the zone storage, the home zone (from the general\nsettings) and YAML zones, are listed with ``editable=false`` /\n``source=\"yaml\"``; editable means ha_set_zone and ha_remove_zone can\nchange the zone. Each zone carries its entity_id.",
+    "description": "Get zone information - list all zones or get details for a specific one.\n\nWithout a zone_id: Lists all Home Assistant zones with their coordinates and radius.\nWith a zone_id: Returns detailed configuration for a specific zone.\n\nEXAMPLES:\n- List all zones: ha_get_zone()\n- Get specific zone: ha_get_zone(zone_id=\"office\")\n- Same zone by entity_id: ha_get_zone(zone_id=\"zone.office\")\n\nZones outside the zone storage, the home zone (from the general\nsettings) and YAML zones, are listed with ``editable=false`` /\n``source=\"yaml\"``; editable means ha_set_zone and ha_remove_zone can\nchange the zone. Each zone carries its entity_id.\n\nA stored zone's ``icon`` is the one stored in the zone, which the\nZones editor shows. ``entity_icon`` is an icon override in the zone\nentity's registry entry: the map and the zone's state show it instead.\nSet or clear the override with ha_set_entity.",
     "inputSchema": {
       "properties": {
         "zone_id": {
@@ -4909,7 +4909,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon stored in the zone itself (as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed",
+          "description": "Material Design Icon (e.g., 'mdi:briefcase'), stored in the zone as the Home Assistant zone dialog stores it. Home Assistant keeps a zone's stored icon on update: it can be changed but not removed, so '' leaves it. An icon override in the entity registry (ha_get_zone's entity_icon) is set or cleared with ha_set_entity",
           "default": null
         },
         "passive": {
