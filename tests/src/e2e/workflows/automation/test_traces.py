@@ -600,11 +600,10 @@ action:
             action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
 
-        create_result = await mcp_client.call_tool(
+        mcp = MCPAssertions(mcp_client)
+        create_data = await mcp.call_tool_success(
             "ha_config_set_automation", {"config": create_config}
         )
-        assert_mcp_success(create_result)
-        create_data = parse_mcp_result(create_result)
 
         automation_id = create_data.get("entity_id")
         assert automation_id, (
@@ -618,12 +617,10 @@ action:
         # Wait for automation registration
 
         # 3. Get traces (should be empty with diagnostics)
-        traces_result = await mcp_client.call_tool(
+        traces_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
             {"entity_id": automation_id},
         )
-        assert_mcp_success(traces_result)
-        traces_data = parse_mcp_result(traces_result)
 
         assert traces_data.get("success") is True
 
