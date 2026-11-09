@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from .registry import (
     _all_area_entries,
@@ -79,10 +80,7 @@ def _registries_missing_category_scopes() -> Exception:
     Raised so a ``registries`` request naming ``category`` without a non-empty
     ``category_scopes`` fails instead of silently returning ``{}`` (a caller
     could otherwise mistake that for "no categories in any scope").
-    ``HomeAssistantError`` is imported function-locally so tests can stub it.
     """
-    from homeassistant.exceptions import HomeAssistantError
-
     err: Exception = HomeAssistantError(
         "ha_mcp_tools/registries: category_scopes is required when "
         "'category' is requested"

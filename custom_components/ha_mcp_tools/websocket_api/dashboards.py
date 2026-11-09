@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from homeassistant.components.lovelace.const import MODE_STORAGE, MODE_YAML
 from homeassistant.core import HomeAssistant
 
 from .registry import _plainify
@@ -17,11 +18,9 @@ _LOGGER = logging.getLogger(__package__)
 # =============================================================================
 # ha_mcp_tools/dashboards
 # =============================================================================
-# LovelaceConfig.mode returns these wire strings (MODE_STORAGE / MODE_YAML in
-# core's lovelace const). Compared as strings so a MagicMock-stubbed core in the
-# unit suite (no real constants) still exercises the branches.
-_LOVELACE_MODE_STORAGE = "storage"
-_LOVELACE_MODE_YAML = "yaml"
+# What LovelaceConfig.mode returns.
+_LOVELACE_MODE_STORAGE = MODE_STORAGE
+_LOVELACE_MODE_YAML = MODE_YAML
 
 # Cap on ``search``-mode matches per call so one WS frame stays bounded. ``docs``
 # is not capped: the server's card search needs whole configs, and the frame

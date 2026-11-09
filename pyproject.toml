@@ -398,6 +398,8 @@ filterwarnings = [
     "ignore::PendingDeprecationWarning",
     # Allow all ResourceWarnings, including those emitted during test cleanup
     "ignore::ResourceWarning",
+    # Core's http component keeps a plain string key on its aiohttp app.
+    "ignore::aiohttp.web_exceptions.NotAppKeyWarning",
 ]
 
 [dependency-groups]

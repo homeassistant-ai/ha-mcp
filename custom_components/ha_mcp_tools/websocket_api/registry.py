@@ -9,6 +9,7 @@ from dataclasses import field as dataclass_field
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -84,8 +85,6 @@ def _substrate_unavailable(name: str) -> Exception:
     keeps returning its empty result — the guards below key off unavailability
     (``None`` / non-``Mapping``), never off an empty-but-valid collection.
     """
-    from homeassistant.exceptions import HomeAssistantError
-
     err: Exception = HomeAssistantError(
         f"ha_mcp_tools: the {name} is unavailable (core drift); the server should "
         "fall back to its legacy read"

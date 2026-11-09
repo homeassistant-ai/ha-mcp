@@ -268,11 +268,14 @@ def test_non_mapping_translations_are_logged_not_swallowed(monkeypatch, caplog):
     """
     import asyncio
     import logging
-    import sys
 
-    translation = MagicMock()
-    translation.async_get_translations = AsyncMock(return_value=["not", "a", "mapping"])
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.translation", translation)
+    from homeassistant.helpers import translation
+
+    monkeypatch.setattr(
+        translation,
+        "async_get_translations",
+        AsyncMock(return_value=["not", "a", "mapping"]),
+    )
 
     with caplog.at_level(logging.WARNING):
         result = asyncio.run(wsapi._fetch_service_translations(MagicMock(), "de"))

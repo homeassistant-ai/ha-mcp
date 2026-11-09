@@ -3065,32 +3065,22 @@ class TestDeviceGetEntities:
         assert res["entities"] == []
 
 
-# A stand-in for core's ``HomeAssistantError`` whose type NAME matches, so the
-# ``exposure`` guardrail (``_is_unknown_entity_error`` keys off the name, not an
-# isinstance against the MagicMock-stubbed ``homeassistant.exceptions``) fires.
-class _UnknownEntityError(Exception):
-    pass
-
-
-_UnknownEntityError.__name__ = "HomeAssistantError"
-
-
 class TestIsUnknownEntityError:
     """``_is_unknown_entity_error`` matches ONLY core's 'Unknown entity' raise: the
-    type name alone is too wide, so a same-type store-read failure is not swallowed
+    type alone is too wide, so a same-type store-read failure is not swallowed
     (issue #1813 F4)."""
 
     def test_matches_unknown_entity_message(self):
-        assert wsapi._is_unknown_entity_error(_UnknownEntityError("Unknown entity"))
+        assert wsapi._is_unknown_entity_error(HomeAssistantError("Unknown entity"))
         # Case-insensitive, substring anywhere in the message.
         assert wsapi._is_unknown_entity_error(
-            _UnknownEntityError("unknown entity light.x")
+            HomeAssistantError("unknown entity light.x")
         )
 
     def test_rejects_same_type_other_message(self):
         # Right type name, unrelated fault → NOT a match (must propagate).
         assert not wsapi._is_unknown_entity_error(
-            _UnknownEntityError("settings store read failed")
+            HomeAssistantError("settings store read failed")
         )
 
     def test_rejects_other_type_same_message(self):
@@ -3196,7 +3186,7 @@ class TestExposure:
 
         def fake_settings(hass, entity_id):
             if entity_id not in settings_map:
-                raise _UnknownEntityError("Unknown entity")
+                raise HomeAssistantError("Unknown entity")
             return settings_map[entity_id]
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
@@ -3258,10 +3248,10 @@ class TestExposure:
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
 
         def boom(hass, entity_id):
-            raise _UnknownEntityError("settings store read failed")
+            raise HomeAssistantError("settings store read failed")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", boom)
-        with pytest.raises(_UnknownEntityError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.kitchen"})
 
     def test_list_mode_mirrors_ws_list(self, monkeypatch):

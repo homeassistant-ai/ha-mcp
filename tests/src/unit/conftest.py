@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 # socket/thread/task checks. pyproject.toml blocks its entry point so the E2E
 # tree never loads it. Nothing above imports Home Assistant: the plugin patches
 # Core's JSON and time helpers before Core is first imported.
-pytest_plugins = ["pytest_homeassistant.plugins"]
+pytest_plugins = ["pytest_homeassistant.plugins", "tests.core_stand_in_guard"]
 
 # quickjs starts its shared worker thread on import; importing it here starts
 # that thread before any test, so Core's leftover-thread check never sees it.
@@ -167,11 +168,13 @@ def _no_threads_left_by_the_test() -> Iterator[None]:
     That is a replacement JS harness worker (when the test killed the shared
     one), quickjs engines created with ``own_executor`` (card definitions) and
     the usage-log writer. Stopping the writer also keeps the next test's usage
-    log in its own config directory.
+    log in its own config directory. AnyIO stops its worker threads when the
+    test's task ends, but does not wait for them to exit; they are joined here.
     """
     from . import _js_harness
 
     worker = _js_harness._worker
+    threads_before = set(threading.enumerate())
     engines: list[Any] = []
     real_function = quickjs.Function
 
@@ -193,6 +196,9 @@ def _no_threads_left_by_the_test() -> Iterator[None]:
         from ha_mcp.utils.usage_logger import shutdown_usage_logger
 
         shutdown_usage_logger()
+        for thread in set(threading.enumerate()) - threads_before:
+            if thread.name == "AnyIO worker thread":
+                thread.join(timeout=5)
 
 
 @pytest.fixture(autouse=True)
@@ -362,3 +368,28 @@ def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
         "ha_mcp.redaction.get_global_settings",
         lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
     )
+
+
+@pytest.fixture
+async def component_ws(hass: Any, hass_ws_client: Any) -> Any:
+    """A WebSocket client of a real ``hass`` with the ``ha_mcp_tools/*`` commands.
+
+    The caller is an admin; ``component_ws_read_only`` is the same for a
+    non-admin. Use ``await ws_call(client, "ha_mcp_tools/info")`` from
+    ``_component_core`` to send one command and get its reply.
+    """
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    return await hass_ws_client(hass)
+
+
+@pytest.fixture
+async def component_ws_read_only(
+    hass: Any, hass_ws_client: Any, hass_read_only_access_token: str
+) -> Any:
+    """``component_ws`` for a user who is not an admin."""
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    return await hass_ws_client(hass, hass_read_only_access_token)

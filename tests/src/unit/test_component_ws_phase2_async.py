@@ -32,6 +32,7 @@ from types import SimpleNamespace
 import pytest
 import voluptuous as vol
 from homeassistant.components.lovelace.const import ConfigNotFound
+from homeassistant.core import is_callback
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from ._component_ws_fakes import _FakeBulkServices, _FakeCallServices
@@ -1609,15 +1610,6 @@ class TestSearchVisibilitySchema:
 # =============================================================================
 # _assist_should_expose — READ-ONLY reconstruction of core's async_should_expose
 # =============================================================================
-class _NamedHomeAssistantError(Exception):
-    """Exception whose __name__ is ``HomeAssistantError`` (what _is_unknown_entity_error
-    keys off, since the fake suite stubs the real class)."""
-
-
-# _is_unknown_entity_error matches on the type NAME, so alias to the exact name.
-_NamedHomeAssistantError.__name__ = "HomeAssistantError"
-
-
 def _boom(*_a, **_k):
     raise AssertionError("must not be consulted")
 
@@ -1666,7 +1658,7 @@ class TestAssistShouldExposeReadOnly:
         # An id in neither the registry nor the store raises "Unknown entity" from the
         # settings read; that is NOT an explicit override — fall to the default.
         def _raise(hass, eid):
-            raise _NamedHomeAssistantError("Unknown entity")
+            raise HomeAssistantError("Unknown entity")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", _raise)
         monkeypatch.setattr(wsapi, "_assist_expose_new_entities", lambda hass: True)
@@ -2409,9 +2401,7 @@ class TestCallServiceListenerJobType:
     A plain (non-callback) listener is ``HassJobType.Executor`` on real HA: every
     instance-wide ``state_changed`` gets dispatched to the thread pool and
     ``asyncio.Event.set()`` runs cross-thread on a non-thread-safe Event (delayed /
-    spurious ``partial`` + an ``InvalidStateError`` race). HA's ``is_callback`` reads
-    exactly ``getattr(func, "_hass_callback", False)``, so the fix pins that attribute
-    — proven here without needing real HA job-type inference.
+    spurious ``partial`` + an ``InvalidStateError`` race).
     """
 
     def test_single_call_listener_is_marked_callback(self):
@@ -2432,7 +2422,7 @@ class TestCallServiceListenerJobType:
         )
         (registered,) = bus.listeners
         _event_type, listener = registered
-        assert getattr(listener, "_hass_callback", False) is True
+        assert is_callback(listener)
 
     def test_bulk_listeners_are_marked_callback(self):
         bus = _FakeBus()
@@ -2465,7 +2455,7 @@ class TestCallServiceListenerJobType:
         )
         assert len(bus.listeners) == 2
         for _event_type, listener in bus.listeners:
-            assert getattr(listener, "_hass_callback", False) is True
+            assert is_callback(listener)
 
 
 class TestCallServiceSchema:

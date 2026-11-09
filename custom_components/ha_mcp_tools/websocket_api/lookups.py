@@ -9,6 +9,7 @@ from typing import Any, NamedTuple
 
 import yaml  # type: ignore[import-untyped]
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from .assist import _async_get_entity_settings, _is_unknown_entity_error
@@ -534,13 +535,10 @@ def _registry_lookup_missing_target() -> Exception:
     ``config_entry_id``, OR only an empty-string / empty-list one — fails instead of
     returning ``{entities: [], missing: []}``, a shape indistinguishable from a
     genuine "nothing matched" result, letting the server's command-error fallback
-    fire for the degenerate case. ``HomeAssistantError`` is imported
-    function-locally so tests can stub it. (This is a deliberate divergence from
+    fire for the degenerate case. (This is a deliberate divergence from
     ``config_entries``, whose empty-string ``entry_id`` is an authoritative empty
     result mirroring ``async_get_entry("")`` — a different, intentional semantic.)
     """
-    from homeassistant.exceptions import HomeAssistantError
-
     err: Exception = HomeAssistantError(
         "ha_mcp_tools/registry_lookup requires a non-empty entity_ids or "
         "config_entry_id"

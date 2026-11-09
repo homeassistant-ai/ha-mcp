@@ -137,8 +137,7 @@ def _legacy_credentials_active(
 
     oauth_legacy pulls in the aiohttp/HTTP view layer at import time; the
     config-flow module must stay importable without it (Home Assistant imports
-    config flows early, and the flow unit tests stub only the config-entries
-    surface) — same pattern as ``oauth_legacy._live_auth_mode``.
+    config flows early) — same pattern as ``oauth_legacy._live_auth_mode``.
     """
     from .oauth_legacy import legacy_credentials_active
 
