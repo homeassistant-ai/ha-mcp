@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from homeassistant.components.device_tracker import ATTR_IN_ZONES
 from homeassistant.components.zone.const import DATA_ZONE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -214,11 +215,15 @@ async def test_every_zone_row_has_the_same_shape(
     tools = ZoneTools(core_client)
     # An icon, like the home zone's: a zone without one has no icon key.
     created = await _create(tools, icon="mdi:briefcase")
+    hass.states.async_set(
+        "device_tracker.phone", "Office", {ATTR_IN_ZONES: [created["entity_id"]]}
+    )
+    await hass.async_block_till_done()
 
     rows = {z["entity_id"]: z for z in (await tools.ha_get_zone())["zones"]}
 
     stored, home = rows[created["entity_id"]], rows["zone.home"]
-    assert "persons" in stored
+    assert stored["device_trackers"] == ["device_tracker.phone"]
     assert set(stored) == set(home)
 
 
