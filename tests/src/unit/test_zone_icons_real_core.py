@@ -191,6 +191,21 @@ async def test_an_override_is_named_apart_from_the_stored_icon(
     assert (zone["icon"], zone["entity_icon"]) == ("mdi:school", "mdi:map")
 
 
+async def test_a_cleared_icon_names_the_override_that_still_shows(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """A zone older versions gave a registry-only icon keeps showing it after
+    the icon is cleared: the reply names the override instead of a silent
+    success."""
+    tools = ZoneTools(core_client)
+    created = await _create(tools)
+    er.async_get(hass).async_update_entity(created["entity_id"], icon="mdi:map")
+
+    result = await tools.ha_set_zone(zone_id=created["zone_id"], icon="", wait=False)
+
+    assert any("mdi:map" in w and "ha_set_entity" in w for w in result["warnings"])
+
+
 async def test_a_recreated_zone_names_its_restored_override(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
