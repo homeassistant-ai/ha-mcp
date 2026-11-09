@@ -44,18 +44,25 @@ class TestAutomationTraces:
             "ha_config_set_automation", {"config": config}
         )
         automation_id = create_data.get("entity_id")
+        leftover_error = None
         if not automation_id:
             # The config exists even though entity discovery timed out; remove
             # it before failing so it cannot pollute later tests on this HA.
             config_id = create_data.get("automation_id")
             if config_id:
-                await safe_call_tool(
+                cleanup = await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
                     {"identifier": config_id},
                 )
+                leftover_error = cleanup.get("error")
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
+            + (
+                f"; removing the leftover config also failed: {leftover_error}"
+                if leftover_error
+                else ""
+            )
         )
         cleanup_tracker.track("automation", automation_id)
         assert await wait_for_entity_registration(mcp_client, automation_id), (
@@ -840,10 +847,10 @@ action:
             )
             cleanup_tracker.track("automation", automation_id)
 
-            prior_light = await safe_call_tool(
-                mcp_client, "ha_get_state", {"entity_id": light_id}
+            prior_light = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": light_id}
             )
-            light_was_on = prior_light.get("data", {}).get("state") == "on"
+            light_was_on = (prior_light.get("data") or {}).get("state") == "on"
 
             await mcp.call_tool_success(
                 "ha_call_service",
