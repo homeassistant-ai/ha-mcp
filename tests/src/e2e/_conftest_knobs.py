@@ -23,9 +23,13 @@ always used.
 
 ``HA_E2E_BASE_HOST``
     Host name used in the testcontainer's ``base_url``. The default is
-    ``localhost``; set it when pytest itself runs inside a container, where
-    the sibling testcontainer's published port is reachable through the Docker
-    bridge address instead.
+    ``localhost``; set it when pytest itself runs inside a container and
+    reaches the sibling testcontainer through the Docker host address
+    (typically the bridge gateway) rather than through its own localhost.
+    Only the host is replaced: the port stays the one testcontainers resolves
+    for its connection mode — the published host port when it maps ports, the
+    container port (8123) when it connects through the container's bridge IP —
+    so give the host that reaches that port.
 
 Resolution lives here rather than in the fixtures so the boot knobs can be
 asserted without Docker.

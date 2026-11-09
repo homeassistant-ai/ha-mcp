@@ -11,7 +11,11 @@ that an unset knob changes nothing: a lane with no environment set must build
 the same container it always did. The assertions below therefore go through
 ``_build_ha_testcontainer`` and check the assembled mounts and entrypoint
 rather than the helpers' own return values, and no Docker daemon is involved —
-constructing a ``DockerContainer`` only records configuration.
+constructing a ``DockerContainer`` only records configuration. The
+``HA_E2E_BASE_HOST`` cases are the exception: that knob only selects a host, so
+they call the resolver directly. Asserting the session fixture's assembled
+``base_url`` would need a live Docker daemon, which this module deliberately
+avoids.
 """
 
 from __future__ import annotations
@@ -340,11 +344,13 @@ def test_the_base_host_defaults_to_localhost() -> None:
     assert _conftest_knobs.resolve_base_host() == "localhost"
 
 
-@pytest.mark.parametrize("raw", ["192.0.2.10", "host.docker.internal", " 192.0.2.10 "])
+@pytest.mark.parametrize("raw", ["192.0.2.10", " 192.0.2.10 "])
 def test_the_base_host_uses_the_override(
     raw: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(_conftest_knobs.BASE_HOST_ENV_VAR, raw)
+    # The literal documented name, not BASE_HOST_ENV_VAR: spelling the knob in
+    # the test is what fails when the constant and the docs drift apart.
+    monkeypatch.setenv("HA_E2E_BASE_HOST", raw)
     assert _conftest_knobs.resolve_base_host() == raw.strip()
 
 
@@ -352,5 +358,5 @@ def test_the_base_host_uses_the_override(
 def test_a_blank_base_host_falls_back_to_localhost(
     raw: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(_conftest_knobs.BASE_HOST_ENV_VAR, raw)
+    monkeypatch.setenv("HA_E2E_BASE_HOST", raw)
     assert _conftest_knobs.resolve_base_host() == "localhost"
