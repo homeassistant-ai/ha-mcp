@@ -27,8 +27,9 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install ruff + pytest
-        run: pip install ruff pytest pytest-asyncio pytest-timeout
+      - name: Install ha-mcp, ruff + pytest
+        # The unit conftest imports ha_mcp (its helper-flow fixtures).
+        run: pip install -e . ruff pytest pytest-asyncio pytest-timeout
 
       - name: Run the promote transform in place
         id: promote
