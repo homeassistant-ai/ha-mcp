@@ -60,6 +60,12 @@ updates:
       # version; Renovate bumps them with the image pin and re-locks.
       - dependency-name: "homeassistant"
       - dependency-name: "pytest-homeassistant"
+      # pytest-homeassistant pins these exactly (Core's own test versions), so
+      # they move with it when Renovate bumps Core; a bump of one alone cannot
+      # resolve.
+      - dependency-name: "pytest"
+      - dependency-name: "pytest-asyncio"
+      - dependency-name: "pytest-xdist"
       # Runtime dependencies Core pins exactly: uv.lock must hold Core's pin
       # (check_ha_constraint_alignment.py rule 3), so Renovate's Core bump
       # moves them (uv lock, then --sync-lock) and a Dependabot bump would

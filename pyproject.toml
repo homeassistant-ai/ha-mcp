@@ -276,10 +276,14 @@ testpaths = ["tests"]
 # as neither a failure nor a real skip. Make it a collection error instead.
 empty_parameter_set_mark = "fail_at_collect"
 
+# Unregistered markers and unknown config keys are errors. Set here, not as
+# --strict-* in addopts: pytest 9.0 (the version Core's test package pins)
+# silently ignores those flags in addopts.
+strict_markers = true
+strict_config = true
+
 # Command line options
 addopts = [
-    "--strict-markers",
-    "--strict-config",
     "--verbose",
     "--tb=short",
     "--maxfail=3",
