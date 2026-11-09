@@ -28,33 +28,36 @@ from .utilities.topology import component_surface_available
 _SESSION_LOOP = pytest.mark.asyncio(loop_scope="session")
 
 
-def _run_async_tests_on_session_loop(items: list[Any]) -> None:
-    """Run every E2E async test on the session loop its fixtures share.
+def _run_async_tests_on_session_loop(session: Any, items: list[Any]) -> None:
+    """Run every E2E async test and fixture on the session loop they share.
 
     The project default is a loop per test (Core's unit-test plugin needs it);
     the session-scoped servers and clients here live on one loop for the run.
-    ``pytest_fixture_setup`` below puts the async fixtures on the same loop.
+    pytest-asyncio reads a fixture's loop from the ``_loop_scope`` attribute
+    its ``fixture(loop_scope=...)`` decorator sets, before the project default,
+    so plain ``@pytest.fixture`` async fixtures defined under this tree get it
+    here. A ``pytest_fixture_setup`` hook would not do: pytest runs it for a
+    session-scoped fixture through the session's hook relay, which leaves out
+    this tree's conftest.
     """
     for item in items:
         if is_async_test(item):
             item.add_marker(_SESSION_LOOP, append=False)
-
-
-@pytest.hookimpl(wrapper=True, tryfirst=True)
-def pytest_fixture_setup(fixturedef: Any, request: Any) -> Any:
-    """Run every E2E async fixture on the session loop, like the tests.
-
-    pytest-asyncio reads a fixture's loop from the ``_loop_scope`` attribute
-    its ``fixture(loop_scope=...)`` decorator sets, before falling back to the
-    project default, so plain ``@pytest.fixture`` async fixtures here get the
-    session loop without each one naming it.
-    """
-    func = fixturedef.func
-    if (
-        inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)
-    ) and getattr(func, "_loop_scope", None) is None:
-        func._loop_scope = "session"
-    return (yield)
+    e2e_dir = Path(__file__).parent
+    for fixturedefs in session._fixturemanager._arg2fixturedefs.values():
+        for fixturedef in fixturedefs:
+            func = fixturedef.func
+            if not (
+                inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)
+            ):
+                continue
+            if getattr(func, "_loop_scope", None) is not None:
+                continue
+            source = inspect.getsourcefile(func)
+            if source and Path(source).is_relative_to(e2e_dir):
+                # A class fixture is a bound method; its attributes live on
+                # the function, which pytest-asyncio's getattr reads through.
+                getattr(func, "__func__", func)._loop_scope = "session"
 
 
 def _move_haos_tls_items_last(items: list[Any]) -> None:
@@ -148,7 +151,7 @@ def _apply_no_tools_entry_skips(
         item.add_marker(skip_no_tools_only)
 
 
-def pytest_collection_modifyitems(config, items):
+def pytest_collection_modifyitems(session, config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
     Backend markers (#1349 item 7 introduced the inaddon split; #1527 added
@@ -190,7 +193,7 @@ def pytest_collection_modifyitems(config, items):
       inaddon); the server-entry-only lanes still run it.
     """
     del config
-    _run_async_tests_on_session_loop(items)
+    _run_async_tests_on_session_loop(session, items)
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
     haos_stdio = haos and is_haos_stdio_mode()
