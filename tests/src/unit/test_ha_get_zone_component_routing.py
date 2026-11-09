@@ -529,3 +529,69 @@ async def test_a_dropped_registry_read_keeps_the_component_listing() -> None:
 
     assert resp["count"] == 2
     assert any("socket closed" in w for w in resp["warnings"])
+
+
+class _OccupiedClient(RoutingClient):
+    """Anna is in zone.work; nobody is home. ``fail`` drops the state read."""
+
+    def __init__(self, fail: bool = False) -> None:
+        super().__init__()
+        self._fail = fail
+
+    async def get_states(self) -> list[dict[str, Any]]:
+        if self._fail:
+            raise HomeAssistantConnectionError("states down")
+        return [
+            {
+                "entity_id": "zone.work",
+                "attributes": {**_LEGACY_STORAGE_ZONE, "persons": ["person.anna"],
+                               "device_trackers": [], "friendly_name": "Work"},
+            },
+            {
+                "entity_id": "zone.home",
+                "attributes": {"latitude": 41.0, "longitude": -73.0, "radius": 100,
+                               "passive": False, "persons": [],
+                               "device_trackers": [], "editable": True,
+                               "icon": "mdi:home", "friendly_name": "Home"},
+            },
+        ]  # fmt: skip
+
+
+@pytest.mark.parametrize("served_by", ["component", "legacy"])
+@pytest.mark.asyncio
+async def test_every_zone_says_who_is_in_it(served_by: str) -> None:
+    """A stored zone lists its persons like the home zone does: the shape of a
+    row must not depend on where the zone is defined."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS if served_by == "component" else None,
+        info_exc=None
+        if served_by == "component"
+        else HomeAssistantCommandError("Command failed: no info", "unknown_command"),
+        cmd_result=_component_zone_result(),
+    )
+    get_zone = _build_get_zone(_OccupiedClient())
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    rows = {z["entity_id"]: z for z in resp["zones"]}
+    assert rows["zone.work"]["persons"] == ["person.anna"]
+    assert rows["zone.home"]["persons"] == []
+    assert set(rows["zone.work"]) == set(rows["zone.home"])
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_state_names_the_missing_persons() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_zone_result(),
+    )
+    get_zone = _build_get_zone(_OccupiedClient(fail=True))
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    assert resp["count"] == 2
+    assert any("persons" in w and "states down" in w for w in resp["warnings"])

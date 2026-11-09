@@ -439,6 +439,29 @@ class TestZoneWrites:
 
         registered.assert_not_awaited()
 
+    async def test_create_leaves_required_coordinates_to_core(self) -> None:
+        """Core's zone/create names a missing field itself; a copy of its
+        required fields here would drift from it."""
+        client = _client(
+            {
+                "zone/create": {
+                    "success": False,
+                    "error": "required key not provided @ data['latitude']",
+                    "error_code": "invalid_format",
+                }
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_set_zone(name="Office", longitude=13.4)
+
+        (create,) = _sent(client, "zone/create")
+        assert "latitude" not in create
+        assert (
+            "required key not provided @ data['latitude']"
+            in _error(exc_info)["message"]
+        )
+
     async def test_create_leaves_defaults_to_core(self) -> None:
         """Core applies radius and passive defaults; the tool must not pin its own."""
         client = _client()
