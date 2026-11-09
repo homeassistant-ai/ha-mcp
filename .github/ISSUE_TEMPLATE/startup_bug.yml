@@ -156,7 +156,7 @@ body:
         **Be specific!** This helps us reproduce the issue.
       placeholder: |
         1. Opened Terminal
-        2. Ran: uvx ha-mcp
+        2. Ran: uvx --python 3.14 ha-mcp@latest
         3. Added config to Claude Desktop at ~/Library/Application Support/Claude/claude_desktop_config.json
         4. Set HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN
         5. Restarted Claude Desktop
