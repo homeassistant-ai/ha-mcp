@@ -174,9 +174,8 @@ class TraceTools:
           a triggering context; `context_scanned` and
           `context_scan_truncated` describe the bounded parent scan, and
           `context_scan_errors` lists stored traces it could not read.
-        - `config_summary` is the compact alias/mode view. Pass
-          `sections="config"` for the full historical `config`; it is not
-          returned by default.
+        - `config_summary` is the compact alias/mode view; the full historical
+          `config` is opt-in.
         - `logbook_entries`, `logbook_transport`, `logbook_total` and
           `logbook_truncated` describe the run's logbook rows.
           `logbook_transport` is `component`, `rest`, or `mixed`.

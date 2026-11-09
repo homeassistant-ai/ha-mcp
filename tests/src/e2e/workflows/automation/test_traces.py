@@ -19,7 +19,11 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 from ...utilities.entity_finders import find_test_light_entity
-from ...utilities.wait_helpers import wait_for_condition, wait_for_tool_result
+from ...utilities.wait_helpers import (
+    wait_for_condition,
+    wait_for_entity_registration,
+    wait_for_tool_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,24 @@ class TestAutomationTraces:
     async def _find_test_light_entity(self, mcp_client) -> str:
         """Delegates to the suite-wide helper in utilities.entity_finders."""
         return await find_test_light_entity(mcp_client)
+
+    async def _create_trace_automation(
+        self, mcp_client, cleanup_tracker, config: dict[str, Any]
+    ) -> str:
+        """Create an automation and wait until its entity is queryable."""
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation", {"config": config}
+        )
+        create_data = assert_mcp_success(create_result, "Create automation")
+        automation_id = create_data.get("entity_id")
+        assert automation_id, (
+            f"ha_config_set_automation did not resolve an entity id: {create_data}"
+        )
+        cleanup_tracker.track("automation", automation_id)
+        assert await wait_for_entity_registration(mcp_client, automation_id), (
+            f"{automation_id} never became queryable"
+        )
+        return automation_id
 
     async def test_template_trace_with_null_trigger_states(
         self,
@@ -120,19 +142,10 @@ class TestAutomationTraces:
             action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
 
-        create_result = await mcp_client.call_tool(
-            "ha_config_set_automation", {"config": create_config}
+        automation_id = await self._create_trace_automation(
+            mcp_client, cleanup_tracker, create_config
         )
-        assert_mcp_success(create_result)
-        create_data = parse_mcp_result(create_result)
-
-        # Track for cleanup
-        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
-        if automation_id:
-            cleanup_tracker.track("automation", automation_id)
         logger.info(f"Created automation: {automation_id}")
-
-        # Wait for automation to be fully registered
 
         # 3. Trigger the automation manually using automation.trigger service
         trigger_result = await mcp_client.call_tool(
@@ -370,9 +383,16 @@ action:
         )
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
-        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
-        assert automation_id is not None
+        # A create whose entity wait expired returns the numeric config id,
+        # which the trace tool cannot resolve.
+        automation_id = create_data.get("entity_id")
+        assert automation_id, (
+            f"ha_config_set_automation did not resolve an entity id: {create_data}"
+        )
         cleanup_tracker.track("automation", automation_id)
+        assert await wait_for_entity_registration(mcp_client, automation_id), (
+            f"{automation_id} never became queryable"
+        )
 
         event_result = await mcp_client.call_tool(
             "ha_call_event", {"event_type": event_type}
@@ -430,9 +450,16 @@ action:
         )
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
-        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
-        assert automation_id is not None
+        # A create whose entity wait expired returns the numeric config id,
+        # which the trace tool cannot resolve.
+        automation_id = create_data.get("entity_id")
+        assert automation_id, (
+            f"ha_config_set_automation did not resolve an entity id: {create_data}"
+        )
         cleanup_tracker.track("automation", automation_id)
+        assert await wait_for_entity_registration(mcp_client, automation_id), (
+            f"{automation_id} never became queryable"
+        )
 
         trigger_result = await mcp_client.call_tool(
             "ha_call_service",
@@ -484,9 +511,16 @@ action:
         )
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
-        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
-        assert automation_id is not None
+        # A create whose entity wait expired returns the numeric config id,
+        # which the trace tool cannot resolve.
+        automation_id = create_data.get("entity_id")
+        assert automation_id, (
+            f"ha_config_set_automation did not resolve an entity id: {create_data}"
+        )
         cleanup_tracker.track("automation", automation_id)
+        assert await wait_for_entity_registration(mcp_client, automation_id), (
+            f"{automation_id} never became queryable"
+        )
 
         trigger_result = await mcp_client.call_tool(
             "ha_call_service",
@@ -561,9 +595,14 @@ action:
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
 
-        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
-        if automation_id:
-            cleanup_tracker.track("automation", automation_id)
+        automation_id = create_data.get("entity_id")
+        assert automation_id, (
+            f"ha_config_set_automation did not resolve an entity id: {create_data}"
+        )
+        cleanup_tracker.track("automation", automation_id)
+        assert await wait_for_entity_registration(mcp_client, automation_id), (
+            f"{automation_id} never became queryable"
+        )
 
         # Wait for automation registration
 
@@ -783,12 +822,17 @@ action:
                 state = await safe_call_tool(
                     mcp_client, "ha_get_state", {"entity_id": light_id}
                 )
+                if state.get("error"):
+                    pytest.fail(f"State query for {light_id} failed: {state['error']}")
                 return state.get("data", {}).get("state") == "on"
 
-            await wait_for_condition(
+            light_is_on = await wait_for_condition(
                 _light_is_on,
                 timeout=10,
                 condition_name=f"{light_id} to turn on",
+            )
+            assert light_is_on, (
+                f"{light_id} never turned on; the not-triggered trace setup is invalid"
             )
 
             turn_off_result = await mcp_client.call_tool(
