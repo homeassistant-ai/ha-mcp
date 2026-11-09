@@ -22,12 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install, no_direct_listener_helpers  # noqa: F401
-
-install()
-
-import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_server as es
+from custom_components.ha_mcp_tools.const import (
     DATA_LAST_PIP_SPEC,
     DATA_SECRET_PATH,
     DIST_NAME_DEV,
@@ -35,9 +31,10 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_PIP_SPEC,
     OPT_SERVER_URL,
 )
-from custom_components.ha_mcp_tools.spec_dist import version_dist  # noqa: E402
+from custom_components.ha_mcp_tools.spec_dist import version_dist
 
-from .test_embedded_server import _manager, _stub_ha_mcp_surface  # noqa: E402
+from ._embedded_helpers import no_direct_listener_helpers  # noqa: F401
+from .test_embedded_server import _manager, _stub_ha_mcp_surface
 
 OTHER_DIST = "acme-ha-mcp"
 OTHER_SPEC = f"{OTHER_DIST} @ file:///pkg.whl"

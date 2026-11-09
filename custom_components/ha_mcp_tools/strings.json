@@ -2,7 +2,7 @@
     "config": {
         "step": {
             "user": {
-                "title": "HA-MCP Custom Component",
+                "title": "HA-MCP — Manage Home Assistant with AI",
                 "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. It is a standalone server and a complete replacement for every other install method: App (add-on), Docker, uvx/PyPI, stdio; if you run it, do not also run one of those. **HA-MCP File & YAML Tools** has two roles. If your ha-mcp server runs outside Home Assistant - app, Docker, uvx/PyPI, stdio - this entry also gives that server the in-process component capabilities it cannot reach from outside (fast in-process search, config entry metadata, registry-backed reads), so it is worth adding to every external install, and it gates the privileged file and YAML editing services used by ha-mcp's opt-in file/YAML tools. If you add the HA-MCP Server entry instead, that entry already provides those shared capabilities, so this second entry is then needed only as the gate for the opt-in file/YAML tools. It works with every server type and can be added later at any time.",
                 "menu_options": {
                     "server": "HA-MCP Server (recommended)",
@@ -146,8 +146,8 @@
             }
         },
         "component_outdated": {
-            "title": "Update the HA-MCP Custom Component",
-            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component from Settings > System > Updates (in HACS, or the Marketplace on Home Assistant 2026.11+, open the HA-MCP Custom Component and use 'Update information' (HACS) or 'Refresh information' (Marketplace) if no update is shown yet) and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
+            "title": "Update the HA-MCP integration",
+            "description": "The installed ha-mcp server requires the HA-MCP integration {required} or newer, but you have {installed}. Update the integration from Settings > System > Updates (in HACS, or the Marketplace on Home Assistant 2026.11+, open the HA-MCP integration and use 'Update information' (HACS) or 'Refresh information' (Marketplace) if no update is shown yet) and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the integration is updated."
         },
         "legacy_oauth_restart": {
             "title": "Restart Home Assistant to apply the legacy OAuth settings",
@@ -183,6 +183,21 @@
                 },
                 "abort": {
                     "entry_removed": "The HA-MCP Server entry no longer exists."
+                }
+            }
+        },
+        "store_records_conflict": {
+            "title": "HA-MCP is installed from two store listings",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Keep HA-MCP on one store listing?",
+                        "description": "HA-MCP is marked installed from both {records}. They carry the same integration (the second one is the older distribution mirror). The Marketplace in Home Assistant 2026.11 lets only one listing own an integration, so there neither of them can update HA-MCP; HACS still updates, but the upgrade to 2026.11 would leave HA-MCP stuck.\n\nSubmit keeps **{keep}**, the listing in the default catalog that needs no custom repository, and marks the other listing as not installed. Nothing is deleted: your HA-MCP entries, settings and files stay exactly as they are, and from now on updates show up under {keep} as usual."
+                    }
+                },
+                "abort": {
+                    "already_resolved": "HA-MCP is installed from one store listing now; nothing to fix.",
+                    "store_unavailable": "The store (HACS or the Marketplace) is not loaded yet, so the listings cannot be checked. Try again in a few minutes."
                 }
             }
         }

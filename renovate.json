@@ -84,6 +84,18 @@
       "datasourceTemplate": "{{{datasource}}}"
     },
     {
+      "description": "Core and its pytest-homeassistant test package in the dev group follow the e2e image's Core version, in the same update as the image pin",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^pyproject\\.toml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\"[A-Za-z0-9._-]+==(?<currentValue>[\\d.]+)\""
+      ],
+      "depNameTemplate": "{{{depName}}}",
+      "datasourceTemplate": "{{{datasource}}}"
+    },
+    {
       "description": "Exact Renovate engine version used by renovatebot/github-action",
       "customType": "regex",
       "managerFilePatterns": [
@@ -207,6 +219,35 @@
       "prConcurrentLimit": 0
     },
     {
+      "description": "Re-lock when the dev group's Core pins move: uv lock takes the new Core's requirement pins, and --sync-lock moves the runtime packages Core pins only in package_constraints.txt (pydantic, httpx), in the same update.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "ghcr.io/home-assistant/home-assistant"
+      ],
+      "matchFileNames": [
+        "pyproject.toml"
+      ],
+      "constraints": {
+        "python": ">=3.14.2,<3.15"
+      },
+      "postUpgradeTasks": {
+        "commands": [
+          "uv lock",
+          "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
+        ],
+        "fileFilters": [
+          "uv.lock"
+        ],
+        "executionMode": "branch",
+        "installTools": {
+          "python": {},
+          "uv": {}
+        }
+      }
+    },
+    {
       "description": "Supervisor uses zero-padded calendar versions; stable.json determines promotion, not the GitHub release list. The OS pin follows stable.json for the same reason: the GitHub release object is published hours before its per-board assets upload, so the release list is not the promotion signal.",
       "matchDepNames": [
         "home-assistant/supervisor"
@@ -222,7 +263,7 @@
         "python",
         "public.ecr.aws/docker/library/python"
       ],
-      "allowedVersions": "/^3\\.13-slim$/"
+      "allowedVersions": "/^3\\.14-slim$/"
     },
     {
       "description": "Webhook proxy images change only through the dev-first promotion workflow",

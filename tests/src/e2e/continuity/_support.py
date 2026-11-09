@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import logging
-import sys
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from ..utilities.assertions import MCPAssertions, safe_call_tool
+from ..utilities.assertions import MCPAssertions
+from ..utilities.cleanup import CleanupSteps
 from ..utilities.wait_helpers import wait_for_tool_result
-
-_LOGGER = logging.getLogger(__name__)
 
 
 class Scenario:
@@ -87,17 +84,7 @@ async def public_scenario(client: Any) -> AsyncIterator[Scenario]:
         try:
             yield scenario
         finally:
-            failing = sys.exception() is not None
-            errors = []
-            for tool, arguments in reversed(scenario.cleanup):
-                try:
-                    result = await safe_call_tool(client, tool, arguments)
-                    if result.get("success") is not True:
-                        errors.append((tool, result))
-                except Exception as error:
-                    _LOGGER.exception("Continuity cleanup failed: %s", tool)
-                    errors.append((tool, str(error)))
-            if errors:
-                _LOGGER.error("Continuity cleanup failures: %s", errors)
-                if not failing:
-                    raise AssertionError(f"Owned objects were not removed: {errors}")
+            with CleanupSteps() as cleanup:
+                for tool, arguments in reversed(scenario.cleanup):
+                    with cleanup.step():
+                        await mcp.call_tool_success(tool, arguments)

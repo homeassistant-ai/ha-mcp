@@ -36,6 +36,7 @@ from ..errors import (
     create_timeout_error,
     create_validation_error,
 )
+from ..redaction import scrub_known_secrets
 from ..utils.usage_logger import log_tool_call
 from .coercion import UNSET, parse_json_param
 
@@ -67,7 +68,12 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
         ... )
         >>> raise_tool_error(error)  # Raises ToolError with isError=true
     """
-    raise ToolError(
+    raise tool_error_from_response(error_response)
+
+
+def tool_error_from_response(error_response: dict[str, Any]) -> ToolError:
+    """Build the ``ToolError`` that :func:`raise_tool_error` raises."""
+    return ToolError(
         json.dumps(error_response, indent=2, default=str),
         log_level=TOOL_ERROR_LOG_LEVEL,
     )
@@ -148,7 +154,8 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
         else error.get("suggestion")
     )
     if isinstance(first, str) and first:
-        return f"{message} {first}"
+        separator = " " if message[-1] in ".!?:" else ". "
+        return f"{message}{separator}{first}"
     return message
 
 
@@ -421,7 +428,9 @@ def _classify_exception(
                 error_msg,
                 suggestions=[
                     "Use a long-lived access token from an administrator's profile",
-                    "Or use the in-process server, which provisions its own admin token",
+                    "Or, on the in-process server, use a token issued in the "
+                    + "integration's forms from the login of a local-only "
+                    + "administrator account",
                 ],
                 context=context,
             )
@@ -732,9 +741,10 @@ def log_tool_usage(func: Any) -> Any:
         except BaseException as e:
             # BaseException, not Exception: a cancelled tool call must not be
             # recorded as a success. str() is empty on a bare CancelledError,
-            # so the class name stands in.
+            # so the class name stands in. RedactSecretsMiddleware scrubs the
+            # error only after this log entry is written.
             success = False
-            error_message = str(e) or type(e).__name__
+            error_message = scrub_known_secrets(str(e)) or type(e).__name__
             raise
         finally:
             execution_time_ms = (time.time() - start_time) * 1000

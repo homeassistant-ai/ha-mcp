@@ -45,7 +45,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .cloudhook import buffered_response, discovery_rejection, is_cloudhook, read_body
 from .readonly_webhook import (
-    readonly_url,
+    forward_url,
     register_readonly_webhook,
     unregister_readonly_webhook,
 )
@@ -499,10 +499,8 @@ async def _setup_ha_auth_oauth(
     # and home-assistant/core#153820 is field evidence that claude.ai /
     # ChatGPT custom connectors work against HA's native OAuth, not a
     # runtime code dependency of this add-on — hence nothing to gate on.
-    try:
-        from homeassistant.const import __version__ as _hass_version
-    except ImportError:  # pragma: no cover - defensive
-        _hass_version = "unknown"
+    from homeassistant.const import __version__ as _hass_version
+
     _LOGGER.info(
         "MCP Proxy: OAuth mode 'ha_auth' — Home Assistant (version %s) is "
         "the authorization server behind this add-on's scoped OAuth surface; "
@@ -857,7 +855,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN,
             "MCP Proxy",
             webhook_id,
-            _handle_webhook,
+            # Core types a webhook handler as returning a Response; the SSE
+            # branch returns a StreamResponse, which aiohttp serves the same way.
+            _handle_webhook,  # type: ignore[arg-type, unused-ignore]
             allowed_methods=["POST", "GET"],
         )
         registered = True
@@ -1061,12 +1061,11 @@ async def _handle_webhook(
     request: web.Request,
     *,
     read_only: bool = False,
+    suffix: str = "",
 ) -> web.StreamResponse:
-    """Forward the MCP request to the addon and stream the response back."""
+    """Forward the MCP request to the addon's endpoint for ``suffix``."""
     data = hass.data[DOMAIN]
-    target_url = data["target_url"]
-    if read_only:
-        target_url = readonly_url(target_url)
+    target_url = forward_url(data["target_url"], suffix, read_only=read_only)
 
     # Inbound-request debug logging (opt-in). Logged BEFORE the OAuth gate so
     # the unauthenticated discovery probe (which gets a 401) is captured too —
@@ -1132,7 +1131,7 @@ async def _handle_webhook(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the MCP Webhook Proxy config entry."""
-    data = hass.data.pop(DOMAIN, {})
+    data: dict[str, Any] = hass.data.pop(DOMAIN, {})
     webhook_id = data.get("webhook_id")
     if webhook_id:
         _unregister_webhook(hass, webhook_id)

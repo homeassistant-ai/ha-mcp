@@ -7,8 +7,9 @@ begun; this module owns that stream and the rule for what counts as settled.
 """
 
 import asyncio
+import contextlib
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -28,8 +29,8 @@ _RELOAD_SETTLE_TIMEOUT = 20.0
 _ENTRY_SUBSCRIBE_TIMEOUT = 10.0
 #: Budget for everything before the commit is visible — the baseline fragment
 #: and then the ``modified_at`` bump. A resubmit of identical values never
-#: bumps it, and stalling the full settle budget for that costs the caller time
-#: the poll would have spent answering.
+#: bumps it, and stalling the full settle budget for that only delays an
+#: unverified answer.
 _COMMIT_VISIBLE_TIMEOUT = 5.0
 WS_CONFIG_ENTRIES_SUBSCRIBE = "config_entries/subscribe"
 
@@ -73,7 +74,7 @@ async def _subscribe_entry_changes(client: Any) -> tuple[Any, Any] | None:
     Home Assistant dispatches ``SIGNAL_CONFIG_ENTRY_CHANGED`` from
     ``ConfigEntry._async_set_state``, so ``config_entries/subscribe`` pushes
     EVERY state transition with the full entry fragment. Subscribing before
-    the flow starts is what makes the post-commit reload observable instead of
+    the submit is what makes the post-commit reload observable instead of
     sampled: the queue is registered before the frame is sent, so no
     transition between the commit and our first read can be missed.
     """
@@ -87,10 +88,9 @@ async def _subscribe_entry_changes(client: Any) -> tuple[Any, Any] | None:
             WS_CONFIG_ENTRIES_SUBSCRIBE, wait_timeout=_ENTRY_SUBSCRIBE_TIMEOUT
         )
     except Exception as exc:  # noqa: BLE001
-        # Degrade to polling rather than failing the reconfigure; the caller
-        # records which mechanism actually ran.
+        # Report the reconfigure unverified rather than failing it.
         logger.warning(
-            "%s unavailable (%r); falling back to polled verification",
+            "%s unavailable (%r); the reload is not observed",
             WS_CONFIG_ENTRIES_SUBSCRIBE,
             exc,
         )
@@ -151,10 +151,10 @@ async def _observe_reload_settled(
     """Consume entry-change events until the POST-COMMIT reload settles.
 
     Returns the settled fragment, or ``None`` if nothing attributable arrived
-    in budget, in which case the caller falls back to polling.
+    in budget, in which case the caller reports the change unverified.
 
-    The subscription opens before the flow, so the queue holds every fragment
-    from the whole flow window — including transitions with nothing to do with
+    The subscription opens before the submit, so the queue holds every fragment
+    from that call on — including transitions with nothing to do with
     this reconfigure. An entry in ``setup_retry``, the state a user
     reconfigures to fix, always has a retry pending, and one firing mid-flow is
     a real state change whose outcome is not the reconfigure's.
@@ -170,7 +170,7 @@ async def _observe_reload_settled(
     Resubmitting identical values is the deliberate gap: ``async_update_entry``
     returns early on ``not changed``, so nothing bumps ``modified_at`` and
     nothing is attributable. Give up once ``_COMMIT_VISIBLE_TIMEOUT`` passes
-    rather than stalling the whole settle budget for an answer the poll has.
+    rather than stalling the whole settle budget for no answer.
     """
     loop = asyncio.get_running_loop()
     reader = _EntryFragmentReader(queue, entry_id)
@@ -208,3 +208,33 @@ async def _observe_reload_settled(
             # The reload is under way; keep reading for its outcome.
             continue
         return entry
+
+
+@contextlib.asynccontextmanager
+async def watch_entry_reload(
+    client: Any, entry_id: str
+) -> AsyncIterator[Callable[[], Awaitable[dict[str, Any] | None]]]:
+    """Open the change stream before a reconfigure is submitted.
+
+    Yields a function that returns the entry once its post-commit reload has
+    settled, or ``None`` when the stream is unavailable or showed nothing
+    attributable. It never raises: by then Home Assistant has committed the
+    change, and a stream failure must not hide that.
+    """
+    subscription = await _subscribe_entry_changes(client)
+
+    async def settled() -> dict[str, Any] | None:
+        if subscription is None:
+            return None
+        try:
+            return await _observe_reload_settled(subscription[1][1], entry_id)
+        except Exception as err:  # noqa: BLE001
+            logger.warning("Entry-change stream failed after commit (%r)", err)
+            return None
+
+    try:
+        yield settled
+    finally:
+        if subscription is not None:
+            ws, (sub_id, _) = subscription
+            await ws.release_subscription(sub_id)

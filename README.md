@@ -3,7 +3,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
-  # The Unofficial and Awesome Home Assistant MCP Server
+  # HA-MCP — Manage Home Assistant with AI
 
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
@@ -21,8 +21,7 @@
   </p>
 
   <p align="center">
-    <em>A comprehensive Model Context Protocol (MCP) server that enables AI assistants to interact with Home Assistant.<br>
-    Using natural language, control smart home devices, query states, execute services and manage your automations.</em>
+    <em>Configure and automate Home Assistant with Claude, ChatGPT, and other AI assistants.</em>
   </p>
 </div>
 
@@ -34,7 +33,7 @@
 
 ## 🚀 Get Started
 
-The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It installs into Home Assistant through HACS (the built-in Marketplace on Home Assistant 2026.11+), runs the full server **in-process**, and works on **every** Home Assistant installation type — Home Assistant OS, Supervised, Container, and Core — with full feature parity. It is the easiest setup in every case: setup asks for an administrator access token and how clients may connect.
+The recommended way to run ha-mcp is the **HA-MCP integration**. It installs into Home Assistant through HACS (the built-in Marketplace on Home Assistant 2026.11+), runs the full server **in-process**, and works on **every** Home Assistant installation type — Home Assistant OS, Supervised, Container, and Core — with full feature parity. It is the easiest setup in every case: setup asks for an administrator access token and how clients may connect.
 
 **Add it to Home Assistant via HACS or, on Home Assistant 2026.11+, the Marketplace (the preferred install):**
 
@@ -44,13 +43,14 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 
 > The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
-1. Install the **HA-MCP Custom Component**. On **Home Assistant 2026.10 or older**, from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp` (category: **Integration**), then **Download**.
-   On **Home Assistant 2026.11 or newer**, HACS is built in as the **Marketplace**: open **Settings → Marketplace** and accept its first-run warning, then **Connect GitHub** (a device sign-in). Adding a custom repository needs it, and until HA-MCP is in the Marketplace catalog it is also what makes the Marketplace check HA-MCP for updates in the background; without it, **Refresh information** on HA-MCP's Marketplace page checks by hand. Then click the badge above, or open the **Add from link** tab and add `https://github.com/homeassistant-ai/ha-mcp` as an **Integration**, and **Install**.
-   Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases; nothing to change.
+1. Install the **HA-MCP integration** (requires **Home Assistant 2026.8.0 or newer**; see [compatibility details](docs/in-process-server.md#requirements)). On **Home Assistant 2026.8–2026.10**, open HACS, search for **HA-MCP**, then **Download**.
+   On **Home Assistant 2026.11 or newer**, open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
+   Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases. On the Marketplace, keep GitHub connected for its background checks on that custom repository.
+   Older installed releases may still appear as **HA-MCP Custom Component**; searching for **HA-MCP** matches both names.
 2. **Restart Home Assistant.**
 3. Decide which administrator account the server acts as. Either create a long-lived access token on your own account (your profile → **Security** → **Long-lived access tokens** → **Create token**; it works from anywhere if it leaks, and the server's changes show under your name), or, safer, create an account just for HA-MCP under **Settings → People → Add person** with **Allow login**, **Local access only** and **Administrator** on. Never use your own login for the second option.
-4. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP Custom Component** and choose **HA-MCP Server**. Paste your token, or enter the user name and password of the account you made for HA-MCP (HA-MCP creates its token), pick how clients may connect — **Remote access through Home Assistant** (start with **Secret URL**, the simplest; **Home Assistant sign-in** adds a login) and/or **Network access: Local network** — then click **Submit**. Both start disabled, so a client on another device needs one of them.
-5. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**). A notification confirms the server started and points you there.
+4. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP** and choose **HA-MCP Server**. Paste your token, or enter the user name and password of the account you made for HA-MCP (HA-MCP creates its token), pick how clients may connect — **Remote access through Home Assistant** (start with **Secret URL**, the simplest; **Home Assistant sign-in** adds a login) and/or **Network access: Local network** — then click **Submit**. Both start disabled, so a client on another device needs one of them.
+5. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → “HA-MCP — Manage Home Assistant with AI” → HA-MCP Server → Configure**). A notification confirms the server started and points you there.
 6. Paste that URL into your AI client — done.
 
 **Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.
@@ -293,7 +293,7 @@ ha-mcp is a standalone server built for **configuring, building, and debugging**
 
 ## 🔌 Custom Component (ha_mcp_tools) — File & YAML Services
 
-The **HA-MCP Custom Component** also powers a set of privileged tools that standard Home Assistant APIs can't provide: file system access and YAML config editing. (The same component runs the full server in-process — that's the recommended install in the **Get Started** section at the top.) Its **File & YAML services entry** (**HA-MCP File & YAML Tools**) enables the tools below.
+The **HA-MCP integration** also powers a set of privileged tools that standard Home Assistant APIs can't provide: file system access and YAML config editing. (The same component runs the full server in-process — that's the recommended install in the **Get Started** section at the top.) Its **File & YAML services entry** (**HA-MCP File & YAML Tools**) enables the tools below.
 
 **Tools that require the component:**
 
@@ -311,13 +311,13 @@ These tools also require beta feature flags. See **[Beta Features](docs/beta.md)
 
 ### Install
 
-Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP Custom Component**:
+Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP integration**:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
 
-To add manually on Home Assistant 2026.10 or older: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**. On 2026.11 or newer: in **Marketplace**, accept the first-run warning and **Connect GitHub**, then **Add from link** > `https://github.com/homeassistant-ai/ha-mcp` as an **Integration** > **Install**. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
+Requires **Home Assistant 2026.8.0 or newer** through HACS or the Marketplace; see [compatibility details](docs/in-process-server.md#requirements) for manual installs. On Home Assistant 2026.8–2026.10: open **HACS**, search for **HA-MCP**, and **Download**. On 2026.11 or newer: open **Marketplace**, accept the first-run warning, search for **HA-MCP**, and **Install**. The main repository is in the default catalog for both. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
-After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP Custom Component**, and add the **HA-MCP File & YAML Tools** entry.
+After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP**, and add the **HA-MCP File & YAML Tools** entry.
 
 To run the full ha-mcp server in-process through this same component, see the **Get Started** section at the top and the [full in-process server documentation →](docs/in-process-server.md).
 
@@ -381,7 +381,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 
 Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, Claude Code); the full catalog has no idle cost there, direct calls skip the search step, and the client's built-in tool search is the better choice — there is no benefit to running ha-mcp's on top of it. Whether tools are deferred depends on the client and model combination: the same model can behave differently per client — GitHub Copilot CLI running Claude Sonnet/Opus inlines the full catalog and still benefits from tool search here. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
-> 🔄 **Refresh your client's tool list after changing this (or any) setting.** Toggling `ENABLE_TOOL_SEARCH` (or changing pinned/disabled tools, Read Only Mode, etc.) changes the tools the server exposes, but your AI client keeps serving its **cached** tool list until it re-fetches. Restarting the app or Home Assistant does **not** refresh the client — reconnect or refresh the MCP server in your client (e.g. re-add/refresh the connector in ChatGPT, or close and reopen Claude Desktop). If you skip this, newly enabled tools won't appear in the client at all, and tools the server no longer exposes still show as available but fail when called (`Unknown tool`, or the Read Only Mode error for a write tool that mode hides). ChatGPT sometimes keeps serving the stale list even after the connector is removed and re-added under the same name — if tools are still missing after re-adding, delete the connector and create a new one with a **different name**.
+> 🔄 **Refresh your client's tool list after changing this (or any) setting.** Toggling `ENABLE_TOOL_SEARCH` (or changing pinned/disabled tools, Read Only Mode, etc.) changes the tools the server exposes, but your AI client keeps serving its **cached** tool list until it re-fetches. Restarting the app or Home Assistant does **not** refresh the client — reconnect or refresh the MCP server in your client (e.g. in ChatGPT open **Settings**, then the plugin settings, select the connector and click **Refresh tools**; disconnect and reconnect a Claude Desktop custom connector; refresh the tools list of a claude.ai connector; or quit and reopen Claude Desktop for a server in `claude_desktop_config.json`), then start a new conversation. If you skip this, newly enabled tools won't appear in the client at all, and tools the server no longer exposes still show as available but fail when called (`Unknown tool`, or the Read Only Mode error for a write tool that mode hides). ChatGPT sometimes keeps serving the stale list even after the connector is removed and re-added under the same name — if tools are still missing after a refresh, delete the connector and create a new one with a **different name**. The [FAQ](https://homeassistant-ai.github.io/ha-mcp/faq/#chatgpt-stale-tools) has the full steps.
 
 For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-app settings UI for fine-grained tool enable/disable/pin.
 

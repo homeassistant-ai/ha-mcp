@@ -322,6 +322,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "root directory.",
     ),
     (
+        "py/unused-import",
+        "tests/src/conftest.py",
+        "Import of 'pytest_runtest_call'",
+        "",
+        "Hook registration: pytest finds hooks by name in the conftest "
+        "namespace, so importing pytest_runtest_call from "
+        "tests/src/timed_out_task.py registers it. pytest_plugins is not "
+        "allowed in a conftest below the root directory.",
+    ),
+    (
         "py/import-and-import-from",
         "tests/src/unit/test_translate_locales.py",
         "Module 'translate_locales' is imported with both",

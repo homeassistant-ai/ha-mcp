@@ -29,7 +29,14 @@ gives in-process access to the Core object a tool wraps, and keep Core's
 REST/WebSocket API as the explicit fallback for an installation without the
 component. Gate the choice on the component's `capabilities` handshake, and
 update the component producer, server consumer, capability gate and fallback in
-the same pull request, on both component entry topologies.
+the same pull request, on both component entry topologies. A path can be
+component-only by design when the fallback would be a copy of Core's rules:
+the reference check on automation, script and scene writes is one, since
+Core's API validates a config's trigger, condition and action lists and serves
+the target lookups and registries, but does not collect an unsaved config's
+references, and a server-side copy of that part is the hand-kept walker it
+replaced. Without the component the write says the
+references went unchecked.
 
 "The component" is the `ha_mcp_tools` integration's shared `ha_mcp_tools/*`
 command surface, which both of its config-entry types serve: the HA-MCP Server
@@ -171,7 +178,12 @@ Core's REST config endpoint and its 400 text leads the error; WebSocket
 the first event of `trigger_platforms/subscribe` or
 `condition_platforms/subscribe`, the registry row from
 `config/entity_registry/get` and the load failure from
-`repairs/list_issues`, and references are not available. On both paths the
+`repairs/list_issues`. Core serves no references over its API there, so the
+get tool carries Core's `search/related` answer as `related` instead and
+`warnings` says so: the Related set the frontend shows, which also holds the
+devices, areas, floors and integrations of what the automation uses and the
+members of groups, scenes and scripts it names, so it stays apart from
+`references`. On both paths the
 config reaches Core as written and Core's text is never rewritten: no root
 key is pluralised, no alias or trigger key is required or renamed by the
 tool. Core does its own renaming while it validates a write (Core's
@@ -193,21 +205,52 @@ automation the registry resolves but Core's config API answers "Resource not
 found" for is defined in YAML or a package, outside `automations.yaml`; the
 get, set and remove tools report it as CONFIG_NOT_FOUND. A config id with no
 registry row returns the body Core stores under it, with `entity` None; only
-an id Core stores nothing under is not found. The reference validator also
-checks
-device, area, floor and label targets when the component's `reference_data`
-advertises `reference_data_targets`, and entities and services only
-otherwise, naming the target kinds it could not check in
-`validation.unchecked_target_kinds` (a failed fetch is
-`validation.references_unchecked`). With targets, `reference_data` also
-carries Core's match sentinels (`ENTITY_MATCH_NONE` / `ENTITY_MATCH_ALL` from
-`homeassistant.const`), which the validator never reports as missing. The tools' own checks are HA-MCP
+an id Core stores nothing under is not found. References in a proposed
+automation, script or scene come from the component's
+`ha_mcp_tools/config_references` bridge (capability `config_references`):
+Core's own validator runs on the config (blueprint inputs applied), Core's
+`Script` and trigger/condition helpers collect its entities, devices, areas,
+floors and labels as Core's automation entity does, and Core's state machine,
+registries and services say which are missing (Core's match sentinels never
+are). Each entity target also goes to Core's `async_get_services_for_target` /
+`async_get_triggers_for_target` / `async_get_conditions_for_target`, the
+lookups behind the editor's target pickers, and an entity Core does not offer
+for its item is reported with what Core does offer (`offered`). The server
+keeps no copy of these rules: when the component is absent or outdated, the
+check fails, or Core refuses the config, `validation.references_unchecked`
+says why nothing was checked. The tools' own checks are HA-MCP
 policies, not Core rules: the `config_hash` optimistic lock, the
 alias-replacement guard, the guard against a config `id` passed without an
 entity_id, the config-`id` mismatch guard, write-mode exclusivity, keeping
 the `enabled` and `category` parameters out of the stored config, blueprint
 empty-list stripping, the best-practice checker and the reference
 validator.
+
+An integration's own `<domain>/` WebSocket commands, the API its panel uses,
+are listed through the component, which reads Core's registry
+(`hass.data["websocket_api"]`) and serializes each command's registered request
+schema; a command registered without fields (schema `False`) is described with
+Core's `BASE_COMMAND_MESSAGE_SCHEMA`. A call is sent over WebSocket as given:
+Core validates it against that schema before the handler runs, so the tool
+passes Core's error through instead of validating first.
+
+A config entry's `options` are read through the component's `config_entries`
+command, which returns Core's entry row with the stored mapping. Core's REST
+and WebSocket entry reads carry no `options` and Core has no read API for
+them, so without the component `ha_get_integration` returns an entry that has
+an options flow without `options` and says so in `warnings`.
+`ha_get_integration` opens an entry's options flow only when the caller asks
+for its form (`include_schema`), as the frontend opens it only when the user
+chooses Configure: the flow's first step is the integration's own code and may
+act (#2987). Only that form marks which fields are passwords, so under
+`redact_secrets` a read that does not ask for it withholds every option value
+of an entry that has an options flow. That is an HA-MCP policy, not a Core
+rule. On an installation without the component, `ha_search` reads a flow
+helper's config through its options flow only for Home Assistant's own helper
+flows, the `core.helper` domains of `integration/descriptions`; a custom helper
+integration's entry is matched on its title, its config is withheld as
+`options_withheld: custom_integration` (the component's own marker), and the
+result is `partial`.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

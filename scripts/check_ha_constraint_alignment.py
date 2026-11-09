@@ -1,4 +1,4 @@
-"""Check ha-mcp's direct dependencies stay aligned with HA core's own pins.
+"""Check ha-mcp's dependencies and locked runtime closure against HA core's pins.
 
 Why (issues #2135/#2146): the in-process embedded install pip-installs ha-mcp
 into Home Assistant's own site-packages. A dependency spec that forces pip to
@@ -23,24 +23,40 @@ current, so drift on either side fails the very PR that introduces it):
    shipped version passes here. The value-level backstop is the embedded
    e2e no-stomp guard, which diffs the real install against the real image.
 
+With ``--lock uv.lock`` a third rule applies, for the Core version the dev
+group and the e2e image share:
+
+3. Every package ha-mcp needs at runtime (its dependency closure in the
+   lock, dev-only tools excluded) that HA pins exactly is locked at exactly
+   that version. The Docker and app images install from ``uv.lock`` while
+   the embedded install keeps Core's versions, so a difference here is a
+   difference between the two installs. ``homeassistant`` in the dev group
+   makes ``uv lock`` take Core's own requirement pins; a package Core pins
+   only in ``package_constraints.txt`` (pydantic, httpx) is moved by
+   ``--sync-lock``, which Renovate runs after it bumps the dev group's Core.
+
 Dependencies HA does not constrain at all are not managed here — renovate
 keeps them current, and the embedded-lane no-stomp guard
 (tests/src/e2e/workflows/embedded/test_embedded_no_stomp.py) still catches a
 collision with an image-shipped transitive package empirically.
 
-Scope limit worth knowing: this reads ``[project.dependencies]`` only, so a
-package that reaches Home Assistant's environment TRANSITIVELY is invisible
-here. The no-stomp guard is what covers those, by diffing the real install
-against the real image.
+Scope limit worth knowing: rules 1-2 read ``[project.dependencies]`` only;
+rule 3 covers the transitive packages HA pins exactly, for the image's Core
+only. A transitive package HA pins loosely, and every package at the HACS
+floor, is the no-stomp guard's job, which diffs the real install against the
+real image.
 
 Usage:
     python scripts/check_ha_constraint_alignment.py --ha-version 2026.7.4
+    python scripts/check_ha_constraint_alignment.py --ha-version 2026.11.0 --lock uv.lock
     python scripts/check_ha_constraint_alignment.py --constraints-file c.txt
+    python scripts/check_ha_constraint_alignment.py --sync-lock
 """
 
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import time
 import tomllib
@@ -50,7 +66,8 @@ from pathlib import Path
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
+from packaging.utils import NormalizedName, canonicalize_name
+from packaging.version import Version
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CONSTRAINTS_URL = (
@@ -160,6 +177,101 @@ def check_alignment(
     return violations
 
 
+def locked_runtime_versions(lock_text: str, root: str = "ha-mcp") -> dict[str, str]:
+    """Return ``{canonical_name: version}`` for ``root``'s runtime closure in a uv.lock.
+
+    Follows ``dependencies`` and the optional-dependency groups named by a
+    dependency's ``extra``; the dev group is not part of the closure.
+    """
+    packages = {
+        canonicalize_name(package["name"]): package
+        for package in tomllib.loads(lock_text)["package"]
+    }
+    versions: dict[str, str] = {}
+    seen: set[tuple[NormalizedName, tuple[str, ...]]] = set()
+    pending: list[tuple[NormalizedName, tuple[str, ...]]] = [
+        (canonicalize_name(root), ())
+    ]
+    while pending:
+        name, extras = pending.pop()
+        package = packages[name]
+        edges = list(package.get("dependencies", []))
+        for extra in extras:
+            edges += package.get("optional-dependencies", {}).get(extra, [])
+        for edge in edges:
+            node = (canonicalize_name(edge["name"]), tuple(edge.get("extra", ())))
+            if node in seen:
+                continue
+            seen.add(node)
+            versions[node[0]] = packages[node[0]]["version"]
+            pending.append(node)
+    return versions
+
+
+def lock_pin_mismatches(
+    locked: dict[str, str], ha_constraints: dict[str, SpecifierSet]
+) -> dict[str, str]:
+    """Return ``{name: ha_pin}`` for locked runtime packages off HA's exact pin."""
+    mismatches: dict[str, str] = {}
+    for name, version in sorted(locked.items()):
+        ha_pin = _lone_exact_pin(ha_constraints.get(name, SpecifierSet()))
+        if ha_pin is not None and Version(version) != Version(ha_pin):
+            mismatches[name] = ha_pin
+    return mismatches
+
+
+def check_lock_alignment(
+    locked: dict[str, str], ha_constraints: dict[str, SpecifierSet]
+) -> list[str]:
+    """Return one violation per locked runtime package off HA's exact pin."""
+    return [
+        f"{name}: uv.lock has {locked[name]} but HA pins {name}=={ha_pin}. "
+        "The Docker and app images would run a different version than the "
+        "embedded install; run 'python scripts/check_ha_constraint_alignment.py "
+        "--sync-lock'."
+        for name, ha_pin in lock_pin_mismatches(locked, ha_constraints).items()
+    ]
+
+
+def sync_lock(lock: Path, ha_constraints: dict[str, SpecifierSet]) -> int:
+    """Re-lock every runtime package that is off HA's exact pin onto it."""
+    mismatches = lock_pin_mismatches(
+        locked_runtime_versions(lock.read_text(encoding="utf-8")), ha_constraints
+    )
+    if not mismatches:
+        print("uv.lock already holds HA's pins.")
+        return 0
+    command = ["uv", "lock"]
+    for name, pin in mismatches.items():
+        command += ["--upgrade-package", f"{name}=={pin}"]
+    print("Running:", " ".join(command))
+    try:
+        subprocess.run(command, check=True, cwd=lock.parent)
+    except (OSError, subprocess.CalledProcessError) as err:
+        print(f"ERROR: {' '.join(command)} failed: {err}", file=sys.stderr)
+        return 2
+    remaining = check_lock_alignment(
+        locked_runtime_versions(lock.read_text(encoding="utf-8")), ha_constraints
+    )
+    for violation in remaining:
+        print(f"VIOLATION: {violation}", file=sys.stderr)
+    return 1 if remaining else 0
+
+
+def dev_group_core_version(pyproject_text: str) -> str:
+    """Return the Core version the dev group pins (``homeassistant==X``)."""
+    for entry in tomllib.loads(pyproject_text)["dependency-groups"]["dev"]:
+        if not isinstance(entry, str):
+            continue
+        requirement = Requirement(entry)
+        if canonicalize_name(requirement.name) != "homeassistant":
+            continue
+        pin = _lone_exact_pin(requirement.specifier)
+        if pin is not None:
+            return pin
+    raise SystemExit("ERROR: the dev group does not pin homeassistant==<version>")
+
+
 def _fetch_constraints(ha_version: str) -> str | None:
     """Fetch HA's constraints file, retrying transient failures.
 
@@ -211,9 +323,15 @@ def _fetch_constraints(ha_version: str) -> str | None:
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--sync-lock",
+        action="store_true",
+        help="Re-lock uv.lock onto the exact pins of the Core version the dev "
+        "group pins (Renovate runs this after a Core bump)",
+    )
     source.add_argument(
         "--ha-version",
         help="HA core version whose package_constraints.txt to check against "
@@ -224,24 +342,65 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Local package_constraints.txt to check against (offline)",
     )
-    args = parser.parse_args(argv)
+    parser.add_argument(
+        "--lock",
+        type=Path,
+        help="uv.lock whose runtime packages must equal HA's exact pins "
+        "(rule 3); pass it only for the Core version the dev group pins",
+    )
+    return parser
 
-    constraints_text: str | None
+
+def _run_sync_lock() -> int:
+    pyproject = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    constraints_text = _fetch_constraints(dev_group_core_version(pyproject))
+    if constraints_text is None:
+        return EXIT_CONSTRAINTS_UNREACHABLE
+    return sync_lock(_REPO_ROOT / "uv.lock", parse_requirement_lines(constraints_text))
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as err:
+        print(f"ERROR: could not read {path}: {err}", file=sys.stderr)
+        return None
+
+
+def _lock_violations(
+    lock: Path, ha_constraints: dict[str, SpecifierSet], origin: str
+) -> list[str] | None:
+    """Rule 3's violations for ``lock``, or None (reported) if it can't be read."""
+    lock_text = _read_text(lock)
+    if lock_text is None:
+        return None
+    try:
+        locked = locked_runtime_versions(lock_text)
+    except (tomllib.TOMLDecodeError, KeyError) as err:
+        print(
+            f"ERROR: could not read the runtime closure from {lock}: {err!r}",
+            file=sys.stderr,
+        )
+        return None
+    print(f"Checked {len(locked)} locked runtime packages against {origin}.")
+    return check_lock_alignment(locked, ha_constraints)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.sync_lock:
+        return _run_sync_lock()
+
     if args.constraints_file is not None:
-        try:
-            constraints_text = args.constraints_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as err:
-            print(
-                f"ERROR: could not read {args.constraints_file}: {err}",
-                file=sys.stderr,
-            )
+        constraints_text = _read_text(args.constraints_file)
+        if constraints_text is None:
             return 2
         origin = str(args.constraints_file)
     else:
         constraints_text = _fetch_constraints(args.ha_version)
         origin = f"HA core {args.ha_version}"
-    if constraints_text is None:
-        return EXIT_CONSTRAINTS_UNREACHABLE
+        if constraints_text is None:
+            return EXIT_CONSTRAINTS_UNREACHABLE
 
     ha_constraints = parse_requirement_lines(constraints_text)
     if not ha_constraints:
@@ -263,6 +422,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {name}: ha-mcp '{dep.specifier}' vs HA '{ha_constraints[name]}'")
 
     violations = check_alignment(dependencies, ha_constraints)
+    if args.lock is not None:
+        lock_violations = _lock_violations(args.lock, ha_constraints, origin)
+        if lock_violations is None:
+            return 2
+        violations += lock_violations
     for violation in violations:
         print(f"VIOLATION: {violation}", file=sys.stderr)
     return 1 if violations else 0

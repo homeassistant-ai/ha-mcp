@@ -34,6 +34,7 @@ from ..utilities.addon_restart import get_instance_id as _get_instance_id
 from ..utilities.addon_restart import post_log_level as _post_log_level
 from ..utilities.addon_restart import restart_self as _restart_self
 from ..utilities.addon_restart import restore_info_level
+from ..utilities.cleanup import CleanupSteps
 
 LOG = logging.getLogger(__name__)
 
@@ -171,14 +172,15 @@ async def test_addon_launcher_schedules_the_startup_nudge(
             "lifespan reaches the add-on."
         )
     finally:
-        await restore_info_level(
-            settings_advanced,
-            settings_restart,
-            settings_info,
-            addon_url,
-            restore_timeout=_RESTORE_TIMEOUT,
-            ready_timeout=_READY_TIMEOUT,
-            poll_interval=_POLL_INTERVAL,
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await restore_info_level(
+                settings_advanced,
+                settings_restart,
+                settings_info,
+                addon_url,
+                restore_timeout=_RESTORE_TIMEOUT,
+                ready_timeout=_READY_TIMEOUT,
+                poll_interval=_POLL_INTERVAL,
+            )
 
     LOG.info("Add-on launcher scheduled the startup nudge")

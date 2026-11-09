@@ -110,6 +110,59 @@ component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
 
+## Unit Tests Run on Real Home Assistant Core
+
+`tests/src/unit/` and `tests/addon/` import Core from the dev group
+(`homeassistant`, pinned with `pytest-homeassistant` to the e2e image's Core)
+and run under Core's own test plugin, which their `conftest.py` loads; its
+entry point is blocked in `pyproject.toml`, so E2E sessions never load it.
+A test never writes its own Home Assistant. A hand-made one asserts against a
+guess of what Core does, and such guesses have shipped bugs (#2752):
+
+- No stand-in for `hass`, a registry, a registry entry, a state, a config
+  entry, a WebSocket connection, an entity, a store or any other Core object.
+  Use the plugin's `hass` fixture, `MockConfigEntry`, the registry fixtures
+  (`entity_registry`, `device_registry`, `area_registry`, ...),
+  `hass.states.async_set`, `async_setup_component`, and `hass_ws_client`
+  (`component_ws` in `src/unit/conftest.py` registers the `ha_mcp_tools/*`
+  commands on it).
+- No stand-in module: nothing but the imported module in `sys.modules` for
+  `homeassistant.*`, `aiohttp`, `voluptuous` or `yarl`.
+- Config entries are set up by Core (`hass.config_entries.async_setup`), which
+  loads this repository's `custom_components/ha_mcp_tools` like any custom
+  integration; `src/unit/_server_entry.py` adds a server entry whose server is
+  replaced.
+- What may be replaced: this repository's own collaborators (the in-process
+  server, the REST/WebSocket client, an upstream), another integration through
+  Core's `mock_integration`, and one function or constant on a real Core module
+  when the test needs an answer Core cannot be made to give in a unit test (a
+  failure, a URL, another Core version's shape). Raise Core's real exceptions.
+- An integration whose requirements are not installed with Core (`cloud`,
+  `camera`, `conversation`) cannot be imported here; the component reaches it
+  through a small function of its own that the test replaces.
+
+Four ast-grep rules refuse these in the source: a hand-made `hass`
+(`rules/no-hand-made-hass.yml`), a fake Core object class
+(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
+(`rules/no-shared-core-fakes.yml`), and `patch.dict(sys.modules, ...)` or an
+assignment of a Core module name in `sys.modules`
+(`rules/no-core-module-stand-ins.yml`). `tests/core_stand_in_guard.py` checks
+`sys.modules` after every test body and fails a test whose stand-in module is
+still there, which covers `monkeypatch` swaps and computed names; it cannot see
+a swap the test has already undone, which is why the fourth rule exists. Test
+files written before the unit tests ran on real Core are listed in the rules'
+`ignores` and in the guard. Converting such a file removes it from the lists;
+no file is ever added to them.
+
+The plugin enforces, for every test:
+
+- a fresh event loop (the E2E tree keeps one session loop, see
+  `src/e2e/_conftest_collection.py`);
+- no sockets: a test that runs its own loopback listener requests
+  `socket_enabled`, and only `127.0.0.1` accepts connections;
+- no thread, task or timer left behind (`_no_threads_left_by_the_test` in
+  `src/unit/conftest.py` stops the per-process ones).
+
 ## Test Design Rules
 
 Every test under `tests/` follows these. Reviewers check new and changed
@@ -175,10 +228,24 @@ tests against them.
   — so it genuinely proves the call failed. Prefer also passing `expected_error` to pin
   *which* failure; about half the current call sites omit it and assert on the returned
   dict themselves instead, which is equally fine.
-- `safe_call_tool()` is for calls whose outcome the test does **not** assert: `finally`
-  cleanup (so a cleanup failure cannot mask the real assertion) and service-availability
-  probes. It swallows `ToolError` and returns a parsed dict, so using it for an expected
-  failure means nothing verifies the call failed at all.
+- `safe_call_tool()` is for calls whose outcome the test does **not** assert: removing
+  or aborting, in a `finally` block, something the test created or opened, and
+  service-availability probes. It swallows `ToolError` and returns a parsed dict, so using
+  it for an expected failure means nothing verifies the call failed at all.
+- A `finally` block that puts back state a later test on the worker reads runs its steps
+  in `CleanupSteps` (`src/e2e/utilities/cleanup.py`): one `with cleanup.step():` per
+  step. A tool call in a step goes through `MCPAssertions(client).call_tool_success()`;
+  a helper counts as checked when it raises on failure. Removing or aborting, in the same
+  block, something the test created or opened may stay on `safe_call_tool()`, in a step
+  of its own. A step that raises an `Exception` or calls `pytest.fail()` or
+  `pytest.skip()` is logged, and the next step runs. A failed step fails a test whose
+  body passed or was skipped; after a failed body it is only logged, so pytest reports
+  the body's own failure. Enter `CleanupSteps` as the first statement of the `finally`
+  block, and not in a `try`/`finally` that runs while another exception is handled (an
+  `except` in the `finally` block, a caller's `except`) or whose body raises an exception
+  the caller expects (`pytest.raises`): it would read that exception as a failed body and
+  only log a failed step. A restore that must never fail the test keeps its own
+  `try`/`except` and a comment saying why.
 
 ## E2E Test Patterns
 
@@ -192,7 +259,7 @@ await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 ```
 
 **Automation configs come back as Core stores them:** the automation tools send the config to Core as written and `ha_config_get_automation` returns Core's stored body verbatim, so `python_transform` operates on that body. Core itself renames the singular root keys `trigger`/`condition`/`action` to the plural forms and `service` to `action` while validating a write (Core's backward-compat validators: `cv.renamed` for the root keys, the service schema's own rename for `service`; both rename in place and the config view stores that dict), and refuses a config holding both forms of one key; a trigger's `platform` key is kept. So a config written with singular keys reads back plural, and `test_data_factory.automation_config`'s singular `trigger`/`action` defaults must be overridden with the same singular keys, never the plural ones.
-An automation the registry knows but Core's config API answers "Resource not found" for (defined in YAML or a package) is CONFIG_NOT_FOUND on get, set and remove. The component's lookup reports `loaded`; while Core has not loaded the automation, `references` is None and the get tool warns. With `reference_data_targets`, `reference_data` carries Core's match sentinels (`none`/`all`), which the reference validator skips; without the target ids it reports `validation.unchecked_target_kinds`.
+An automation the registry knows but Core's config API answers "Resource not found" for (defined in YAML or a package) is CONFIG_NOT_FOUND on get, set and remove. The component's lookup reports `loaded`; while Core has not loaded the automation, `references` is None and the get tool warns. The reference validator reads Core's verdict from the component's `config_references`; without the component it reports `validation.references_unchecked`.
 
 **Poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
 ```python

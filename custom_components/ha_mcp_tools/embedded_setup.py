@@ -286,6 +286,21 @@ def _dedup_hosts(primary: str | None, extra: list[str] | None) -> list[str]:
     return ordered
 
 
+def _cloud_remote_url(hass: HomeAssistant) -> str | None:
+    """The Nabu Casa remote URL, when the cloud integration is set up + logged in."""
+    try:
+        from homeassistant.components.cloud import (
+            CloudNotAvailable,
+            async_remote_ui_url,
+        )
+    except ImportError:
+        return None  # Cloud integration not installed (e.g. HA Core) - local URL only.
+    try:
+        return str(async_remote_ui_url(hass))
+    except CloudNotAvailable:
+        return None  # Cloud not logged in / remote UI off - no remote URL to show.
+
+
 def _resolve_local_url(hass: HomeAssistant) -> tuple[str | None, str | None]:
     """The get_url internal base URL and its host, or ``(None, None)``."""
     from homeassistant.helpers.network import NoURLAvailableError, get_url
@@ -340,21 +355,8 @@ def build_connect_urls(
         # external URL leads the list (any reverse proxy, not just Nabu Casa).
         urls.append(f"{external}/api/webhook/{webhook_id}")
 
-    # Nabu Casa remote URL (only when the cloud integration is set up + logged in).
-    try:
-        from homeassistant.components.cloud import (
-            CloudNotAvailable,
-            async_remote_ui_url,
-        )
-
-        try:
-            if webhook_id:
-                cloud_base = async_remote_ui_url(hass)
-                urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
-        except CloudNotAvailable:
-            pass  # Cloud not logged in / remote UI off - no remote URL to show.
-    except ImportError:
-        pass  # Cloud integration not installed (e.g. HA Core) - local URL only.
+    if webhook_id and (cloud_base := _cloud_remote_url(hass)):
+        urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
 
     local_base, local_host = _resolve_local_url(hass)
 
@@ -418,8 +420,9 @@ def _surface_connect_urls(
 
     log_message = (
         "HA-MCP in-process server is running. The connect URL(s) are on the "
-        "entry's Configure screen (Settings - Devices & Services - HA-MCP "
-        f"Custom Component - HA-MCP Server - Configure). {auth_note}"
+        "entry's Configure screen (Settings - Devices & Services - "
+        "“HA-MCP — Manage Home Assistant with AI” - "
+        f"HA-MCP Server - Configure). {auth_note}"
     )
     if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
         if not oauth_creds_active:
@@ -463,7 +466,7 @@ def _surface_connect_urls(
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
         f"{panel_line}"
         "The connect URL is shown on the entry's Configure screen "
-        "(Settings - Devices & Services - HA-MCP Custom Component - "
+        "(Settings - Devices & Services - “HA-MCP — Manage Home Assistant with AI” - "
         "HA-MCP Server - Configure), which only administrators can open, "
         "because the URL is the credential.\n\n"
         f"{auth_note}\n\n"
@@ -628,8 +631,8 @@ async def _async_check_component_compat(
 
     if outdated:
         _LOGGER.warning(
-            "The installed ha-mcp server requires HA-MCP Custom Component %s or "
-            "newer, but %s is running; update the component via HACS (the "
+            "The installed ha-mcp server requires the HA-MCP integration %s or "
+            "newer, but %s is running; update the integration via HACS (the "
             "Marketplace on Home Assistant 2026.11+).",
             required,
             own,

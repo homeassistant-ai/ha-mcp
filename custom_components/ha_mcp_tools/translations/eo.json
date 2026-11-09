@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA-MCP Propra Komponanto",
+        "title": "HA-MCP — Administru Home Assistant per AI",
         "description": "Elektu kion aldoni. **HA-MCP Server** rulas la plenan ha-mcp-servilon ene de Home Assistant kaj elmetas ĝin per Home Assistant-retooko (webhook) — ĉi tio estas la instalo, kiun la plej multaj homoj deziras. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por ĉiu alia instala metodo: Apo (aldonaĵo), Docker, uvx/PyPI, stdio; se vi rulas ĝin, ne krome rulas iun el tiuj. **HA-MCP File & YAML Tools** havas du rolojn. Se via ha-mcp-servilo rulas ekster Home Assistant — apo, Docker, uvx/PyPI, stdio — ĉi tiu enigo ankaŭ donas al tiu servilo la enprocezajn komponentajn kapablojn, kiujn ĝi ne povas atingi de ekstere (rapida enproceza serĉo, metadatenoj de agorda enigo, legadoj subtenataj de registro), do indas aldoni ĝin al ĉiu ekstera instalo, kaj ĝi regas la privilegiitajn dosierajn kaj YAML-redaktajn servojn uzatajn de la laŭvolaj dosieraj/YAML-iloj de ha-mcp. Se vi aldonas la enigon de HA-MCP Server anstataŭe, tiu enigo jam provizas tiujn komunajn kapablojn, do ĉi tiu dua enigo tiam necesas nur kiel la pordego por la laŭvolaj dosieraj/YAML-iloj. Ĝi funkcias kun ĉiu servilspeco kaj povas esti aldonita poste iam ajn.",
         "menu_options": {
           "server": "HA-MCP Servilo (rekomendita)",
@@ -146,8 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Ĝisdatigu la HA-MCP Propra Komponento",
-      "description": "La instalita ha-mcp servilo postulas HA-MCP Propra Komponento {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la komponenton el Agordoj > Sistemo > Ĝisdatigoj (en HACS, aŭ la Vendejo ĉe Home Assistant 2026.11+, malfermu la HA-MCP Propra Komponento kaj uzu 'Ĝisdatigi informojn' (HACS) aŭ 'Refreŝigi informojn' (Vendejo) se neniu ĝisdatigo estas ankoraŭ montrata) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj ebloj eble ne funkcios ĝis la komponento estos ĝisdatigita."
+      "title": "Ĝisdatigu la HA-MCP integriĝon",
+      "description": "La instalita ha-mcp servilo postulas la HA-MCP integriĝon {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la integriĝon de Agordoj > Sistemo > Ĝisdatigoj (en HACS, aŭ la Merkata Placo ĉe Home Assistant 2026.11+, malfermu la HA-MCP integriĝon kaj uzu 'Update information' (HACS) aŭ 'Refresh information' (Merkata Placo) se neniu ĝisdatigo estas ankoraŭ montrata) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj funkcioj eble ne funkcios ĝis kiam la integriĝo estas ĝisdatigita."
     },
     "legacy_oauth_restart": {
       "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
@@ -183,6 +183,21 @@
         },
         "abort": {
           "entry_removed": "La ero de la HA-MCP Server jam ekzistas ne plu."
+        }
+      }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP estas instalita el du vendejaj listoj",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Ĉu konservi HA-MCP en unu vendeja listo?",
+            "description": "HA-MCP estas markita kiel instalita el ambaŭ {records}. Ili portas la saman integriĝon (la dua estas la pli malnova distribua spegulo). La vendejo en Home Assistant 2026.11 permesas al nur unu listo posedi integriĝon, do tie neniu el ili povas ĝisdatigi HA-MCP; HACS ankoraŭ ĝisdatigas, sed la ĝisdatigo al 2026.11 lasus HA-MCP blokita.\n\nSendado konservas **{keep}**, la liston en la defaŭlta katalogo kiu bezonas neniun propran deponejon, kaj markas la alian liston kiel ne instalitan. Nenio estas forviŝita: viaj HA-MCP-registroj, agordoj kaj dosieroj restas ekzakte kiel ili estas, kaj de nun ĝisdatigoj aperas sub {keep} kiel kutime."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP estas instalita el unu vendeja listo nun; nenio korektenda.",
+          "store_unavailable": "La vendejo (HACS aŭ la vendejo) ankoraŭ ne estas ŝargita, do la listoj ne povas esti kontrolitaj. Provu denove post kelkaj minutoj."
         }
       }
     }

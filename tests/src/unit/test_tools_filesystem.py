@@ -611,23 +611,15 @@ class TestRegisterFilesystemTools:
         mcp = MagicMock()
         client = MagicMock()
 
-        with patch.dict(os.environ, {FEATURE_FLAG: "false"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "false", "ENABLE_BETA_FEATURES": "true"}
+        ):
             register_filesystem_tools(mcp, client)
 
-        # mcp.tool should not have been called
-        mcp.tool.assert_not_called()
+        mcp.add_tool.assert_not_called()
 
     def test_registers_tools_when_enabled(self):
-        """Tools should be registered via mcp.add_tool when feature flag is enabled.
-
-        ``register_tool_methods`` (in helpers.py) discovers @tool-decorated
-        methods on the FilesystemTools instance and calls ``mcp.add_tool(...)``
-        for each. Earlier versions of this test mocked ``mcp.tool`` (the
-        legacy decorator path) and never inspected the call list, so the
-        guarded ``if registered_func:`` branches in production code could
-        silently skip without anyone noticing. Now we assert mcp.add_tool
-        fired the expected number of times (one per @tool method).
-        """
+        """Every filesystem method registers through the actual add_tool API."""
         from ha_mcp.tools.tools_filesystem import register_filesystem_tools
 
         mcp = MagicMock()
@@ -666,338 +658,242 @@ class TestRegisterFilesystemTools:
         )
 
 
+@pytest.fixture
+def filesystem_tool():
+    """Capture the callable actually exposed by registration, with beta enabled."""
+    from ha_mcp.tools.tools_filesystem import register_filesystem_tools
+
+    def register(name, client):
+        mcp = MagicMock()
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "true", "ENABLE_BETA_FEATURES": "true"}
+        ):
+            register_filesystem_tools(mcp, client)
+        registered = next(
+            (
+                call.args[0]
+                for call in mcp.add_tool.call_args_list
+                if call.args and call.args[0].__name__ == name
+            ),
+            None,
+        )
+        assert registered is not None, f"{name} was not registered"
+        return registered
+
+    return register
+
+
+@pytest.fixture
+def component_service():
+    """Keep argument tests independent of the separately tested token bootstrap."""
+    with patch(
+        "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", new_callable=AsyncMock
+    ) as service:
+        yield service
+
+
+@pytest.fixture
+def enabled_auto_backup(monkeypatch):
+    """Exercise registered write tools with a successful mandatory snapshot."""
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+    with patch("ha_mcp.tools.auto_backup.get_backup_manager") as manager:
+        manager.return_value.maybe_snapshot = AsyncMock()
+        yield
+
+
 class TestHaListFilesTool:
     """Test ha_list_files tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_raises_tool_error_when_mcp_tools_not_installed(self):
+    async def test_raises_tool_error_when_mcp_tools_not_installed(
+        self, filesystem_tool
+    ):
         """Should raise ToolError when ha_mcp_tools is not installed."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
-        # Capture the registered function
-        registered_func = None
+        registered_func = filesystem_tool("ha_list_files", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_list_files" in func.__name__:
-                    registered_func = func
-                return func
-
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        # Call the captured function
-        if registered_func:
-            # Need to unwrap from log_tool_usage decorator
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            with pytest.raises(ToolError) as exc_info:
-                await inner_func(path="www/")
-            # The error is the #1853 install recipe: generic HACS tools plus
-            # the File & YAML entry, never the removed installer tool.
-            error_data = json.loads(str(exc_info.value))
-            assert error_data["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-            suggestions = " ".join(error_data["error"]["suggestions"])
-            assert 'repository="homeassistant-ai/ha-mcp"' in suggestions
-            assert "HA-MCP File & YAML Tools" in suggestions
-            assert "ha_install_mcp_tools" not in suggestions
+        with pytest.raises(ToolError) as exc_info:
+            await registered_func(path="www/")
+        # The error is the #1853 install recipe: generic HACS tools plus
+        # the File & YAML entry, never the removed installer tool.
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+        suggestions = " ".join(error_data["error"]["suggestions"])
+        assert (
+            'ha_manage_hacs(action="download", repository_id="homeassistant-ai/ha-mcp")'
+            in suggestions
+        )
+        # The integration is in the default catalog; adding a custom repo
+        # would unnecessarily require a connected Marketplace GitHub account.
+        assert 'action="add_repository"' not in suggestions
+        assert "HA-MCP File & YAML Tools" in suggestions
+        assert "ha_install_mcp_tools" not in suggestions
 
     @pytest.mark.asyncio
-    async def test_calls_service_when_mcp_tools_installed(self):
+    async def test_calls_service_when_mcp_tools_installed(
+        self, filesystem_tool, component_service
+    ):
         """Should call the service when ha_mcp_tools is installed."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [
             {"domain": MCP_TOOLS_DOMAIN, "services": {"list_files": {}}}
         ]
         client.get_config.return_value = {"time_zone": "UTC"}
-        client.call_service.return_value = {
+        component_service.return_value = {
             "success": True,
             "path": "www/",
             "files": [{"name": "test.css", "size": 100}],
             "count": 1,
         }
 
-        registered_func = None
+        registered_func = filesystem_tool("ha_list_files", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_list_files" in func.__name__:
-                    registered_func = func
-                return func
+        result = await registered_func(path="www/", pattern="*.css")
 
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        if registered_func:
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            result = await inner_func(path="www/", pattern="*.css")
-
-            client.call_service.assert_called_once_with(
-                MCP_TOOLS_DOMAIN,
-                "list_files",
-                {"path": "www/", "pattern": "*.css"},
-                return_response=True,
-            )
-            assert result["success"] is True
+        component_service.assert_awaited_once_with(
+            client,
+            "list_files",
+            {"path": "www/", "pattern": "*.css"},
+        )
+        assert result["success"] is True
 
 
 class TestHaReadFileTool:
     """Test ha_read_file tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_raises_tool_error_when_mcp_tools_not_installed(self):
+    async def test_raises_tool_error_when_mcp_tools_not_installed(
+        self, filesystem_tool
+    ):
         """Should raise ToolError when ha_mcp_tools is not installed."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
-        registered_func = None
+        registered_func = filesystem_tool("ha_read_file", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_read_file" in func.__name__:
-                    registered_func = func
-                return func
-
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        if registered_func:
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            with pytest.raises(ToolError):
-                await inner_func(path="configuration.yaml")
+        with pytest.raises(ToolError) as exc_info:
+            await registered_func(path="configuration.yaml")
+        assert (
+            json.loads(str(exc_info.value))["error"]["code"]
+            == "COMPONENT_NOT_INSTALLED"
+        )
 
 
 class TestHaWriteFileTool:
     """Test ha_write_file tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_raises_tool_error_when_mcp_tools_not_installed(self):
+    async def test_raises_tool_error_when_mcp_tools_not_installed(
+        self, filesystem_tool, enabled_auto_backup
+    ):
         """Should raise ToolError when ha_mcp_tools is not installed."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
-        registered_func = None
+        registered_func = filesystem_tool("ha_write_file", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_write_file" in func.__name__:
-                    registered_func = func
-                return func
-
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        if registered_func:
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            with pytest.raises(ToolError):
-                await inner_func(path="www/test.css", content=".test { color: red; }")
+        with pytest.raises(ToolError) as exc_info:
+            await registered_func(path="www/test.css", content=".test { color: red; }")
+        assert (
+            json.loads(str(exc_info.value))["error"]["code"]
+            == "COMPONENT_NOT_INSTALLED"
+        )
 
     @pytest.mark.asyncio
-    async def test_calls_service_with_all_params(self):
+    async def test_calls_service_with_all_params(
+        self, filesystem_tool, component_service, enabled_auto_backup
+    ):
         """Should pass all parameters to the service."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [
             {"domain": MCP_TOOLS_DOMAIN, "services": {"write_file": {}}}
         ]
         client.get_config.return_value = {"time_zone": "UTC"}
-        client.call_service.return_value = {
+        component_service.return_value = {
             "success": True,
             "path": "www/test.css",
             "size": 50,
             "created": True,
         }
 
-        registered_func = None
+        registered_func = filesystem_tool("ha_write_file", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_write_file" in func.__name__:
-                    registered_func = func
-                return func
+        result = await registered_func(
+            path="www/test.css",
+            content=".test { color: red; }",
+            overwrite=True,
+            create_dirs=False,
+        )
 
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        if registered_func:
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            result = await inner_func(
-                path="www/test.css",
-                content=".test { color: red; }",
-                overwrite=True,
-                create_dirs=False,
-            )
-
-            client.call_service.assert_called_once_with(
-                MCP_TOOLS_DOMAIN,
-                "write_file",
-                {
-                    "path": "www/test.css",
-                    "content": ".test { color: red; }",
-                    "overwrite": True,
-                    "create_dirs": False,
-                },
-                return_response=True,
-            )
-            assert result["success"] is True
+        component_service.assert_awaited_once_with(
+            client,
+            "write_file",
+            {
+                "path": "www/test.css",
+                "content": ".test { color: red; }",
+                "overwrite": True,
+                "create_dirs": False,
+            },
+        )
+        assert result["success"] is True
 
 
 class TestHaDeleteFileTool:
     """Test ha_delete_file tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_requires_confirmation(self):
+    async def test_requires_confirmation(
+        self, filesystem_tool, component_service, enabled_auto_backup
+    ):
         """Should require confirm=True to delete."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [
             {"domain": MCP_TOOLS_DOMAIN, "services": {"delete_file": {}}}
         ]
         client.get_config.return_value = {"time_zone": "UTC"}
 
-        registered_func = None
+        registered_func = filesystem_tool("ha_delete_file", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_delete_file" in func.__name__:
-                    registered_func = func
-                return func
+        with pytest.raises(ToolError) as exc_info:
+            await registered_func(path="www/test.css", confirm=False)
 
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        if registered_func:
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            with pytest.raises(ToolError) as exc_info:
-                await inner_func(path="www/test.css", confirm=False)
-
-            error_data = json.loads(str(exc_info.value))
-            assert "not confirmed" in error_data["error"]["message"].lower()
-            # Service should not have been called
-            client.call_service.assert_not_called()
+        error_data = json.loads(str(exc_info.value))
+        assert "not confirmed" in error_data["error"]["message"].lower()
+        # Service should not have been called
+        component_service.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_deletes_when_confirmed(self):
+    async def test_deletes_when_confirmed(
+        self, filesystem_tool, component_service, enabled_auto_backup
+    ):
         """Should call service when confirm=True."""
-        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
-
-        mcp = MagicMock()
         client = AsyncMock()
         client.get_services.return_value = [
             {"domain": MCP_TOOLS_DOMAIN, "services": {"delete_file": {}}}
         ]
         client.get_config.return_value = {"time_zone": "UTC"}
-        client.call_service.return_value = {
+        component_service.return_value = {
             "success": True,
             "path": "www/test.css",
             "deleted_size": 50,
             "message": "File deleted successfully",
         }
 
-        registered_func = None
+        registered_func = filesystem_tool("ha_delete_file", client)
 
-        def capture_tool(**kwargs):
-            def decorator(func):
-                nonlocal registered_func
-                if "ha_delete_file" in func.__name__:
-                    registered_func = func
-                return func
+        result = await registered_func(path="www/test.css", confirm=True)
 
-            return decorator
-
-        mcp.tool = capture_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
-            register_filesystem_tools(mcp, client)
-
-        if registered_func:
-            inner_func = (
-                registered_func.__wrapped__
-                if hasattr(registered_func, "__wrapped__")
-                else registered_func
-            )
-            result = await inner_func(path="www/test.css", confirm=True)
-
-            client.call_service.assert_called_once_with(
-                MCP_TOOLS_DOMAIN,
-                "delete_file",
-                {"path": "www/test.css"},
-                return_response=True,
-            )
-            assert result["success"] is True
+        component_service.assert_awaited_once_with(
+            client,
+            "delete_file",
+            {"path": "www/test.css"},
+        )
+        assert result["success"] is True
 
 
 class TestEmbeddedDirectBlueprintReadStaysOffTheFilesystemTools:

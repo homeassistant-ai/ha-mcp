@@ -8,12 +8,8 @@ wall-clock ``total`` — so a long-lived MCP response stream is bounded by read
 packages this repo does not own, and neither is visible to the suites that
 exercise the relay:
 
-1. **``ClientTimeout``'s constructor defaults.** The relay tests assert
-   ``total is None`` against *stubs* (``_embedded_stubs.ClientTimeout`` and
-   ``tests/addon/test_webhook_proxy._FakeClientTimeout``), because aiohttp is a
-   Home Assistant runtime package that the unit environment fakes. Let aiohttp
-   give ``total`` a non-``None`` default and production silently regains a
-   wall-clock bound while both stub-backed suites stay green.
+1. **``ClientTimeout``'s constructor defaults.** Let aiohttp give ``total`` a
+   non-``None`` default and production silently regains a wall-clock bound.
 
 2. **sse-starlette's keepalive ping.** ``sock_read=300`` only spares a *healthy
    but idle* stream because something writes to that stream more often than
@@ -21,122 +17,31 @@ exercise the relay:
    SDK constructs every SSE response without a ``ping`` argument, so the
    interval is sse-starlette's ``DEFAULT_PING_INTERVAL`` of 15 s.
 
-Both packages are importable here: ``aiohttp`` is a dev dependency added for
-this module, ``sse-starlette`` arrives transitively with the ``mcp`` SDK.
+Both packages are importable here: ``aiohttp`` comes with Home Assistant Core
+(a dev dependency), ``sse-starlette`` arrives transitively with the ``mcp`` SDK.
 """
 
 from __future__ import annotations
 
 import ast
 import inspect
-import json
-import subprocess
-import sys
-from typing import Any
 
-import pytest
+import aiohttp
 from sse_starlette.sse import EventSourceResponse
 
 from ha_mcp._vendor.mcp.server import streamable_http
-from tests.addon.test_webhook_proxy import _FakeClientTimeout as AddonClientTimeout
-
-from ._embedded_stubs import ClientTimeout as EmbeddedClientTimeout
-
-# Every bound aiohttp's ClientTimeout carries. Production leaves `total` unset
-# on purpose and sets the other three explicitly; `ceil_threshold` is aiohttp's
-# own rounding knob, modelled by the stubs so an added field shows up as drift.
-_TIMEOUT_FIELDS = ("total", "connect", "sock_read", "sock_connect", "ceil_threshold")
-
-# The two hand-written stand-ins that stub-backed relay tests assert against.
-_STUB_TIMEOUTS = {
-    "tests/src/unit/_embedded_stubs.py::ClientTimeout": EmbeddedClientTimeout,
-    "tests/addon/test_webhook_proxy.py::_FakeClientTimeout": AddonClientTimeout,
-}
-
-_STUB_TIMEOUT_CASES = [
-    pytest.param(origin, stub, id=origin)
-    for origin, stub in sorted(_STUB_TIMEOUTS.items())
-]
-
-# Reads the genuine ClientTimeout in a *pristine* interpreter and reports it as
-# JSON. Field names arrive on argv. Anything that is not JSON-serializable —
-# aiohttp swapping a default for a sentinel object, say — fails the dump here
-# and surfaces as a loud probe error rather than a silently weakened assertion.
-_AIOHTTP_PROBE = """\
-import inspect
-import json
-import sys
-
-import aiohttp
-
-fields = sys.argv[1:]
-signature = inspect.signature(aiohttp.ClientTimeout)
-relay = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
-json.dump(
-    {
-        "version": aiohttp.__version__,
-        "constructor": [
-            [name, parameter.default]
-            for name, parameter in signature.parameters.items()
-        ],
-        "defaults": {
-            field: getattr(aiohttp.ClientTimeout(), field) for field in fields
-        },
-        "relay": {field: getattr(relay, field) for field in fields},
-    },
-    sys.stdout,
-)
-"""
-
-
-@pytest.fixture(scope="module")
-def real_aiohttp() -> dict[str, Any]:
-    """Introspect the genuine ``aiohttp.ClientTimeout`` in a separate process.
-
-    Importing aiohttp here would not give the real thing: ``_embedded_stubs``
-    assigns a hand-built module to ``sys.modules["aiohttp"]`` (and two OAuth
-    test modules do the same for ``yarl``, which the real aiohttp imports), all
-    at *collection* time from whichever peer module pytest reaches first. An
-    in-process import would therefore hand back a fake and turn the comparisons
-    below into a stub measured against itself — precisely the blind spot this
-    module exists to close. A fresh interpreter has no test stubs in it at all,
-    so the result cannot depend on collection order.
-    """
-    completed = subprocess.run(
-        [sys.executable, "-c", _AIOHTTP_PROBE, *_TIMEOUT_FIELDS],
-        capture_output=True,
-        text=True,
-        check=False,
-        # This runs in a fixture, and timeout_func_only bills the pytest
-        # deadline to the test function only, so nothing else bounds it.
-        timeout=120,
-    )
-    assert completed.returncode == 0, (
-        "Could not introspect the real aiohttp. It is a dev dependency for "
-        "exactly this check, so without it nothing verifies that the relay's "
-        "ClientTimeout stubs still match the class production uses:\n"
-        f"{completed.stderr.strip()}"
-    )
-    return json.loads(completed.stdout)
-
-
-def _constructor_pairs(cls: Any) -> list[list[Any]]:
-    """Constructor parameters as ordered ``[name, default]`` pairs.
-
-    Lists, not tuples, so the shape matches the probe's JSON round-trip.
-    """
-    return [
-        [name, parameter.default]
-        for name, parameter in inspect.signature(cls).parameters.items()
-    ]
 
 
 class TestAiohttpClientTimeoutContract:
     """The genuine ``aiohttp.ClientTimeout`` still behaves as the relay assumes."""
 
-    def test_relay_timeout_leaves_total_unbounded(self, real_aiohttp):
-        version = real_aiohttp["version"]
-        relay = real_aiohttp["relay"]
+    def test_relay_timeout_leaves_total_unbounded(self):
+        version = aiohttp.__version__
+        timeout = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
+        relay = {
+            field: getattr(timeout, field)
+            for field in ("total", "connect", "sock_connect", "sock_read")
+        }
 
         assert relay["total"] is None, (
             f"aiohttp {version} defaults ClientTimeout.total to "
@@ -156,35 +61,6 @@ class TestAiohttpClientTimeoutContract:
             "exhausted by live ones — from hanging forever."
         )
 
-    @pytest.mark.parametrize("origin,stub", _STUB_TIMEOUT_CASES)
-    def test_stub_constructor_matches_aiohttp(self, origin, stub, real_aiohttp):
-        assert _constructor_pairs(stub) == real_aiohttp["constructor"], (
-            f"{origin} no longer mirrors aiohttp {real_aiohttp['version']}'s "
-            "ClientTimeout constructor. Relay timeout tests build that stub and "
-            "assert on the bounds production deliberately leaves unset, so a "
-            "drifted stub makes them assert a shape production never has — they "
-            "would keep passing while the real relay timed out differently."
-        )
-
-    @pytest.mark.parametrize("origin,stub", _STUB_TIMEOUT_CASES)
-    def test_stub_defaults_match_aiohttp(self, origin, stub, real_aiohttp):
-        fake = stub()
-        # Sentinel rather than a bare getattr: a stub that DROPPED a bound
-        # should read as a value mismatch in the diff below, not as an
-        # AttributeError that buries the explanation.
-        stub_defaults = {
-            field: getattr(fake, field, "<absent from stub>")
-            for field in _TIMEOUT_FIELDS
-        }
-
-        assert stub_defaults == real_aiohttp["defaults"], (
-            f"A default-constructed {origin} does not match a default-constructed "
-            f"aiohttp {real_aiohttp['version']} ClientTimeout. The relay passes "
-            "only three bounds and relies on the rest defaulting to unset, so the "
-            "stub-backed tests would be describing a timeout production never "
-            "builds."
-        )
-
 
 class TestSseKeepalivePingContract:
     """A healthy idle MCP stream still gets written to well inside ``sock_read``.
@@ -196,9 +72,6 @@ class TestSseKeepalivePingContract:
     therefore the pair of facts that *determine* that interval: sse-starlette's
     class default, and the absence of a ``ping`` override at every SDK call site
     (found by parsing the SDK module, which is immune to reformatting).
-
-    No peer test stubs ``mcp`` or ``sse_starlette``, so unlike aiohttp above
-    these can be imported directly.
     """
 
     def test_default_ping_interval_outpaces_sock_read(self):

@@ -3,8 +3,7 @@
 The panel gives every install type the add-on's "Open Web UI" experience without
 exposing the loopback secret path: an admin-gated session endpoint mints a
 short-lived HttpOnly cookie, and a cookie-validated proxy forwards to the
-in-process server's settings routes. Home Assistant / aiohttp are stubbed via
-``_embedded_stubs``.
+in-process server's settings routes.
 """
 
 from __future__ import annotations
@@ -13,13 +12,12 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components import frontend
 
-from ._embedded_stubs import FakeSession, FakeUpstream, install
+from custom_components.ha_mcp_tools import ui_panel
+from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DOMAIN
 
-install()
-
-from custom_components.ha_mcp_tools import ui_panel  # noqa: E402
-from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DOMAIN  # noqa: E402
+from ._embedded_helpers import FakeSession, FakeUpstream, stream_ready
 
 _TARGET = "http://127.0.0.1:9584/private_abc"
 
@@ -68,6 +66,7 @@ def _make_request(
     req.get = MagicMock(
         side_effect=lambda key, default=None: {"hass_user": hass_user}.get(key, default)
     )
+    stream_ready(req)
     return req
 
 
@@ -95,10 +94,10 @@ class TestSessionMint:
         assert cookie["httponly"] is True
         assert cookie["samesite"] == "Strict"
         assert cookie["path"] == ui_panel._COOKIE_PATH
-        assert cookie["max_age"] == ui_panel._SESSION_TTL_SECONDS
+        assert int(cookie["max-age"]) == ui_panel._SESSION_TTL_SECONDS
         # The token is recorded server-side, mapped to the admin user.
         store = hass.data[ui_panel._SESSIONS_KEY]
-        assert store[cookie["value"]]["user_id"] == "admin-1"
+        assert store[cookie.value]["user_id"] == "admin-1"
 
     async def test_non_admin_is_refused_without_minting(self):
         hass = _make_hass()
@@ -399,7 +398,7 @@ class TestProxyForwarding:
     async def test_upstream_client_error_maps_to_502(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        from ._embedded_stubs import ClientError
+        from aiohttp import ClientError
 
         # A pool-acquire timeout names the target URL; its path is the secret.
         err = ClientError("Connection timeout to host http://127.0.0.1/p_s3cr3t")
@@ -431,8 +430,9 @@ class TestProxyForwarding:
 
         assert resp.prepared is True
         assert resp.headers["X-Accel-Buffering"] == "no"
-        assert b"".join(resp.written) == b"data: a\n\ndata: b\n\n"
-        assert resp.eof is True
+        writer = request._payload_writer
+        assert b"".join(writer.chunks) == b"data: a\n\ndata: b\n\n"
+        assert writer.eof is True
 
 
 # ---------------------------------------------------------------------------
@@ -472,12 +472,12 @@ class TestPanelRegistration:
 
         assert hass.http.register_view.call_count == 3
         assert hass.data[ui_panel._VIEWS_REGISTERED_KEY] is True
-        panels = hass.data["_fake_frontend_panels"]
+        panels = hass.data[frontend.DATA_PANELS]
         assert ui_panel.PANEL_URL_PATH in panels
         panel = panels[ui_panel.PANEL_URL_PATH]
-        assert panel["component_name"] == "iframe"
-        assert panel["config"] == {"url": ui_panel._BOOT_URL}
-        assert panel["require_admin"] is True
+        assert panel.component_name == "iframe"
+        assert panel.config == {"url": ui_panel._BOOT_URL}
+        assert panel.require_admin is True
 
     async def test_second_register_does_not_rebind_views(self):
         hass = _make_hass()
@@ -496,7 +496,7 @@ class TestPanelRegistration:
 
         ui_panel.async_unregister_ui_panel(hass)
 
-        assert ui_panel.PANEL_URL_PATH not in hass.data["_fake_frontend_panels"]
+        assert ui_panel.PANEL_URL_PATH not in hass.data[frontend.DATA_PANELS]
 
 
 class TestBootPage:

@@ -1,0 +1,13 @@
+{
+  "reason": "#2930 adds one external_only + requires_component_surface test (tests/src/e2e/workflows/auto_backup/test_integration_options_restore.py): it runs only on the container and external HAOS lanes, so every other lane gains one collection-time skip.",
+  "deltas": {
+    "haos_stdio": 1,
+    "haos_inaddon": 1,
+    "embedded": 1,
+    "haos_embedded": 1,
+    "container_no_tools": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

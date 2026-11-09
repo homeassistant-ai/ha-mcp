@@ -18,7 +18,11 @@ from test_constants import TEST_TOKEN
 
 from ha_mcp._vendor.fastmcp import Client
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    parse_mcp_result,
+)
+from ...utilities.cleanup import CleanupSteps
 
 # default_config's sun integration: has_entity_name with a "Sun" device, so the
 # friendly name visibly changes between "Sun Next dawn" and "Sun".
@@ -86,16 +90,17 @@ class TestUseDeviceName:
             assert entry["uses_device_name"] is False, entry
             assert await _friendly_name(mcp_client) == default_friendly
         finally:
-            # name='' means revert, so an originally empty override is restored
-            # through the switch itself.
-            restore: dict[str, Any] = (
-                {"use_device_name": True}
-                if before.get("name") == ""
-                else {"name": before.get("name") or ""}
-            )
-            await safe_call_tool(
-                mcp_client, "ha_set_entity", {"entity_id": ENTITY, **restore}
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                # name='' means revert, so an originally empty override is restored
+                # through the switch itself.
+                restore: dict[str, Any] = (
+                    {"use_device_name": True}
+                    if before.get("name") == ""
+                    else {"name": before.get("name") or ""}
+                )
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_set_entity", {"entity_id": ENTITY, **restore}
+                )
 
     async def test_refused_on_older_core(self, mcp_client: Client) -> None:
         if await _ha_supports_use_device_name():

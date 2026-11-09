@@ -2,31 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 import threading
 from io import StringIO
-from unittest.mock import MagicMock
 
 import pytest
 
-# Mock Home Assistant imports so the package __init__ can be loaded.
-sys.modules["voluptuous"] = MagicMock()
-homeassistant = MagicMock()
-sys.modules["homeassistant"] = homeassistant
-sys.modules["homeassistant.components"] = homeassistant.components
-sys.modules["homeassistant.config"] = homeassistant.config
-sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function (production code decorates real closures with
-# it - a clobbered auto-mock attribute would silently replace them). This
-# file doesn't care what's already there, only that something importable is.
-sys.modules.setdefault("homeassistant.core", homeassistant.core)
-sys.modules["homeassistant.helpers"] = homeassistant.helpers
-sys.modules["homeassistant.helpers.config_validation"] = (
-    homeassistant.helpers.config_validation
-)
-
-from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
+from custom_components.ha_mcp_tools.yaml_rt import (
     _STORAGE,
     make_yaml,
 )

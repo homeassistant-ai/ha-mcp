@@ -3,9 +3,9 @@
 from typing import Any
 
 import pytest
+import voluptuous as vol
 
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeArea,
     FakeChildDevice,
     FakeDevice,
@@ -157,8 +157,7 @@ def test_unavailable_location_registry_is_not_authoritative_empty(
 
 
 def test_search_window_has_no_500_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-    schema = _REAL_VOL.Schema(wsapi._search_schema())
+    schema = vol.Schema(wsapi._search_schema())
     params = schema(
         {
             "type": wsapi.WS_SEARCH,

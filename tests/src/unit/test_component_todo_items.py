@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import voluptuous as vol
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
@@ -28,10 +29,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_todo
 from ha_mcp.tools.component_api import ComponentCaps
 
-# The sibling module installs the homeassistant.* stubs the component needs, so
-# the component module is imported only after it.
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _Unauthorized,
@@ -432,7 +430,7 @@ def test_core_without_the_move_feature_has_no_bridge(
 
 @pytest.mark.parametrize("previous_uid", [None, "1"])
 def test_command_schema_takes_previous_uid(previous_uid: str | None) -> None:
-    schema = _REAL_VOL.Schema(todo_items.command_specs(_REAL_VOL)[0][0])
+    schema = vol.Schema(todo_items.command_specs(vol)[0][0])
     msg = {
         "type": todo_items.WS_TODO_ITEM,
         "entity_id": LIST,

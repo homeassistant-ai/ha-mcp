@@ -7,53 +7,12 @@ restarts Home Assistant instead of only allowing the issue to be ignored.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from ._embedded_stubs import install
-
-install()
-
-
-class _RepairsFlow:
-    """Small HA RepairsFlow stand-in with real flow-result behavior."""
-
-    def async_show_form(
-        self,
-        *,
-        step_id: str,
-        data_schema: Any,
-        errors: dict[str, str] | None = None,
-        description_placeholders: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "type": "form",
-            "step_id": step_id,
-            "data_schema": data_schema,
-            "errors": errors or {},
-            "description_placeholders": description_placeholders,
-        }
-
-    def async_create_entry(self, *, data: dict[str, Any]) -> dict[str, Any]:
-        return {"type": "create_entry", "data": data}
-
-    def async_abort(self, *, reason: str) -> dict[str, Any]:
-        return {"type": "abort", "reason": reason}
-
-
-data_entry_flow = ModuleType("homeassistant.data_entry_flow")
-data_entry_flow.FlowResult = dict
-sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
-sys.modules["homeassistant"].data_entry_flow = data_entry_flow
-
-repairs_platform = ModuleType("homeassistant.components.repairs")
-repairs_platform.RepairsFlow = _RepairsFlow
-sys.modules["homeassistant.components.repairs"] = repairs_platform
 
 
 def _load_repairs_module() -> ModuleType:
@@ -82,7 +41,7 @@ async def test_legacy_oauth_fix_flow_restarts_home_assistant_blocking() -> None:
         {},
         blocking=True,
     )
-    assert result == {"type": "create_entry", "data": {}}
+    assert (result["type"], result["data"]) == ("create_entry", {})
 
 
 async def test_legacy_oauth_fix_flow_prompts_before_restart() -> None:
@@ -255,7 +214,7 @@ async def test_token_repair_aborts_when_the_entry_is_gone(
 
     result = await flow.async_step_token({"admin_token": "tok"})
 
-    assert result == {"type": "abort", "reason": "entry_removed"}
+    assert (result["type"], result["reason"]) == ("abort", "entry_removed")
 
 
 async def test_an_unknown_repair_issue_has_no_fix_flow() -> None:
@@ -373,7 +332,7 @@ async def test_package_repair_explains_when_it_cannot_reinstall(
 
     result = await flow.async_step_init()
 
-    assert result == {"type": "abort", "reason": reason}
+    assert (result["type"], result["reason"]) == ("abort", reason)
     hass.services.async_call.assert_not_awaited()
 
 
@@ -390,4 +349,82 @@ def test_package_repair_catalog_has_its_fix_flow(catalog_path: str) -> None:
     fix_flow = catalog["issues"]["server_package_install_failed"]["fix_flow"]
     assert "{detail}" in fix_flow["step"]["confirm"]["description"]
     for reason in ("entry_removed", "externally_managed"):
+        assert fix_flow["abort"][reason]
+
+
+# --- Two store listings claim the integration (#2993) -------------------------
+
+
+def _store_flow(monkeypatch: pytest.MonkeyPatch, records: list[str] | None) -> Any:
+    repairs = _load_repairs_module()
+    store_records = repairs.store_records
+    monkeypatch.setattr(store_records, "conflicting_records", lambda _hass: records)
+    cleared = MagicMock()
+    monkeypatch.setattr(store_records, "async_clear_store_records_issue", cleared)
+    resolve = AsyncMock(return_value=store_records.MAIN_REPOSITORY)
+    monkeypatch.setattr(store_records, "async_resolve_store_records", resolve)
+    flow = repairs.StoreRecordsRepairFlow()
+    flow.hass = MagicMock()
+    return flow, cleared, resolve
+
+
+async def test_store_repair_waits_when_no_store_is_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HACS disabled or the Marketplace entry still retrying: the card cannot
+    tell, so it says so instead of claiming the problem is gone."""
+    flow, cleared, _resolve = _store_flow(monkeypatch, None)
+
+    result = await flow.async_step_init()
+
+    assert (result["type"], result["reason"]) == ("abort", "store_unavailable")
+    cleared.assert_not_called()
+
+
+async def test_store_repair_clears_a_stale_card_when_the_store_reads_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fix made by hand, or a store that loaded after the retries stopped:
+    opening the card is what removes it."""
+    flow, cleared, _resolve = _store_flow(monkeypatch, [])
+
+    result = await flow.async_step_init()
+
+    assert (result["type"], result["reason"]) == ("abort", "already_resolved")
+    cleared.assert_called_once_with(flow.hass)
+
+
+async def test_store_repair_names_both_listings_then_keeps_the_main_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow, _cleared, resolve = _store_flow(
+        monkeypatch, ["homeassistant-ai/ha-mcp", "homeassistant-ai/ha-mcp-integration"]
+    )
+
+    shown = await flow.async_step_init()
+    assert shown["type"] == "form" and shown["step_id"] == "confirm"
+    assert shown["description_placeholders"] == {
+        "records": "homeassistant-ai/ha-mcp and homeassistant-ai/ha-mcp-integration",
+        "keep": "homeassistant-ai/ha-mcp",
+    }
+
+    done = await flow.async_step_confirm({})
+    assert done["type"] == "create_entry"
+    resolve.assert_awaited_once_with(flow.hass)
+
+
+@pytest.mark.parametrize(
+    "catalog_path",
+    [
+        "custom_components/ha_mcp_tools/strings.json",
+        "custom_components/ha_mcp_tools/translations/en.json",
+    ],
+)
+def test_store_repair_catalog_explains_every_abort(catalog_path: str) -> None:
+    root = Path(__file__).parents[3]
+    catalog = json.loads((root / catalog_path).read_text())
+    fix_flow = catalog["issues"]["store_records_conflict"]["fix_flow"]
+    for placeholder in ("{records}", "{keep}"):
+        assert placeholder in fix_flow["step"]["confirm"]["description"]
+    for reason in ("already_resolved", "store_unavailable"):
         assert fix_flow["abort"][reason]

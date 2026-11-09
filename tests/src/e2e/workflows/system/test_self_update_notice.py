@@ -75,7 +75,9 @@ class TestSelfUpdateNoticeSurfacedInTools:
         # than whatever this build reports, then clear the memo so the next tool
         # call re-resolves through the patched fetch.
         monkeypatch.setattr(
-            update_check, "_fetch_latest_from_pypi", lambda _package: _FAKE_LATEST
+            update_check,
+            "_fetch_latest_from_pypi",
+            lambda _package: update_check.PyPIRelease(_FAKE_LATEST),
         )
         update_check.get_update_info.cache_clear()
 

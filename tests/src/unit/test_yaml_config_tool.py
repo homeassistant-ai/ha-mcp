@@ -716,11 +716,13 @@ def _patch_reported_version(monkeypatch, client, version: str | None):
     the bootstrap produced no usable version at all.
     """
     from ha_mcp.tools import tools_filesystem as fsmod
+    from ha_mcp.tools import yaml_extra_keys
 
     async def _ensure(_client, **_kwargs):
         return "token"
 
     monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+    monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
     fsmod._COMPONENT_VERSION_CACHE.pop(client, None)
     if version is not None:
         fsmod._COMPONENT_VERSION_CACHE[client] = version

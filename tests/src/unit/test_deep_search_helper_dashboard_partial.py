@@ -22,7 +22,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import NON_ADMIN_TOKEN_WARNING
+from ha_mcp.tools import helper_flows
 from ha_mcp.tools.smart_search import SmartSearchTools
+
+# The real catalog read, before the autouse conftest stub replaces it.
+_REAL_FETCH_CORE_HELPER_DOMAINS = helper_flows._fetch_core_helper_domains
 
 
 def _make_tools(client) -> SmartSearchTools:
@@ -620,6 +625,86 @@ class TestHelperDashboardPartialThroughDeepSearch:
         # Only the flow-helper surface failed → exactly one.
         assert re.search(r"\b1 helper backend\(s\)", result["partial_reason"])
 
+    async def test_unsearched_custom_helper_body_surfaces_partial(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A custom helper integration's config is not searched (its options
+        flow is not opened, #2987), and the caller must not read that as a
+        clean non-match. Pins the forward: ``_score_flow_entry`` →
+        ``_search_flow_helpers`` → ``helper_unsearched`` → partial."""
+        monkeypatch.setattr(
+            helper_flows,
+            "_fetch_helper_flow_types",
+            AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
+        )
+        monkeypatch.setattr(
+            helper_flows,
+            "_fetch_core_helper_domains",
+            AsyncMock(return_value=frozenset({"template"})),
+        )
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXCUSTOMGATE",
+                    "domain": "my_custom_helper",
+                    "title": "Gate Opener",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        client.start_options_flow.assert_not_awaited()
+        assert result["partial"] is True
+        assert "1 custom helper integration entry" in result["partial_reason"]
+
+    async def test_a_refused_own_helper_catalog_names_the_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """integration/descriptions is admin-only: when a non-admin token is
+        refused there, every flow helper stays unsearched and the search says
+        the token is why."""
+        monkeypatch.setattr(
+            helper_flows, "_fetch_core_helper_domains", _REAL_FETCH_CORE_HELPER_DOMAINS
+        )
+        client = MagicMock()
+        client.token_is_admin = AsyncMock(return_value=False)
+        client.admin_route_refused = True
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXTEMPLATEA",
+                    "domain": "template",
+                    "title": "Some Template",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        client.start_options_flow.assert_not_awaited()
+        assert result["partial"] is True
+        assert NON_ADMIN_TOKEN_WARNING in result.get("warnings", [])
+
     async def test_flow_helper_options_probe_failure_surfaces_partial(self) -> None:
         """A flow-helper whose options-flow probe FAILS (vs returns a
         genuinely-empty options form) must drive ``partial`` through
@@ -704,6 +789,39 @@ class TestHelperDashboardPartialThroughDeepSearch:
             f"a genuinely-empty options form is a clean read, not a failure; "
             f"got {result.get('partial')!r} / {result.get('partial_reason')!r}"
         )
+
+    async def test_an_ignored_flow_helper_is_not_options_probed(self) -> None:
+        """An ignored entry has no options flow by policy (Core never set it
+        up, so its flow can raise), so the search must not start one — a
+        probe would also misreport the helper backend as partial."""
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXIGNORED",
+                    "domain": "template",
+                    "title": "Some Template",
+                    "source": "ignore",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock(
+            side_effect=RuntimeError("ignored entry has no flow")
+        )
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        client.start_options_flow.assert_not_called()
+        assert not result.get("partial"), result.get("partial_reason")
 
     async def test_dashboard_list_failure_surfaces_partial(self) -> None:
         """A failed dashboard registry-list driven through ``deep_search``

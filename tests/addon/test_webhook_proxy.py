@@ -13,13 +13,12 @@ import os
 import sys
 import tempfile
 import time
-import types
-from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from homeassistant.exceptions import ConfigEntryError
 
 WEBHOOK_PROXY_VARIANTS = {
     "stable": {
@@ -102,160 +101,30 @@ def _import_start():
     return mod
 
 
-# ---------------------------------------------------------------------------
-# Helper: import mcp_proxy/__init__.py with homeassistant imports stubbed
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _issue_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record the component's Repairs issue calls instead of making them.
 
-
-class _FakeConfigEntryError(Exception):
-    pass
-
-
-@dataclass(frozen=True)
-class _FakeClientTimeout:
-    """Field-faithful stand-in for ``aiohttp.ClientTimeout``.
-
-    Mirrors aiohttp's own defaults — every bound is ``None`` unless passed — so
-    tests can assert on the timeout object the relay session is built with,
-    including the bounds it deliberately leaves unset.
+    The hass these tests build is a ``MagicMock`` without Core's issue
+    registry, and each test asserts on its own calls.
     """
+    from homeassistant.helpers import issue_registry
 
-    total: float | None = None
-    connect: float | None = None
-    sock_read: float | None = None
-    sock_connect: float | None = None
-    ceil_threshold: float = 5
-
-
-@dataclass(frozen=True)
-class _FakeTCPConnector:
-    """Connector stand-in retaining the isolated CIMD pool limit."""
-
-    limit: int = 100
-
-
-def _install_runtime_stubs() -> None:  # noqa: PLR0915
-    """Inject homeassistant.* and aiohttp stubs into sys.modules.
-
-    The custom integration imports from these packages at module load.
-    Neither is in our dev dependencies (homeassistant only exists inside
-    HA Core at runtime; aiohttp ships with HA's own deps), so tests stub
-    just enough surface area to satisfy the imports.
-    """
-    ha = types.ModuleType("homeassistant")
-    ha_components = types.ModuleType("homeassistant.components")
-    ha_webhook = types.ModuleType("homeassistant.components.webhook")
-    ha_webhook.async_register = MagicMock(name="async_register")
-    ha_webhook.async_unregister = MagicMock(name="async_unregister")
-    ha_config_entries = types.ModuleType("homeassistant.config_entries")
-    ha_config_entries.ConfigEntry = MagicMock
-    ha_core = types.ModuleType("homeassistant.core")
-    ha_core.HomeAssistant = MagicMock
-    ha_core.ServiceCall = MagicMock
-    ha_helpers = types.ModuleType("homeassistant.helpers")
-    ha_helpers_typing = types.ModuleType("homeassistant.helpers.typing")
-    ha_helpers_typing.ConfigType = dict
-    ha_exceptions = types.ModuleType("homeassistant.exceptions")
-    ha_exceptions.ConfigEntryError = _FakeConfigEntryError
-
-    aiohttp_mod = types.ModuleType("aiohttp")
-    aiohttp_mod.ClientSession = MagicMock(name="ClientSession")
-    aiohttp_mod.ClientTimeout = _FakeClientTimeout
-    aiohttp_mod.TCPConnector = _FakeTCPConnector
-    aiohttp_mod.ClientError = type("ClientError", (Exception,), {})
-    aiohttp_web = types.ModuleType("aiohttp.web")
-    aiohttp_web.Request = MagicMock
-    aiohttp_web.Response = MagicMock
-    aiohttp_web.StreamResponse = MagicMock
-    aiohttp_web.json_response = MagicMock(name="json_response")
-    aiohttp_mod.web = aiohttp_web
-
-    # yarl ships with aiohttp; OAuth views import it lazily for redirect
-    # construction. Use the real package if available, otherwise minimal stub.
-    try:
-        import yarl as _real_yarl
-
-        yarl_mod = _real_yarl
-    except ImportError:
-        yarl_mod = types.ModuleType("yarl")
-
-        class _StubURL:
-            def __init__(self, url):
-                self._url = url
-                self._extra: dict[str, str] = {}
-
-            def update_query(self, params):
-                new = _StubURL(self._url)
-                new._extra = {**self._extra, **dict(params)}
-                return new
-
-            def __str__(self):
-                if not self._extra:
-                    return self._url
-                from urllib.parse import urlencode
-
-                sep = "&" if "?" in self._url else "?"
-                return f"{self._url}{sep}{urlencode(self._extra)}"
-
-        yarl_mod.URL = _StubURL
-
-    # Stub the HA HTTP module just enough for the OAuth views to import
-    ha_components_http = types.ModuleType("homeassistant.components.http")
-    ha_components_http.HomeAssistantView = type(
-        "HomeAssistantView", (), {"requires_auth": True, "cors_allowed": False}
+    monkeypatch.setattr(
+        issue_registry, "async_create_issue", MagicMock(name="async_create_issue")
+    )
+    monkeypatch.setattr(
+        issue_registry, "async_delete_issue", MagicMock(name="async_delete_issue")
     )
 
-    # repairs.py imports — stub the surface area it needs
-    ha_components_repairs = types.ModuleType("homeassistant.components.repairs")
-    ha_components_repairs.RepairsFlow = type("RepairsFlow", (), {})
-    ha_data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
-    ha_data_entry_flow.FlowResult = dict
-    ha_helpers_issue_registry = types.ModuleType("homeassistant.helpers.issue_registry")
-    ha_helpers_issue_registry.async_create_issue = MagicMock(name="async_create_issue")
-    ha_helpers_issue_registry.async_delete_issue = MagicMock(name="async_delete_issue")
 
-    class _IssueSeverity:
-        ERROR = "error"
-        WARNING = "warning"
-        CRITICAL = "critical"
-
-    ha_helpers_issue_registry.IssueSeverity = _IssueSeverity
-
-    voluptuous_mod = types.ModuleType("voluptuous")
-    voluptuous_mod.Schema = MagicMock(name="Schema")
-    # __init__.py builds CONFIG_SCHEMA at import time with these, so the stub
-    # must expose them or the module import raises AttributeError.
-    voluptuous_mod.Optional = MagicMock(name="Optional")
-    voluptuous_mod.Any = MagicMock(name="Any")
-    voluptuous_mod.ALLOW_EXTRA = MagicMock(name="ALLOW_EXTRA")
-    # __init__.py builds _REFRESH_REPAIRS_SCHEMA at import time with these.
-    voluptuous_mod.Required = MagicMock(name="Required")
-    voluptuous_mod.In = MagicMock(name="In")
-
-    sys.modules.update(
-        {
-            "homeassistant": ha,
-            "homeassistant.components": ha_components,
-            "homeassistant.components.webhook": ha_webhook,
-            "homeassistant.components.http": ha_components_http,
-            "homeassistant.components.repairs": ha_components_repairs,
-            "homeassistant.config_entries": ha_config_entries,
-            "homeassistant.core": ha_core,
-            "homeassistant.helpers": ha_helpers,
-            "homeassistant.helpers.typing": ha_helpers_typing,
-            "homeassistant.helpers.issue_registry": ha_helpers_issue_registry,
-            "homeassistant.exceptions": ha_exceptions,
-            "homeassistant.data_entry_flow": ha_data_entry_flow,
-            "aiohttp": aiohttp_mod,
-            "aiohttp.web": aiohttp_web,
-            "yarl": yarl_mod,
-            "voluptuous": voluptuous_mod,
-        }
-    )
+# ---------------------------------------------------------------------------
+# Helper: import the mcp_proxy package from the app tree
+# ---------------------------------------------------------------------------
 
 
 def _import_mcp_proxy(preload_oauth=None):
-    """Import the mcp_proxy package's __init__.py with HA imports stubbed.
+    """Import the mcp_proxy package's __init__.py against Core's real modules.
 
     `preload_oauth`: pre-register a specific oauth module under the
     relative-import name (`mcp_proxy_init_<variant>.oauth`). Without this,
@@ -265,7 +134,6 @@ def _import_mcp_proxy(preload_oauth=None):
     stable/dev imports never share (or clobber) each other's sys.modules
     entry.
     """
-    _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     init_path = os.path.join(component_dir, "__init__.py")
     mod_name = f"mcp_proxy_init_{CURRENT['key']}"
@@ -299,7 +167,6 @@ def _import_oauth(tmp_secret_dir=None):
     passed to `_import_mcp_proxy(preload_oauth=...)` so the integration's
     relative import resolves to the same instance.
     """
-    _install_runtime_stubs()
     oauth_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth.py")
     mod_name = f"mcp_proxy_oauth_{CURRENT['key']}"
     sys.modules.pop(mod_name, None)
@@ -473,7 +340,6 @@ def _import_none_autoapprove_stack(tmp_secret_dir=None):
     import ...` at load. Returns (init_mod, oauth_mod, autoapprove_mod,
     auth_native_mod).
     """
-    _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
     for suffix in (
@@ -531,7 +397,6 @@ def _import_ha_auth_stack(tmp_secret_dir=None):
     oauth top-level, which can't satisfy the view's reverse relative import.)
     Returns (init_mod, oauth_mod, auth_native_mod).
     """
-    _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
     for suffix in (
@@ -1436,7 +1301,7 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
             patch.object(mod.aiohttp, "ClientSession") as mock_session,
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1456,7 +1321,7 @@ class TestSetupEntrySurfaceFailures:
             caplog.at_level("ERROR"),
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
-            pytest.raises(_FakeConfigEntryError),
+            pytest.raises(ConfigEntryError),
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1470,7 +1335,7 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
             patch.object(mod.aiohttp, "ClientSession") as mock_session,
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1487,7 +1352,7 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
             patch.object(mod.aiohttp, "ClientSession") as mock_session,
-            pytest.raises(_FakeConfigEntryError),
+            pytest.raises(ConfigEntryError),
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1517,7 +1382,7 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register", side_effect=register_error),
             patch.object(mod.aiohttp, "ClientSession", side_effect=make_session),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1533,7 +1398,7 @@ class TestSetupEntrySurfaceFailures:
         hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         with (
             patch.object(mod, "async_register") as mock_register,
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1548,7 +1413,7 @@ class TestSetupEntrySurfaceFailures:
         hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         with (
             patch.object(mod, "async_register") as mock_register,
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -1781,7 +1646,7 @@ class TestOAuthOffPreservesBehavior:
             patch.object(mod, "async_register"),
             patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -2607,7 +2472,7 @@ class TestOAuthSetupEntry:
             patch.object(
                 oauth, "load_or_create_secret", side_effect=RuntimeError("boom")
             ),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -2643,7 +2508,7 @@ class TestOAuthSetupEntry:
             patch.object(mod, "async_register"),
             patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -2694,7 +2559,7 @@ class TestOAuthSetupEntry:
                 "load_or_create_secret",
                 side_effect=sibling_claims_then_returns_key,
             ),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -4491,7 +4356,6 @@ class TestRepairsModule:
 
     @pytest.fixture
     def repairs(self, tmp_path):
-        _install_runtime_stubs()
         repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
         mod_name = f"mcp_proxy_repairs_{CURRENT['key']}"
         sys.modules.pop(mod_name, None)
@@ -4530,7 +4394,6 @@ class TestRepairsModule:
     def test_maybe_create_issue_fires_when_marker_present(self, repairs):
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_create_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
         repairs.maybe_create_issue(hass, CURRENT["domain"])
@@ -4544,7 +4407,6 @@ class TestRepairsModule:
     def test_clear_issue_deletes_marker_and_calls_delete_issue(self, repairs):
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_delete_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
         repairs.clear_issue(hass, CURRENT["domain"])
@@ -4564,7 +4426,6 @@ class TestRepairsFlowSubmit:
 
     @pytest.fixture
     def repairs(self, tmp_path):
-        _install_runtime_stubs()
         repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
         mod_name = f"mcp_proxy_repairs_{CURRENT['key']}"
         sys.modules.pop(mod_name, None)
@@ -4643,7 +4504,6 @@ class TestAsyncSetupBootMarker:
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "oauth_enabled"}')
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_create_issue.reset_mock()
         # No DOMAIN key in config → skip the YAML-migration branch.
         result = await mod.async_setup(hass, {})
 
@@ -4659,7 +4519,6 @@ class TestAsyncSetupBootMarker:
         _bind_repairs(mod, tmp_path)  # marker redirected to tmp, never written
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_create_issue.reset_mock()
         result = await mod.async_setup(hass, {})
 
         assert result is True
@@ -4716,7 +4575,6 @@ class TestRefreshRepairsService:
         _bind_repairs(mod, tmp_path)
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_create_issue.reset_mock()
         handler = mod._make_refresh_repairs_handler(hass)
         call = MagicMock()
         call.data = {"issue_id": "update_restart_required", "action": "create"}
@@ -4734,7 +4592,6 @@ class TestRefreshRepairsService:
         repairs = _bind_repairs(mod, tmp_path)
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_create_issue.reset_mock()
         handler = mod._make_refresh_repairs_handler(hass)
         call = MagicMock()
         call.data = {"issue_id": "oauth_restart_required", "action": "create"}
@@ -4757,7 +4614,6 @@ class TestRefreshRepairsService:
         _bind_repairs(mod, tmp_path)
         from homeassistant.helpers import issue_registry
 
-        issue_registry.async_delete_issue.reset_mock()
         handler = mod._make_refresh_repairs_handler(hass)
         call = MagicMock()
         call.data = {"issue_id": "update_restart_required", "action": "clear"}
@@ -5160,7 +5016,7 @@ class TestHaAuthMode:
             patch.object(
                 oauth, "register_metadata_views", side_effect=RuntimeError("boom")
             ),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
@@ -5407,7 +5263,7 @@ class TestHaAuthMode:
             patch.object(mod, "async_register"),
             patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
         assert "Unknown OAuth mode" in str(exc_info.value)
@@ -5435,7 +5291,7 @@ class TestHaAuthMode:
             patch.object(mod, "async_register"),
             patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
-            pytest.raises(_FakeConfigEntryError) as exc_info,
+            pytest.raises(ConfigEntryError) as exc_info,
         ):
             await mod.async_setup_entry(hass, MagicMock())
         assert "Ambiguous" in str(exc_info.value)
@@ -7331,7 +7187,7 @@ class TestReadOnlyWebhook:
             ),
             patch.object(mod, "async_unregister") as unregister,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
-            pytest.raises(_FakeConfigEntryError),
+            pytest.raises(ConfigEntryError),
         ):
             await mod.async_setup_entry(hass, MagicMock())
         unregister.assert_not_called()

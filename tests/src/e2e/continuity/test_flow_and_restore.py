@@ -45,7 +45,7 @@ async def test_template_options_edit_changes_output_and_preserves_unit_and_name(
         assert initial["data"]["attributes"]["unit_of_measurement"] == "W"
         assert initial["data"]["attributes"]["friendly_name"] == name
         original = await case.mcp.call_tool_success(
-            "ha_get_integration", {"entry_id": entry_id, "include_options": True}
+            "ha_get_integration", {"entry_id": entry_id, "include_schema": True}
         )
         assert original["entry"]["options"]["state"] == "{{ 2 + 3 }}"
         assert original["entry"]["options"]["unit_of_measurement"] == "W"
@@ -65,7 +65,7 @@ async def test_template_options_edit_changes_output_and_preserves_unit_and_name(
         assert changed["data"]["attributes"]["unit_of_measurement"] == "W"
         assert changed["data"]["attributes"]["friendly_name"] == name
         persisted = await case.mcp.call_tool_success(
-            "ha_get_integration", {"entry_id": entry_id, "include_options": True}
+            "ha_get_integration", {"entry_id": entry_id, "include_schema": True}
         )
         assert persisted["entry"]["options"]["state"] == "{{ 3 + 4 }}"
         assert persisted["entry"]["options"]["unit_of_measurement"] == "W"

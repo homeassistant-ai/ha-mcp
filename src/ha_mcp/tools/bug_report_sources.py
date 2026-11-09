@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import ipaddress
 import logging
+import platform
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -282,3 +283,14 @@ async def fetch_ha_install(client: Any) -> dict[str, Any] | None:
         if ws_client is not None:
             with contextlib.suppress(Exception):
                 await ws_client.disconnect()
+
+
+def detect_platform() -> dict[str, str]:
+    """Detect platform information."""
+    return {
+        "os": platform.system(),  # Windows, Darwin, Linux
+        "os_release": platform.release(),
+        "os_version": platform.version(),
+        "architecture": platform.machine(),
+        "python_version": platform.python_version(),
+    }

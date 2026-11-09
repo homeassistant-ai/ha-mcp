@@ -3,10 +3,7 @@
 Covers the forwarding handler (header stripping, SSE streaming, session-id
 propagation, content-type coercion, error mapping), the two auth postures
 (``none`` secret-URL vs ``ha_auth`` bearer), the RFC 8414 / RFC 9728 discovery
-views, and the register/unregister lifecycle.
-
-Home Assistant and aiohttp are stubbed via ``_embedded_stubs`` (imported first so
-the fakes are installed before ``mcp_webhook`` binds them).
+views, and the register/unregister lifecycle, against Core's real modules.
 """
 
 from __future__ import annotations
@@ -18,17 +15,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import FakeSession, FakeUpstream, install, make_request
-
-# Install the HA / aiohttp sys.modules stubs BEFORE importing the component
-# modules below. This statement is also an isort barrier so the component imports
-# are never reordered above it (which would import mcp_webhook before the stubs
-# exist).
-install()
-
-import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
-from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.mcp_webhook as mw
+from custom_components.ha_mcp_tools import oauth_legacy
+from custom_components.ha_mcp_tools.const import (
     DATA_DCR_SIGNING_KEY,
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
@@ -38,13 +27,26 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
-from custom_components.ha_mcp_tools.oauth_legacy import (  # noqa: E402
+from custom_components.ha_mcp_tools.oauth_legacy import (
     OAUTH_ROUTE_OWNER_KEY,
     LegacyOAuthProvider,
 )
 
+from ._embedded_helpers import FakeSession, FakeUpstream, make_request, response_json
+
 TARGET_URL = "http://127.0.0.1:9584/private_aaaaaaaaaaaaaaaa"
 WEBHOOK_ID = "mcp_0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _webhook_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record Core's webhook register/unregister calls instead of making them.
+
+    The hass these tests build is a ``MagicMock`` without Core's webhook
+    integration, and each test asserts on its own calls.
+    """
+    monkeypatch.setattr(mw, "async_register", MagicMock(name="async_register"))
+    monkeypatch.setattr(mw, "async_unregister", MagicMock(name="async_unregister"))
 
 
 def _make_hass(*, validate_result=None, validate_side_effect=None) -> MagicMock:
@@ -226,12 +228,13 @@ class TestForwardingHandler:
         hass = _make_hass()
         _store_cfg(hass, session=session)
 
-        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
+        request = make_request()
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
 
         assert isinstance(resp, mw.web.StreamResponse)
         assert resp.prepared is True
-        assert resp.written == chunks
-        assert resp.eof is True
+        assert request._payload_writer.chunks == chunks
+        assert request._payload_writer.eof is True
         assert resp.headers["Content-Type"] == "text/event-stream"
         assert resp.headers["X-Accel-Buffering"] == "no"
         assert resp.headers["Content-Encoding"] == "identity"
@@ -267,12 +270,13 @@ class TestForwardingHandler:
         hass = _make_hass()
         _store_cfg(hass, session=session)
 
-        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
+        request = make_request()
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
 
         # The prepared stream is ended deterministically, not remapped to 502.
         assert isinstance(resp, mw.web.StreamResponse)
-        assert resp.written == [chunk]
-        assert resp.eof is True
+        assert request._payload_writer.chunks == [chunk]
+        assert request._payload_writer.eof is True
         assert f"dropped mid-stream after {len(chunk)} bytes" in caplog.text
 
     async def test_client_error_maps_to_502(self):
@@ -653,7 +657,7 @@ class TestDiscoveryViews:
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
         resp = await view.get(request, webhook_id=WEBHOOK_ID)
         assert resp.status == 200
-        body = resp.json_body
+        body = response_json(resp)
         assert body["resource"] == f"https://abc.ui.nabu.casa/api/webhook/{WEBHOOK_ID}"
         assert body["authorization_servers"] == [
             f"https://abc.ui.nabu.casa{OAUTH_BASE}"
@@ -676,7 +680,7 @@ class TestDiscoveryViews:
         resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
         assert resp.status == 200
         assert (
-            resp.json_body["token_endpoint"]
+            response_json(resp)["token_endpoint"]
             == f"https://abc.ui.nabu.casa{OAUTH_BASE}/token"
         )
 
@@ -694,7 +698,7 @@ class TestDiscoveryViews:
         view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
         assert resp.status == 200
-        doc = resp.json_body
+        doc = response_json(resp)
         assert doc["authorization_endpoint"] == (
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
@@ -747,7 +751,7 @@ class TestDiscoveryViews:
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
         resp = await view.get(request, webhook_id="mcp_second_entry_id")
         assert resp.status == 200
-        assert resp.json_body["resource"] == (
+        assert response_json(resp)["resource"] == (
             "https://abc.ui.nabu.casa/api/webhook/mcp_second_entry_id"
         )
         # The flip side of the route parameter: the FIRST entry's id stops
@@ -812,7 +816,7 @@ class TestNoneModeDiscovery:
         view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
         assert resp.status == 200
-        doc = resp.json_body
+        doc = response_json(resp)
         assert doc["authorization_endpoint"] == (
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
@@ -837,7 +841,7 @@ class TestNoneModeDiscovery:
                 resp = await view.get(
                     make_request(headers={"Host": "abc.ui.nabu.casa"})
                 )
-                assert WEBHOOK_ID not in json.dumps(resp.json_body)
+                assert WEBHOOK_ID not in json.dumps(response_json(resp))
 
     async def test_path_scoped_protected_resource_still_serves_in_none_mode(self):
         # The path-scoped view claude.ai's none-mode discovery actually uses
@@ -848,10 +852,10 @@ class TestNoneModeDiscovery:
         wellknown = mw._WellKnownProtectedResourceView(hass)
         wk_resp = await wellknown.get(request, webhook_id=WEBHOOK_ID)
         assert wk_resp.status == 200
-        assert wk_resp.json_body["resource"] == (
+        assert response_json(wk_resp)["resource"] == (
             f"https://abc.ui.nabu.casa/api/webhook/{WEBHOOK_ID}"
         )
-        assert wk_resp.json_body["authorization_servers"] == [
+        assert response_json(wk_resp)["authorization_servers"] == [
             f"https://abc.ui.nabu.casa{OAUTH_BASE}"
         ]
 
@@ -863,7 +867,7 @@ class TestNoneModeDiscovery:
         view = mw._AuthorizationServerMetadataView(hass)  # bound once
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
 
-        none_doc = (await view.get(request)).json_body
+        none_doc = response_json(await view.get(request))
         assert none_doc["authorization_endpoint"] == (
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
@@ -876,7 +880,7 @@ class TestNoneModeDiscovery:
             "oauth_provider": None,
             mw.CFG_AUTOAPPROVE_PROVIDER: None,
         }
-        ha_doc = (await view.get(request)).json_body
+        ha_doc = response_json(await view.get(request))
         assert (
             ha_doc["authorization_endpoint"]
             == f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
@@ -890,7 +894,7 @@ class TestNoneModeDiscovery:
             "oauth_provider": None,
             mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(list),
         }
-        back_doc = (await view.get(request)).json_body
+        back_doc = response_json(await view.get(request))
         assert back_doc["authorization_endpoint"] == (
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
@@ -974,18 +978,6 @@ class TestRegisterWebhook:
                 await mw.async_register_webhook(hass, _entry(), **arguments)
         assert (await view.post(make_request(), WEBHOOK_ID)).status == 404
         await mw.async_unregister_webhook(hass)
-
-    @pytest.fixture(autouse=True)
-    def _reset_registration_state(self):
-        # async_register / async_unregister are module-global MagicMocks shared
-        # across tests; reset call history and any injected side effect so each
-        # registration test starts clean (the per-session views guard lives in
-        # hass.data, which is fresh per test).
-        mw.async_register.reset_mock(side_effect=True)
-        mw.async_unregister.reset_mock(side_effect=True)
-        yield
-        mw.async_register.reset_mock(side_effect=True)
-        mw.async_unregister.reset_mock(side_effect=True)
 
     async def test_none_auth_registers_and_stores_cfg(self, monkeypatch):
         hass = _register_hass()

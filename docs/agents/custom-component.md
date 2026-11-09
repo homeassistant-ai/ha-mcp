@@ -2,8 +2,8 @@
 
 Read this document before changing `custom_components/ha_mcp_tools/` or a
 server feature that depends on the component. The HACS component and the
-`ha-mcp` server ship through separate installation paths, so compatibility
-must hold in both update directions.
+`ha-mcp` server ship through separate installation paths; see
+[Compatibility](#compatibility) for which version skew matters.
 
 ## Version cycle
 
@@ -49,6 +49,16 @@ in the same PR, to the release that will carry it: the number
 next release from `master` on any branch, so count the PR's own commit type:
 a `feat:` on a `master` that only has fixes pending raises the minor).
 
+The floor applies to every filesystem tool, so an optional feature must not
+raise it: users who don't need the feature would be forced to update. Such a
+feature gates on its own signal and prompts for the update only when it is used,
+as `ha_write_file(edits=...)` does by finding `edit_file` in the service registry
+(`_assert_file_edits_supported`). Prefer the registry over a version here,
+because a version is wrong in both directions: an unreleased build (master, E2E,
+the dev environment) reports the previous release's number while already
+carrying the service, and a dev pre-release reports the next release's number
+(see above), including one cut before the service existed.
+
 Every development pre-release cut while that release is pending reports the
 same plain number, so the floor cannot tell a pre-release that has the new
 service from an earlier one that lacks it. Only an external server (app,
@@ -58,15 +68,17 @@ from HACS.
 
 ## Compatibility
 
-The embedded server always runs the build its component release pins, but an
-external server (app, Docker, standalone) talking to the component through
-the tools entry still updates independently, so a new component can run
-against an older released server. Do not remove or tighten an existing
-service schema without a compatibility shim the previous server can still
-satisfy. Remove that shim only after the matching server version becomes the
-minimum supported component consumer.
-The version gate cannot protect this direction because the older server is the
-caller and does not know to demand the new component.
+The embedded server always runs the build its component release pins. An
+external server (app, Docker, standalone) updates on its own, and in practice
+before the component, so the skew that matters is a newer server meeting an
+older component. The capability handshake covers it: the server asks the
+component only for what it advertises, and says so in its answer when a
+capability is missing.
+
+A component newer than the external server that calls it is unlikely and does
+not shape a design. Do not keep a server-side fallback, a second code path or a
+frozen schema for it. An old command may stay registered while it costs
+nothing; remove it once it gets in the way.
 
 For component behavior changes, follow the
 [repository live-testing requirement](../../AGENTS.md#testing-and-verification)

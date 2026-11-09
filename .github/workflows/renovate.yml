@@ -31,7 +31,9 @@ jobs:
     name: Renovate
     # Let Renovate handle native checkbox overrides on its next scan. Wake it
     # for human requests, not bot edits, unrelated PRs, or an already checked box.
+    # Forks do not have the upstream Renovate app credentials.
     if: >-
+      github.event.repository.fork == false && (
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issues' &&
@@ -50,7 +52,7 @@ jobs:
        github.event.sender.type == 'User' &&
        github.event.changes.body &&
        contains(github.event.pull_request.body, '[x] <!-- rebase-check -->') &&
-       !contains(github.event.changes.body.from, '[x] <!-- rebase-check -->'))
+       !contains(github.event.changes.body.from, '[x] <!-- rebase-check -->')))
     # Serialize writers without interrupting a run partway through PR creation.
     # Job-level concurrency keeps unrelated issue/PR edits out of this queue.
     concurrency:
@@ -97,7 +99,7 @@ jobs:
           permission-workflows: write
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@2804199d260ad00c1fae0e9e842888369391c776 # v46.3.10
+        uses: renovatebot/github-action@1c0cf989c02653fba0efe7ca5772338860ca71dc # v46.3.12
         with:
           # Repository config is discovered normally. Loading renovate.json as
           # global config too duplicates its managers and dashboard entries.
@@ -106,6 +108,7 @@ jobs:
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
           RENOVATE_REPOSITORIES: ${{ github.repository }}
-          # Only these isolated generators may run; they cannot invoke a shell.
-          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$"]'
+          # Only these isolated generators and the lock refresh may run; they cannot
+          # invoke a shell.
+          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$", "^uv lock$", "^uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment\\.py --sync-lock$"]'
           RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS: "false"

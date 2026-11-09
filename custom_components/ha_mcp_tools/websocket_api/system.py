@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from .. import template_diagnose
 from ..const import (
@@ -346,8 +347,6 @@ async def _server_entry_update_prep(
     triggers runs as its own hass task after the response has flushed.
     """
     import asyncio
-
-    from homeassistant.exceptions import HomeAssistantError
 
     entry = _find_server_config_entry(hass)
     if entry is None:

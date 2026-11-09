@@ -14,7 +14,12 @@ from typing import ClassVar
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +82,15 @@ class TestListIntegrations:
                 "supports_options",
                 "supports_unload",
                 "disabled_by",
+                # Core fields the row must pass through unchanged (#2632).
+                "supports_remove_device",
+                "supported_subentry_types",
+                "num_subentries",
+                "created_at",
+                "modified_at",
+                "reason",
+                "error_reason_translation_key",
+                "error_reason_translation_placeholders",
             ]
 
             for field in expected_fields:
@@ -282,6 +296,14 @@ class TestListIntegrations:
         logger.info(f"All {data['total_count']} entries have valid structure")
 
 
+def _assert_options_or_unread_warning(data: dict) -> None:
+    """Every listed entry has ``options``, or the response warns they were not read."""
+    missing = [e for e in data["entries"] if "options" not in e]
+    assert all(e.get("supports_options") for e in missing), missing
+    if missing:
+        assert any("ha_mcp_tools" in w for w in data.get("warnings", [])), data
+
+
 @pytest.mark.integrations
 class TestIntegrationFiltering:
     """Test integration domain filtering and options inclusion."""
@@ -291,7 +313,7 @@ class TestIntegrationFiltering:
         Test: Filter integrations by domain.
 
         Verifies that the domain parameter filters entries correctly
-        and auto-includes the options object.
+        and auto-includes the options object, or says why it could not.
         """
         logger.info("Testing ha_get_integration with domain filter...")
 
@@ -319,9 +341,10 @@ class TestIntegrationFiltering:
                 f"Expected domain {test_domain}, got {entry['domain']}"
             )
 
-        # Domain filter auto-enables options inclusion
-        for entry in data["entries"]:
-            assert "options" in entry, "Domain filter should include options"
+        # Domain filter auto-enables options inclusion. Without the custom
+        # component a list opens no options flow (#2987), so an entry that has
+        # one comes back without options and the response says so.
+        _assert_options_or_unread_warning(data)
 
         logger.info(
             f"Domain filter test passed: {data['total_count']} {test_domain} entries"
@@ -339,14 +362,50 @@ class TestIntegrationFiltering:
         assert data["total_count"] == 0, "Should have 0 results for nonexistent domain"
         assert len(data["entries"]) == 0
 
+    async def test_blank_domain_is_rejected(self, mcp_client):
+        """A blank domain is no filter to Core, so the tool refuses it."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_integration",
+                {"domain": " "},
+                expected_error="domain must be a non-empty",
+            )
+
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.parametrize("integration_type", ["service", "not_a_type"])
+    async def test_integration_type_matches_core(
+        self, mcp_client, ha_client, integration_type
+    ):
+        """integration_type returns the entries Core's own ?type= filter returns.
+
+        Core does not reject an unknown type, so that case must match Core's
+        answer too rather than fail.
+        """
+        core = await ha_client._request(
+            "GET", "/config/config_entries/entry", params={"type": integration_type}
+        )
+        expected = {e["entry_id"] for e in core}
+        if integration_type == "service":
+            assert expected, "the test instance has service entries (sun, ...)"
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"integration_type": integration_type, "limit": 200}
+        )
+        data = assert_mcp_success(result, f"list integration_type={integration_type}")
+
+        assert data["total_count"] == len(expected)
+        assert {e["entry_id"] for e in data["entries"]} == expected
+
     async def test_include_options_flag(self, mcp_client, ha_client):
         """
         Test: include_options=True returns ACTUAL option values (not {}).
 
         Regression guard for #1245 — the previous implementation read
         ``options`` from HA's list endpoint, which deliberately omits the
-        field, so every entry came back with ``options={}``. The fix
-        probes each entry's OptionsFlow to recover the real values.
+        field, so every entry came back with ``options={}``. The custom
+        component serves the stored values; without it the list opens no
+        options flow (#2987) and warns instead of passing ``{}`` off as real.
 
         The test creates its own entry with known options: a Times of the
         Day helper keeps its times in options. The seeded HACS entry used to
@@ -372,15 +431,14 @@ class TestIntegrationFiltering:
             )
             data = assert_mcp_success(result, "list with include_options")
 
-            # All entries should have options field present.
-            for entry in data["entries"]:
-                assert "options" in entry, "include_options should add options field"
+            _assert_options_or_unread_warning(data)
 
-            [probe] = [e for e in data["entries"] if e["entry_id"] == entry_id]
-            assert probe["options"].get("after_time") == "08:00:00", (
-                "The OptionsFlow probe returned no options for an entry that "
-                f"has them (regression of #1245): {probe}"
-            )
+            [tod_entry] = [e for e in data["entries"] if e["entry_id"] == entry_id]
+            if "options" in tod_entry:
+                assert tod_entry["options"].get("after_time") == "08:00:00", (
+                    "The read returned no options for an entry that "
+                    f"has them (regression of #1245): {tod_entry}"
+                )
         finally:
             await ha_client.delete_config_entry(entry_id)
 
@@ -397,15 +455,20 @@ class TestIntegrationFiltering:
         """
         logger.info("Testing specific entry includes options...")
 
-        # Find an entry that actually has options to validate the audit use case
+        # Find an entry that actually has options to validate the audit use
+        # case. Without the custom component neither read carries them
+        # (#2987), so any entry with an options flow serves the comparison.
         list_result = await mcp_client.call_tool(
             "ha_get_integration", {"include_options": True}
         )
         list_data = assert_mcp_success(list_result, "list with options")
 
-        target_entry = next((e for e in list_data["entries"] if e.get("options")), None)
-        if not target_entry:
-            pytest.skip("No integrations with non-empty options found")
+        entries = list_data["entries"]
+        target_entry = next((e for e in entries if e.get("options")), None)
+        if target_entry is None:
+            target_entry = next((e for e in entries if e.get("supports_options")), None)
+        if target_entry is None:
+            pytest.skip("No integrations with options or an options flow found")
 
         entry_id = target_entry["entry_id"]
 
@@ -421,16 +484,15 @@ class TestIntegrationFiltering:
         assert "entry_id" in entry
         assert "domain" in entry
 
-        # Verify options are present and match what the list endpoint returned
-        assert "options" in entry, "Specific entry should include options"
-        assert entry["options"] == target_entry["options"], (
+        # The specific entry carries what the list endpoint returned for it;
+        # without the component neither read has options, and both say why.
+        assert entry.get("options") == target_entry.get("options"), (
             "Options from specific entry should match list endpoint"
         )
+        if "options" not in target_entry:
+            assert any("ha_mcp_tools" in w for w in data.get("warnings", [])), data
 
-        logger.info(
-            f"Specific entry test passed: domain={entry.get('domain')}, "
-            f"options_keys={list(entry['options'].keys())}"
-        )
+        logger.info(f"Specific entry test passed: domain={entry.get('domain')}")
 
     async def test_specific_entry_options_empty_when_unsupported(self, mcp_client):
         """

@@ -1,7 +1,7 @@
-"""Routing tests for the entity_lookup / reference_data component consumers.
+"""Routing tests for the entity_lookup component consumer.
 
-Two set/remove/post-write consumers pay for a whole-collection fetch to answer
-a single question, and route through the ``ha_mcp_tools`` component when it
+A set/remove/post-write consumer pays for a whole-collection fetch to answer
+a single question, and routes through the ``ha_mcp_tools`` component when it
 advertises the capability:
 
 - ``ConfigSceneTools._resolve_scene_entity_id`` (unique_id -> entity_id) dumps the
@@ -11,19 +11,15 @@ advertises the capability:
   read). An AUTHORITATIVE empty recheck falls to the naive fallback; a recheck
   that itself returns ``None`` (component went unavailable mid-retry) drops to the
   legacy registry list+retry instead of trusting the empty and guessing.
-- ``validate_config_references`` fetches ``get_services()`` + ``get_states()``; the
-  component path is one ``reference_data`` frame.
 
-These pin, per consumer, the standard component-routing taxonomy: component
+These pin the standard component-routing taxonomy: component
 preferred, capability-miss -> legacy, ``unknown_command`` -> invalidate caps +
-legacy, non-unknown command error -> legacy WITHOUT invalidating, AND — uniform
-across every consumer — a transport failure -> legacy: both a
+legacy, non-unknown command error -> legacy WITHOUT invalidating, AND a
+transport failure -> legacy: both a
 ``HomeAssistantConnectionError`` off the frame AND the same error from
 ``get_websocket_client()`` failing to establish the socket fall back rather than
-propagate. None of the legacy paths dies identically on a pooled-WS drop: the
-scene resolver's legacy scan rides the ``send_websocket_message`` bridge
-(with a naive ``scene.{id}`` fallback), and the validator's legacy path is the REST
-``get_services()``/``get_states()`` pair — so an escaping error would abort a
+propagate. The scene resolver's legacy scan rides the ``send_websocket_message``
+bridge (with a naive ``scene.{id}`` fallback), so an escaping error would abort a
 landed write / a delete the legacy path would have completed. Plus the GET-path
 invariant: with ``allow_component`` unset
 (the config-get default) the resolvers never touch the component even with the
@@ -49,7 +45,6 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, component_config_reads
-from ha_mcp.tools.reference_validator import validate_config_references
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._component_routing_helpers import (
@@ -64,14 +59,9 @@ _CAPS_ENTITY_LOOKUP = {
     "capabilities": ["entity_lookup"],
     "limits": {},
 }
-_CAPS_REFERENCE_DATA = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["reference_data"],
-    "limits": {},
-}
-# A component that answers ``info`` but advertises NEITHER capability (only the
-# unrelated ``search``) — the caps-miss branch.
+
+# A component that answers ``info`` but does not advertise ``entity_lookup``
+# (only the unrelated ``search``) — the caps-miss branch.
 _CAPS_OTHER = {
     "schema_version": 1,
     "component_version": "1.2.0",
@@ -410,210 +400,4 @@ class TestSceneResolverRouting:
             )
         assert entity_id == "scene.movie_night"
         assert client.ws_types["config/entity_registry/list"] == 1
-        assert client in component_api._CAPS_CACHE
-
-
-# =============================================================================
-# Reference validator — validate_config_references
-# =============================================================================
-# A config with one valid + one bogus service AND one valid + one bogus entity,
-# so both paths must produce the same two warnings from the same registry data.
-_CONFIG = {
-    "action": [
-        {"service": "light.turn_on", "entity_id": "light.a"},
-        {"service": "light.bogus", "entity_id": "light.ghost"},
-    ]
-}
-_SERVICES = [{"domain": "light", "services": {"turn_on": {}}}]
-_ENTITY_IDS = ["light.a"]
-
-
-def _warning_set(result: dict[str, Any]) -> set[tuple[str, str]]:
-    return {(w["value"], w["kind"]) for w in result["warnings"]}
-
-
-def _lookup_kwargs(ws: Any, command: str) -> dict[str, Any]:
-    calls = [c for c in ws.send_command.call_args_list if c.args[0] == command]
-    assert len(calls) == 1
-    return dict(calls[0].kwargs)
-
-
-class TestReferenceDataRouting:
-    @pytest.mark.asyncio
-    async def test_component_preferred_no_rest_fetches(self) -> None:
-        """reference_data serves both indexes in one frame; neither
-        ``get_services`` nor ``get_states`` is called, and the warnings are the
-        expected two."""
-        ws = make_ws(
-            "ha_mcp_tools/reference_data",
-            info_result=_CAPS_REFERENCE_DATA,
-            cmd_result={"services": _SERVICES, "entity_ids": _ENTITY_IDS},
-        )
-        client = RoutingClient()
-        with patch_ws(ws, component_config_reads):
-            result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {
-            ("light.bogus", "service"),
-            ("light.ghost", "entity"),
-        }
-        assert client.get_services.await_count == 0
-        assert client.get_states.await_count == 0
-
-    @pytest.mark.parametrize("targets_advertised", [True, False])
-    @pytest.mark.asyncio
-    async def test_target_ids_are_checked_only_when_the_component_sends_them(
-        self, targets_advertised: bool
-    ) -> None:
-        """A device, area, floor or label id no registry holds was written
-        silently; an older component cannot send the ids, so nothing is asked
-        of it and nothing is guessed."""
-        caps = dict(_CAPS_REFERENCE_DATA)
-        if targets_advertised:
-            caps["capabilities"] = ["reference_data", "reference_data_targets"]
-        ws = make_ws(
-            "ha_mcp_tools/reference_data",
-            info_result=caps,
-            cmd_result={
-                "services": _SERVICES,
-                "entity_ids": _ENTITY_IDS,
-                **(
-                    {"device_ids": ["dev-1"], "area_ids": []}
-                    if targets_advertised
-                    else {}
-                ),
-            },
-        )
-        config = {
-            "action": [
-                {
-                    "service": "light.turn_on",
-                    "target": {"device_id": ["dev-1", "dev-x"]},
-                }
-            ]
-        }
-        with patch_ws(ws, component_config_reads):
-            result = await validate_config_references(RoutingClient(), config)
-        sent = _lookup_kwargs(ws, "ha_mcp_tools/reference_data")
-        if targets_advertised:
-            assert sent == {"include_targets": True}
-            assert _warning_set(result) == {("dev-x", "device")}
-        else:
-            assert sent == {}
-            assert result["warnings"] == []
-
-    @pytest.mark.asyncio
-    async def test_caps_miss_uses_legacy_gather(self) -> None:
-        ws = make_ws("ha_mcp_tools/reference_data", info_result=_CAPS_OTHER)
-        client = RoutingClient(
-            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
-        )
-        with patch_ws(ws, component_config_reads):
-            result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {
-            ("light.bogus", "service"),
-            ("light.ghost", "entity"),
-        }
-        assert client.get_services.await_count == 1
-        assert client.get_states.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_unknown_command_invalidates_and_gathers(self) -> None:
-        ws = make_ws(
-            "ha_mcp_tools/reference_data",
-            info_result=_CAPS_REFERENCE_DATA,
-            cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-        )
-        client = RoutingClient(
-            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
-        )
-        with patch_ws(ws, component_config_reads):
-            result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {
-            ("light.bogus", "service"),
-            ("light.ghost", "entity"),
-        }
-        assert client.get_services.await_count == 1
-        assert client.get_states.await_count == 1
-        assert client not in component_api._CAPS_CACHE
-
-    @pytest.mark.asyncio
-    async def test_command_timeout_gathers_without_invalidating(self) -> None:
-        ws = make_ws(
-            "ha_mcp_tools/reference_data",
-            info_result=_CAPS_REFERENCE_DATA,
-            cmd_exc=HomeAssistantCommandTimeout("timeout"),
-        )
-        client = RoutingClient(
-            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
-        )
-        with patch_ws(ws, component_config_reads):
-            result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {
-            ("light.bogus", "service"),
-            ("light.ghost", "entity"),
-        }
-        assert client.get_services.await_count == 1
-        assert client in component_api._CAPS_CACHE
-
-    @pytest.mark.asyncio
-    async def test_connection_error_falls_back_to_rest(self) -> None:
-        """A WS-down error on the reference_data frame falls back to REST.
-
-        Unlike the pooled-WS resolvers, the validator's legacy path is the REST
-        ``get_services()`` / ``get_states()`` pair, so a
-        ``HomeAssistantConnectionError`` on the component frame must NOT escape into
-        the validator's swallow-all guard (which would skip every reference
-        warning). ``fetch_reference_data_via_component`` catches it and returns
-        ``None``, so the REST fetch runs and the expected two warnings still surface.
-        """
-        ws = make_ws(
-            "ha_mcp_tools/reference_data",
-            info_result=_CAPS_REFERENCE_DATA,
-            cmd_exc=HomeAssistantConnectionError("ws down"),
-        )
-        client = RoutingClient(
-            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
-        )
-        with patch_ws(ws, component_config_reads):
-            result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {
-            ("light.bogus", "service"),
-            ("light.ghost", "entity"),
-        }
-        # The REST legacy fetch served both indexes.
-        assert client.get_services.await_count == 1
-        assert client.get_states.await_count == 1
-        # A transient connection error is not a downgrade — caps stay cached.
-        assert client in component_api._CAPS_CACHE
-
-    @pytest.mark.asyncio
-    async def test_ws_establish_failure_falls_back_to_rest(self) -> None:
-        """A failed establish in ``get_websocket_client()`` falls back to REST.
-
-        After caps are cached, ``WebSocketManager`` raises
-        ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled
-        socket. ``fetch_reference_data_via_component`` catches it and returns
-        ``None`` so the validator's REST legacy fetch still produces the reference
-        warnings.
-        """
-        caps_ws = make_ws(
-            "ha_mcp_tools/reference_data", info_result=_CAPS_REFERENCE_DATA
-        )
-        client = RoutingClient(
-            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
-        )
-        with patch_ws_establish_failure(
-            caps_ws,
-            component_config_reads,
-            HomeAssistantConnectionError(
-                "Failed to connect to Home Assistant WebSocket"
-            ),
-        ):
-            result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {
-            ("light.bogus", "service"),
-            ("light.ghost", "entity"),
-        }
-        assert client.get_services.await_count == 1
-        assert client.get_states.await_count == 1
         assert client in component_api._CAPS_CACHE

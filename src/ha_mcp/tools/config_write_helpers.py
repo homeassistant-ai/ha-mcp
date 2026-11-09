@@ -8,7 +8,7 @@ metadata, and the config reload waiter.
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -177,30 +177,22 @@ async def apply_entity_category(
 
 
 def merge_validation_meta(
-    result: dict[str, Any], validation_meta: dict[str, Any]
+    result: dict[str, Any], validation_meta: Mapping[str, Any]
 ) -> None:
     """Attach reference-validator output to a set-tool success ``result``.
 
-    Produces a single nested ``validation`` field when there's anything
-    worth reporting - warnings, skipped templates, a blueprint
-    short-circuit, target kinds left unchecked, or a failed registry fetch.
-    Keeps the happy-path response unchanged.
+    Produces a single nested ``validation`` field when there's anything worth
+    reporting: Core's warnings, or why the references went unchecked. Keeps the
+    happy-path response unchanged.
 
-    Shared between ``ha_config_set_automation`` and
-    ``ha_config_set_script``; see
-    :mod:`ha_mcp.tools.reference_validator` for the validator itself
-    and #940 for background.
+    Shared between ``ha_config_set_automation``, ``ha_config_set_script`` and
+    ``ha_config_set_scene``; see :mod:`ha_mcp.tools.reference_validator`.
     """
-    entry: dict[str, Any] = {}
-    if validation_meta.get("warnings"):
-        entry["warnings"] = validation_meta["warnings"]
-    if validation_meta.get("unvalidated_templates"):
-        entry["unvalidated_templates"] = validation_meta["unvalidated_templates"]
-    if validation_meta.get("blueprint_skipped"):
-        entry["blueprint_skipped"] = True
-    for key in ("unchecked_target_kinds", "references_unchecked"):
-        if validation_meta.get(key):
-            entry[key] = validation_meta[key]
+    entry = {
+        key: validation_meta[key]
+        for key in ("warnings", "references_unchecked")
+        if validation_meta.get(key)
+    }
     if entry:
         result["validation"] = entry
 

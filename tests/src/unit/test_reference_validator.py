@@ -1,10 +1,9 @@
-"""Unit tests for reference_validator.
+"""Core's verdict on a config's references reaches the write response.
 
-Covers the extraction walker (pure, sync), the registry index builders,
-the check layer, and the end-to-end async runner with a mock client.
-Regression coverage for #940: a hallucinated
-``notify.mobile_app_andrew_phone`` must produce a warning, not a
-silent success.
+The component's ``config_references`` validates a proposed automation, script
+or scene with Core, checks its references against Core's registries and puts
+each entity target to Core's target lookups. These tests pin how the reference
+validator reports that answer, and that it says so when nothing was checked.
 """
 
 from __future__ import annotations
@@ -14,511 +13,202 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.tools.reference_validator import (
-    build_entity_set,
-    build_service_index,
-    check_refs,
-    extract_refs,
-    validate_config_references,
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
+from ha_mcp.tools import component_api, component_config_reads
+from ha_mcp.tools.reference_validator import validate_config_references
 
-# ---------------------------------------------------------------------------
-# extract_refs — pure walker
-# ---------------------------------------------------------------------------
+from ._component_routing_helpers import make_ws, patch_ws
 
-
-class TestExtractRefs:
-    def test_empty_config(self):
-        result = extract_refs({})
-        assert result["refs"] == []
-        assert result["unvalidated_templates"] == 0
-        assert result["blueprint_skipped"] is False
-
-    def test_flat_service_call(self):
-        config = {
-            "alias": "t",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.kitchen"}}
-            ],
+_CONFIG = {
+    "triggers": [{"trigger": "event", "event_type": "arrived"}],
+    "actions": [
+        {
+            "action": "select.select_option",
+            "target": {"entity_id": "input_select.mode_of_travel"},
+            "data": {"option": "cycling"},
         }
-        result = extract_refs(config)
-        kinds = sorted((r["kind"], r["value"]) for r in result["refs"])
-        assert kinds == [("entity", "light.kitchen"), ("service", "light.turn_on")]
-
-    def test_hallucinated_service_is_extracted(self):
-        """#940 reproduction: the bogus notify service must be extracted."""
-        config = {
-            "alias": "battery_alert",
-            "trigger": [
-                {
-                    "platform": "numeric_state",
-                    "entity_id": "sensor.grid_status_battery_percentage",
-                    "below": 50,
-                }
-            ],
-            "action": [{"service": "notify.mobile_app_andrew_phone"}],
-        }
-        result = extract_refs(config)
-        services = [r for r in result["refs"] if r["kind"] == "service"]
-        entities = [r for r in result["refs"] if r["kind"] == "entity"]
-        assert len(services) == 1
-        assert services[0]["value"] == "notify.mobile_app_andrew_phone"
-        assert len(entities) == 1
-        assert entities[0]["value"] == "sensor.grid_status_battery_percentage"
-
-    def test_action_alias_for_service_key(self):
-        """HA accepts both `service:` and `action:` as the call key."""
-        config = {"action": [{"action": "light.turn_on"}]}
-        result = extract_refs(config)
-        assert [r["value"] for r in result["refs"]] == ["light.turn_on"]
-
-    def test_entity_id_as_list(self):
-        config = {
-            "action": [
-                {
-                    "service": "light.turn_on",
-                    "target": {"entity_id": ["light.a", "light.b", "light.c"]},
-                }
-            ]
-        }
-        result = extract_refs(config)
-        entities = sorted(r["value"] for r in result["refs"] if r["kind"] == "entity")
-        assert entities == ["light.a", "light.b", "light.c"]
-
-    def test_entity_id_in_trigger(self):
-        config = {
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion"}],
-            "action": [],
-        }
-        result = extract_refs(config)
-        assert any(
-            r["kind"] == "entity" and r["value"] == "binary_sensor.motion"
-            for r in result["refs"]
-        )
-
-    def test_nested_choose_action(self):
-        config = {
-            "action": [
-                {
-                    "choose": [
-                        {
-                            "conditions": [
-                                {
-                                    "condition": "state",
-                                    "entity_id": "sun.sun",
-                                    "state": "above_horizon",
-                                }
-                            ],
-                            "sequence": [
-                                {
-                                    "service": "cover.open_cover",
-                                    "target": {"entity_id": "cover.garage"},
-                                }
-                            ],
-                        }
-                    ],
-                    "default": [
-                        {
-                            "service": "light.turn_off",
-                            "target": {"entity_id": "light.porch"},
-                        }
-                    ],
-                }
-            ]
-        }
-        result = extract_refs(config)
-        service_values = {r["value"] for r in result["refs"] if r["kind"] == "service"}
-        entity_values = {r["value"] for r in result["refs"] if r["kind"] == "entity"}
-        assert service_values == {"cover.open_cover", "light.turn_off"}
-        assert entity_values == {"sun.sun", "cover.garage", "light.porch"}
-
-    def test_repeat_and_parallel(self):
-        config = {
-            "action": [
-                {
-                    "repeat": {
-                        "count": 3,
-                        "sequence": [
-                            {
-                                "service": "light.toggle",
-                                "target": {"entity_id": "light.a"},
-                            }
-                        ],
-                    }
-                },
-                {
-                    "parallel": [
-                        {
-                            "service": "switch.turn_on",
-                            "target": {"entity_id": "switch.x"},
-                        },
-                        {
-                            "service": "switch.turn_on",
-                            "target": {"entity_id": "switch.y"},
-                        },
-                    ]
-                },
-            ]
-        }
-        result = extract_refs(config)
-        entities = sorted(r["value"] for r in result["refs"] if r["kind"] == "entity")
-        assert entities == ["light.a", "switch.x", "switch.y"]
-
-    def test_template_service_is_skipped_and_counted(self):
-        config = {"action": [{"service": "{{ 'light.turn_on' }}"}]}
-        result = extract_refs(config)
-        assert result["refs"] == []
-        assert result["unvalidated_templates"] == 1
-
-    def test_template_entity_is_skipped_and_counted(self):
-        config = {
-            "action": [
-                {
-                    "service": "light.turn_on",
-                    "target": {"entity_id": "{{ states('input_text.target') }}"},
-                }
-            ]
-        }
-        result = extract_refs(config)
-        services = [r for r in result["refs"] if r["kind"] == "service"]
-        assert len(services) == 1
-        entities = [r for r in result["refs"] if r["kind"] == "entity"]
-        assert entities == []
-        assert result["unvalidated_templates"] == 1
-
-    def test_template_in_entity_list_only_skips_that_entry(self):
-        config = {
-            "action": [
-                {
-                    "service": "light.turn_on",
-                    "target": {
-                        "entity_id": ["light.kitchen", "{{ var }}", "light.hallway"]
-                    },
-                }
-            ]
-        }
-        result = extract_refs(config)
-        entities = sorted(r["value"] for r in result["refs"] if r["kind"] == "entity")
-        assert entities == ["light.hallway", "light.kitchen"]
-        assert result["unvalidated_templates"] == 1
-
-    def test_blueprint_short_circuits(self):
-        config = {
-            "alias": "blueprint auto",
-            "use_blueprint": {
-                "path": "homeassistant/motion_light.yaml",
-                "input": {
-                    "motion_entity": "binary_sensor.motion",
-                    "light_target": {"entity_id": "light.hallway"},
-                },
-            },
-        }
-        result = extract_refs(config)
-        assert result["refs"] == []
-        assert result["blueprint_skipped"] is True
-        assert result["unvalidated_templates"] == 0
-
-    def test_path_tracking(self):
-        config = {
-            "action": [
-                {"service": "light.turn_on"},
-                {"service": "fan.turn_on", "target": {"entity_id": "fan.ceiling"}},
-            ]
-        }
-        result = extract_refs(config)
-        paths = {r["path"] for r in result["refs"]}
-        assert "action[0].service" in paths
-        assert "action[1].service" in paths
-        assert "action[1].target.entity_id" in paths
-
-    def test_target_ids_are_extracted_with_their_kind(self):
-        config = {
-            "triggers": [{"trigger": "device", "device_id": "dev-1"}],
-            "actions": [
-                {
-                    "action": "light.turn_on",
-                    "target": {"area_id": ["kitchen"], "label_id": "evening"},
-                }
-            ],
-        }
-        kinds = {(r["value"], r["kind"]) for r in extract_refs(config)["refs"]}
-        assert kinds == {
-            ("dev-1", "device"),
-            ("kitchen", "area"),
-            ("evening", "label"),
-            ("light.turn_on", "service"),
-        }
-
-    def test_non_string_service_values_ignored(self):
-        """A non-string service value shouldn't crash the walker."""
-        config = {"action": [{"service": 42, "data": {"entity_id": None}}]}
-        result = extract_refs(config)
-        assert result["refs"] == []
+    ],
+}
+_CAPS = {
+    "schema_version": 1,
+    "component_version": "9.1.0",
+    "capabilities": ["config_references"],
+    "limits": {},
+}
 
 
-# ---------------------------------------------------------------------------
-# build_service_index / build_entity_set
-# ---------------------------------------------------------------------------
-
-
-class TestRegistryIndices:
-    def test_build_service_index_shape(self):
-        payload = [
-            {
-                "domain": "light",
-                "services": {"turn_on": {}, "turn_off": {}, "toggle": {}},
-            },
-            {
-                "domain": "notify",
-                "services": {
-                    "persistent_notification": {},
-                    "mobile_app_real_phone": {},
-                },
-            },
-        ]
-        index = build_service_index(payload)
-        assert index["light"] == {"turn_on", "turn_off", "toggle"}
-        assert "mobile_app_real_phone" in index["notify"]
-
-    def test_build_service_index_ignores_malformed(self):
-        payload = [
-            {"domain": "light", "services": {"turn_on": {}}},
-            "garbage",
-            {"domain": None, "services": {}},
-            {"domain": "switch"},  # missing services
-        ]
-        index = build_service_index(payload)
-        assert index == {"light": {"turn_on"}}
-
-    def test_build_service_index_non_list(self):
-        assert build_service_index(None) == {}
-        assert build_service_index({}) == {}
-
-    def test_build_entity_set(self):
-        payload = [
-            {"entity_id": "light.kitchen", "state": "on"},
-            {"entity_id": "sensor.temp", "state": "21.5"},
-            {"entity_id": None},
-            "bad_entry",
-        ]
-        entities = build_entity_set(payload)
-        assert entities == {"light.kitchen", "sensor.temp"}
-
-
-# ---------------------------------------------------------------------------
-# check_refs
-# ---------------------------------------------------------------------------
-
-
-class TestCheckRefs:
-    @pytest.fixture
-    def service_index(self) -> dict[str, set[str]]:
-        return {
-            "light": {"turn_on", "turn_off"},
-            "notify": {"persistent_notification"},
-        }
-
-    @pytest.fixture
-    def entity_set(self) -> set[str]:
-        return {"light.kitchen", "sensor.temp", "binary_sensor.motion"}
-
-    def test_valid_service_no_warning(self, service_index, entity_set):
-        refs = [
-            {"path": "action[0].service", "value": "light.turn_on", "kind": "service"}
-        ]
-        assert check_refs(refs, service_index, entity_set) == []
-
-    def test_missing_service_warned(self, service_index, entity_set):
-        refs = [
-            {
-                "path": "action[0].service",
-                "value": "notify.mobile_app_andrew_phone",
-                "kind": "service",
-            }
-        ]
-        warnings = check_refs(refs, service_index, entity_set)
-        assert len(warnings) == 1
-        assert warnings[0]["kind"] == "service"
-        assert warnings[0]["value"] == "notify.mobile_app_andrew_phone"
-        assert "not found" in warnings[0]["reason"]
-
-    def test_bogus_domain_warned(self, service_index, entity_set):
-        refs = [{"path": "p", "value": "bogus.thing", "kind": "service"}]
-        warnings = check_refs(refs, service_index, entity_set)
-        assert len(warnings) == 1
-
-    def test_service_without_dot_warned(self, service_index, entity_set):
-        refs = [{"path": "p", "value": "not_a_service", "kind": "service"}]
-        warnings = check_refs(refs, service_index, entity_set)
-        assert len(warnings) == 1
-
-    def test_valid_entity_no_warning(self, service_index, entity_set):
-        refs = [
-            {"path": "trigger[0].entity_id", "value": "light.kitchen", "kind": "entity"}
-        ]
-        assert check_refs(refs, service_index, entity_set) == []
-
-    def test_missing_entity_warned(self, service_index, entity_set):
-        refs = [
-            {"path": "trigger[0].entity_id", "value": "sensor.ghost", "kind": "entity"}
-        ]
-        warnings = check_refs(refs, service_index, entity_set)
-        assert len(warnings) == 1
-        assert warnings[0]["kind"] == "entity"
-        assert warnings[0]["value"] == "sensor.ghost"
-
-    def test_target_ref_checked_against_its_registry(self, service_index, entity_set):
-        refs = [
-            {"path": "target.area_id", "value": "kitchen", "kind": "area"},
-            {"path": "target.floor_id", "value": "attic", "kind": "floor"},
-        ]
-        warnings = check_refs(
-            refs, service_index, entity_set, {"area": {"kitchen"}, "floor": set()}
-        )
-        assert [(w["value"], w["reason"]) for w in warnings] == [
-            ("attic", "not found in floor registry")
-        ]
-
-    def test_target_ref_unchecked_without_its_registry(self, service_index, entity_set):
-        refs = [{"path": "target.label_id", "value": "ghost", "kind": "label"}]
-        assert check_refs(refs, service_index, entity_set, {"area": set()}) == []
-
-    def test_mixed_refs_partial_failure(self, service_index, entity_set):
-        refs = [
-            {"path": "action[0].service", "value": "light.turn_on", "kind": "service"},
-            {
-                "path": "action[0].target.entity_id",
-                "value": "light.ghost",
-                "kind": "entity",
-            },
-            {
-                "path": "trigger[0].entity_id",
-                "value": "binary_sensor.motion",
-                "kind": "entity",
-            },
-        ]
-        warnings = check_refs(refs, service_index, entity_set)
-        assert len(warnings) == 1
-        assert warnings[0]["value"] == "light.ghost"
-
-
-# ---------------------------------------------------------------------------
-# validate_config_references — async end-to-end
-# ---------------------------------------------------------------------------
-
-
-def _mock_client(services_payload: Any, states_payload: Any) -> Any:
+def _client() -> Any:
     client = AsyncMock()
-    # Credential-less: get_component_caps short-circuits to None (no component),
-    # so these tests exercise the legacy get_services/get_states path they pin.
-    client.base_url = None
-    client.token = None
-    client.get_services = AsyncMock(return_value=services_payload)
-    client.get_states = AsyncMock(return_value=states_payload)
+    client.base_url = "http://ha.local:8123"
+    client.token = "tok"
     return client
 
 
-class TestValidateConfigReferences:
-    @pytest.mark.anyio
-    async def test_940_reproduction_produces_warning(self):
-        """The exact scenario from #940 must yield a service warning."""
-        config = {
-            "alias": "battery_alert",
-            "trigger": [
-                {
-                    "platform": "numeric_state",
-                    "entity_id": "sensor.grid_status_battery_percentage",
-                    "below": 50,
-                }
-            ],
-            "action": [{"service": "notify.mobile_app_andrew_phone"}],
-        }
-        client = _mock_client(
-            services_payload=[
-                {"domain": "notify", "services": {"persistent_notification": {}}},
-            ],
-            states_payload=[
-                {"entity_id": "sensor.grid_status_battery_percentage", "state": "45"},
-            ],
+async def _validate(ws: Any, client: Any | None = None) -> dict[str, Any]:
+    with patch_ws(ws, component_config_reads):
+        return await validate_config_references(
+            client or _client(), _CONFIG, "automation"
         )
-        result = await validate_config_references(client, config)
-        assert result["blueprint_skipped"] is False
-        assert result["unvalidated_templates"] == 0
-        warnings = result["warnings"]
-        assert len(warnings) == 1
-        assert warnings[0]["kind"] == "service"
-        assert warnings[0]["value"] == "notify.mobile_app_andrew_phone"
 
-    @pytest.mark.anyio
-    async def test_all_valid_no_warnings(self):
-        config = {
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.kitchen"}}
-            ]
-        }
-        client = _mock_client(
-            services_payload=[{"domain": "light", "services": {"turn_on": {}}}],
-            states_payload=[{"entity_id": "light.kitchen", "state": "off"}],
-        )
-        result = await validate_config_references(client, config)
-        assert result["warnings"] == []
 
-    @pytest.mark.anyio
-    async def test_blueprint_short_circuits_no_fetch(self):
-        """Blueprint configs must not even hit the registries."""
-        config = {
-            "alias": "bp",
-            "use_blueprint": {
-                "path": "homeassistant/motion_light.yaml",
-                "input": {"motion_entity": "binary_sensor.motion"},
-            },
-        }
-        client = _mock_client(services_payload=[], states_payload=[])
-        result = await validate_config_references(client, config)
-        assert result["blueprint_skipped"] is True
-        assert result["warnings"] == []
-        client.get_services.assert_not_called()
-        client.get_states.assert_not_called()
+def _answer(**answer: Any) -> Any:
+    return make_ws(
+        "ha_mcp_tools/config_references", info_result=_CAPS, cmd_result=answer
+    )
 
-    @pytest.mark.anyio
-    async def test_registry_fetch_failure_is_swallowed(self, caplog):
-        """A broken client must never break the automation write path, and an
-        empty warning list must not read as every reference checked."""
-        config = {"action": [{"service": "light.turn_on"}]}
-        client = AsyncMock()
-        # Credential-less → legacy gather path (the broken get_services below).
-        client.base_url = None
-        client.token = None
-        client.get_services = AsyncMock(side_effect=RuntimeError("boom"))
-        client.get_states = AsyncMock(return_value=[])
-        with caplog.at_level("ERROR"):
-            result = await validate_config_references(client, config)
-        assert result["warnings"] == []
-        assert result["references_unchecked"] == "boom"
-        assert any("validator" in rec.message.lower() for rec in caplog.records)
 
-    @pytest.mark.anyio
-    async def test_empty_config_no_fetch(self):
-        """No refs → no registry fetches, no warnings."""
-        client = _mock_client(services_payload=[], states_payload=[])
-        result = await validate_config_references(client, {"alias": "empty"})
-        assert result["warnings"] == []
-        client.get_services.assert_not_called()
-        client.get_states.assert_not_called()
+@pytest.mark.anyio
+async def test_select_option_on_an_input_select_is_reported_with_cores_offer():
+    """#2989: the write saved silently and the helper never changed. The
+    warning carries what Core offers for the entity, the right action in it."""
+    ws = _answer(
+        status="ok",
+        missing=[],
+        mismatches=[
+            {
+                "path": "actions[0]",
+                "kind": "services",
+                "name": "select.select_option",
+                "entity_id": "input_select.mode_of_travel",
+                "offered": ["input_select.select_next", "input_select.select_option"],
+            }
+        ],
+    )
+    result = await _validate(ws)
+    (warning,) = result["warnings"]
+    assert warning["path"] == "actions[0]"
+    assert warning["value"] == "input_select.mode_of_travel"
+    assert warning["target_of"] == "select.select_option"
+    assert "input_select.select_option" in warning["offered"]
+    assert "references_unchecked" not in result
+    (call,) = [
+        c
+        for c in ws.send_command.call_args_list
+        if c.args[0] == "ha_mcp_tools/config_references"
+    ]
+    assert call.kwargs == {"kind": "automation", "config": _CONFIG}
 
-    @pytest.mark.anyio
-    async def test_templates_counted_not_warned(self):
-        config = {
-            "action": [
-                {"service": "{{ 'light.turn_on' }}"},
-                {"service": "light.turn_off", "target": {"entity_id": "light.real"}},
-            ]
-        }
-        client = _mock_client(
-            services_payload=[{"domain": "light", "services": {"turn_off": {}}}],
-            states_payload=[{"entity_id": "light.real", "state": "on"}],
-        )
-        result = await validate_config_references(client, config)
-        assert result["warnings"] == []
-        assert result["unvalidated_templates"] == 1
+
+@pytest.mark.anyio
+async def test_a_reference_core_does_not_have_is_reported():
+    """#940: a hallucinated notify service was accepted silently."""
+    ws = _answer(
+        status="ok",
+        missing=[{"kind": "service", "value": "notify.mobile_app_andrew_phone"}],
+        mismatches=[],
+    )
+    result = await _validate(ws)
+    assert [(w["kind"], w["value"]) for w in result["warnings"]] == [
+        ("service", "notify.mobile_app_andrew_phone")
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_config_core_refuses_leaves_the_references_unchecked():
+    ws = _answer(status="invalid", error="Invalid action")
+    result = await _validate(ws)
+    assert result == {"warnings": [], "references_unchecked": "Invalid action"}
+
+
+@pytest.mark.anyio
+async def test_without_the_component_the_references_are_reported_unchecked():
+    """No server-side copy of Core's rules stands in for the component."""
+    client = _client()
+    client.base_url = None  # no credentials: no component to ask
+    result = await _validate(make_ws("unused"), client)
+    assert result["warnings"] == []
+    assert "not installed" in result["references_unchecked"]
+
+
+@pytest.mark.parametrize(
+    "ws",
+    [
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS | {"capabilities": []},
+            ),
+            id="capability-not-advertised",
+        ),
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS,
+                cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
+            ),
+            id="command-unknown",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_an_outdated_component_is_told_apart_from_an_absent_one(ws):
+    """An installed component from before the check was told it was missing."""
+    client = _client()
+    result = await _validate(ws, client)
+    assert result["warnings"] == []
+    assert "update it" in result["references_unchecked"]
+
+
+@pytest.mark.anyio
+async def test_an_unknown_command_forgets_the_cached_capabilities():
+    client = _client()
+    ws = make_ws(
+        "ha_mcp_tools/config_references",
+        info_result=_CAPS,
+        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
+    )
+    await _validate(ws, client)
+    assert client not in component_api._CAPS_CACHE
+
+
+@pytest.mark.parametrize(
+    "ws",
+    [
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS,
+                cmd_exc=HomeAssistantConnectionError("closed"),
+            ),
+            id="connection-lost",
+        ),
+        pytest.param(
+            make_ws(
+                "ha_mcp_tools/config_references",
+                info_result=_CAPS,
+                cmd_exc=HomeAssistantCommandTimeout("slow"),
+            ),
+            id="timeout",
+        ),
+        pytest.param(_answer(status="ok", missing=None, mismatches=[]), id="malformed"),
+        pytest.param(
+            _answer(
+                status="ok",
+                missing=[],
+                mismatches=[
+                    {
+                        "path": "actions[0]",
+                        "kind": "services",
+                        "name": "x.y",
+                        "entity_id": "a.b",
+                        "offered": "x.z",
+                    }
+                ],
+            ),
+            id="malformed-value",
+        ),
+        pytest.param(_answer(status="invalid"), id="failed-without-error"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_failed_check_never_aborts_the_write_and_says_why(ws):
+    """The check runs before the write; an error escaping it failed the write."""
+    client = _client()
+    result = await _validate(ws, client)
+    assert result["warnings"] == []
+    assert result["references_unchecked"]
+    assert client in component_api._CAPS_CACHE

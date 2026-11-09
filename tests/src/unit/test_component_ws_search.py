@@ -1,9 +1,7 @@
 """Unit tests for the ha_mcp_tools in-process WebSocket command surface.
 
-Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
-``test_custom_component_filesystem.py``): the ``homeassistant.*`` imports are
-stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
-fake hass / registry objects injected through the ``_resolve_registries`` seam.
+The pure ``_do_*`` functions are exercised with fake hass / registry objects
+injected through the ``_resolve_registries`` seam, against Core's real modules.
 
 Covers the v1.2.1 command surface (info / search / overview / helpers_list /
 states / blueprint_get / device_get / device_list / entity_enrich / exposure;
@@ -30,65 +28,34 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
+import voluptuous as vol
+from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.ha_mcp_tools.websocket_api import (
+    config_entries as _ws_config_entries,
+)
+
+# Server-side scoring path the component must stay in parity with.
+from ha_mcp.tools.search.entities import _match_exact_search_entity
+from ha_mcp.utils.fuzzy_search import calculate_ratio
+
+from ._component_ws_api import COMPONENT_VERSION, wsapi
 from ._component_ws_fakes import (
+    FakeFragment,
     FakeRegEntry,
     FakeServices,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
+    fake_json_bytes,
 )
-
-# Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
-# a MagicMock at import time); the schema/registration tests need a real one.
-sys.modules.pop("voluptuous", None)
-import voluptuous as _REAL_VOL  # noqa: E402
-
-# Stub the HA modules the component imports. The pure search functions never
-# touch them (registries arrive via the monkeypatched _resolve_registries seam).
-for _mod in (
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_mod, MagicMock())
-
-
-class _StubHomeAssistantError(Exception):
-    """Stand-in for core's ``HomeAssistantError``.
-
-    ``websocket_api.system`` imports ``homeassistant.exceptions.HomeAssistantError``
-    function-locally when a read fails; the module is MagicMock-stubbed like the
-    rest of ``homeassistant.*``, so pin a real exception class as its
-    ``HomeAssistantError`` attribute so the raise path is exercisable.
-    """
-
-
-_exceptions_stub = MagicMock()
-_exceptions_stub.HomeAssistantError = _StubHomeAssistantError
-sys.modules.setdefault("homeassistant.exceptions", _exceptions_stub)
-
-# Server-side scoring path the component must stay in parity with.
-from ha_mcp.tools.search.entities import _match_exact_search_entity  # noqa: E402
-from ha_mcp.utils.fuzzy_search import calculate_ratio  # noqa: E402
-
-from ._component_ws_api import COMPONENT_VERSION, wsapi  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -620,6 +587,7 @@ class FakeConfigEntry:
         pref_disable_polling=False,
         disabled_by=None,
         reason=None,
+        error_reason_translation_domain=None,
         error_reason_translation_key=None,
         error_reason_translation_placeholders=None,
         subentries=None,
@@ -645,22 +613,65 @@ class FakeConfigEntry:
         self.pref_disable_polling = pref_disable_polling
         self.disabled_by = disabled_by
         self.reason = reason
+        self.error_reason_translation_domain = error_reason_translation_domain
         self.error_reason_translation_key = error_reason_translation_key
         self.error_reason_translation_placeholders = (
             error_reason_translation_placeholders
         )
         # Modern core stores subentries as a MappingProxyType keyed by subentry_id.
         self.subentries = dict(subentries or {})
-        # created_at/modified_at are datetimes core serializes via .timestamp();
-        # supported_subentry_types is a computed property. Set only when provided so
-        # a fixture can omit them (getattr -> None / _safe_prop default {}), modeling
-        # a core old enough to predate them.
-        if created_at is not None:
-            self.created_at = created_at
-        if modified_at is not None:
-            self.modified_at = modified_at
-        if supported_subentry_types is not None:
-            self.supported_subentry_types = supported_subentry_types
+        self.created_at = created_at
+        self.modified_at = modified_at
+        self.supported_subentry_types = supported_subentry_types or {}
+        # Extra keys merged into the fragment, standing in for a field a newer
+        # Core adds to ``as_json_fragment``.
+        self.extra_fragment_fields: dict[str, Any] = {}
+
+    @property
+    def as_json_fragment(self):
+        """Stand-in for Core's ``ConfigEntry.as_json_fragment``.
+
+        Unlike Core it tolerates ``None`` timestamps and subentries, so
+        flow-helper fixtures that omit them still build a row.
+        """
+
+        def _ts(value):
+            return value.timestamp() if value is not None else None
+
+        def _val(value):
+            return getattr(value, "value", value)
+
+        row = {
+            "created_at": _ts(self.created_at),
+            "entry_id": self.entry_id,
+            "domain": self.domain,
+            "modified_at": _ts(self.modified_at),
+            "title": self.title,
+            "source": self.source,
+            "state": _val(self.state),
+            "supports_options": self.supports_options,
+            "supports_remove_device": self.supports_remove_device or False,
+            "supports_unload": self.supports_unload or False,
+            "supports_reconfigure": self.supports_reconfigure,
+            "supported_subentry_types": self.supported_subentry_types,
+            "pref_disable_new_entities": self.pref_disable_new_entities,
+            "pref_disable_polling": self.pref_disable_polling,
+            "disabled_by": _val(self.disabled_by),
+            "reason": self.reason,
+            "error_reason_translation_domain": self.error_reason_translation_domain,
+            "error_reason_translation_key": self.error_reason_translation_key,
+            "error_reason_translation_placeholders": (
+                self.error_reason_translation_placeholders
+            ),
+            "num_subentries": len(self.subentries or {}),
+            **self.extra_fragment_fields,
+        }
+        return FakeFragment(json.dumps(row).encode())
+
+
+# ``homeassistant.helpers.json`` is a MagicMock stub in unit tests; give the
+# config_entries command a json_bytes that serializes the fake fragment.
+_ws_config_entries.json_bytes = fake_json_bytes
 
 
 class FakeSubentry:
@@ -1821,7 +1832,6 @@ class TestMatchTypeTaxonomy:
 def functional_ws(monkeypatch):
     fake = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", fake)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     monkeypatch.setattr(
         wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
     )
@@ -1854,8 +1864,7 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
     "ha_mcp_tools/device_get": {"device_id": "d1"},
     "ha_mcp_tools/entity_enrich": {"entity_ids": []},
-    # exposure: no entity_id (list mode) — the registries resolve empty here so
-    # no per-entity settings lookup runs, keeping the admin-gate probe pure.
+    # exposure, list mode: registries resolve empty, so the probe stays pure.
     "ha_mcp_tools/entity_lookup": {"unique_id": "x"},
     "ha_mcp_tools/registries": {"registries": []},
     # registry_lookup now REQUIRES a target (entity_ids or config_entry_id) —
@@ -1905,10 +1914,12 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS + wsapi.entity_restore.COMMANDS,
             wsapi.core_contract.COMMAND,
+            wsapi.core_contract.INTEGRATION_COMMAND,
             "ha_mcp_tools/statistics_units",
             wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
             wsapi.todo_items.WS_TODO_ITEM,  # test_component_todo_items.py
             wsapi.automation_config.WS_AUTOMATION_CONFIG,
+            wsapi.config_references.WS_CONFIG_REFERENCES,  # its own test file
         }
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
 
@@ -1934,15 +1945,12 @@ class TestRegistrationAndAdminGate:
         if command == wsapi.WS_ENTITY_LOOKUP:
             # Deterministic stub binding for the function-local import (same
             # full-suite ordering guard as the other raises-tests).
-            monkeypatch.setitem(
-                sys.modules, "homeassistant.exceptions", _exceptions_stub
-            )
             # A bare FakeHass resolves no entity registry, and entity_lookup's
             # whole answer IS that substrate — the drift guard correctly raises
             # (→ command error → the server's legacy fallback). The admin gate
             # provably admitted the call because the raise comes from the pure
             # handler; result-shape coverage lives in TestEntityLookup.
-            with pytest.raises(_StubHomeAssistantError):
+            with pytest.raises(HomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
         hass = FakeHass()
@@ -1958,8 +1966,7 @@ class TestRegistrationAndAdminGate:
 
 class TestSchemaValidation:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._search_schema())
+        return vol.Schema(wsapi._search_schema())
 
     def test_valid_params_apply_defaults(self, monkeypatch):
         """Apply stable defaults to valid search parameters."""
@@ -1982,7 +1989,7 @@ class TestSchemaValidation:
             }
         )
         assert out["result_fields"] == ["is_group", "member_entity_ids"]
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(
                 {
                     "type": wsapi.WS_SEARCH,
@@ -2001,7 +2008,7 @@ class TestSchemaValidation:
     )
     def test_malformed_params_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
 
@@ -2009,8 +2016,7 @@ class TestNewCommandSchemas:
     """Voluptuous validation for overview / helpers_list."""
 
     def _schema(self, monkeypatch, schema_fn):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(schema_fn())
+        return vol.Schema(schema_fn())
 
     def test_overview_defaults(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._overview_schema)
@@ -2020,7 +2026,7 @@ class TestNewCommandSchemas:
 
     def test_overview_malformed_rejected(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._overview_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_OVERVIEW, "include_notifications": "yes"})
 
     def test_helpers_list_defaults(self, monkeypatch):
@@ -2037,7 +2043,7 @@ class TestNewCommandSchemas:
     )
     def test_helpers_list_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._helpers_list_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_states_requires_entity_ids_list(self, monkeypatch):
@@ -2055,7 +2061,7 @@ class TestNewCommandSchemas:
     )
     def test_states_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._states_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_blueprint_get_valid(self, monkeypatch):
@@ -2081,7 +2087,7 @@ class TestNewCommandSchemas:
     )
     def test_blueprint_get_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_device_get_requires_device_id(self, monkeypatch):
@@ -2100,7 +2106,7 @@ class TestNewCommandSchemas:
 
     def test_device_get_include_entities_must_be_bool(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._device_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(
                 {
                     "type": wsapi.WS_DEVICE_GET,
@@ -2118,7 +2124,7 @@ class TestNewCommandSchemas:
     )
     def test_device_get_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._device_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     def test_device_list_valid(self, monkeypatch):
@@ -2128,7 +2134,7 @@ class TestNewCommandSchemas:
 
     def test_device_list_rejects_extra_keys(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._device_list_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_DEVICE_LIST, "area_id": "x"})
 
     # --- config_entries ---------------------------------------------------------
@@ -2139,6 +2145,9 @@ class TestNewCommandSchemas:
         # Both filters are optional (a no-filter call lists every entry).
         defaults = {"type": wsapi.WS_CONFIG_ENTRIES, "include_subentry_data": False}
         assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == defaults
+        # The server's integration_type filter; Core would refuse an unknown key.
+        typed = schema({"type": wsapi.WS_CONFIG_ENTRIES, "type_filter": ["hub"]})
+        assert typed["type_filter"] == ["hub"]
 
     @pytest.mark.parametrize(
         "bad",
@@ -2146,11 +2155,12 @@ class TestNewCommandSchemas:
             {"type": "ha_mcp_tools/config_entries", "entry_id": 5},  # not str/None
             {"type": "ha_mcp_tools/config_entries", "domain": 5},  # not str/None
             {"type": "ha_mcp_tools/config_entries", "bogus": "x"},  # extra key
+            {"type": "ha_mcp_tools/config_entries", "type_filter": "hub"},  # not list
         ],
     )
     def test_config_entries_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._config_entries_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     # --- registry_lookup --------------------------------------------------------
@@ -2184,7 +2194,7 @@ class TestNewCommandSchemas:
     )
     def test_registry_lookup_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._registry_lookup_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     # --- system_snapshot --------------------------------------------------------
@@ -2198,7 +2208,7 @@ class TestNewCommandSchemas:
 
     def test_system_snapshot_malformed_rejected(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._system_snapshot_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_SYSTEM_SNAPSHOT, "include_states": "yes"})
 
     # --- entity_lookup ----------------------------------------------------------
@@ -2220,7 +2230,7 @@ class TestNewCommandSchemas:
     )
     def test_entity_lookup_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._entity_lookup_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
     # --- registries -------------------------------------------------------------
@@ -2251,7 +2261,7 @@ class TestNewCommandSchemas:
     )
     def test_registries_malformed_rejected(self, monkeypatch, bad):
         schema = self._schema(monkeypatch, wsapi._registries_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema(bad)
 
 
@@ -3055,32 +3065,22 @@ class TestDeviceGetEntities:
         assert res["entities"] == []
 
 
-# A stand-in for core's ``HomeAssistantError`` whose type NAME matches, so the
-# ``exposure`` guardrail (``_is_unknown_entity_error`` keys off the name, not an
-# isinstance against the MagicMock-stubbed ``homeassistant.exceptions``) fires.
-class _UnknownEntityError(Exception):
-    pass
-
-
-_UnknownEntityError.__name__ = "HomeAssistantError"
-
-
 class TestIsUnknownEntityError:
     """``_is_unknown_entity_error`` matches ONLY core's 'Unknown entity' raise: the
-    type name alone is too wide, so a same-type store-read failure is not swallowed
+    type alone is too wide, so a same-type store-read failure is not swallowed
     (issue #1813 F4)."""
 
     def test_matches_unknown_entity_message(self):
-        assert wsapi._is_unknown_entity_error(_UnknownEntityError("Unknown entity"))
+        assert wsapi._is_unknown_entity_error(HomeAssistantError("Unknown entity"))
         # Case-insensitive, substring anywhere in the message.
         assert wsapi._is_unknown_entity_error(
-            _UnknownEntityError("unknown entity light.x")
+            HomeAssistantError("unknown entity light.x")
         )
 
     def test_rejects_same_type_other_message(self):
         # Right type name, unrelated fault → NOT a match (must propagate).
         assert not wsapi._is_unknown_entity_error(
-            _UnknownEntityError("settings store read failed")
+            HomeAssistantError("settings store read failed")
         )
 
     def test_rejects_other_type_same_message(self):
@@ -3186,7 +3186,7 @@ class TestExposure:
 
         def fake_settings(hass, entity_id):
             if entity_id not in settings_map:
-                raise _UnknownEntityError("Unknown entity")
+                raise HomeAssistantError("Unknown entity")
             return settings_map[entity_id]
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
@@ -3248,10 +3248,10 @@ class TestExposure:
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
 
         def boom(hass, entity_id):
-            raise _UnknownEntityError("settings store read failed")
+            raise HomeAssistantError("settings store read failed")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", boom)
-        with pytest.raises(_UnknownEntityError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.kitchen"})
 
     def test_list_mode_mirrors_ws_list(self, monkeypatch):
@@ -3303,7 +3303,7 @@ class TestConfigEntries:
             "state": _FakeEnum("loaded"),
             "source": "user",
             "supports_options": True,
-            "supports_remove_device": None,  # None -> False (core's `or False`)
+            "supports_remove_device": None,
             "supports_unload": True,
             "supports_reconfigure": False,
             "pref_disable_new_entities": False,
@@ -3325,20 +3325,20 @@ class TestConfigEntries:
         res = wsapi._do_config_entries(
             FakeHass(config_entries=[self._entry()]), {"domain": "mqtt"}
         )
+        # Base keys come from the fake's Core-shaped fragment; the component adds
+        # unique_id, options and subentries.
         assert res["entries"] == [
             {
-                "created_at": self._CREATED_AT.timestamp(),  # float, like core
+                "created_at": self._CREATED_AT.timestamp(),
                 "modified_at": self._MODIFIED_AT.timestamp(),
                 "entry_id": "cfg1",
                 "domain": "mqtt",
-                # Superset field: core's as_json_fragment withholds unique_id,
-                # the component supplies it for the reconfigure identity anchor.
                 "unique_id": "mqtt-unique-1",
                 "title": "Mosquitto",
-                "state": "loaded",  # ConfigEntryState.value
+                "state": "loaded",
                 "source": "user",
                 "supports_options": True,
-                "supports_remove_device": False,  # None coerced to False
+                "supports_remove_device": False,
                 "supports_unload": True,
                 "supports_reconfigure": False,
                 "supported_subentry_types": {"device": {"supports_reconfigure": True}},
@@ -3346,6 +3346,7 @@ class TestConfigEntries:
                 "pref_disable_polling": True,
                 "disabled_by": None,
                 "reason": None,
+                "error_reason_translation_domain": None,
                 "error_reason_translation_key": "config_entry_not_ready",
                 "error_reason_translation_placeholders": {"host": "1.2.3.4"},
                 "num_subentries": 1,
@@ -3361,61 +3362,15 @@ class TestConfigEntries:
             }
         ]
 
-    # Every key core's ConfigEntry.as_json_fragment emits (the config_entries/get +
-    # REST /api/config/config_entries row). The component row must be a SUPERSET —
-    # dropping any of these silently degrades a consumer depending which read path
-    # won. Pinned so a future core field addition (or a component drop) is caught.
-    _CORE_JSON_FRAGMENT_KEYS = frozenset(
-        {
-            "created_at",
-            "modified_at",
-            "entry_id",
-            "domain",
-            "title",
-            "source",
-            "state",
-            "supports_options",
-            "supports_remove_device",
-            "supports_unload",
-            "supports_reconfigure",
-            "supported_subentry_types",
-            "pref_disable_new_entities",
-            "pref_disable_polling",
-            "disabled_by",
-            "reason",
-            "error_reason_translation_key",
-            "error_reason_translation_placeholders",
-            "num_subentries",
-        }
-    )
-
-    def test_row_is_superset_of_core_json_fragment(self):
-        res = wsapi._do_config_entries(
-            FakeHass(config_entries=[self._entry()]), {"domain": "mqtt"}
-        )
-        row_keys = set(res["entries"][0])
-        missing = self._CORE_JSON_FRAGMENT_KEYS - row_keys
-        assert not missing, f"component row dropped core json_fragment keys: {missing}"
-
-    def test_old_core_missing_fields_degrade(self):
-        # A core predating created_at/modified_at/supported_subentry_types: the
-        # attributes are absent, so timestamps degrade to None and
-        # supported_subentry_types to {} (not a crash, not a dropped key). The row is
-        # read-only (never restored), so a None-valued timestamp key is harmless.
-        entry = FakeConfigEntry(
-            "mqtt",
-            title="Old",
-            options={},
-            entry_id="old1",
-            state=_FakeEnum("loaded"),
-        )
-        assert not hasattr(entry, "created_at")
+    def test_core_fields_pass_through_verbatim(self):
+        # The row is Core's as_json_fragment, so a field a newer Core adds reaches
+        # the caller without a component change.
+        entry = self._entry()
+        entry.extra_fragment_fields = {"future_field": {"nested": [1, 2]}}
         row = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})["entries"][
             0
         ]
-        assert row["created_at"] is None
-        assert row["modified_at"] is None
-        assert row["supported_subentry_types"] == {}
+        assert row["future_field"] == {"nested": [1, 2]}
 
     def test_entry_data_never_read(self):
         # entry.data (credentials) must never surface — neither the value nor the
@@ -3505,18 +3460,6 @@ class TestConfigEntries:
         entry.subentries = None
         res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
         assert res["entries"][0]["subentries"] == []
-        assert res["entries"][0]["num_subentries"] == 0
-
-    def test_error_reason_translation_fields_absent_default_to_none(self):
-        # An older ConfigEntry (pre-dating these attrs) must degrade to None via
-        # getattr, not raise -- mirrors the subentries-absent degrade above.
-        entry = FakeConfigEntry("mqtt", entry_id="c1", state=_FakeEnum("loaded"))
-        del entry.error_reason_translation_key
-        del entry.error_reason_translation_placeholders
-        res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
-        row = res["entries"][0]
-        assert row["error_reason_translation_key"] is None
-        assert row["error_reason_translation_placeholders"] is None
 
     def test_mappingproxy_options_read(self):
         # ConfigEntry.options is a MappingProxyType in live HA — it must still be
@@ -3663,18 +3606,16 @@ class TestRegistryLookup:
         # "no matches" (issue #1813 M2 tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
         # Pin the stub so the function-local ``from homeassistant.exceptions
-        # import HomeAssistantError`` binds _StubHomeAssistantError even when an
+        # import HomeAssistantError`` binds HomeAssistantError even when an
         # earlier-collected module already replaced sys.modules["homeassistant.
         # exceptions"] with its own plain MagicMock.
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registry_lookup(FakeHass(), {})
 
     def test_empty_entity_ids_list_raises(self, monkeypatch):
         # An explicit empty list is likewise "no target", not "zero results".
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registry_lookup(FakeHass(), {"entity_ids": []})
 
 
@@ -3838,8 +3779,7 @@ class TestEntityLookup:
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: wsapi._RegistryView()
         )
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_entity_lookup(FakeHass(), {"unique_id": "x"})
 
 
@@ -4020,16 +3960,14 @@ class TestRegistries:
         # tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(wsapi, "_category_registry", lambda h: FakeCategoryReg({}))
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(FakeHass(), {"registries": ["category"]})
 
     def test_category_requested_with_empty_scopes_list_raises(self, monkeypatch):
         # An explicit empty category_scopes list is likewise rejected.
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(wsapi, "_category_registry", lambda h: FakeCategoryReg({}))
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(
                 FakeHass(), {"registries": ["category"], "category_scopes": []}
             )
@@ -4053,8 +3991,7 @@ class TestRegistries:
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: wsapi._RegistryView()
         )
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(FakeHass(), {"registries": ["area"]})
 
     def test_drifted_category_registry_raises(self, monkeypatch):
@@ -4062,8 +3999,7 @@ class TestRegistries:
         # scoped category request must RAISE, not serve {scope: []} per scope.
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(wsapi, "_category_registry", lambda h: None)
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_registries(
                 FakeHass(),
                 {"registries": ["category"], "category_scopes": ["automation"]},
@@ -4071,7 +4007,7 @@ class TestRegistries:
 
 
 class TestConfigEntryUniqueId:
-    """The one field the component adds beyond core's as_json_fragment."""
+    """``unique_id``: the one Core-withheld identity field the row adds."""
 
     def test_row_carries_unique_id_which_core_withholds(self):
         """Core omits unique_id everywhere; this row is the only source.

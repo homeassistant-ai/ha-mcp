@@ -17,7 +17,6 @@ from ha_mcp import backup_manager as bm
 from ha_mcp.tools import component_api
 from ha_mcp.tools.config_entry_backup import helper_backup_id, removal_backup_id
 
-# Importing the component fakes installs the homeassistant.* stubs first.
 from .test_component_ws_search import FakeConfigEntry, FakeHass, FakeSubentry, wsapi
 
 PLANE = {"declination": 30, "azimuth": 180, "modules_power": 1200}

@@ -68,7 +68,7 @@ _SERVICE_PATH_DESCS = _service_path_descriptions()
 _READ_TOOLS = ("ha_read_file", "ha_list_files")
 _WRITE_TOOLS = ("ha_write_file", "ha_delete_file")
 _READ_SERVICES = ("read_file", "list_files")
-_WRITE_SERVICES = ("write_file", "delete_file")
+_WRITE_SERVICES = ("write_file", "edit_file", "delete_file")
 
 
 @pytest.mark.parametrize("tool", _READ_TOOLS)

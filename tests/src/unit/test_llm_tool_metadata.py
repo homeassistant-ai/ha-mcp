@@ -12,19 +12,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import llm_api  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools import llm_api
+from custom_components.ha_mcp_tools.const import (
     DOMAIN,
     EXPOSURE_TOOL_SEARCH,
 )
 
-from ._llm_api_helpers import (  # noqa: E402
+from ._llm_api_helpers import (
     CoreToolResult,
     fake_session,
+    llm_context,
     make_api,
     make_hass,
     tool_entry,
@@ -80,9 +77,7 @@ class TestCoreToolMetadata:
         }
         fake_session(monkeypatch, tools=[_annotated_entry(sdk, **hints)])
 
-        instance = await make_api(make_hass()).async_get_api_instance(
-            llm_api.llm.LLMContext()
-        )
+        instance = await make_api(make_hass()).async_get_api_instance(llm_context())
 
         (tool,) = instance.tools
         assert tool.title == "Get Entity State"
@@ -96,9 +91,7 @@ class TestCoreToolMetadata:
     ) -> None:
         fake_session(monkeypatch, tools=[_annotated_entry("v2", readOnlyHint=True)])
 
-        instance = await make_api(make_hass()).async_get_api_instance(
-            llm_api.llm.LLMContext()
-        )
+        instance = await make_api(make_hass()).async_get_api_instance(llm_context())
 
         assert instance.tools[0].annotations == _CoreToolAnnotations(read_only=True)
 
@@ -121,7 +114,7 @@ class TestCoreToolMetadata:
         result = await tool.async_call(
             make_hass(),
             llm_api.llm.ToolInput("ha_search", {}),
-            llm_api.llm.LLMContext(),
+            llm_context(),
         )
 
         assert isinstance(result, CoreToolResult)
@@ -134,7 +127,7 @@ class TestCoreToolMetadata:
         fake_session(monkeypatch, tools=[tool_entry("ha_get_state")])
         instance = await make_api(
             make_hass(), mode=EXPOSURE_TOOL_SEARCH
-        ).async_get_api_instance(llm_api.llm.LLMContext())
+        ).async_get_api_instance(llm_context())
         search, call = instance.tools
 
         assert search.annotations == _CoreToolAnnotations(
@@ -147,7 +140,7 @@ class TestCoreToolMetadata:
         unknown = await call.async_call(
             make_hass(),
             llm_api.llm.ToolInput("ha_call_tool", {"name": "ha_nope"}),
-            llm_api.llm.LLMContext(),
+            llm_context(),
         )
         assert unknown.error is True
 
@@ -158,9 +151,7 @@ class TestCoreToolMetadata:
         monkeypatch.delattr(llm_api.llm, "ToolAnnotations", raising=False)
         fake_session(monkeypatch, tools=[_annotated_entry("v2", readOnlyHint=True)])
 
-        instance = await make_api(make_hass()).async_get_api_instance(
-            llm_api.llm.LLMContext()
-        )
+        instance = await make_api(make_hass()).async_get_api_instance(llm_context())
 
         assert "annotations" not in vars(instance.tools[0])
         assert instance.tools[0].title == "Get Entity State"

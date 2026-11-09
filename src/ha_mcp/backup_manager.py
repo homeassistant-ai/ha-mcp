@@ -54,9 +54,9 @@ import time
 import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
@@ -66,6 +66,7 @@ import yaml  # type: ignore[import-untyped]
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
+from .backup_calendar import _fetch_calendar_event, _restore_calendar_event
 from .backup_dashboards import (
     _DASHBOARD_KIND,
     dashboard_comparison,
@@ -94,6 +95,7 @@ from .backup_entity_ids import (
     update_with_registry_icon,
     with_registry_icon,
 )
+from .backup_files import _fetch_file, _fetch_file_as_stored, _restore_file
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import (
@@ -272,6 +274,15 @@ class _FlowHelperReadError(HomeAssistantError):
 class _FlowHelperBackupSkip(_FlowHelperReadError):
     """Nothing to back up: no stored or disclosed options, or no helper flow Core
     lists. Best-effort capture logs it at INFO."""
+
+
+def _restore_is_flow_driven(domain: str) -> bool:
+    """A snapshot domain whose restore drives a Core flow, which can apply it
+    partly: a flow helper, a config subentry or an integration entry."""
+    return _is_flow_helper_domain(domain) or domain in (
+        "helper_config_subentry",
+        "integration",
+    )
 
 
 def _is_flow_helper_domain(domain: str) -> bool:
@@ -1513,18 +1524,17 @@ class BackupManager:
                         safety_backup=None,
                     ) from err
                 data["entity_id"] = entity_id
-                async with self.config_entry_write_guard(entity_id, exclusive=True):
-                    return await self._restore_snapshot_data(
-                        name, data, take_safety_backup=take_safety_backup
-                    )
-            if data["domain"] == "entity":
-                async with restore_locks(self._client, data["config"]):
-                    return await self._restore_snapshot_data(
-                        name, data, take_safety_backup=take_safety_backup
-                    )
-            return await self._restore_snapshot_data(
-                name, data, take_safety_backup=take_safety_backup
-            )
+                guard: Any = self.config_entry_write_guard(entity_id, exclusive=True)
+            elif data["domain"] == "entity":
+                guard = restore_locks(self._client, data["config"])
+            elif data["domain"] == "integration":  # its restore drives an options flow
+                guard = self.config_entry_write_guard(data["entity_id"])
+            else:
+                guard = nullcontext()
+            async with guard:
+                return await self._restore_snapshot_data(
+                    name, data, take_safety_backup=take_safety_backup
+                )
         finally:
             self._unprotect_snapshot(name)
 
@@ -1566,11 +1576,10 @@ class BackupManager:
         step = "safety_preflight"
         try:
             needs_safety = await self._restore_needs_safety(handler, entity_id, config)
-            # Existing flow helpers and subentries always require a fresh
-            # recovery point: their flows can apply a restore partly.
-            is_flow = _is_flow_helper_domain(domain)
-            flow_driven = is_flow or domain == "helper_config_subentry"
-            if needs_safety and (flow_driven or take_safety_backup):
+            # Existing flow helpers, subentries and integration entries always
+            # require a fresh recovery point: their flows can apply a restore
+            # partly.
+            if needs_safety and (_restore_is_flow_driven(domain) or take_safety_backup):
                 step = "safety_backup"
                 safety_path = await self._capture_restore_safety(
                     domain, entity_id, outcome, config
@@ -1642,7 +1651,7 @@ class BackupManager:
     ) -> Path | None:
         """Take a restore's recovery point; a failed capture raises and blocks it."""
         is_flow = _is_flow_helper_domain(domain)
-        flow_driven = is_flow or domain == "helper_config_subentry"
+        flow_driven = _restore_is_flow_driven(domain)
         if not flow_driven and not getattr(self._settings, "enable_auto_backup", False):
             return None  # auto-backup off: no safety backup is promised
         # The restore overwrites the current state, so the throttle that a
@@ -2314,276 +2323,6 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
     return await _ws_send(client, {**group_set, "service_data": service_data})
 
 
-# Calendar events — calendar.get_events to fetch, calendar.create/update services.
-
-
-# Bounds of the second sweep below: wide enough for a past event or one booked
-# well ahead, without asking a busy calendar to expand a decade of recurrences.
-_CALENDAR_WIDE_LOOKBACK_DAYS = 366
-_CALENDAR_WIDE_LOOKAHEAD_DAYS = 732
-
-
-async def _find_calendar_event(
-    client: Any,
-    cal: str,
-    uid: str,
-    recurrence_id: str | None,
-    start: datetime,
-    end: datetime,
-) -> Any:
-    """Return the event with ``uid`` on ``cal`` between ``start`` and ``end``.
-
-    Reads the REST calendar view rather than the ``calendar.get_events``
-    service: the service response is built by HA's
-    ``_list_events_dict_factory``, which keeps only ``LIST_EVENT_FIELDS``
-    (start/end/summary/description/location/status) and therefore carries no
-    ``uid`` to match on. ``/api/calendars/{entity_id}`` serialises the whole
-    CalendarEvent, so uid, recurrence_id and rrule survive — the same endpoint
-    ``ha_config_get_calendar_events`` reads.
-
-    A recurring series is expanded into occurrences that all share the ``uid``,
-    so ``recurrence_id`` selects which one; without it the first match wins.
-    """
-    try:
-        events = await client._request(
-            "GET",
-            f"/calendars/{cal}",
-            params={"start": start.isoformat(), "end": end.isoformat()},
-        )
-    except HomeAssistantError as err:
-        # Only treat 404 (calendar entity not present) as "skip silently".
-        # Auth/transport/server errors deserve a WARNING so an operator
-        # can spot a misconfigured calendar integration; matches the
-        # ``status_code == 404`` narrowing the automation/script/scene
-        # fetchers use.
-        if getattr(err, "status_code", None) == 404:
-            return None
-        raise
-    for event in _require_list(events, f"/calendars/{cal}"):
-        if not isinstance(event, dict) or event.get("uid") != uid:
-            continue
-        if recurrence_id is not None and event.get("recurrence_id") != recurrence_id:
-            continue
-        return event
-    return None
-
-
-def _recurrence_id_window(
-    recurrence_id: str | None,
-) -> tuple[datetime, datetime] | None:
-    """A day-wide window around an iCalendar recurrence id, if it parses."""
-    if not recurrence_id:
-        return None
-    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M%SZ", "%Y%m%d"):
-        try:
-            at = datetime.strptime(recurrence_id, fmt).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-        return at - timedelta(days=1), at + timedelta(days=1)
-    return None
-
-
-async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
-    # entity_id is "<calendar.entity>::<event_uid>[::<recurrence_id>]"
-    cal, _, rest = entity_id.partition("::")
-    uid, _, recurrence_id = rest.partition("::")
-    if not cal or not uid:
-        return None
-    # Configurable lookahead window. Default 7 days catches typical edits;
-    # set HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS to widen for far-future
-    # events or narrow to skip noise. Bounded so a typo can't query
-    # decades of history.
-    try:
-        from .config import get_global_settings
-
-        days = int(
-            getattr(get_global_settings(), "auto_backup_calendar_lookahead_days", 7)
-        )
-    except (AttributeError, ImportError, ValueError, TypeError):
-        days = 7
-    days = max(1, min(365, days))
-    now = datetime.now(UTC)
-    wanted = recurrence_id or None
-    # A recurrence_id names the occurrence's own date, so an occurrence far
-    # outside the windows below is still found in one request.
-    around = _recurrence_id_window(wanted)
-    found = (
-        await _find_calendar_event(client, cal, uid, wanted, *around)
-        if around
-        else None
-    )
-    if found is None:
-        found = await _find_calendar_event(
-            client, cal, uid, wanted, now, now + timedelta(days=days)
-        )
-    if found is None:
-        # The configured window is the cheap common case, not the contract: a
-        # write targets an event by uid, and an event being edited or deleted
-        # can sit in the past or well beyond the lookahead. Missing it would
-        # silently skip the snapshot and leave the prior values unrecoverable,
-        # so sweep once more over a wide window before concluding it is gone.
-        found = await _find_calendar_event(
-            client,
-            cal,
-            uid,
-            wanted,
-            now - timedelta(days=_CALENDAR_WIDE_LOOKBACK_DAYS),
-            now + timedelta(days=_CALENDAR_WIDE_LOOKAHEAD_DAYS),
-        )
-    if found is None:
-        return None
-    if wanted is None and found.get("rrule"):
-        # The write targets a whole series, but the calendar view only exposes
-        # expanded OCCURRENCES — never the master event's own start. Restoring
-        # one occurrence's values would revert a single date and leave the rest
-        # of the series edited, or re-create a series starting at the wrong
-        # date, both reported as a successful restore. No snapshot is the
-        # honest answer; a single-occurrence write (which carries a
-        # recurrence_id) is captured normally.
-        logger.warning(
-            "Auto-backup: no snapshot for series-wide write on %s (event %s); "
-            "Home Assistant exposes only expanded occurrences, so the series "
-            "could not be restored faithfully",
-            cal,
-            uid,
-        )
-        return None
-    return {"calendar_entity_id": cal, **found}
-
-
-def _calendar_bound(value: Any) -> tuple[str, bool] | None:
-    """Return ``(iso_value, is_date_only)`` for a snapshotted event boundary.
-
-    The REST view wraps each boundary as ``{"dateTime": ...}`` (timed) or
-    ``{"date": ...}`` (all-day); snapshots taken before that switch hold a
-    flat ISO string, which a 10-character length identifies as date-only.
-    """
-    if isinstance(value, dict):
-        if value.get("dateTime"):
-            return str(value["dateTime"]), False
-        if value.get("date"):
-            return str(value["date"]), True
-        return None
-    if isinstance(value, str) and value:
-        return value, len(value) == 10
-    return None
-
-
-# HA reports a missing event as a plain ``failed`` command error whose message
-# comes from the integration (Local Calendar surfaces ical's "No existing item
-# with uid/recurrence_id: ..."), so absence has to be read off the message.
-_CALENDAR_EVENT_ABSENT_MARKERS = ("no existing item", "not found", "does not exist")
-
-
-def _calendar_update_cannot_apply(err: HomeAssistantCommandError) -> bool:
-    """Whether ``err`` proves the in-place update never touched the event."""
-    if getattr(err, "code", None) == "not_supported":
-        # The calendar advertises no UPDATE_EVENT, so it cannot ever accept
-        # the update and re-creating is the only restore available.
-        return True
-    message = str(err).lower()
-    return any(marker in message for marker in _CALENDAR_EVENT_ABSENT_MARKERS)
-
-
-async def _recreate_calendar_event(
-    client: Any,
-    cal: str,
-    event: dict[str, Any],
-    start: tuple[str, bool],
-    end: tuple[str, bool],
-) -> Any:
-    """Create an event that no longer exists under its snapshotted uid.
-
-    Always a single event: a series-wide write is never snapshotted (the
-    calendar view cannot describe the series), and a snapshot of one
-    occurrence must not be re-created as a series of its own.
-    """
-    data: dict[str, Any] = {"entity_id": cal, "summary": event["summary"]}
-    if start[1]:
-        data.update({"start_date": start[0], "end_date": end[0]})
-    else:
-        data.update({"start_date_time": start[0], "end_date_time": end[0]})
-    for key in ("description", "location"):
-        if event.get(key):
-            data[key] = event[key]
-    return await _rest_post(client, "services/calendar/create_event", data)
-
-
-async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> Any:
-    cal, _, rest = entity_id.partition("::")
-    key_uid, _, key_recurrence_id = rest.partition("::")
-    cal = config.get("calendar_entity_id") or cal
-    uid = config.get("uid") or key_uid
-    recurrence_id = config.get("recurrence_id") or key_recurrence_id or None
-    start = _calendar_bound(config.get("start"))
-    end = _calendar_bound(config.get("end"))
-    if start is None or end is None:
-        raise HomeAssistantError(
-            f"Calendar snapshot for {entity_id!r} has no usable start/end"
-        )
-
-    # Home Assistant merges the update into the stored event (ical dumps it
-    # with ``exclude_unset``), so a field left out keeps whatever the write
-    # put there. Send the text fields unconditionally — empty clears a
-    # description or location the write added.
-    event: dict[str, Any] = {
-        "summary": config.get("summary") or "",
-        "dtstart": start[0],
-        "dtend": end[0],
-        "description": config.get("description") or "",
-        "location": config.get("location") or "",
-    }
-    # ``rrule`` is deliberately never replayed. Every expanded occurrence
-    # carries the series' rule, and sending it back onto one occurrence —
-    # which ical has already forked into a plain event — would make that
-    # occurrence a second series under the same uid, duplicating every later
-    # date.
-
-    if not uid:
-        return await _recreate_calendar_event(client, cal, event, start, end)
-
-    # An edited event still exists under its uid, so put the captured values
-    # back in place instead of creating a second copy. Only a snapshot of a
-    # DELETED event (or a calendar without UPDATE_EVENT) falls through to
-    # re-creation.
-    message: dict[str, Any] = {
-        "type": "calendar/event/update",
-        "entity_id": cal,
-        "uid": uid,
-        "event": event,
-    }
-    if recurrence_id:
-        message["recurrence_id"] = recurrence_id
-    try:
-        return await _ws_send(client, message)
-    except HomeAssistantCommandError as err:
-        if not _calendar_update_cannot_apply(err):
-            # A transport drop, a timeout or an unclassified command failure
-            # leaves it unknown whether HA applied the update; re-creating
-            # then leaves a duplicate behind. Only a failure that PROVES the
-            # update never landed falls through. Connection errors and
-            # timeouts are separate types, so they never reach here at all.
-            raise
-        if recurrence_id:
-            # The occurrence is gone — deleted from the series, or the series
-            # moved and this recurrence_id no longer names one of its dates.
-            # ``create_event`` could only add a detached event next to the
-            # series, which is not the occurrence being restored, so say so
-            # instead of inventing one.
-            raise HomeAssistantError(
-                f"Occurrence {recurrence_id} of event {uid} no longer exists on "
-                f"{cal}, and an occurrence cannot be re-created into its series"
-            ) from err
-        logger.info(
-            "Restoring calendar event %s on %s in place is not possible (%s); "
-            "re-creating it instead",
-            uid,
-            cal,
-            err,
-        )
-    return await _recreate_calendar_event(client, cal, event, start, end)
-
-
 # Areas / floors — config/area_registry/{list,update}, config/floor_registry/{list,update}
 
 
@@ -2737,60 +2476,6 @@ async def _registry_snapshot(client: Any, helper_type: str, item: dict) -> Any:
 # ``edit_yaml_config``. Both store the content as ``kind: "text"``.
 
 
-async def _fetch_file(client: Any, entity_id: str) -> Any:
-    """Read a file's current content via the read_file service.
-
-    ``entity_id`` is the file path. Returns the content string, or None
-    when the file does not exist — a brand-new write has no prior content
-    to snapshot, so capture skips (same as creating a new entity). A
-    binary file also returns None: snapshots store text only, so capture
-    skips it instead of blocking the write or delete. Other read failures
-    raise so the capture pipeline logs them at WARNING.
-    """
-    from .tools.auto_backup import PathNotAllowedError
-    from .tools.tools_filesystem import call_mcp_tools_service
-    from .tools.util_helpers import unwrap_service_response
-
-    result = await call_mcp_tools_service(client, "read_file", {"path": entity_id})
-    if not isinstance(result, dict):
-        return None
-    result = unwrap_service_response(result)
-    if result.get("success", False):
-        content = result.get("content")
-        return content if isinstance(content, str) else None
-    error = str(result.get("error", ""))
-    skips = ("does not exist", "not a file", "Cannot read binary file")
-    if any(marker in error for marker in skips):
-        return None
-    if error.startswith("Path not allowed"):
-        raise PathNotAllowedError(entity_id, error)
-    raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
-
-
-async def _restore_file(client: Any, entity_id: str, config: Any) -> Any:
-    """Re-write a file's captured content via the write_file service."""
-    from .tools.tools_filesystem import call_mcp_tools_service
-    from .tools.util_helpers import unwrap_service_response
-
-    result = await call_mcp_tools_service(
-        client,
-        "write_file",
-        {
-            "path": entity_id,
-            "content": str(config),
-            "overwrite": True,
-            "create_dirs": True,
-        },
-    )
-    if isinstance(result, dict):
-        result = unwrap_service_response(result)
-        if not result.get("success", False):
-            raise HomeAssistantError(
-                f"write_file restore failed for {entity_id!r}: {result.get('error')}"
-            )
-    return result
-
-
 async def _fetch_yaml(client: Any, entity_id: str) -> Any:
     """Read the current YAML subtree for a ``{file}::{yaml_path}`` target.
 
@@ -2848,12 +2533,12 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     and can therefore be left off.
     """
     from .config import get_global_settings
-    from .tools.tools_filesystem import (
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+    from .tools.yaml_extra_keys import (
         assert_extra_yaml_keys_supported,
-        call_mcp_tools_service,
         effective_extra_yaml_write_keys,
     )
-    from .tools.util_helpers import unwrap_service_response
 
     # Split on the LAST "::" (see _fetch_yaml) so an exotic file path
     # containing "::" still restores to the right file and key.
@@ -3049,7 +2734,7 @@ def _flow_label(helper_type: str) -> str:
 
 def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
     """Require persisted flow-helper options that can safely be restored."""
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
 
     label = _flow_label(helper_type)
     if not isinstance(config, dict):
@@ -3061,22 +2746,14 @@ def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
             f"{label} helper has no stored options to back up or restore",
             "invalid_options",
         )
-    # The component's resolved-!secret scrub predates the server sentinels.
-    # Neither kind of placeholder is a usable recovery value.
-    if sentinel_option_keys(config) or _contains_redacted_leaf(config):
+    # Neither a server sentinel nor the component's scrub is a usable
+    # recovery value.
+    if placeholder_option_keys(config):
         raise _FlowHelperReadError(
             f"{label} helper options contain redacted values; capture is incomplete",
             "redacted_options",
         )
     return config
-
-
-def _contains_redacted_leaf(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(_contains_redacted_leaf(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_redacted_leaf(item) for item in value)
-    return isinstance(value, str) and value == "**redacted**"
 
 
 async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> Any:
@@ -3578,13 +3255,13 @@ def _subentry_target(entity_id: str) -> tuple[str, str]:
 
 
 def _subentry_data(data: Any) -> dict[str, Any]:
-    from .redaction import sentinel_option_keys
+    from .redaction import placeholder_option_keys
 
     if not isinstance(data, dict):
         raise _FlowHelperReadError(
             "Config subentry data must be an object", "invalid_data"
         )
-    if sentinel_option_keys(data) or _contains_redacted_leaf(data):
+    if placeholder_option_keys(data):
         raise _FlowHelperReadError(
             "Config subentry data contains redacted values; capture is incomplete",
             "redacted_data",
@@ -3871,12 +3548,12 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("entity", fetch_entity, restore_entity))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
     mgr.register(DomainHandler("integration", fetch_integration, restore_integration))
-    mgr.register(DomainHandler("file", _fetch_file, _restore_file))
+    mgr.register(DomainHandler("file", _fetch_file_as_stored, _restore_file))
     mgr.register(DomainHandler("yaml", _fetch_yaml, _restore_yaml))
     # Whole-file YAML config: same fetch as "file" (read_file), but restored via
     # edit_yaml_config(replace_file) since write_file rejects config files.
     # Backs the legacy-restore write path and its pre-restore safety snapshot.
-    mgr.register(DomainHandler("yaml_file", _fetch_file, _restore_yaml_file))
+    mgr.register(DomainHandler("yaml_file", _fetch_file_as_stored, _restore_yaml_file))
     # Blueprint files (#2329): the pre-write snapshot for
     # ha_manage_blueprints(action="delete" / "save").
     for blueprint_domain in ("automation", "script"):

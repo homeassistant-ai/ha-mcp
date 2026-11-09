@@ -1,4 +1,4 @@
-"""The HAOS bake's local add-on builds take python:3.13-slim from the
+"""The HAOS bake's local add-on builds take python:3.14-slim from the
 project's GHCR mirror when it serves the pinned digest, else from Docker Hub
 when ECR Public answers 429, decided once on the runner before staging."""
 
@@ -15,9 +15,9 @@ import pytest
 from tests.haos_image_build import python_base
 
 _DIGEST = "sha256:" + "ab" * 32
-_ECR_REF = f"{python_base.ECR_PYTHON}:3.13-slim@{_DIGEST}"
-_HUB_REF = f"{python_base.DOCKERHUB_PYTHON}:3.13-slim@{_DIGEST}"
-_MIRROR_REF = f"{python_base.MIRROR_PYTHON}:3.13-slim@{_DIGEST}"
+_ECR_REF = f"{python_base.ECR_PYTHON}:3.14-slim@{_DIGEST}"
+_HUB_REF = f"{python_base.DOCKERHUB_PYTHON}:3.14-slim@{_DIGEST}"
+_MIRROR_REF = f"{python_base.MIRROR_PYTHON}:3.14-slim@{_DIGEST}"
 _ARG_FORM = f"ARG PYTHON_BASE={_ECR_REF}\nFROM ${{PYTHON_BASE}}\nCOPY x /\n"
 _FROM_FORM = f"FROM {_ECR_REF}\nCOPY x /\n"
 # Taken before the autouse fixture replaces it, for the probe's own test.

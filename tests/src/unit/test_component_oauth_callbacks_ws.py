@@ -9,23 +9,19 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+import voluptuous as vol
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools.const import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     MAX_OAUTH_CALLBACKS,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
-from custom_components.ha_mcp_tools.websocket_api import (  # noqa: E402
+from custom_components.ha_mcp_tools.websocket_api import (
     oauth_callbacks,
 )
 
-from . import test_component_ws_search as _base  # noqa: E402
-from .test_component_ws_search import (  # noqa: E402
+from .test_component_ws_search import (
     FakeConfigEntry,
     FakeHass,
     _FakeConnection,
@@ -175,8 +171,7 @@ async def test_an_install_without_the_server_entry_is_told_so() -> None:
 class TestUpdateFrame:
     @pytest.fixture
     def schema(self, monkeypatch: Any) -> Any:
-        monkeypatch.setattr(oauth_callbacks, "vol", _base._REAL_VOL)
-        return _base._REAL_VOL.Schema(oauth_callbacks._oauth_callbacks_update_schema())
+        return vol.Schema(oauth_callbacks._oauth_callbacks_update_schema())
 
     @pytest.mark.parametrize(
         "frame",
@@ -189,7 +184,7 @@ class TestUpdateFrame:
     def test_an_out_of_bounds_frame_is_refused(
         self, schema: Any, frame: dict[str, Any]
     ) -> None:
-        with pytest.raises(_base._REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_OAUTH_CALLBACKS_UPDATE, **frame})
 
 
@@ -204,7 +199,6 @@ class TestAdminGate:
     ) -> None:
         fake = _FakeWSApi()
         monkeypatch.setattr(wsapi, "websocket_api", fake)
-        monkeypatch.setattr(wsapi, "vol", _base._REAL_VOL)
         wsapi.async_register_commands(FakeHass())
         for command in (wsapi.WS_OAUTH_CALLBACKS, wsapi.WS_OAUTH_CALLBACKS_UPDATE):
             with pytest.raises(_Unauthorized):

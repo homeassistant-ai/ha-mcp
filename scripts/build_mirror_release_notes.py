@@ -103,7 +103,7 @@ def format_release_notes(
     subjects = _filter_noise_subjects(subjects)
     version = curr_tag.removeprefix("v")
     lines = [
-        f"## HA-MCP Custom Component {version}",
+        f"## HA-MCP — Manage Home Assistant with AI {version}",
         "",
         f"Installs the ha-mcp {version} server released with it; restart Home "
         "Assistant after updating to run both.",
@@ -145,7 +145,7 @@ def format_dev_release_notes(
     subjects = _filter_noise_subjects(subjects)
     version = pin.split(".dev", 1)[0]
     lines = [
-        f"## HA-MCP Custom Component {version} (development pre-release)",
+        f"## HA-MCP — Manage Home Assistant with AI {version} (development pre-release)",
         "",
         (
             f"Snapshot of the custom component and its ha-mcp server from {source}, "

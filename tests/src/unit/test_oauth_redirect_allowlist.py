@@ -11,16 +11,12 @@ from typing import Any
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools.const import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
-from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (  # noqa: E402
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     _is_valid_redirect_uri,
     effective_allowlist,
     is_redirect_allowed,
@@ -28,8 +24,8 @@ from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (  # noqa: E
     stored_allowlist,
 )
 
-from . import test_oauth_autoapprove as aa_tests  # noqa: E402
-from .test_mcp_webhook import (  # noqa: E402
+from . import test_oauth_autoapprove as aa_tests
+from .test_mcp_webhook import (
     DATA_WEBHOOK,
     DOMAIN,
     WEBHOOK_AUTH_NONE,
@@ -38,7 +34,11 @@ from .test_mcp_webhook import (  # noqa: E402
     _register_hass,
     mw,
 )
-from .test_oauth_autoapprove import AUTH_QS, oauth_dcr  # noqa: E402
+from .test_oauth_autoapprove import AUTH_QS, oauth_dcr
+
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 # The real-aiohttp /authorize harness, shared with the auto-approve suite.
 unified_view_client_factory = aa_tests.unified_view_client_factory

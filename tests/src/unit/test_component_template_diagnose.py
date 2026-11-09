@@ -15,10 +15,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import voluptuous as vol
+
+from custom_components.ha_mcp_tools import template_diagnose
 
 # Import through the sibling module: it installs the ``homeassistant.*`` stubs
 # and the real voluptuous before any ``custom_components`` import.
-from . import test_component_ws_search as _base
 from .test_component_ws_search import (
     FakeHass,
     _FakeConnection,
@@ -26,10 +28,6 @@ from .test_component_ws_search import (
     _Unauthorized,
     wsapi,
 )
-
-_REAL_VOL = _base._REAL_VOL
-
-from custom_components.ha_mcp_tools import template_diagnose  # noqa: E402
 
 
 class _StubTemplateError(Exception):
@@ -235,7 +233,6 @@ class TestRegistration:
     def test_registered_and_admin_gated(self, fake_core, monkeypatch) -> None:
         transport = _FakeWSApi()
         monkeypatch.setattr(wsapi, "websocket_api", transport)
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
         wsapi.async_register_commands(FakeHass())
         handler = transport.registered[wsapi.WS_TEMPLATE_DIAGNOSE]
         msg = {
@@ -254,8 +251,7 @@ class TestRegistration:
 
 class TestSchema:
     def test_defaults_and_coercion(self, monkeypatch) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._template_diagnose_schema())
+        schema = vol.Schema(wsapi._template_diagnose_schema())
         out = schema({"type": wsapi.WS_TEMPLATE_DIAGNOSE, "template": "{{ 1 }}"})
         assert out["strict"] is False
         assert out["timeout"] == 3.0
@@ -268,9 +264,8 @@ class TestSchema:
 
     @pytest.mark.parametrize("timeout", [0, 61, -1])
     def test_rejects_out_of_range_timeout(self, monkeypatch, timeout) -> None:
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._template_diagnose_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
+        schema = vol.Schema(wsapi._template_diagnose_schema())
+        with pytest.raises(vol.Invalid):
             schema(
                 {
                     "type": wsapi.WS_TEMPLATE_DIAGNOSE,

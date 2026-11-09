@@ -253,10 +253,10 @@ class TestConfigEntryFlow:
             async with MCPAssertions(mcp_client) as mcp:
                 integration_data = await mcp.call_tool_success(
                     "ha_get_integration",
-                    {"entry_id": entry_id, "include_options": True},
+                    {"entry_id": entry_id, "include_schema": True},
                 )
             options = (integration_data.get("entry") or {}).get("options") or {}
-            # Stored options keep the section nested; the options-flow read
+            # Stored options keep the section nested; the options-form read
             # (no custom component) lists its fields at the top level.
             section = options.get("additional_options", options)
             assert section.get("availability") == availability, (
@@ -348,10 +348,10 @@ class TestConfigEntryFlow:
             ha_get_integration(entry_id,
                                include_options=True)  -> template body
 
-        Covers the two read paths that previously had only unit coverage:
-        ``ha_get_entity`` surfacing ``config_entry_id``, and
-        ``include_options`` surfacing a UI template helper's body via
-        ``description.suggested_value``.
+        ``ha_get_entity`` surfaces ``config_entry_id`` and the entry read
+        surfaces a UI template helper's body. Without the custom component
+        that read opens no options flow (#2987): it warns, and
+        ``include_schema=True`` reads the body from the options form.
         """
         body_marker = "optimalpathtemplatebody8829"
         name = "e2e optimal path template"
@@ -385,15 +385,19 @@ class TestConfigEntryFlow:
                 "ha_get_entity must surface the parent config_entry_id"
             )
 
-            # Optimal read path: include_options surfaces the template body via
-            # the options-flow probe (description.suggested_value).
             async with MCPAssertions(mcp_client) as mcp:
                 gi_data = await mcp.call_tool_success(
                     "ha_get_integration",
                     {"entry_id": entry_id, "include_options": True},
                 )
-            assert body_marker in str(gi_data), (
-                "include_options should surface the template body for a "
+                if "options" not in gi_data["entry"]:
+                    assert "ha_mcp_tools" in gi_data["warnings"][0], gi_data
+                    gi_data = await mcp.call_tool_success(
+                        "ha_get_integration",
+                        {"entry_id": entry_id, "include_schema": True},
+                    )
+            assert body_marker in str(gi_data["entry"]["options"]), (
+                "the entry read should surface the template body for a "
                 "UI-created template helper"
             )
             logger.info("✅ optimal read sequence verified end-to-end")
@@ -409,7 +413,7 @@ class TestConfigEntryFlow:
 
         A group helper created with ``hide_members=True`` exposes BOTH
         ``default: False`` and ``description.suggested_value: True`` on the
-        same options-flow field; ``include_options`` must report the stored
+        same options-flow field; the entry read must report the stored
         ``True``, not the static default the buggy precedence used to pick.
         """
         config = {
@@ -426,14 +430,14 @@ class TestConfigEntryFlow:
             async with MCPAssertions(mcp_client) as mcp:
                 gi_data = await mcp.call_tool_success(
                     "ha_get_integration",
-                    {"entry_id": entry_id, "include_options": True},
+                    {"entry_id": entry_id, "include_schema": True},
                 )
             options = (gi_data.get("entry") or {}).get("options") or {}
             assert options.get("hide_members") is True, (
-                "include_options must report the stored hide_members=True, "
+                "the entry read must report the stored hide_members=True, "
                 f"not the schema default False (issue #1575); got {options!r}"
             )
-            logger.info("✅ stored hide_members=True surfaced via include_options")
+            logger.info("✅ stored hide_members=True surfaced by the entry read")
         finally:
             await safe_call_tool(
                 mcp_client,
@@ -481,31 +485,45 @@ class TestConfigEntryFlow:
                 {"target": entry_id, "confirm": True},
             )
 
-    async def test_get_integration_include_schema(self, mcp_client):
-        """ha_get_integration with include_schema=True returns options_schema for eligible entries."""
-        # Find an entry that supports options
-        async with MCPAssertions(mcp_client) as mcp:
-            list_data = await mcp.call_tool_success("ha_get_integration", {})
-        entry = next(
-            (e for e in list_data.get("entries", []) if e.get("supports_options")),
-            None,
+    async def test_get_integration_include_schema(self, mcp_client, ha_client):
+        """include_schema describes the options form in Core's own words.
+
+        The demo entry's options flow opens with form ``options_1``; a
+        field's help text is Core's ``data_description`` for it, or its
+        ``data`` label when Core has no description, read here from Core's
+        translations.
+        """
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "options",
+                "integration": ["demo"],
+            }
         )
-        if entry is None:
-            pytest.skip(
-                "No config entries with supports_options=true in test environment"
-            )
+        resources = translations["result"]["resources"]
+        step = "component.demo.options.step.options_1"
+        expected = resources.get(
+            f"{step}.data_description.bool", resources.get(f"{step}.data.bool")
+        )
+        assert expected, "Core serves a label for the demo options field"
 
         async with MCPAssertions(mcp_client) as mcp:
+            list_data = await mcp.call_tool_success(
+                "ha_get_integration", {"domain": "demo"}
+            )
+            entry = next(e for e in list_data["entries"] if e.get("supports_options"))
             data = await mcp.call_tool_success(
                 "ha_get_integration",
                 {"entry_id": entry["entry_id"], "include_schema": True},
             )
-        assert "options_schema" in data, "Expected options_schema in response"
+
         schema = data["options_schema"]
-        assert schema.get("flow_type") in ("form", "menu")
-        logger.info(
-            f"options_schema flow_type={schema['flow_type']} for {entry['domain']}"
-        )
+        assert schema["flow_type"] == "form"
+        assert schema["step_id"] == "options_1"
+        assert "data_schema" not in schema
+        fields = {f["name"]: f for f in schema["fields"]}
+        assert fields["bool"]["description"] == expected
 
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
         """Creating a group helper without group_type returns a helpful error

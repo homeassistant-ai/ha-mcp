@@ -173,10 +173,13 @@
     ⚠ Changes saved. Restart HA-MCP for them to take effect. On next
     startup, HA-MCP fully removes disabled tools from the MCP tool list.
     Then reconnect or refresh the MCP server in your AI client (e.g.
-    refresh tool list on claude.ai, re-add/refresh the connector in
-    ChatGPT, or close and reopen Claude Desktop) so it reloads the tool
-    list. Restarting the App (add-on) or Home Assistant does NOT refresh your
-    client's cached tool list.
+    refresh tool list on claude.ai; in ChatGPT open Settings, then the
+    plugin settings, select the connector and click Refresh tools;
+    disconnect and reconnect a Claude Desktop custom connector; or quit
+    and reopen Claude Desktop for a server in claude_desktop_config.json)
+    so it reloads the tool list, then start a new conversation. Restarting
+    the App (add-on) or Home Assistant does NOT refresh your client's
+    cached tool list.
   </span>
   <button class="restart-btn" id="restartBtn" style="display:none" data-i18n="actions.restart_addon">Restart App (add-on)</button>
 </div>
@@ -232,8 +235,11 @@
       Settings on this tab save automatically. Changes take effect only after
       you restart the App (add-on) (applies them server-side) and reconnect or
       refresh the MCP server in your AI client (reloads the tool list), e.g.
-      refresh tool list on claude.ai, re-add or refresh the connector in
-      ChatGPT, or close and reopen Claude Desktop.
+      refresh tool list on claude.ai; in ChatGPT open Settings, then the
+      plugin settings, select the connector and click Refresh tools;
+      disconnect and reconnect a Claude Desktop custom connector; or quit
+      and reopen Claude Desktop for a server in claude_desktop_config.json;
+      then start a new conversation.
     </div>
   </div>
 

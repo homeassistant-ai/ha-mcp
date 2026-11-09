@@ -1,0 +1,9 @@
+{
+  "reason": "#2976 adds five requires_tools_entry tests in tests/src/e2e/workflows/filesystem/test_write_file_edits.py (ha_write_file edits against the real edit_file service, and the theme and custom template reloads after a write). They need the File & YAML Tools entry, so they skip at collection on each of the four no-tools lanes and run everywhere else.",
+  "deltas": {
+    "container_no_tools": 5,
+    "embedded_no_tools": 5,
+    "haos_embedded_no_tools": 5,
+    "haos_inaddon_no_tools": 5
+  }
+}

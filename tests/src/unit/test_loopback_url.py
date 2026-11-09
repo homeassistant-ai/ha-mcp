@@ -12,11 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools.loopback_url import (  # noqa: E402
+from custom_components.ha_mcp_tools.loopback_url import (
     derive_loopback_url,
 )
 

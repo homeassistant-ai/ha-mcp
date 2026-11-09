@@ -27,9 +27,8 @@ from ha_mcp.tools.tools_service import ServiceTools, register_service_tools
 
 from ._component_routing_helpers import patch_ws
 
-# Importing the phase-2 async component suite installs the homeassistant.* stubs,
-# pins ServiceNotFound / EVENT_STATE_CHANGED onto them, and exposes the fake
-# services / bus / hass builder the real component prep runs against.
+# The phase-2 async component suite exposes the fake services / bus / hass
+# builder the real component prep runs against.
 from .test_component_ws_phase2_async import (
     _call_hass,
     _FakeBus,

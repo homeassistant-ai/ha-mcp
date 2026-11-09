@@ -1,0 +1,51 @@
+id: no-hand-made-hass
+language: python
+rule:
+  any:
+    - pattern: hass = MagicMock($$$)
+    - pattern: hass = Mock($$$)
+    - pattern: hass = SimpleNamespace($$$)
+    - pattern: MagicMock($$$, name="hass", $$$)
+    - pattern: Mock($$$, name="hass", $$$)
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+# Files written before the unit tests ran on real Home Assistant Core. They are
+# to be converted and removed from this list; never add a file to it.
+ignores:
+  - "tests/addon/test_webhook_proxy.py"
+  - "tests/addon/test_webhook_proxy_catalog.py"
+  - "tests/addon/test_webhook_proxy_cloudhook.py"
+  - "tests/src/unit/_llm_api_helpers.py"
+  - "tests/src/unit/test_caller_token_auth.py"
+  - "tests/src/unit/test_card_definitions.py"
+  - "tests/src/unit/test_card_review_regressions.py"
+  - "tests/src/unit/test_card_review_round6.py"
+  - "tests/src/unit/test_component_repairs.py"
+  - "tests/src/unit/test_component_ws_logbook.py"
+  - "tests/src/unit/test_config_flow.py"
+  - "tests/src/unit/test_custom_card_lifecycle.py"
+  - "tests/src/unit/test_custom_card_limits.py"
+  - "tests/src/unit/test_custom_component_file_writes.py"
+  - "tests/src/unit/test_custom_component_filesystem.py"
+  - "tests/src/unit/test_custom_component_volume_writes.py"
+  - "tests/src/unit/test_embedded_server.py"
+  - "tests/src/unit/test_embedded_setup.py"
+  - "tests/src/unit/test_entry_migration.py"
+  - "tests/src/unit/test_ha_mcp_server_entry.py"
+  - "tests/src/unit/test_loopback_url.py"
+  - "tests/src/unit/test_mcp_webhook.py"
+  - "tests/src/unit/test_mcp_webhook_relay_pool.py"
+  - "tests/src/unit/test_oauth_autoapprove.py"
+  - "tests/src/unit/test_oauth_dcr.py"
+  - "tests/src/unit/test_oauth_legacy_component.py"
+  - "tests/src/unit/test_server_credentials.py"
+  - "tests/src/unit/test_tools_entry_lifecycle.py"
+  - "tests/src/unit/test_ui_panel.py"
+  - "tests/src/unit/test_webhook_proxy_liveness.py"
+message: |
+  Use the real `hass` fixture from Core's test plugin (with `MockConfigEntry`,
+  the registry fixtures and `hass_ws_client`) instead of a hand-made Home
+  Assistant: a stand-in asserts against a guess of what Core does. See
+  tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core".
+severity: error

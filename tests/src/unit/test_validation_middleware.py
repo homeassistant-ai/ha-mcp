@@ -2,16 +2,19 @@
 
 import json
 import logging
+import re
 from types import SimpleNamespace
 
 import pytest
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.validation_middleware import (
     ValidationErrorMiddleware,
     _closest_parameter,
 )
+from ha_mcp.utils.usage_logger import get_recent_logs, shutdown_usage_logger
 
 
 def _make_mcp() -> FastMCP:
@@ -395,6 +398,13 @@ def test_shared_word_outranks_closer_spelling():
     assert _closest_parameter("force", ["forced", "force_reload"]) == "force_reload"
 
 
+def _suggestions(body: dict) -> list[str]:
+    """All suggestions of a rejection: `suggestions` holds every one once there
+    are two or more, otherwise `suggestion` holds the only one."""
+    error = body["error"]
+    return error.get("suggestions") or [error["suggestion"]]
+
+
 def _make_config_set_like_mcp() -> FastMCP:
     """Tools shaped like ha_config_set_automation/_script for the config-key hint."""
     mcp = FastMCP("test")
@@ -433,10 +443,8 @@ async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> No
     assert "inside `config`" in msg
     assert msg.endswith("Valid parameters: config, entity_id, python_transform.")
     # The guidance is repeated in the suggestions, not only in the message.
-    error = body["error"]
-    all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])
     assert any(
-        s and "Move `alias` inside the `config` argument" in s for s in all_suggestions
+        "Move `alias` inside the `config` argument" in s for s in _suggestions(body)
     )
 
 
@@ -454,11 +462,8 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     msg = body["error"]["message"]
     assert "`sequence`: unknown parameter" in msg
     assert "inside `config`" in msg
-    error = body["error"]
-    all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])
     assert any(
-        s and "Move `sequence` inside the `config` argument" in s
-        for s in all_suggestions
+        "Move `sequence` inside the `config` argument" in s for s in _suggestions(body)
     )
 
 
@@ -472,6 +477,157 @@ async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
     msg = json.loads(str(exc_info.value))["error"]["message"]
     assert "`configg`: unknown parameter, did you mean `config`?" in msg
     assert "inside `config`" not in msg
+
+
+@pytest.mark.asyncio
+async def test_renamed_parameter_names_a_stale_client_tool_list() -> None:
+    """A parameter an update renamed, with no alias kept for the old name
+    (`identifier` -> `entity_id` in 9.1.0), arrives from a client still
+    serving its old tool list; the rejection names that cause and the
+    reconnect that fixes it (#2968, #2978)."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_config_get_automation(entity_id: str) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_config_get_automation", {"identifier": "automation.morning"}
+        )
+
+    stale = [s for s in _suggestions(json.loads(str(exc_info.value))) if "stale" in s]
+    assert len(stale) == 1
+    hint = stale[0]
+    # Conditional: the agent may also have invented the name (#2877).
+    assert hint.startswith("If your tool list shows `identifier`")
+    assert "not a server bug" in hint
+    # Each Claude client setup with its own refresh step (steps end at `;`).
+    steps = (
+        ("Claude Desktop custom connector", "disconnect and reconnect"),
+        ("claude_desktop_config.json", "reopen Claude Desktop"),
+        ("claude.ai", "tools list"),
+        ("Claude Code", "/mcp"),
+        ("ChatGPT", "Refresh tools"),
+    )
+    for setup, step in steps:
+        assert re.search(rf"{re.escape(setup)}[^;]*{re.escape(step)}", hint)
+    assert "new conversation" in hint
+
+
+@pytest.mark.asyncio
+async def test_misplaced_config_key_gets_no_stale_tool_list_hint() -> None:
+    """A config key passed top-level is the agent's mistake, not an old tool
+    list, so only the move-into-config suggestion applies."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
+
+    (only,) = _suggestions(json.loads(str(exc_info.value)))
+    assert "Move `alias` inside the `config` argument" in only
+
+
+@pytest.mark.asyncio
+async def test_type_error_alone_gets_no_stale_tool_list_hint() -> None:
+    """A wrong type for a declared parameter has nothing to do with the tool
+    list, so it keeps the generic suggestions."""
+    mcp = _make_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_dict_param", {"config": '{"a": 1}'})
+
+    assert (
+        _suggestions(json.loads(str(exc_info.value)))
+        == DEFAULT_SUGGESTIONS[ErrorCode.VALIDATION_FAILED]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_call_is_recorded_for_the_issue_report(monkeypatch) -> None:
+    """A rejected call never reaches the tool, so its usage-log wrapper never
+    runs. Without an entry here, a report filed from a client with a stale
+    tool list shows no trace of the call or of the name the client sent."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "ha_mcp.tools.validation_middleware.log_tool_call",
+        lambda **entry: recorded.append(entry),
+    )
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_config_get_automation(entity_id: str) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError):
+        await mcp.call_tool(
+            "ha_config_get_automation", {"identifier": "automation.morning"}
+        )
+
+    (entry,) = recorded
+    assert entry["tool_name"] == "ha_config_get_automation"
+    assert entry["success"] is False
+    assert entry["parameters"] == {"identifier": "automation.morning"}
+    assert "`identifier`: unknown parameter" in entry["error_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [
+        '{"code": "4711-secret"}',
+        '{"code": "4711-secret"',
+        {"payload": '{"code": "4711-secret"}'},
+    ],
+    ids=["json_string", "malformed_json_string", "nested_json_string"],
+)
+async def test_a_rejected_call_does_not_log_a_secret_inside_a_json_string(
+    data: str | dict,
+) -> None:
+    """A client that stringifies `data` sends an alarm code as raw text. An
+    ordinary call reaches the usage log parsed, where masking by key name
+    covers the code; a call rejected for another argument must not put it in
+    the log that ha_report_issue returns."""
+    # A fresh log: an entry left by another case must not stand in for this one.
+    shutdown_usage_logger()
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_rejected_secret(data: dict | None = None) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError):
+        await mcp.call_tool("ha_test_rejected_secret", {"data": data, "bogus": 1})
+
+    (entry,) = get_recent_logs(50)
+    assert entry["tool_name"] == "ha_test_rejected_secret"
+    assert "4711-secret" not in json.dumps(entry)
+
+
+@pytest.mark.asyncio
+async def test_stale_tool_list_hint_names_only_the_undeclared_arguments() -> None:
+    """In a call that also has a misplaced config key and a type error, one
+    stale-list suggestion names the undeclared arguments and nothing else, and
+    the move-into-config suggestion stays."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_config_set_automation",
+            {
+                "alias": "Goodnight",
+                "config": '{"triggers": []}',
+                "identifier": "automation.goodnight",
+                "force": True,
+            },
+        )
+
+    suggestions = _suggestions(json.loads(str(exc_info.value)))
+    assert any("Move `alias` inside the `config` argument" in s for s in suggestions)
+    stale = [s for s in suggestions if "stale" in s]
+    assert len(stale) == 1
+    assert "`identifier`" in stale[0] and "`force`" in stale[0]
+    assert "`alias`" not in stale[0] and "`config`" not in stale[0]
 
 
 def test_trailing_declared_name_outranks_closer_spelling():

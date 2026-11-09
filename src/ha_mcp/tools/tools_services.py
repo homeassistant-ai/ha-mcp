@@ -6,6 +6,8 @@ allowing AI to explore available Home Assistant services/actions.
 """
 
 import logging
+import re
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -44,9 +46,9 @@ from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
-# WS command name for the component's coarse-filtered service catalog read
-# (see ``component_api`` module docstring for the capability-negotiation pattern
-# this consumer follows).
+# WS command name for the component's service catalog read (domain-scoped; see
+# ``component_api`` module docstring for the capability-negotiation pattern this
+# consumer follows).
 WS_SERVICES_LIST = "ha_mcp_tools/services_list"
 
 
@@ -94,8 +96,9 @@ class ServiceDiscoveryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': name, description, domain, service, and target when the "
-                    "service has one. 'full': additionally include parameter field schemas."
+                    "'summary': name, description, domain, service, target and response "
+                    "when the service returns data. 'full': additionally include "
+                    "parameter field schemas."
                 ),
             ),
         ] = "summary",
@@ -108,7 +111,8 @@ class ServiceDiscoveryTools:
                     'Project each service record to only the specified keys. E.g. ["name", '
                     '"description"] returns slim service records. None = full records. '
                     "Unknown keys yield empty records. Available keys: name, description, "
-                    "domain, service, target (when present), fields (full mode only)."
+                    "domain, service, target (when present), response (when present), "
+                    "fields (full mode only)."
                 ),
             ),
         ] = None,
@@ -176,6 +180,7 @@ class ServiceDiscoveryTools:
                 limit=limit_int,
                 offset=offset_int,
                 detail_level=detail_level,
+                warnings=catalog_warnings,
             )
 
             if parsed_service_fields is not None and "services" in result:
@@ -237,14 +242,41 @@ async def _fetch_catalog_and_translations(
 
     Tries the component (``domain``-scoped, one frame) first; falls back to the
     legacy REST ``get_services()`` + WS ``frontend/get_translations`` pair on any
-    capability miss or fallback-eligible error.
+    capability miss or fallback-eligible error. Both sources are Core's own
+    ``async_get_all_descriptions`` output, so the server's shaping runs unchanged
+    over either.
     """
     component_payload = await _fetch_services_list_via_component(client, domain=domain)
     if component_payload is not None:
         return component_payload["services"], component_payload["translations"]
+    language, language_warning = await _configured_language(client)
+    if language_warning and warnings is not None:
+        warnings.append(language_warning)
     rest_services = await client.get_services()
-    translations = await _get_service_translations(client, warnings)
+    translations = await _get_service_translations(client, language, warnings)
     return rest_services, translations
+
+
+async def _configured_language(client: Any) -> tuple[str, str | None]:
+    """Core's configured language, plus a warning when it could not be read.
+
+    ``frontend/get_translations`` requires a language. Core serves the configured
+    one in ``/api/config``; falling back to English keeps the catalog usable when
+    that read is unavailable, but the caller is told the text may be untranslated.
+    """
+    try:
+        config = await client.get_config()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read the configured language: %r", exc)
+        return (
+            "en",
+            f"service descriptions may be untranslated: language unavailable: {exc}",
+        )
+    language = config.get("language") if isinstance(config, Mapping) else None
+    if isinstance(language, str) and language:
+        return language, None
+    logger.warning("Home Assistant config carries no usable language: %r", config)
+    return "en", "service descriptions may be untranslated: language unavailable"
 
 
 async def _fetch_services_list_via_component(
@@ -255,19 +287,16 @@ async def _fetch_services_list_via_component(
     Returns ``{"services": [...], "translations": {...}}`` — ``services`` is the
     REST ``/api/services`` list shape and ``translations`` the same flat
     ``frontend/get_translations`` resources map ``_get_service_translations``
-    returns — so ``_process_services`` consumes either source unchanged. Only
-    ``domain`` is threaded to the component (an exact match, identical semantics
-    on both sides); ``query`` is deliberately NOT forwarded, even though the
-    component also accepts a coarse ``query`` filter, because that coarse pass
-    can drop a domain from the payload ENTIRELY when nothing under it matches
-    anywhere (name/description/translation) — but ``_process_services``'s
-    ``domains`` field is populated purely from ``domain_filter`` (every domain
-    that passes it, independent of ``query_filter``), so a query-trimmed payload
-    would silently omit domains legacy still lists. Skipping ``query`` on the
-    wire keeps ``_process_services`` doing 100% of the query filtering over an
-    identical (domain-filtered only) catalog either way, so the output — the
-    ``domains`` field included — is byte-identical to legacy in every case, not
-    just when a query happens not to trigger the drop. ``None`` on capability
+    returns — so ``_process_services`` consumes either source unchanged.
+
+    The command accepts only ``domain`` and an optional ``language``. This
+    consumer threads ``domain`` alone (an exact match, identical semantics on
+    both sides). ``query`` is not a command parameter: the exact
+    concatenation-based filter stays here in ``_process_services``, applied to
+    the full domain-scoped catalog, so ``domains`` still lists every domain that
+    passes ``domain_filter``. ``language`` is not sent either — the component
+    resolves ``hass.config.language`` itself, and an explicit wire value would
+    override the instance's configured language. ``None`` on capability
     miss, downgrade (``unknown_command`` → invalidate the cached caps), or
     command error/timeout (logged) — the caller falls back to the legacy REST +
     WS translations fetch.
@@ -285,7 +314,7 @@ async def _fetch_services_list_via_component(
     caps = await get_component_caps(client)
     if not component_supports(caps, "services_list"):
         return None
-    kwargs: dict[str, Any] = {"language": "en"}
+    kwargs: dict[str, Any] = {}
     if domain is not None:
         kwargs["domain"] = domain
     try:
@@ -328,19 +357,19 @@ async def _fetch_services_list_via_component(
 
 
 async def _get_service_translations(
-    client: Any, warnings: list[str] | None = None
+    client: Any, language: str, warnings: list[str] | None = None
 ) -> dict[str, Any]:
     """
     Get service translations from Home Assistant via WebSocket.
 
     Uses the frontend/get_translations command to retrieve
-    human-readable service names and descriptions.
+    human-readable service names and descriptions in Core's configured language.
     """
     try:
         response = await client.send_websocket_message(
             {
                 "type": "frontend/get_translations",
-                "language": "en",
+                "language": language,
                 "category": "services",
             }
         )
@@ -380,6 +409,7 @@ def _process_services(
     limit: int = 50,
     offset: int = 0,
     detail_level: Literal["summary", "full"] = "summary",
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Process raw service data into structured output.
@@ -392,12 +422,16 @@ def _process_services(
         limit: Maximum number of services per page
         offset: Number of services to skip
         detail_level: 'summary' or 'full'
+        warnings: Degradation warnings to extend when Core's field payload is
+            not the mapping shape this shaping expects (the discarded metadata
+            is labelled incomplete rather than silently dropped)
 
     Returns:
         Processed service dictionary with pagination metadata
     """
     services: dict[str, dict[str, Any]] = {}
     domains_seen: set[str] = set()
+    incomplete_fields: list[str] = []
 
     # Handle both list and dict formats from REST API
     if isinstance(rest_services, list):
@@ -444,9 +478,22 @@ def _process_services(
                 translations,
                 query_lower,
                 detail_level,
+                incomplete=incomplete_fields if detail_level == "full" else None,
             )
             if entry is not None:
                 services[service_key] = entry
+
+    if incomplete_fields and warnings is not None:
+        shown = ", ".join(incomplete_fields[:5])
+        more = (
+            f" (+{len(incomplete_fields) - 5} more)"
+            if len(incomplete_fields) > 5
+            else ""
+        )
+        warnings.append(
+            "service field metadata incomplete: expected a mapping, got another "
+            f"type at {shown}{more}"
+        )
 
     # Sort domains alphabetically
     sorted_domains = sorted(domains_seen)
@@ -479,15 +526,27 @@ def _build_service_entry(
     translations: dict[str, Any],
     query_lower: str | None,
     detail_level: Literal["summary", "full"],
+    incomplete: list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Build a single service entry, returning None if it doesn't match the query."""
-    translation_key = f"component.{domain}.services.{service_name}"
-    service_trans = translations.get(translation_key, {})
+    """Build a single service entry, returning None if it doesn't match the query.
 
-    name = service_trans.get("name", service_name.replace("_", " ").title())
-    description = service_trans.get(
-        "description",
-        service_def.get("description", ""),
+    ``translations`` is Core's flat resources map (``component.<domain>.services.
+    <service>.name``), and ``name``/``description`` fall back to the text Core's
+    own description carries for dynamic services (``script.*``, ``notify.*``).
+    """
+    prefix = f"component.{domain}.services.{service_name}"
+    placeholders = service_def.get("description_placeholders")
+    name = _apply_placeholders(
+        _translation(translations, f"{prefix}.name")
+        or service_def.get("name")
+        or service_name.replace("_", " ").title(),
+        placeholders,
+    )
+    description = _apply_placeholders(
+        _translation(translations, f"{prefix}.description")
+        or service_def.get("description")
+        or "",
+        placeholders,
     )
 
     # Apply query filter
@@ -507,7 +566,11 @@ def _build_service_entry(
     if detail_level == "full":
         entry["fields"] = _process_service_fields(
             service_def.get("fields", {}),
-            service_trans.get("fields", {}),
+            translations,
+            prefix,
+            placeholders,
+            service_key=f"{domain}.{service_name}",
+            incomplete=incomplete,
         )
 
     # Add target only if present
@@ -515,130 +578,117 @@ def _build_service_entry(
     if target is not None:
         entry["target"] = target
 
+    # Core reports whether a service can return data; agents need this before
+    # calling ha_call_service with return_response.
+    response = service_def.get("response")
+    if response is not None:
+        entry["response"] = response
+
     return entry
 
 
+def _translation(translations: Mapping[str, Any], key: str) -> str | None:
+    """Return a flat translation string, or None when Core has no entry."""
+    value = translations.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
+
+
+def _apply_placeholders(text: str, placeholders: Any) -> str:
+    """Substitute Core's ``description_placeholders`` without touching literals.
+
+    Only keys Core supplied are replaced, so a description containing JSON or an
+    unknown placeholder survives unchanged instead of raising like ``str.format``.
+    """
+    if not text or not isinstance(placeholders, Mapping):
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        value = placeholders.get(match.group(1))
+        return str(value) if value is not None else match.group(0)
+
+    return _PLACEHOLDER_RE.sub(_replace, text)
+
+
 def _process_service_fields(
-    fields_def: dict[str, Any],
-    fields_trans: dict[str, Any],
+    fields_def: Any,
+    translations: Mapping[str, Any],
+    prefix: str,
+    placeholders: Any,
+    *,
+    service_key: str = "",
+    incomplete: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """
-    Process service field definitions into structured output.
+    """Shape Core's field descriptions, recursing into section entries.
 
-    Args:
-        fields_def: Field definitions from REST API
-        fields_trans: Field translations from WebSocket
+    Every key Core sends is copied through (``filter``, ``advanced``,
+    ``collapsed``, ``default``, ``example``, ``required``, ``selector``), so no
+    accepted-value rule is re-implemented here. Translations are added on top,
+    and a section keeps its nested ``fields`` processed the same way. Core puts
+    section field translations under the service's flat ``fields.<name>``
+    namespace and the section's own name under ``sections.<name>``.
 
-    Returns:
-        Dictionary of processed field definitions
+    ``example`` has its own translated key (``fields.<field>.example``), which
+    the frontend prefers over the services.yaml value, so it is read the same
+    way as the name and description; the key is omitted when neither exists.
+
+    A payload shape that is not a mapping is discarded, never fatal. Its dotted
+    path is appended to ``incomplete`` so the catalog can label the description
+    incomplete instead of silently serving a shorter field list.
     """
+    if not isinstance(fields_def, Mapping):
+        if incomplete is not None:
+            incomplete.append(f"{service_key}.fields" if service_key else "fields")
+        return {}
+
     processed: dict[str, dict[str, Any]] = {}
-
     for field_name, field_info in fields_def.items():
-        trans = fields_trans.get(field_name, {})
+        if not isinstance(field_info, Mapping):
+            if incomplete is not None:
+                incomplete.append(f"{service_key}.fields.{field_name}")
+            continue
 
-        # Determine field type from selector
-        selector = field_info.get("selector", {})
-        field_type = _get_field_type(selector)
-
-        processed[field_name] = {
-            "name": trans.get("name", field_name.replace("_", " ").title()),
-            "description": trans.get(
-                "description",
-                field_info.get("description", ""),
-            ),
-            "required": field_info.get("required", False),
-            "type": field_type,
-            "example": trans.get("example", field_info.get("example")),
+        is_section = isinstance(field_info.get("fields"), Mapping)
+        translation_prefix = (
+            f"{prefix}.sections.{field_name}"
+            if is_section
+            else f"{prefix}.fields.{field_name}"
+        )
+        entry = {
+            key: value
+            for key, value in field_info.items()
+            if not (is_section and key == "fields")
         }
-
-        # Add selector details for complex types
-        if selector:
-            processed[field_name]["selector"] = selector
-
-        # Add default value if present
-        if "default" in field_info:
-            processed[field_name]["default"] = field_info["default"]
+        entry["name"] = _apply_placeholders(
+            _translation(translations, f"{translation_prefix}.name")
+            or field_info.get("name")
+            or field_name.replace("_", " ").title(),
+            placeholders,
+        )
+        entry["description"] = _apply_placeholders(
+            _translation(translations, f"{translation_prefix}.description")
+            or field_info.get("description")
+            or "",
+            placeholders,
+        )
+        translated_example = _translation(translations, f"{translation_prefix}.example")
+        if translated_example is not None:
+            entry["example"] = _apply_placeholders(translated_example, placeholders)
+        elif entry.get("example") is None:
+            # Neither a translated nor a Core-supplied example: omit the key
+            # rather than advertising an empty one.
+            entry.pop("example", None)
+        if is_section:
+            entry["fields"] = _process_service_fields(
+                field_info["fields"],
+                translations,
+                prefix,
+                placeholders,
+                service_key=service_key,
+                incomplete=incomplete,
+            )
+        processed[field_name] = entry
 
     return processed
-
-
-_SIMPLE_SELECTOR_TYPES: dict[str, str] = {
-    "boolean": "boolean",
-    "text": "text",
-    "target": "target (entity/area/device)",
-    "time": "time",
-    "date": "date",
-    "datetime": "datetime",
-    "color_temp": "color_temp_kelvin",
-    "color_temp_kelvin": "color_temp_kelvin",
-    "color_rgb": "color_rgb",
-    "object": "object",
-    "template": "template",
-    "area": "area",
-    "device": "device",
-    "duration": "duration",
-}
-
-
-def _get_field_type(selector: dict[str, Any]) -> str:
-    """
-    Determine field type from selector definition.
-
-    Args:
-        selector: Field selector from service definition
-
-    Returns:
-        Human-readable type string
-    """
-    if not selector:
-        return "any"
-
-    for key, type_name in _SIMPLE_SELECTOR_TYPES.items():
-        if key in selector:
-            return type_name
-    if "number" in selector:
-        return _get_number_type(selector["number"])
-
-    if "select" in selector:
-        return _get_select_type(selector["select"])
-
-    if "entity" in selector:
-        return _get_entity_type(selector["entity"])
-
-    # Return the first key as type name
-    selector_types = list(selector.keys())
-    if selector_types:
-        return selector_types[0]
-
-    return "any"
-
-
-def _get_number_type(num_sel: Any) -> str:
-    """Format number selector type with optional range."""
-    if isinstance(num_sel, dict) and "min" in num_sel and "max" in num_sel:
-        return f"number ({num_sel['min']}-{num_sel['max']})"
-    return "number"
-
-
-def _get_select_type(select_sel: Any) -> str:
-    """Format select selector type with inline options for small lists."""
-    if isinstance(select_sel, dict):
-        options = select_sel.get("options", [])
-        if options and len(options) <= 5:
-            option_values = [
-                opt.get("value", opt) if isinstance(opt, dict) else opt
-                for opt in options
-            ]
-            return f"select ({', '.join(str(v) for v in option_values)})"
-    return "select"
-
-
-def _get_entity_type(entity_sel: Any) -> str:
-    """Format entity selector type with domain constraint."""
-    if isinstance(entity_sel, dict) and "domain" in entity_sel:
-        domains = entity_sel["domain"]
-        if isinstance(domains, list):
-            return f"entity ({', '.join(domains)})"
-        return f"entity ({domains})"
-    return "entity"

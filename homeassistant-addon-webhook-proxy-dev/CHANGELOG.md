@@ -9,6 +9,44 @@ history from before the fork.
 -->
 
 
+## v3.0.6.dev2 (2026-11-09)
+
+- The app (add-on) image is built on Python 3.14 (`python:3.14-slim`).
+
+
+## v3.0.6.dev1 (2026-11-09)
+
+Version line rebased onto stable 3.0.5 by the promotion workflow. The tool
+catalog suffixes, the `ha_auth` fix for Home Assistant serving HTTPS itself,
+the Claude.ai connector steps, the `PYTHON_BASE` build argument and the Core
+2026.11 type annotations developed through 3.0.5.dev6 now ship in stable 3.0.5.
+See the [stable release notes](../homeassistant-addon-webhook-proxy/CHANGELOG.md#v305-2026-11-09).
+Dev and stable runtime code are equivalent apart from flavor identity at this
+promotion.
+
+
+## v3.0.5.dev6 (2026-11-08)
+
+- Type annotations match Home Assistant Core 2026.11's own types (repairs
+  flow results, the webhook handler, the protected-resource view URL). No
+  behavior change.
+
+
+## v3.0.5.dev5 (2026-11-06)
+
+- The Claude.ai connector steps in DOCS.md follow the current connector
+  form: Settings → Customize → Add → Add custom connector (Customize reads
+  Plugins on accounts with the new Plugins page), Continue, the sign-in
+  settings Claude detects (No sign in, or Sign in now / Sign in when
+  needed with Use Claude's published identity for ha_auth and Use your own
+  OAuth client for legacy), Add, then Connect if the connector shows that
+  button. They also give the Team or Enterprise path, where an Owner or
+  Primary Owner adds the connector under Organization settings →
+  Connectors and members then connect it. They warn that with OAuth off or
+  in legacy mode every member who connects it gets the server's Home
+  Assistant access without signing in, and that in ha_auth mode any
+  account that can sign in gets the same admin-equivalent access.
+
 ## v3.0.5.dev4 (2026-11-03)
 
 - The webhook also serves `/catalog/full` and `/catalog/search`, alone or

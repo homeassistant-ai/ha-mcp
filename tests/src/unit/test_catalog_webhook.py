@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ._embedded_stubs import FakeSession, FakeUpstream, make_request
+from ._embedded_helpers import FakeSession, FakeUpstream, make_request
 from .test_mcp_webhook import (
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,

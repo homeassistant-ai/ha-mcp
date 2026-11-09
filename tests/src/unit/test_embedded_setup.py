@@ -6,8 +6,7 @@ keep running), connect-URL surfacing, teardown, and credential revocation on
 removal. The integration is always-on — the config entry existing means the
 server runs — so there is no enable/disable gate here.
 
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (which also puts
-the component package on sys.path). The server manager and webhook
+The server manager and webhook
 register/unregister functions are patched so these tests exercise only the
 orchestration decisions.
 """
@@ -17,16 +16,14 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import Iterator
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components import network as ha_adapters
+from homeassistant.helpers import network as ha_network
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_setup as esetup
 
 # Captured before any test patches it so the connect-URL tests can restore the
 # real implementation regardless of the module-level spy.
@@ -126,22 +123,15 @@ def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
     install_spies(monkeypatch)
 
 
-@pytest.fixture(autouse=True)
-def _restore_network_modules() -> Iterator[None]:
-    """Undo ``_install_network_cloud``'s ``sys.modules`` swaps after each test.
+# What ``_install_network_cloud`` and ``_install_adapters`` answer for Home
+# Assistant, undone after each test.
+_core_answers = pytest.MonkeyPatch()
 
-    Left in place, they reach later test modules in the same process: the
-    config flow then builds its connect hint from the stubs instead of falling
-    back to the translated remote-URL prose.
-    """
-    names = ("homeassistant.helpers.network", "homeassistant.components.cloud")
-    saved = {name: sys.modules.get(name) for name in names}
+
+@pytest.fixture(autouse=True)
+def _restore_core_answers() -> Iterator[None]:
     yield
-    for name, module in saved.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _core_answers.undo()
 
 
 class TestBringUp:
@@ -334,62 +324,35 @@ class TestRevokeOnRemove:
 
 
 def _install_network_cloud(*, cloud_url=None, local_url=None):
-    """Install fake homeassistant.helpers.network + components.cloud modules.
+    """Set Home Assistant's own URL and its Nabu Casa remote URL.
 
-    ``cloud_url``/``local_url`` None ⇒ the corresponding lookup raises its
-    "unavailable" exception (the branch the code guards for).
+    ``local_url`` None ⇒ Core's lookup raises its "unavailable" exception (the
+    branch the code guards for). ``cloud_url`` None ⇒ no remote URL: the cloud
+    integration's own requirements are not installed with Core, so its lookup
+    is replaced at the component's ``_cloud_remote_url``.
     """
-
-    class NoURLAvailableError(Exception):
-        pass
-
-    class CloudNotAvailable(Exception):
-        pass
-
-    net = ModuleType("homeassistant.helpers.network")
-    net.NoURLAvailableError = NoURLAvailableError
 
     def get_url(hass, *, allow_external=False, prefer_external=False):
         if local_url is None:
-            raise NoURLAvailableError
+            raise ha_network.NoURLAvailableError
         return local_url
 
-    net.get_url = get_url
-
-    cloud = ModuleType("homeassistant.components.cloud")
-    cloud.CloudNotAvailable = CloudNotAvailable
-
-    def async_remote_ui_url(hass):
-        if cloud_url is None:
-            raise CloudNotAvailable
-        return cloud_url
-
-    cloud.async_remote_ui_url = async_remote_ui_url
-
-    sys.modules["homeassistant.helpers.network"] = net
-    sys.modules["homeassistant.components.cloud"] = cloud
+    _core_answers.setattr(ha_network, "get_url", get_url)
+    _core_answers.setattr(esetup, "_cloud_remote_url", lambda hass: cloud_url)
 
 
 def _install_adapters(adapters=None, *, error=None):
-    """Install a fake ``homeassistant.components.network.async_get_adapters``.
+    """Set the network adapters Home Assistant reports.
 
-    ``error`` set ⇒ the lookup raises it (the degrade-to-empty branch). The
-    parent-package attribute is set too: ``homeassistant.components`` is a
-    MagicMock here, so ``from homeassistant.components import network`` reads the
-    child attribute rather than the ``sys.modules`` entry alone.
+    ``error`` set ⇒ the lookup raises it (the degrade-to-empty branch).
     """
-
-    net = ModuleType("homeassistant.components.network")
 
     async def async_get_adapters(hass):
         if error is not None:
             raise error
         return adapters or []
 
-    net.async_get_adapters = async_get_adapters
-    sys.modules["homeassistant.components.network"] = net
-    sys.modules["homeassistant.components"].network = net
-    return net
+    _core_answers.setattr(ha_adapters, "async_get_adapters", async_get_adapters)
 
 
 class TestSurfaceConnectUrls:

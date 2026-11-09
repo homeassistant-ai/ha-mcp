@@ -10,8 +10,6 @@ The domain dispatcher in the package ``__init__`` routes the two entry types
 (``tools`` / ``server``, discriminated by ``entry.data[entry_type]``, missing =
 ``tools``) to their respective setup/unload/remove functions — exercised by
 ``TestDomainDispatch`` below.
-
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs``.
 """
 
 from __future__ import annotations
@@ -21,15 +19,13 @@ import importlib.util
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools as component  # noqa: E402
-import custom_components.ha_mcp_tools.embedded_entry as pkg  # noqa: E402
-import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools as component
+import custom_components.ha_mcp_tools.embedded_entry as pkg
+import custom_components.ha_mcp_tools.embedded_setup as esetup
+from custom_components.ha_mcp_tools.const import (
     CONF_ENTRY_TYPE,
     DATA_ACCESS_ENABLED,
     DATA_BRINGUP_TASK,
@@ -43,14 +39,19 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
-from custom_components.ha_mcp_tools.embedded_server import (  # noqa: E402
+from custom_components.ha_mcp_tools.embedded_server import (
     EmbeddedServerManager,
 )
 
 
 def _make_hass() -> MagicMock:
     hass = MagicMock(name="hass")
-    hass.data = {}
+    # Core's registries, as loaded ones: no retired update entity, and a
+    # device the entry can attach to.
+    hass.data = {
+        er.DATA_REGISTRY: MagicMock(async_get_entity_id=MagicMock(return_value=None)),
+        dr.DATA_REGISTRY: MagicMock(),
+    }
 
     def _update_entry(entry, *, data=None, options=None, **_kw):
         if data is not None:

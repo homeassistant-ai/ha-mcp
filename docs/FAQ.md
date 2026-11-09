@@ -140,7 +140,7 @@ You can also start a new conversation and ask Claude if it can see your Home Ass
 
 This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.
 
-**If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also make sure you clicked **Connect** on the connector (and, with OAuth enabled, **Allow** on the consent page) — adding the connector alone does not complete the connection.
+**If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also check whether the connector shows a **Connect** button: if it does, click it (and, with OAuth enabled, **Allow** on the consent page) — adding the connector does not always complete the connection.
 
 ### Claude.ai connects from my browser but the connector fails — ports, firewalls, timeouts
 
@@ -430,7 +430,7 @@ By default the Webhook Proxy app registers an **unauthenticated** webhook endpoi
 
 For a real auth layer on top of the URL secret, the Webhook Proxy app (v1.1.0 and later) ships an optional OAuth 2.1 mode. Toggle **Show unused optional configuration options**, turn **Enable OAuth (Beta)** on, set **OAuth Mode** to `legacy` if you want the Client ID + Secret flow described here (a first-time enable with the mode left unset defaults to `ha_auth`, which generates no credentials), leave Client ID and Client Secret blank, and restart the app. Legacy mode also needs a **full Home Assistant restart** (a Repair prompts you) — restarting only the app is not enough; `ha_auth` needs no Home Assistant restart. In legacy mode the app generates a strong Client ID and Client Secret on first start, persists them at `/data/oauth_creds.json`, and prints them in the app log.
 
-That is the app's `legacy` OAuth mode. Webhook Proxy 3.x defaults a first-time enable to `ha_auth` instead: you sign in with your Home Assistant account and no Client ID or Secret exists. In Claude.ai's connector wizard, `ha_auth` is **Always required** + **Use Anthropic's hosted client metadata** (both auto-detected); for `legacy`, choose **Use your own OAuth client** and paste the Client ID and Client Secret from the app log. Click **Add**, then the connector's **Connect** button — Claude.ai handles the rest of the OAuth handshake. When the toggle is off, the webhook URL behaves exactly as before with no auth check.
+That is the app's `legacy` OAuth mode. Webhook Proxy 3.x defaults a first-time enable to `ha_auth` instead: you sign in with your Home Assistant account and no Client ID or Secret exists. In Claude.ai's connector form, `ha_auth` is **Sign in now** or **Sign in when needed** + **Use Claude's published identity** (both auto-detected); for `legacy`, choose **Use your own OAuth client** and paste the Client ID and Client Secret from the app log. Click **Add**, then the connector's **Connect** button if it shows one — Claude.ai handles the rest of the OAuth handshake. When the toggle is off, the webhook URL behaves exactly as before with no auth check.
 
 **OAuth flow end-to-end**
 
@@ -503,8 +503,9 @@ Workarounds, any one of them:
 1. **Wait a few seconds before clicking Allow once**, longer for large
    dashboard writes. Desktop gives no "generation finished" signal, so this
    is timing-based.
-2. **Set the ha-mcp write tools to Always allow**: Settings → Connectors →
-   your server → Tool permissions.
+2. **Set the ha-mcp write tools to Always allow**: choose **Allow always**
+   when Desktop asks to approve one of them, or set it in the server's tool
+   permissions in Desktop's connector settings.
 3. **Keep manual approval, but in ha-mcp instead of Desktop**: set the tools to
    Always allow in Desktop and enable **Tool Security Policies** with a
    require-approval rule on the write tools. The call is dispatched
@@ -567,11 +568,32 @@ uvx ha-mcp@latest --version
 
 The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest). If you see a much older version, the cache needs clearing.
 
+### A tool rejects as unknown a parameter your client's tool list shows (stale tool list)
+
+An AI client stores the server's tool list and keeps using it until the connection is refreshed. After an update renames a tool parameter, the client still offers the old name. Where the change is a plain rename, ha-mcp still serves the call and adds a warning to the result saying the tool list is stale: 9.1.0 renamed `identifier` to `entity_id` on the automation tools, and releases after 9.1.0 accept `identifier` this way. Otherwise the tool rejects the old name with `VALIDATION_FAILED` and `unknown parameter`, listing the current names under `Valid parameters`. Newly enabled tools stay missing for the same reason. Restarting ha-mcp or Home Assistant does not refresh the client.
+
+**Solution:** refresh the connection in the client, then start a new conversation:
+
+- Claude Desktop custom connector: disconnect and reconnect it. Claude Desktop does not refetch the list on its own, not even for a new conversation ([anthropics/claude-ai-mcp#1182](https://github.com/anthropics/claude-ai-mcp/issues/1182)).
+- claude.ai custom connector: use **Refresh tools list** in the connector's settings. A conversation that is already open keeps its old list, so start a new one.
+- A server in `claude_desktop_config.json`: quit and reopen Claude Desktop.
+- Claude Code: run `/mcp` and reconnect the server.
+- ChatGPT: see the next entry.
+
 ### ChatGPT doesn't show new or newly enabled tools (stale tool list)
 
-ChatGPT (web, including Codex Work Mode) caches a connector's tool list and sometimes keeps serving the stale list even after you enable new tools on the server, restart it, and remove and re-add the connector under the same name. Newly enabled tools (for example the beta filesystem/YAML tools) simply never appear in ChatGPT's tool list, even though the server logs show them registered — and other tools on the stale connection may fail with MCP internal errors.
+ChatGPT (web, including Codex Work Mode) caches a connector's tool list and keeps serving it until the connector is refreshed. Enabling new tools on the server, updating ha-mcp, or restarting it does not change what ChatGPT has stored. Newly enabled tools (for example the beta filesystem/YAML tools) never appear in ChatGPT's tool list, even though the server logs show them registered, and other tools on the stale connection may fail with MCP internal errors. After an ha-mcp update that renames a tool parameter, ChatGPT keeps calling the tool with the old name and the server rejects it with `VALIDATION_FAILED` and `unknown parameter`.
 
-**Solution:** delete the connector and create a new one with a **different name** — ChatGPT then fetches a fresh tool list. Re-adding it under the original name is not enough; the cached list survives the re-add.
+**Solution:** refresh the connector's tool list. If you enabled tools or changed a setting, restart the ha-mcp server first; the refresh only fetches the tools the server exposes at that moment. The steps are the same for the app (add-on) and the embedded server (custom component):
+
+1. In ChatGPT, open **Settings**, then the plugin settings.
+2. Find your ha-mcp connector and select it.
+3. Click **Refresh tools**.
+4. Start a new conversation.
+
+If the refresh returns an error, start a new conversation first. ChatGPT then prompts you to reconnect and sign in to the connector again; once that is done, go back and click **Refresh tools**.
+
+If the old tool list is still there after a refresh, delete the connector on that same screen and create a new one with a **different name**. Re-adding it under the original name is not enough; ChatGPT can keep the cached list across the re-add.
 
 ### Antigravity client troubleshooting
 
@@ -584,7 +606,7 @@ ChatGPT (web, including Codex Work Mode) caches a connector's tool list and some
 
 ### Claude.ai connection issues
 
-Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. Enter the URL, click **Continue**, and keep the settings marked **Detected**. If authentication is not auto-detected, the connection may not be working: **delete any existing connector and create a new one, then try again**. You can try selecting settings manually, but connections typically only work when the settings are auto-detected, so manually forcing them — including **None / No login** — may not help.
+Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. Enter the URL, click **Continue**, and keep the settings Claude detected and selected. If authentication is not auto-detected, the connection may not be working: **delete any existing connector and create a new one, then try again**. You can try selecting settings manually, but connections typically only work when the settings are auto-detected, so manually forcing them — including **No sign in** — may not help.
 
 If you installed the embedded HA-MCP server, make sure you have **restarted Home Assistant** after installation so everything registers properly.
 
@@ -664,7 +686,7 @@ The first number in `-p` (the host port) can be anything — only the second num
 
 ## Custom Component (ha_mcp_tools)
 
-The **HA-MCP Custom Component** (`ha_mcp_tools`) has two config-entry types under one integration: the **File & YAML services entry** (**HA-MCP File & YAML Tools**) adds the privileged file and YAML-configuration services described below, and the **HA-MCP Server** entry runs the full ha-mcp server in-process inside Home Assistant — now the recommended way to install ha-mcp, working on every Home Assistant installation type (HAOS, Supervised, Container, Core). The **HA-MCP Server** entry is a complete, standalone install that replaces the app, Docker, and uvx/stdio methods — run only one ha-mcp server, never two side by side. See the [in-process server guide](in-process-server.md) for the full walkthrough.
+The **HA-MCP integration** (`ha_mcp_tools`) has two config-entry types under one integration: the **File & YAML services entry** (**HA-MCP File & YAML Tools**) adds the privileged file and YAML-configuration services described below, and the **HA-MCP Server** entry runs the full ha-mcp server in-process inside Home Assistant — now the recommended way to install ha-mcp, working on every Home Assistant installation type (HAOS, Supervised, Container, Core). The **HA-MCP Server** entry is a complete, standalone install that replaces the app, Docker, and uvx/stdio methods — run only one ha-mcp server, never two side by side. See the [in-process server guide](in-process-server.md) for the full walkthrough.
 
 ### What is the custom component and why do I need it?
 
@@ -685,11 +707,13 @@ Template helper edit backups and restores also require the component, using eith
 
 ### How do I install it?
 
-**Using HACS (recommended, Home Assistant 2026.10 or older):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or add it manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
+**Using HACS (recommended, Home Assistant 2026.8–2026.10):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **HACS**, search for **HA-MCP**, and **Download**. The main repository is already in the default catalog.
 
-**Using the Marketplace (Home Assistant 2026.11 or newer):** HACS is built in as the **Marketplace**. Open **Settings → Marketplace**, accept its first-run warning and **Connect GitHub** (a device sign-in; adding a custom repository needs it, and until HA-MCP is in the Marketplace catalog it is also what makes the Marketplace check HA-MCP for updates in the background — otherwise use **Refresh information** on HA-MCP's page). Then open the same link, or the **Add from link** tab, add `https://github.com/homeassistant-ai/ha-mcp` as an **Integration**, and **Install**.
+**Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
 
-After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP Custom Component**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
+On Home Assistant 2026.7, use the manual install below and select **HA-MCP File & YAML Tools** with an external server. The in-process server requires 2026.8.0 or newer. Earlier Home Assistant versions cannot load the integration.
+
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
 
 **Manual install:** Copy `custom_components/ha_mcp_tools/` from the [repository](https://github.com/homeassistant-ai/ha-mcp) into your HA config's `custom_components/` directory. Restart Home Assistant, then add the integration as described above.
 
@@ -704,7 +728,38 @@ Yes. The component is required, but the tools are also gated by feature flags fo
 
 The split is deliberate: YAML *reads* sit behind the filesystem flag, and only YAML *edits* need `ENABLE_YAML_CONFIG_EDITING`.
 
-The component itself is installed through HACS (the Marketplace on Home Assistant 2026.11+) — add `homeassistant-ai/ha-mcp` as a custom repository (no feature flag required). An AI agent can drive that install with the generic HACS tools once the Marketplace's first-run warning is accepted and GitHub connected, which only you can do; then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first read and accept the warning in its UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the legacy distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+
+### The store says "The ha_mcp_tools directory belongs to …" and HA-MCP will not update
+
+Two store records, `homeassistant-ai/ha-mcp` and the legacy mirror
+`homeassistant-ai/ha-mcp-integration`, are both marked installed, and both own
+`custom_components/ha_mcp_tools`. HACS allowed a download of the second one on
+top of the first (older ha-mcp servers suggested exactly that); the Marketplace
+in Home Assistant 2026.11 refuses to update either record, and refuses to
+uninstall one while any HA-MCP entry exists, disabled ones included.
+
+Open **Settings → System → Repairs**. A current HA-MCP integration shows
+**HA-MCP is installed from two store listings**; submitting it keeps
+`homeassistant-ai/ha-mcp` and marks the other record as not installed. Nothing
+is deleted and your entries stay. Then update HA-MCP from the store as usual.
+
+Without that repair card (an integration older than the one that added it),
+either:
+
+1. Delete every HA-MCP entry under **Settings → Devices & services**, uninstall
+   the duplicate record in the store, update the kept one, add the entries back
+   and restart. A re-added server entry gets a new connect URL unless you
+   re-enter the old webhook id and secret path overrides in its Configure
+   dialog.
+2. Keep the entries: with Core stopped (`ha core stop` in a terminal app), set
+   `"installed": false` on the duplicate record in
+   `/config/.storage/marketplace.repositories` (`hacs.repositories` on HACS),
+   start Core, then update the kept record.
+
+A mirror install that was never doubled needs none of this: it keeps updating
+from the mirror. `ha_manage_hacs` now routes a download of either repository to
+the one that is installed.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

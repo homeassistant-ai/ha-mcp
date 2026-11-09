@@ -27,6 +27,7 @@ from ..utilities.assertions import (
     extract_error_message,
     safe_call_tool,
 )
+from ..utilities.cleanup import CleanupSteps
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -322,8 +323,8 @@ class TestEngineThemeIdentityGuard:
                 f"Writing an unidentifiable engine account must fail: {write}"
             )
         finally:
-            await safe_call_tool(
-                mcp_client_with_dev_mode,
-                "ha_dev_manage_settings",
-                {"action": "reset", "setting": "dashboard_screenshot_engine_url"},
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                await MCPAssertions(mcp_client_with_dev_mode).call_tool_success(
+                    "ha_dev_manage_settings",
+                    {"action": "reset", "setting": "dashboard_screenshot_engine_url"},
+                )

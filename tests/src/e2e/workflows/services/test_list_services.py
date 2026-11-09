@@ -167,8 +167,8 @@ class TestServiceDiscovery:
         """
         Test: Service field details are properly returned in full detail mode.
 
-        Validates that detail_level='full' includes field definitions with
-        type information, descriptions, and requirements.
+        Validates that detail_level='full' includes Core's field schemas with
+        translated names, selector definitions and section entries.
         """
         logger.info("Testing: Service field details (full mode)")
 
@@ -181,25 +181,139 @@ class TestServiceDiscovery:
 
         services = data.get("services", {})
 
-        # Check light.turn_on service (should have brightness, color, etc.)
-        if "light.turn_on" in services:
-            turn_on = services["light.turn_on"]
-            fields = turn_on.get("fields", {})
+        # light.turn_on is the reference full-detail entry: Core's own
+        # light/services.yaml defines it, so its absence must fail rather than
+        # skip the checks below.
+        assert "light.turn_on" in services, (
+            f"light domain must list turn_on, got {sorted(services)}"
+        )
+        turn_on = services["light.turn_on"]
+        fields = turn_on.get("fields", {})
 
-            assert len(fields) > 0, "Full mode should include fields"
-            logger.info(f"light.turn_on has {len(fields)} fields")
+        assert len(fields) > 0, "Full mode should include fields"
+        logger.info(f"light.turn_on has {len(fields)} fields")
 
-            # Check field structure
-            for field_name, field_def in fields.items():
-                assert "name" in field_def, f"Field {field_name} should have name"
-                assert "type" in field_def, f"Field {field_name} should have type"
+        # Check field structure: Core's selector replaces the hand-derived type.
+        for field_name, field_def in fields.items():
+            assert "name" in field_def, f"Field {field_name} should have name"
+            if "fields" in field_def:
+                assert field_def["fields"], (
+                    f"Section {field_name} should carry nested fields"
+                )
+            else:
+                assert "selector" in field_def, (
+                    f"Field {field_name} should carry Core's selector"
+                )
+            assert "type" not in field_def, (
+                f"Field {field_name} should not carry a hand-derived type"
+            )
 
-            # Common light.turn_on fields to check
-            expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
-            found_fields = [f for f in expected_fields if f in fields]
-            logger.info(f"Found expected fields: {found_fields}")
+        # The collapsed section Core serves for light.turn_on is preserved.
+        # Required, not conditional: `additional_fields` ships in Core's own
+        # light/services.yaml, and a silent absence would leave this check green
+        # while the section shaping broke.
+        additional = fields["additional_fields"]
+        assert additional.get("collapsed") is True
+        additional_fields = additional.get("fields", {})
+        assert "rgbw_color" in additional_fields, (
+            f"section fields should carry Core's keys, got {sorted(additional_fields)}"
+        )
+        assert "color_name" in additional_fields
+        assert "brightness" in additional_fields
+
+        # Core's common light.turn_on fields must survive the shaping.
+        # `brightness` is a section field inside `additional_fields`, not a
+        # top-level one, so only the top-level pair is asserted here; the
+        # section itself is checked above.
+        expected_fields = {"brightness_pct", "color_temp_kelvin"}
+        assert expected_fields <= set(fields), (
+            f"light.turn_on is missing Core fields: {sorted(expected_fields - set(fields))}"
+        )
 
         logger.info("Service field details test passed")
+
+    async def test_service_text_and_response_come_from_core(self, mcp_client):
+        """Core's translated text and response shape reach the catalog.
+
+        A domain with a Core integration exposes translated names/descriptions;
+        a response-capable service reports its ``response`` block so an agent
+        knows it can ask ``ha_call_service`` for a return value.
+        """
+        logger.info("Testing: translated service text and response metadata")
+
+        light = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "light", "detail_level": "full"},
+        )
+        light_data = assert_mcp_success(light, "light service text")
+        turn_on = light_data.get("services", {}).get("light.turn_on")
+        assert turn_on is not None, "light.turn_on should be listed"
+        assert turn_on["name"].strip(), "Service name should not be empty"
+        assert turn_on["description"].strip(), (
+            "Core ships a translation for light.turn_on; the catalog must use it"
+        )
+
+        calendar = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "calendar"},
+        )
+        calendar_data = assert_mcp_success(calendar, "calendar response metadata")
+        calendar_services = calendar_data.get("services", {})
+        # Every lane seeds a calendar entity (see test_call_service_return_response),
+        # so the calendar domain is registered: a missing entry is a failure, not a
+        # reason to skip the response assertion.
+        assert "calendar.get_events" in calendar_services, (
+            f"calendar domain must list get_events, got {sorted(calendar_services)}"
+        )
+        get_events = calendar_services["calendar.get_events"]
+        assert get_events.get("response") == {"optional": False}, (
+            "calendar.get_events must report Core's non-optional response"
+        )
+
+        logger.info("Translated text and response metadata test passed")
+
+    async def test_core_catalog_shape_from_kitchen_sink(self, mcp_client):
+        """Core's own catalog shape reaches the tool, verified against real Core.
+
+        kitchen_sink ships translated service, field and section text with
+        description placeholders, a translated field example, a collapsed
+        section and required flags; the seeded config loads it on every lane.
+        These assertions live here, against the pinned Core image, rather than
+        in a hand-maintained copy of Core's catalog.
+        """
+        logger.info("Testing: Core catalog shape from kitchen_sink")
+
+        result = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "kitchen_sink", "detail_level": "full"},
+        )
+        data = assert_mcp_success(result, "kitchen_sink catalog")
+        services = data.get("services", {})
+        assert "kitchen_sink.test_service_1" in services, sorted(services)
+        service = services["kitchen_sink.test_service_1"]
+
+        # Service-level placeholders resolve in the name and description.
+        assert service["name"] == "Test action foo"
+        assert service["description"] == "Fake action for testing bar"
+
+        fields = service["fields"]
+        field_1 = fields["field_1"]
+        assert field_1["name"] == "Field 1 beer"
+        assert field_1["description"] == "Number of seconds milk"
+        assert field_1["example"] == "Example: https://example.com"
+        assert field_1["required"] is True
+        assert fields["field_2"]["example"] == "Field 2 example"
+
+        section = fields["additional_fields"]
+        assert section["name"] == "Additional options"
+        assert section["collapsed"] is True
+        assert {"field_3", "field_4"} <= set(section["fields"])
+        assert "example" not in section["fields"]["field_3"]
+
+        for field in fields.values():
+            assert "type" not in field, f"Field {field['name']} carries a derived type"
+
+        logger.info("Core catalog shape test passed")
 
     async def test_nonexistent_domain(self, mcp_client):
         """
@@ -315,6 +429,41 @@ class TestServiceDiscovery:
         assert keys1.isdisjoint(keys2), "Pages should not overlap"
 
         logger.info("Pagination limit/offset test passed")
+
+    async def test_pagination_walk_covers_every_service_once(self, mcp_client):
+        """A paged walk returns every service exactly once, in a stable order.
+
+        The catalog has more services than one page, so two different page sizes
+        must produce the same concatenated sequence. Duplicates or gaps would
+        make a paged discovery miss a service or call it twice.
+        """
+
+        async def _walk(limit: int) -> tuple[list[str], int]:
+            seen: list[str] = []
+            offset = 0
+            pages = 0
+            while True:
+                page = await mcp_client.call_tool(
+                    "ha_list_services", {"limit": limit, "offset": offset}
+                )
+                data = assert_mcp_success(page, f"pagination walk limit={limit}")
+                keys = list(data["services"])
+                assert data["count"] == len(keys)
+                seen.extend(keys)
+                pages += 1
+                assert pages < 100, "pagination walk did not terminate"
+                if not data.get("has_more"):
+                    return seen, data["total_count"]
+                assert data["next_offset"] == offset + data["count"]
+                offset = data["next_offset"]
+
+        small, total = await _walk(50)
+        large, total_large = await _walk(200)
+
+        assert total == total_large
+        assert len(small) == total, f"walk returned {len(small)} of {total} services"
+        assert len(set(small)) == len(small), "a paged walk returned a service twice"
+        assert small == large, "page size changed the service order"
 
     async def test_detail_level_full_includes_fields(self, mcp_client):
         """Test that detail_level='full' includes field schemas."""

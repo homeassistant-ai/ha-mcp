@@ -28,6 +28,11 @@ from ...utilities.assertions import (
     extract_error_message,
     safe_call_tool,
 )
+from ...utilities.cleanup import CleanupSteps
+from ...utilities.component_services import (
+    bootstrap_caller_token,
+    set_extra_yaml_keys,
+)
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logging.basicConfig(level=logging.INFO)
@@ -1302,37 +1307,32 @@ class TestYamlConfigThemesIntegration:
             logger.info(f"Verified {theme_name} appears in theme list")
 
         finally:
-            # Cleanup: remove the theme and verify it disappears from the list.
-            # This guarantees the themes-module count==2 assertion can never
-            # observe the extra theme (sequential within-worker execution).
-            async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-                remove_data = await call_set_yaml_confirmed(
-                    mcp,
-                    {
-                        "yaml_path": theme_name,
-                        "action": "remove",
-                        "file": theme_file,
-                    },
+            # Cleanup: remove the theme and verify it disappears from the list, so
+            # the themes-module count==2 assertion (sequential per-worker runs) does
+            # not see it.
+            with CleanupSteps() as cleanup, cleanup.step():
+                async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+                    remove_data = await call_set_yaml_confirmed(
+                        mcp,
+                        {
+                            "yaml_path": theme_name,
+                            "action": "remove",
+                            "file": theme_file,
+                        },
+                    )
+                    assert remove_data.get("success") is True, (
+                        f"Theme remove should succeed: {remove_data}"
+                    )
+                    assert remove_data.get("post_action") == "reload_performed", (
+                        f"Theme remove should trigger reload_performed: {remove_data}"
+                    )
+                    listed = await mcp.call_tool_success(
+                        "ha_manage_theme", {"action": "list"}
+                    )
+                final_theme_names = listed["data"]["themes"]
+                assert theme_name not in final_theme_names, (
+                    f"{theme_name} should disappear after remove+reload: {final_theme_names}"
                 )
-                assert remove_data.get("success") is True, (
-                    f"Theme remove should succeed: {remove_data}"
-                )
-                assert remove_data.get("post_action") == "reload_performed", (
-                    f"Theme remove should trigger reload_performed: {remove_data}"
-                )
-
-            # Verify the theme no longer appears.
-            list_after_remove = await safe_call_tool(
-                mcp_client_with_yaml_config, "ha_manage_theme", {"action": "list"}
-            )
-            assert list_after_remove.get("success") is True, (
-                f"List themes after remove failed: {list_after_remove}"
-            )
-            final_theme_names = list_after_remove["data"]["themes"]
-            assert theme_name not in final_theme_names, (
-                f"{theme_name} should disappear after remove+reload: {final_theme_names}"
-            )
-            logger.info(f"Verified {theme_name} removed and no longer in list")
 
 
 @pytest.mark.filesystem
@@ -1489,9 +1489,8 @@ class TestYamlConfigAutoBackup:
             assert read.get("success") is True, read
             assert "V1" in read["content"], read["content"]
         finally:
-            # Best-effort cleanup: drive the confirm flow with safe_call_tool
-            # so a preview (or a failure) can't raise out of ``finally`` and
-            # mask the real assertion error.
+            # Removes the key this test added to its own package file, so
+            # ``safe_call_tool`` is enough (tests/AGENTS.md "Test Patterns").
             rm = await safe_call_tool(
                 mcp,
                 TOOL_NAME,
@@ -1590,54 +1589,6 @@ class TestYamlConfirmFlow:
 # ---------------------------------------------------------------------------
 
 
-async def _bootstrap_caller_token(base_url: str) -> str:
-    """Fetch the caller token via the admin-gated bootstrap service.
-
-    Mirrors ``test_custom_paths.py``: the component services are driven
-    directly over HA REST with the admin token, exactly as the ha-mcp server
-    drives them.
-    """
-    import httpx
-
-    from tests.test_constants import TEST_TOKEN
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/services/ha_mcp_tools/get_caller_token",
-            headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            params={"return_response": ""},
-            json={},
-        )
-    assert resp.status_code == 200, f"get_caller_token failed: {resp.text!r}"
-    service_response = resp.json().get("service_response", {})
-    assert service_response.get("success") is True, f"bootstrap failed: {resp.text!r}"
-    return service_response["token"]
-
-
-async def _set_extra_yaml_keys(base_url: str, token: str, keys: list[str]) -> dict:
-    """Call set_extra_yaml_keys with the admin token + caller token; return the
-    structured service response (``{success, keys, rejected}``)."""
-    import httpx
-
-    from tests.test_constants import TEST_TOKEN
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/services/ha_mcp_tools/set_extra_yaml_keys",
-            headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            params={"return_response": ""},
-            json={"_ha_mcp_token": token, "keys": keys},
-        )
-    assert resp.status_code == 200, f"set_extra_yaml_keys failed: {resp.text!r}"
-    return resp.json().get("service_response", {})
-
-
 @pytest.mark.filesystem
 class TestExtraYamlKeysStorePathLive:
     """The extra-key setting configured through the integration UI writes live.
@@ -1654,8 +1605,9 @@ class TestExtraYamlKeysStorePathLive:
 
     Cross-lane (no backend marker): the store lives in the component (HA
     process), so unlike the env-var path it is available in every backend,
-    including inaddon. Mirrors ``test_custom_paths.py`` for the REST-driven
-    service calls; the write goes through the MCP ``ha_config_set_yaml`` tool.
+    including inaddon. The service calls go over HA REST
+    (``utilities/component_services.py``); the write goes through the MCP
+    ``ha_config_set_yaml`` tool.
     """
 
     async def test_store_configured_key_writes_live(
@@ -1669,13 +1621,12 @@ class TestExtraYamlKeysStorePathLive:
         generic allowlist rejection, so the success actually pins the store path.
         """
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_caller_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         # Session-scoped container: delete the package in finally so it does not
         # linger for later tests (parity with test_custom_paths.py).
         fname = f"packages/_e2e_store_key_{uuid.uuid4().hex[:8]}.yaml"
         try:
-            sr = await _set_extra_yaml_keys(base_url, token, ["alert2_store"])
-            assert sr.get("success") is True, sr
+            sr = await set_extra_yaml_keys(base_url, token, ["alert2_store"])
             assert sr.get("keys") == ["alert2_store"], sr
             assert not sr.get("rejected"), sr
 
@@ -1699,12 +1650,15 @@ class TestExtraYamlKeysStorePathLive:
                 )
                 logger.info("Store-configured extra key alert2_store wrote live")
         finally:
-            await safe_call_tool(
-                mcp_client_with_yaml_config,
-                "ha_delete_file",
-                {"path": fname, "confirm": True},
-            )
-            await _set_extra_yaml_keys(base_url, token, [])
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client_with_yaml_config,
+                        "ha_delete_file",
+                        {"path": fname, "confirm": True},
+                    )
+                with cleanup.step():
+                    await set_extra_yaml_keys(base_url, token, [])
 
     async def test_deny_floor_drops_store_key_and_blocks_write_live(
         self, mcp_client_with_yaml_config, ha_container_with_fresh_config
@@ -1717,10 +1671,10 @@ class TestExtraYamlKeysStorePathLive:
         a denied key is refused live even after it was pushed through the service.
         """
         base_url = ha_container_with_fresh_config["base_url"]
-        token = await _bootstrap_caller_token(base_url)
+        token = await bootstrap_caller_token(base_url)
         try:
             # Push a denylisted key alongside a valid one in a single set.
-            sr = await _set_extra_yaml_keys(
+            sr = await set_extra_yaml_keys(
                 base_url, token, ["homeassistant", "alert2_store"]
             )
             assert "homeassistant" in sr.get("rejected", []), sr
@@ -1747,4 +1701,5 @@ class TestExtraYamlKeysStorePathLive:
             assert "cannot be lifted" in message, message
             logger.info("Deny floor dropped the store key and blocked the write")
         finally:
-            await _set_extra_yaml_keys(base_url, token, [])
+            with CleanupSteps() as cleanup, cleanup.step():
+                await set_extra_yaml_keys(base_url, token, [])

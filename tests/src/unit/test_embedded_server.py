@@ -3,9 +3,7 @@
 Covers package-ensure gating, worker-thread env staging, HA-token provisioning
 (create / reuse / revoke), the readiness probe, and start/stop idempotency.
 
-Home Assistant and aiohttp are stubbed via ``_embedded_stubs`` (imported first so
-the fakes are installed before the component modules bind them). ``ha_mcp`` is
-never imported here — the manager only imports it inside the worker thread, which
+``ha_mcp`` is never imported here — the manager only imports it inside the worker thread, which
 these tests never actually run.
 """
 
@@ -24,14 +22,9 @@ from urllib.parse import urlparse
 
 import pytest
 
-from ._embedded_stubs import install, no_direct_listener_helpers  # noqa: F401
+import custom_components.ha_mcp_tools.embedded_server as es
 
-# Install stubs + put the component package on sys.path before importing the
-# integration modules below. Also an isort barrier so the imports below are never
-# reordered above it (which would import embedded_server before the stubs exist).
-install()
-
-import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
+from ._embedded_helpers import no_direct_listener_helpers  # noqa: F401
 
 # HA's wheels index, as a HOST — the installer's extra-index retry drops a
 # failing index by parsed hostname, and the fakes below match it the same way.

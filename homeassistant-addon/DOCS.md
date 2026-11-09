@@ -151,7 +151,9 @@ The **Webhook Proxy** app routes MCP traffic through your existing Home Assistan
 
 Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
 
-**Claude.ai:** **Customize** (left sidebar) → **Connectors** → **Add**, enter a name and the URL, click **Continue**, keep the detected settings (**Authentication: None** for the plain webhook URL; **Always required** + **Use Anthropic's hosted client metadata** if you enabled the proxy's `ha_auth` OAuth mode; **Use your own OAuth client** with the Client ID/Secret from the log for `legacy`), click **Add**, then **Connect** if a sign-in is required. After changing the proxy's OAuth mode, remove and re-add the connector.
+**Claude.ai:** **Settings** → **Customize** → **Add** → **Add custom connector** (the entry point can differ by browser; on accounts with the new Plugins page, **Customize** reads **Plugins**), enter a name and the URL, click **Continue**, and keep the settings Claude detects (**Authentication: No sign in** for the plain webhook URL; **Sign in now** or **Sign in when needed**, whichever is detected, + **Use Claude's published identity** if you enabled the proxy's `ha_auth` OAuth mode; **Use your own OAuth client** with the Client ID/Secret from the log for `legacy`). Click **Add**; if the connector then shows a **Connect** button, click it. After changing the proxy's OAuth mode, remove and re-add the connector.
+
+On a Team or Enterprise plan, an Owner or Primary Owner opens the form under **Organization settings** → **Connectors** → **Add** → **Custom** → **Web** instead and adds the connector the same way; members then find it under **Customize** → **Connectors** (under **Plugins** on accounts with the new Plugins page) and click **Connect**. With the plain webhook URL, the URL is the only credential, and in the proxy's `legacy` mode the Client ID and Secret the owner enters are, so every member who connects it gets this server's Home Assistant access without signing in. With the proxy's `ha_auth` OAuth mode each member signs in to Home Assistant, but any account that can sign in gets the same admin-equivalent access, not its own Home Assistant permissions.
 
 #### Option B: Cloudflared App (No existing reverse proxy needed)
 
@@ -276,14 +278,20 @@ The app has minimal configuration - most settings are automatic.
 > enabled/disabled/pinned tools, etc.), your AI client keeps serving its
 > **cached** tool list until it re-fetches. Restarting the app or Home
 > Assistant does **not** refresh the client — you must reconnect or refresh
-> the MCP server in your AI client (e.g. re-add/refresh the connector in
-> ChatGPT, or close and reopen Claude Desktop). Symptom if you skip this:
+> the MCP server in your AI client (e.g. in ChatGPT open **Settings**, then
+> the plugin settings, select the connector and click **Refresh tools**;
+> disconnect and reconnect a Claude Desktop custom connector; refresh the
+> tools list of a claude.ai connector; or quit and reopen Claude Desktop
+> for a server in `claude_desktop_config.json`), then start a new
+> conversation. Symptom if you skip this:
 > newly enabled tools don't appear in the client at all, and tools the
 > server no longer exposes still show as available but return `Unknown
 > tool` when called. ChatGPT sometimes keeps serving the stale list even
 > after the connector is removed and re-added under the same name — if
-> tools are still missing after re-adding, delete the connector and create
-> a new one with a **different name**.
+> tools are still missing after a refresh, delete the connector and create
+> a new one with a **different name**. The
+> [FAQ](https://homeassistant-ai.github.io/ha-mcp/faq/#chatgpt-stale-tools)
+> has the full steps.
 
 ### enable_snapshot_actions
 
@@ -464,7 +472,7 @@ read_only_mode: true
 Redacts secrets from tool responses before they reach the AI assistant. When enabled:
 
 - **App (add-on) options** (`ha_get_app`, `ha_manage_app`): any option value whose app schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
-- **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
+- **Integration options** (`ha_get_integration`): only an entry's options flow marks which fields are passwords, and a read does not open that flow, because opening it runs the integration's own code. So a read replaces every option value of an entry that has an options flow. With `include_schema=True` the flow is opened and only the fields it marks with a password selector get that treatment, including each field's `current` value. Stored option values are checked against the flow's first form only, so a password field that only a later form declares is not detected in them.
 - **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
 
 Redaction is schema-driven — fields not marked as passwords by their schema are not detected and are returned as-is until the value scrub has seen them. Two exceptions: app option values holding a private key, and app options named in [`redact_app_option_keys`](#redact_app_option_keys). The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_app` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
@@ -804,7 +812,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
-- `ha_set_integration` — Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
+- `ha_set_integration` — Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.
 
 ### Labels & Categories
 - `ha_config_get_category` — Get category info - list all categories for a scope or get a specific one by ID.
