@@ -217,13 +217,20 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
         monkeypatch.setenv("HA_E2E_BASE_HOST", override)
 
     # A client built before the session must not keep the stale URL: prime the
-    # settings cache with one, then let the fixture's real reset replace it.
-    stale = SimpleNamespace(homeassistant_url="http://stale.invalid:1")
+    # settings cache and the connection pool with one, then let the fixture's
+    # real reset replace them.
+    stale_url, stale_token = "http://stale.invalid:1", "stale-token"
+    stale = SimpleNamespace(homeassistant_url=stale_url, verify_ssl=True)
     monkeypatch.setattr(config, "_settings", stale)
     assert config.get_global_settings() is stale
     pooled = dict(websocket_manager._clients)
     last_used = dict(websocket_manager._last_used)
     current_loop = websocket_manager._current_loop
+    stale_client = object()
+    websocket_manager._clients[
+        websocket_manager._pool_key(stale_url, stale_token, None)[2]
+    ] = stale_client
+    assert websocket_manager.pooled_client(stale_url, stale_token) is stale_client
 
     fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
     generator = fixture(request, None)
@@ -232,6 +239,9 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
         assert info["base_url"] == f"http://{expected_host}:32768"
         assert os.environ["HOMEASSISTANT_URL"] == info["base_url"]
         assert config.get_global_settings().homeassistant_url == info["base_url"]
+        # The next lookup must build a client for the session URL rather than
+        # reuse the pooled one that points at the stale address.
+        assert websocket_manager.pooled_client(stale_url, stale_token) is None
     finally:
         generator.close()
         for finalizer in request.finalizers:
