@@ -545,13 +545,15 @@ class _OccupiedClient(RoutingClient):
             {
                 "entity_id": "zone.work",
                 "attributes": {**_LEGACY_STORAGE_ZONE, "persons": ["person.anna"],
-                               "device_trackers": [], "friendly_name": "Work"},
+                               "device_trackers": ["device_tracker.work_phone"],
+                               "friendly_name": "Work"},
             },
             {
                 "entity_id": "zone.home",
                 "attributes": {"latitude": 41.0, "longitude": -73.0, "radius": 100,
                                "passive": False, "persons": [],
-                               "device_trackers": [], "editable": True,
+                               "device_trackers": ["device_tracker.tablet"],
+                               "editable": True,
                                "icon": "mdi:home", "friendly_name": "Home"},
             },
         ]  # fmt: skip
@@ -578,6 +580,8 @@ async def test_every_zone_says_who_is_in_it(served_by: str) -> None:
     rows = {z["entity_id"]: z for z in resp["zones"]}
     assert rows["zone.work"]["persons"] == ["person.anna"]
     assert rows["zone.home"]["persons"] == []
+    assert rows["zone.work"]["device_trackers"] == ["device_tracker.work_phone"]
+    assert rows["zone.home"]["device_trackers"] == ["device_tracker.tablet"]
     assert set(rows["zone.work"]) == set(rows["zone.home"])
 
 
@@ -595,3 +599,34 @@ async def test_an_unreadable_state_names_the_missing_persons() -> None:
 
     assert resp["count"] == 2
     assert any("persons" in w and "states down" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_the_component_reads_only_the_zones_states() -> None:
+    """With the component's targeted state read, persons come from the zones'
+    own states: reading every state of a large instance per zone lookup is
+    the cost the component read exists to avoid."""
+    ws = AsyncMock()
+
+    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        if command_type == "ha_mcp_tools/info":
+            caps = {**_CAPS_HELPERS, "capabilities": ["helpers_list", "states"]}
+            return {"success": True, "result": caps}
+        if command_type == "ha_mcp_tools/helpers_list":
+            return {"success": True, "result": _component_zone_result()}
+        if command_type == "ha_mcp_tools/states":
+            assert sorted(kwargs["entity_ids"]) == ["zone.home", "zone.work"]
+            states = {s["entity_id"]: s for s in await _OccupiedClient().get_states()}
+            return {"success": True, "result": {"states": states, "missing": []}}
+        raise AssertionError(f"unexpected command {command_type!r}")
+
+    ws.send_command = AsyncMock(side_effect=_send)
+    client = _OccupiedClient(fail=True)  # an all-states read would raise
+    get_zone = _build_get_zone(client)
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    rows = {z["entity_id"]: z for z in resp["zones"]}
+    assert rows["zone.work"]["persons"] == ["person.anna"]
+    assert "warnings" not in resp

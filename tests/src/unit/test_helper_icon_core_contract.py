@@ -20,6 +20,7 @@ from .test_zone_tools_core_contract import (
     _FETCH_SCHEMAS,
     HOME_STATE,
     OFFICE,
+    OFFICE_ENTRY,
     REGISTRY_BLOCKED,
     _client,
     _no_component,  # noqa: F401 - pytest fixture
@@ -453,3 +454,56 @@ class TestIconFollowsCoresSchema:
 
         assert write.call_args.args[3]["icon"] == "mdi:briefcase"
         assert "icon" not in write.call_args.kwargs["registry"]
+
+    @pytest.mark.parametrize("override", ["mdi:lamp", None])
+    async def test_an_override_hiding_the_new_icon_is_named(
+        self, override: str | None
+    ) -> None:
+        """An icon older ha-mcp versions mirrored into the registry still shows
+        over the stored one: the update says so instead of a silent success."""
+        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
+        client = _client(
+            {
+                "input_boolean/list": {"success": True, "result": [stored]},
+                "input_boolean/update": {
+                    "success": True,
+                    "result": {**stored, "icon": "mdi:star"},
+                },
+                "config/entity_registry/get": {
+                    "success": True,
+                    "result": {**LAMP, "icon": override},
+                },
+            }
+        )
+        schemas = {"input_boolean": {"update": [{"name": "icon"}]}}
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
+            result = await _execute_update_simple_helper(
+                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
+                None, "mdi:star", None, None, None, False, False, {},
+            )  # fmt: skip
+
+        named = [w for w in result.get("warnings", []) if "ha_set_entity" in w]
+        assert [override in w for w in named] == ([True] if override else [])
+
+    async def test_a_created_zone_names_a_restored_override(self) -> None:
+        """Core gives a zone created again under a removed zone's id that zone's
+        registry entry back, icon override included."""
+        client = _client(
+            {
+                "zone/create": {
+                    "success": True,
+                    "result": {**OFFICE, "icon": "mdi:briefcase"},
+                },
+                "config/entity_registry/get": {
+                    "success": True,
+                    "result": {**OFFICE_ENTRY, "icon": "mdi:map"},
+                },
+            }
+        )
+
+        result = await ZoneTools(client).ha_set_zone(
+            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
+        )
+
+        assert any("mdi:map" in w and "ha_set_entity" in w for w in result["warnings"])
