@@ -15,6 +15,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..backup_helper_target import stored_target
 from ..client.rest_client import (
+    _NO_ANSWER_ERRORS,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -361,11 +362,9 @@ class ZoneTools:
                 if isinstance(found, dict):
                     return list(found.values())
                 logger.warning("ha_mcp_tools/states returned a malformed payload")
-            except (
-                HomeAssistantCommandError,
-                HomeAssistantCommandTimeout,
-                HomeAssistantConnectionError,
-            ) as exc:
+            # A raw socket reset reaches here unwrapped (send_command keeps
+            # writes at-most-once), and every state is still readable.
+            except (HomeAssistantCommandError, *_NO_ANSWER_ERRORS) as exc:
                 if is_unknown_command(exc):
                     invalidate_caps(self._client)
                 logger.warning(
