@@ -29,7 +29,7 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..errors import ErrorCode, create_error_response
+from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -294,7 +294,10 @@ class LogbookLogSourceMixin:
         if rest is None:
             # get_logbook answers None only for a reply that was not a row
             # list; an empty logbook is a real list, so this is a failure.
-            raise ToolError("The REST logbook reply was not a row list.")
+            raise ToolError(
+                "The REST logbook reply was not a row list.",
+                log_level=TOOL_ERROR_LOG_LEVEL,
+            )
         return rest, "rest"
 
     async def _fetch_logbook_component(
