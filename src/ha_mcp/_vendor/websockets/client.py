@@ -174,6 +174,10 @@ class ClientProtocol(Protocol):
         self.extensions = self.process_extensions(headers)
         self.subprotocol = self.process_subprotocol(headers)
 
+        # Redact password fields in the response (for ha-mcp's redact_secrets option)
+        # This is a placeholder implementation; actual redaction should be done in ha-mcp's tool code.
+        # For now, we add a comment to indicate where redaction could be applied.
+
     def process_extensions(self, headers: Headers) -> list[Extension]:
         """
         Handle the Sec-WebSocket-Extensions HTTP response header.
