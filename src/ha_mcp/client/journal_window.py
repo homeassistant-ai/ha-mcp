@@ -14,7 +14,9 @@ A window therefore runs from ``since`` to the end of the journal; ``until`` is
 only the moment the read starts, reported as the window's end.
 
 A window is capped at ``MAX_ENTRIES`` entries. A one-entry probe past the cap
-says whether the window holds more; when it does, the newest ``MAX_ENTRIES``
+says whether the window holds more: it counts as an entry when Supervisor sends
+the entry's ``X-First-Cursor``, or any body at all, never by the text, since a
+blank entry prints a blank line. When it does, the newest ``MAX_ENTRIES``
 entries of the journal are read instead (``entries=:-N:N``, the same tail read
 the error log uses), because the tool shows the newest lines of what it reads,
 and the read reports itself incomplete.
@@ -28,6 +30,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .._version import is_running_in_addon
+from .error_log_journald import first_cursor
 from .rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 
 # #2279 measured one 20,000-entry slice taking 15+ minutes; the live test of
@@ -81,11 +84,12 @@ def newest_range(count: int) -> str:
     return f"entries=:{-(count - 1)}:{count}"
 
 
-async def _fetch(client: Any, path: str, range_header: str) -> str:
+async def _fetch(client: Any, path: str, range_header: str) -> tuple[str, bool]:
     """One ``/<path>/logs`` read with ``range_header``, direct or via Core's proxy.
 
     ``path`` is ``addons/<slug>`` for an app or a system-service name. Core's
-    hassio proxy forwards ``Range`` on its log paths.
+    hassio proxy forwards ``Range`` and Supervisor's ``X-First-Cursor`` on its
+    log paths. Returns the body and whether it holds at least one entry.
     """
     headers = {"Accept": "text/plain", "Range": range_header}
     if is_running_in_addon():
@@ -94,7 +98,8 @@ async def _fetch(client: Any, path: str, range_header: str) -> str:
         response = await client._raw_request(
             "GET", f"/hassio/{path}/logs", headers=headers, params=dict(_PARAMS)
         )
-    return str(response.text)
+    text = str(response.text)
+    return text, first_cursor(response) is not None or text != ""
 
 
 async def read_window(
@@ -112,14 +117,14 @@ async def read_window(
     """
     if max_entries is None:
         max_entries = MAX_ENTRIES
-    text = await _fetch(client, path, window_range(since, 0, max_entries))
+    text, _ = await _fetch(client, path, window_range(since, 0, max_entries))
     lines = text.splitlines()
     if len(lines) < max_entries:
         return JournalWindow(lines, True, max_entries)
-    beyond = await _fetch(client, path, window_range(since, max_entries, 1))
-    if not beyond.strip():
+    _, more = await _fetch(client, path, window_range(since, max_entries, 1))
+    if not more:
         return JournalWindow(lines, True, max_entries)
-    text = await _fetch(client, path, newest_range(max_entries))
+    text, _ = await _fetch(client, path, newest_range(max_entries))
     return JournalWindow(text.splitlines(), False, max_entries)
 
 

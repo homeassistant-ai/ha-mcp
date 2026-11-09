@@ -55,6 +55,10 @@ class FakeGatewayd:
         return cls([(at(m), [f"m{m}"]) for m in range(minutes - 1, -1, -1)])
 
     def answer(self, range_header: str) -> str:
+        return self.reply(range_header)[0]
+
+    def reply(self, range_header: str) -> tuple[str, int]:
+        """The body for ``range_header`` and how many entries it holds."""
         self.ranges.append(range_header)
         if match := _ENTRIES.match(range_header):
             skip, count = int(match[1]), int(match[2])
@@ -78,7 +82,7 @@ class FakeGatewayd:
                 picked.append((stamp, lines))
                 if len(picked) == count:
                     break
-        return "\n".join(line for _, lines in picked for line in lines)
+        return "\n".join(line for _, lines in picked for line in lines), len(picked)
 
     def client(self, timeout: float = 30) -> MagicMock:
         client = MagicMock(timeout=timeout)
@@ -86,7 +90,10 @@ class FakeGatewayd:
         async def raw_request(
             method: str, path: str, headers: dict[str, str], params: dict[str, Any]
         ) -> MagicMock:
-            return MagicMock(text=self.answer(headers["Range"]))
+            text, entries = self.reply(headers["Range"])
+            # Supervisor sends the first entry's cursor whenever it returns one.
+            cursor = {"X-First-Cursor": "s=1;i=1"} if entries else {}
+            return MagicMock(text=text, headers=cursor)
 
         client._raw_request = AsyncMock(side_effect=raw_request)
         return client
@@ -149,6 +156,20 @@ class TestReadWindow:
         assert not read.complete
         assert read.lines == [f"m{m}" for m in range(99, -1, -1)]
         assert journal.ranges[-1] == "entries=:-99:100"
+
+    @pytest.mark.parametrize("blank", ["   ", ""])
+    async def test_a_blank_entry_past_the_cap_still_counts_as_more(self, blank: str):
+        # The probe asks whether an entry exists past the cap. A blank or empty
+        # message there is still an entry; judging by its text would call the
+        # window whole and drop the newer entries after it.
+        journal = FakeGatewayd.per_minute(150)
+        journal.entries[100] = (journal.entries[100][0], [blank])
+        journal.entries[-1] = (journal.entries[-1][0], ["newest needle"])
+        read = await read_window(
+            journal.client(), "core", NOW - timedelta(hours=5), max_entries=100
+        )
+        assert not read.complete
+        assert read.lines[-1] == "newest needle"
 
     async def test_an_entry_stamped_in_the_future_does_not_end_the_read(self):
         # After a clock correction an entry can carry a later time than the ones
