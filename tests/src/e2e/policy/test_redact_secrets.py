@@ -13,8 +13,8 @@ boots without the flag) and verifies the deployable contract:
   round-trip guard is deliberately unconditional).
 
 - a stored integration secret stays out of the options form reads: Core's
-  own ``forecast_solar`` options form marks its API key secret, so a change
-  in how Core serializes that marker fails here (#3002).
+  own ``mjpeg`` options form marks its password secret, so a change in how
+  Core serializes that marker fails here (#3002).
 
 Add-on ``format: password`` options need a Supervisor add-on, which the test
 container does not ship; that transformation is covered by the unit suite
@@ -38,7 +38,6 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
-from ..utilities.forecast_solar import create_forecast_solar_entry
 
 
 async def _build_redacting_server(container_info, monkeypatch, tmp_path):
@@ -155,26 +154,34 @@ async def test_options_are_withheld_until_the_options_form_is_asked_for(
 
 @pytest.mark.asyncio
 async def test_stored_integration_secret_stays_out_of_options_form_reads(
-    redacting_mcp, ha_client
+    redacting_mcp,
 ):
     """An agent opening an integration's options form must not get the stored
-    API key back. Core marks the field secret in its own serialization (since
+    password back. Core marks the field secret in its own serialization (since
     2026.11 a ``secret`` flag on a plain string field), so this fails when
     Core changes that marker and ha-mcp no longer recognises it (#3002)."""
     client, _server = redacting_mcp
-    api_key = uuid.uuid4().hex[:16]
-    # Core's options form for forecast_solar carries a secret field and needs
-    # no device; the shared helper waits out the forecast fetch setup runs.
-    flow_done = await create_forecast_solar_entry(ha_client)
-    assert flow_done.get("type") == "create_entry", flow_done
-    entry_id = flow_done["result"]["entry_id"]
+    password = uuid.uuid4().hex
     async with MCPAssertions(client) as mcp:
+        # Core's mjpeg flow stores the password in the entry and pre-fills its
+        # options form with it, marked by nothing but Secret. Its URL check
+        # runs against Home Assistant itself; the query keeps the URL unique.
+        created = await mcp.call_tool_success(
+            "ha_set_integration",
+            {
+                "domain": "mjpeg",
+                "config": {
+                    "name": f"redact e2e {password[:8]}",
+                    "mjpeg_url": f"http://127.0.0.1:8123/manifest.json?{password[:8]}",
+                    "username": "redact-e2e",
+                    "password": password,
+                    "verify_ssl": False,
+                },
+            },
+        )
+        entry_id = created["entry_id"]
         flow_id = None
         try:
-            await mcp.call_tool_success(
-                "ha_set_integration",
-                {"entry_id": entry_id, "config": {"api_key": api_key}},
-            )
             # A server that never saw the value has nothing to scrub it with;
             # only recognising the field keeps it out.
             _clear_known_secret_values()
@@ -183,14 +190,14 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
                 "ha_set_integration", {"entry_id": entry_id}
             )
             flow_id = form["flow_id"]
-            assert api_key not in json.dumps(form), form
-            field = next(f for f in form["fields"] if f["name"] == "api_key")
-            assert field["current"] == REDACTED_SET, field
+            assert password not in json.dumps(form), form
+            field = next(f for f in form["fields"] if f["name"] == "password")
+            assert field["default"] == REDACTED_SET, field
 
             described = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": entry_id, "include_schema": True}
             )
-            assert api_key not in json.dumps(described), described
+            assert password not in json.dumps(described), described
         finally:
             if flow_id:
                 await safe_call_tool(
