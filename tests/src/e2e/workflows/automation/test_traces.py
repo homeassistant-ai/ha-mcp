@@ -155,6 +155,13 @@ class TestAutomationTraces:
         )
         logger.info(f"Created automation: {automation_id}")
 
+        # A reused config id can still carry runs from an earlier test, so the
+        # assertion below has to prove the selected run is new.
+        before = await MCPAssertions(mcp_client).call_tool_success(
+            "ha_get_automation_traces", {"entity_id": automation_id}
+        )
+        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
+
         # 3. Trigger the automation manually using automation.trigger service
         await MCPAssertions(mcp_client).call_tool_success(
             "ha_call_service",
@@ -212,6 +219,10 @@ class TestAutomationTraces:
         # 6. Verify trace structure
         first_trace = traces[0]
         assert "run_id" in first_trace, "Trace should have run_id"
+        assert first_trace["run_id"] not in runs_before, (
+            "The selected run predates the manual trigger; it belongs to an "
+            "earlier run of this automation"
+        )
         assert "timestamp" in first_trace, "Trace should have timestamp"
         assert "state" in first_trace, "Trace should have state"
 
