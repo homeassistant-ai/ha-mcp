@@ -13,10 +13,7 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
-from ha_mcp.tools.config_helpers.update import (
-    _execute_update_simple_helper,
-    _update_via_component,
-)
+from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
 from ha_mcp.tools.tools_zones import ZoneTools
 
 from .test_zone_tools_core_contract import (
@@ -253,16 +250,20 @@ class TestIconFollowsCoresSchema:
         """The item takes the icon where Core's schema has one, the registry
         otherwise: an override would hide later changes made in the helper's
         own dialog, which writes only the item."""
-        write = AsyncMock(return_value=None)
+        write = AsyncMock(
+            return_value={"success": True, "item": item,
+                          "entity_id": f"{helper_type}.anna",
+                          "registry_applied": {}, "warnings": []}
+        )  # fmt: skip
         read = AsyncMock(return_value={"item": item, "item_id": "anna"})
         with (
             patch("ha_mcp.tools.config_helpers.update.read_stored_helper_item", read),
             patch("ha_mcp.tools.config_helpers.update.write_helper_item", write),
             patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)),
         ):
-            await _update_via_component(
+            await _execute_update_simple_helper(
                 _client(), helper_type, f"{helper_type}.anna", f"{helper_type}.anna",
-                None, "mdi:account", None, None, None, {},
+                None, "mdi:account", None, None, None, False, False, {},
             )  # fmt: skip
 
         assert ("icon" in write.call_args.args[3]) is in_item
