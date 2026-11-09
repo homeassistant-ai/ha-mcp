@@ -40,14 +40,16 @@ async def icon_targets(
 async def note_hidden_icon(
     client: Any, entity_id: str | None, item_icon: str | None, warnings: list[str]
 ) -> None:
-    """Warn when the entity's registry icon hides the icon just stored.
+    """Warn when the entity's registry icon hides the icon just stored or
+    cleared.
 
     The entity shows a registry icon over the stored one, and older ha-mcp
-    versions mirrored every helper icon there, so a changed stored icon can
-    stay invisible. The registry read is advisory: when it fails the write
-    has still succeeded, so no warning is given.
+    versions kept icons there (a zone's alone, every helper's on update), so
+    a changed or cleared stored icon can stay invisible. The registry read is
+    advisory: when it fails the write has still succeeded, so no warning is
+    given.
     """
-    if not item_icon or not entity_id:
+    if item_icon is None or not entity_id:
         return
     try:
         result = await client.send_websocket_message(
@@ -59,8 +61,12 @@ async def note_hidden_icon(
     override = entry.get("icon") if isinstance(entry, dict) else None
     if not override or override == item_icon:
         return
+    shown = (
+        f"shows its entity registry icon {override} over the stored icon {item_icon}"
+        if item_icon
+        else f"still shows its entity registry icon {override}"
+    )
     warnings.append(
-        f"{entity_id} shows its entity registry icon {override} over the stored "
-        f"icon {item_icon}; clear it with ha_set_entity(entity_id='{entity_id}', "
-        "icon='') for the stored icon to show."
+        f"{entity_id} {shown}; clear it with "
+        f"ha_set_entity(entity_id='{entity_id}', icon='')."
     )
