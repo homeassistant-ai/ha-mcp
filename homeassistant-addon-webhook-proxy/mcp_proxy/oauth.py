@@ -45,6 +45,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .oauth_metadata import MetadataProvider as MetadataProvider
+from .readonly_webhook import ENDPOINT_SUFFIXES, endpoint_suffix
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -855,10 +856,10 @@ class WellKnownProtectedResourceView(HomeAssistantView):
         self._bound_webhook_id = provider.webhook_id
         # Instance-level URL: the well-known path embeds this install's
         # webhook id, which is only known at runtime.
-        self.url = (
+        self.url: str = (
             f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
         )
-        self.extra_urls = [f"{self.url}/readonly"]
+        self.extra_urls = [f"{self.url}{suffix}" for suffix in ENDPOINT_SUFFIXES]
 
     async def get(self, request: web.Request) -> web.Response:
         hass = getattr(self._provider, "_hass", None)
@@ -879,8 +880,7 @@ class WellKnownProtectedResourceView(HomeAssistantView):
             return _json_not_found()
         base = provider.base_url_for(request)
         resource = provider.resource_url(base)
-        if request.path == f"{self.url}/readonly":
-            resource += "/readonly"
+        resource += endpoint_suffix(request.path, self.url)
         return web.json_response(
             {
                 "resource": resource,
@@ -1298,11 +1298,9 @@ def build_unauthorized_response(
     # 401 is only ever produced on a request TO /api/webhook/<id>, so the
     # caller already holds it. There is no fixed-path document to point at —
     # see WellKnownProtectedResourceView for why.
-    metadata_url = (
-        f"{base}/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
-    )
-    if getattr(request, "path", "") == f"/api/webhook/{provider.webhook_id}/readonly":
-        metadata_url += "/readonly"
+    path = f"/api/webhook/{provider.webhook_id}"
+    suffix = endpoint_suffix(getattr(request, "path", ""), path)
+    metadata_url = f"{base}/.well-known/oauth-protected-resource{path}{suffix}"
     return web.Response(
         status=401,
         text="Unauthorized",
