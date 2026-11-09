@@ -273,7 +273,7 @@ action:
     target:
       entity_id: !input target_entity
 """
-        saved = await mcp_client.call_tool(
+        await MCPAssertions(mcp_client).call_tool_success(
             "ha_manage_blueprints",
             {
                 "action": "save",
@@ -282,7 +282,6 @@ action:
                 "yaml": blueprint_yaml,
             },
         )
-        assert_mcp_success(saved)
 
         automation_id = None
         try:
@@ -295,18 +294,17 @@ action:
                 "trace": {"stored_traces": 5},
                 "initial_state": True,
             }
-            create_result = await mcp_client.call_tool(
+            mcp = MCPAssertions(mcp_client)
+            create_data = await mcp.call_tool_success(
                 "ha_config_set_automation", {"config": create_config}
             )
-            assert_mcp_success(create_result)
-            create_data = parse_mcp_result(create_result)
             automation_id = create_data.get("entity_id") or create_data.get(
                 "automation_id"
             )
             assert automation_id is not None
             cleanup_tracker.track("automation", automation_id)
 
-            trigger_result = await mcp_client.call_tool(
+            await mcp.call_tool_success(
                 "ha_call_service",
                 {
                     "domain": "automation",
@@ -314,7 +312,6 @@ action:
                     "entity_id": automation_id,
                 },
             )
-            assert_mcp_success(trigger_result)
 
             traces_data = await wait_for_tool_result(
                 mcp_client,
@@ -326,7 +323,7 @@ action:
                 description="blueprint automation trace",
             )
 
-            detail_result = await mcp_client.call_tool(
+            detail_data = await mcp.call_tool_success(
                 "ha_get_automation_traces",
                 {
                     "entity_id": automation_id,
@@ -334,8 +331,6 @@ action:
                     "sections": "config",
                 },
             )
-            assert_mcp_success(detail_result)
-            detail_data = parse_mcp_result(detail_result)
 
             assert detail_data["last_step"].startswith("action/")
             assert detail_data["blueprint_inputs"]["use_blueprint"]["input"] == {
