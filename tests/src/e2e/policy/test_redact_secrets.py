@@ -12,10 +12,12 @@ boots without the flag) and verifies the deployable contract:
   a structured validation error — with the flag ON and with it OFF (the
   round-trip guard is deliberately unconditional).
 
-The password-bearing read surfaces themselves (add-on ``format: password``
-options, integration password selectors) need a Supervisor add-on or an
-integration with a password options flow, which the test container does not
-ship; those transformations are covered by the unit suite
+- a stored integration secret stays out of the options form reads: Core's
+  own ``forecast_solar`` options form marks its API key secret, so a change
+  in how Core serializes that marker fails here (#3002).
+
+Add-on ``format: password`` options need a Supervisor add-on, which the test
+container does not ship; that transformation is covered by the unit suite
 (``tests/src/unit/test_redaction.py``).
 
 Requires Docker (testcontainers); runs in CI.
@@ -23,16 +25,19 @@ Requires Docker (testcontainers); runs in CI.
 
 from __future__ import annotations
 
+import json
+import uuid
+
 import pytest
 from test_constants import TEST_TOKEN
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.redaction import REDACTED_SET, is_sentinel
+from ha_mcp.redaction import REDACTED_SET, _clear_known_secret_values, is_sentinel
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
-from ..utilities.assertions import parse_mcp_result, safe_call_tool
+from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 
 
 async def _build_redacting_server(container_info, monkeypatch, tmp_path):
@@ -145,6 +150,79 @@ async def test_options_are_withheld_until_the_options_form_is_asked_for(
             "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
+
+
+async def _add_forecast_solar(mcp: MCPAssertions) -> str:
+    """Add a forecast_solar entry: Core's options form for it carries a secret
+    field and needs no device, and setup validates nothing over the network."""
+    step = await mcp.call_tool_success(
+        "ha_set_integration",
+        {
+            "domain": "forecast_solar",
+            "config": {
+                "location": "home",
+                "declination_source": "fixed",
+                "azimuth_source": "fixed",
+            },
+        },
+    )
+    created = await mcp.call_tool_success(
+        "ha_set_integration",
+        {
+            "domain": "forecast_solar",
+            "flow_id": step["flow_id"],
+            "config": {"declination": 25, "azimuth": 180, "modules_power": 10000},
+        },
+    )
+    return created["entry_id"]
+
+
+@pytest.mark.asyncio
+async def test_stored_integration_secret_stays_out_of_options_form_reads(
+    redacting_mcp,
+):
+    """An agent opening an integration's options form must not get the stored
+    API key back. Core marks the field secret in its own serialization (since
+    2026.11 a ``secret`` flag on a plain string field), so this fails when
+    Core changes that marker and ha-mcp no longer recognises it (#3002)."""
+    client, _server = redacting_mcp
+    api_key = uuid.uuid4().hex[:16]
+    async with MCPAssertions(client) as mcp:
+        entry_id = await _add_forecast_solar(mcp)
+        flow_id = None
+        try:
+            await mcp.call_tool_success(
+                "ha_set_integration",
+                {"entry_id": entry_id, "config": {"api_key": api_key}},
+            )
+            # A server that never saw the value has nothing to scrub it with;
+            # only recognising the field keeps it out.
+            _clear_known_secret_values()
+
+            form = await mcp.call_tool_success(
+                "ha_set_integration", {"entry_id": entry_id}
+            )
+            flow_id = form["flow_id"]
+            assert api_key not in json.dumps(form), form
+            field = next(f for f in form["fields"] if f["name"] == "api_key")
+            assert field["current"] == REDACTED_SET, field
+
+            described = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": entry_id, "include_schema": True}
+            )
+            assert api_key not in json.dumps(described), described
+        finally:
+            if flow_id:
+                await safe_call_tool(
+                    client,
+                    "ha_set_integration",
+                    {"entry_id": entry_id, "flow_id": flow_id, "abort": True},
+                )
+            await safe_call_tool(
+                client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
 
 
 async def _expect_sentinel_rejected(client: Client) -> None:

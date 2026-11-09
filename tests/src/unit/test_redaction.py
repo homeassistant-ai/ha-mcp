@@ -339,6 +339,16 @@ FLOW_SCHEMA = [
     },
 ]
 
+# A field as Home Assistant 2026.11 serializes a ``probatio.Secret`` key: a
+# plain string field whose only secret marker is ``secret: true`` (#3002).
+CORE_SECRET_FIELD = {
+    "type": "string",
+    "name": "password",
+    "description": {"suggested_value": "stored-device-password"},
+    "required": True,
+    "secret": True,
+}
+
 
 class TestPasswordFlowFields:
     def test_text_selector_password_detected(self):
@@ -346,6 +356,9 @@ class TestPasswordFlowFields:
 
     def test_literal_password_type_detected(self):
         assert is_password_flow_field(FLOW_SCHEMA[2])
+
+    def test_core_secret_marker_detected(self):
+        assert is_password_flow_field(CORE_SECRET_FIELD)
 
     def test_plain_fields_not_detected(self):
         assert not is_password_flow_field(FLOW_SCHEMA[0])
