@@ -1,6 +1,6 @@
 """The tools entry's services on a real ``hass``: Core refuses a non-admin.
 
-Every ``ha_mcp_tools`` service registers through Core's admin-service helper,
+Core sets the entry up and unloads it through its config-entry machinery. Every ``ha_mcp_tools`` service registers through Core's admin-service helper,
 so Core itself raises ``Unauthorized`` for a non-admin user before the handler
 runs; the caller token then refuses an admin without it, and a call with no
 user at all. Unload removes every service the setup registered.
@@ -8,29 +8,31 @@ user at all. Unload removes every service the setup registered.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from homeassistant.auth.models import User
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError, Unauthorized
 from pytest_homeassistant.common import MockConfigEntry
 
 import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import file_ops, yaml_find
+from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 
 
 @pytest.fixture
-async def tools_entry(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
-) -> MockConfigEntry:
-    # The WS commands and the entry's device are not under test here.
-    monkeypatch.setattr(comp, "async_register_commands", MagicMock())
-    monkeypatch.setattr(comp, "async_register_entry_device", AsyncMock())
-    entry = MockConfigEntry(domain=DOMAIN, title=TOOLS_ENTRY_TITLE, data={})
+async def tools_entry(hass: HomeAssistant) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=TOOLS_ENTRY_TITLE,
+        version=HaMcpToolsConfigFlow.VERSION,
+        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
+        data={},
+    )
     entry.add_to_hass(hass)
-    assert await comp._async_setup_tools_entry(hass, entry) is True
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    assert entry.state is ConfigEntryState.LOADED
     return entry
 
 
@@ -103,5 +105,5 @@ async def test_edit_file_refuses_a_path_outside_the_allowlist(
 async def test_unload_removes_every_service(
     hass: HomeAssistant, tools_entry: MockConfigEntry
 ) -> None:
-    assert await comp._async_unload_tools_entry(hass, tools_entry) is True
+    assert await hass.config_entries.async_unload(tools_entry.entry_id) is True
     assert DOMAIN not in hass.services.async_services_internal()
