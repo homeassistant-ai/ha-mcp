@@ -190,7 +190,7 @@ If you're using Claude Desktop, update your `claude_desktop_config.json`:
   "mcpServers": {
     "ha-mcp": {
       "command": "uvx",
-      "args": ["ha-mcp-dev"],
+      "args": ["--python", "3.14", "ha-mcp-dev"],
       "env": {
         "HOMEASSISTANT_URL": "http://your-ha-instance:8123",
         "HOMEASSISTANT_TOKEN": "your_token"
