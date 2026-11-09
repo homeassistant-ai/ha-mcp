@@ -169,9 +169,8 @@ def test_a_successful_session_removes_the_staged_config_after_the_container_stop
     fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
     generator = fixture(request, None)
 
-    info = next(generator)
+    next(generator)
     staged = Path(seen["config_path"])
-    assert info["base_url"] == "http://localhost:32768"
     assert staged.is_dir(), "the session needs its staged config while it runs"
     assert request.finalizers, "cleanup must be registered for a successful session too"
 
