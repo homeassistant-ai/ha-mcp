@@ -704,8 +704,7 @@ async def icon_zone(
 ) -> AsyncIterator[tuple[str, str]]:
     """A zone storing ``mdi:school``, removed afterwards: (entity_id, id).
 
-    Created through Core's zone/create, as the Home Assistant UI does: the
-    helper tools keep a new zone's icon in the entity registry instead. Each
+    Created through Core's zone/create, as the Home Assistant UI does. Each
     zone gets its own name: Core keeps a removed zone's registry entry, icon
     included, and gives it back to a zone created again under the same id.
     """
@@ -732,7 +731,7 @@ async def icon_zone(
 
 
 async def _stored_icon(ha_client: Any, zone_id: str) -> str | None:
-    """The icon in the stored zone; ha_get_zone shows the registry's over it."""
+    """The icon in the stored zone, read from Core's zone/list."""
     listed = await ha_client.send_websocket_message({"type": "zone/list"})
     zone: dict[str, Any] = next(
         (z for z in listed.get("result") or [] if z.get("id") == zone_id), {}
@@ -743,18 +742,17 @@ async def _stored_icon(ha_client: Any, zone_id: str) -> str | None:
 @pytest.mark.asyncio
 @pytest.mark.config
 class TestZoneIconPersistence:
-    """A zone keeps an icon in its stored item and as a registry override.
+    """A zone's icon is stored in the zone, as the zone dialog stores it.
 
-    The registry override wins while it is set, and Core's zone/update merges
-    into the item, so an icon stored there cannot be removed.
+    Core's zone/update merges into the stored zone, so a stored icon can be
+    changed but not removed, in the zone dialog as through the tools.
     """
 
     async def test_zone_icon_change_reaches_the_stored_icon(
         self, mcp_client: Client, ha_client: Any, icon_zone: tuple[str, str]
     ) -> None:
-        """Changing the icon of a zone created with one must update the stored
-        icon too, or the old icon shows again once the registry override is
-        cleared.
+        """Changing the icon of a zone must update the stored icon, the one the
+        Zones editor shows (#3001).
         """
         entity_id, zone_id = icon_zone
         async with MCPAssertions(mcp_client) as mcp:
@@ -766,19 +764,19 @@ class TestZoneIconPersistence:
             )  # fmt: skip
             assert await _stored_icon(ha_client, zone_id) == "mdi:home-city"
 
-    async def test_zone_stored_icon_clear_fails(
+    async def test_zone_stored_icon_clear_reports_the_kept_icon(
         self, mcp_client: Client, ha_client: Any, icon_zone: tuple[str, str]
     ) -> None:
-        """Clearing the icon of a zone that stores one must fail instead of
-        reporting success while the stored icon keeps showing.
+        """Clearing the icon of a zone that stores one must say Home Assistant
+        kept it, instead of a silent success while the icon keeps showing.
         """
         entity_id, zone_id = icon_zone
         async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_failure(
+            result = await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {"helper_type": "zone", "helper_id": entity_id, "icon": ""},
-                expected_error="cannot be removed",
             )
+            assert any("mdi:school" in w for w in result.get("warnings", [])), result
             assert await _stored_icon(ha_client, zone_id) == "mdi:school"
 
 

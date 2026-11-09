@@ -395,20 +395,6 @@ class TestRemoveWait:
 
 
 class TestZoneWrites:
-    async def test_new_icon_on_a_zone_without_stored_icon_goes_to_the_registry(
-        self,
-    ) -> None:
-        """An icon written into the zone item could never be cleared again (#2643)."""
-        client = _client()
-
-        await ZoneTools(client).ha_set_zone(zone_id="office", icon="mdi:briefcase")
-
-        assert all("icon" not in m for m in _sent(client, "zone/update"))
-        assert any(
-            m.get("icon") == "mdi:briefcase"
-            for m in _sent(client, "config/entity_registry/update")
-        )
-
     async def test_update_by_entity_id_writes_the_zone_item(self) -> None:
         client = _client()
 
@@ -420,47 +406,6 @@ class TestZoneWrites:
         assert result["zone_id"] == "office"
         assert result["entity_id"] == "zone.office"
         assert result["updated_fields"] == ["radius"]
-
-    @pytest.mark.parametrize(
-        ("stored", "registry", "icon", "shown"),
-        [
-            (None, "mdi:briefcase", None, "mdi:briefcase"),
-            ("mdi:map", "mdi:briefcase", None, "mdi:briefcase"),
-            ("mdi:map", None, None, "mdi:map"),
-            (None, "mdi:briefcase", "", None),
-        ],
-        ids=["left-alone", "over-the-stored-icon", "stored-only", "cleared"],
-    )
-    async def test_an_update_reply_shows_the_icon_the_zone_entity_shows(
-        self,
-        stored: str | None,
-        registry: str | None,
-        icon: str | None,
-        shown: str | None,
-    ) -> None:
-        """The zone entity shows its registry icon over the stored one, and
-        #2643 keeps a zone's icon there. An update that leaves the icon alone
-        reports the icon of this zone, as ha_get_zone does; one that clears it
-        does not bring it back."""
-        zone = {**OFFICE, "icon": stored} if stored else OFFICE
-        other = {"entity_id": "zone.gym", "platform": "zone", "unique_id": "gym"}
-        entries = [
-            {**other, "icon": "mdi:dumbbell"},
-            {**OFFICE_ENTRY, "icon": registry},
-        ]
-        client = _client(
-            {
-                "zone/list": {"success": True, "result": [zone]},
-                "zone/update": {"success": True, "result": zone},
-                "config/entity_registry/list": {"success": True, "result": entries},
-            }
-        )
-
-        result = await ZoneTools(client).ha_set_zone(
-            zone_id="office", radius=200, icon=icon
-        )
-
-        assert result["zone_data"].get("icon") == shown
 
     async def test_wait_false_skips_the_update_check(
         self, registered: AsyncMock

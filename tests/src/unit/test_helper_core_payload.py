@@ -3,8 +3,8 @@
 Home Assistant validates each storage-helper create and update itself, so the
 tool sends the caller's fields under Core's names. These tests cover what the
 tool still adds: the merge with the stored item that Core's whole-item update
-needs and the create defaults the tool documents. The zone icon rule (#2643)
-is covered through both write paths in test_helper_config_fold.py.
+needs and the create defaults the tool documents. Where a zone's icon goes is
+covered through both write paths in test_helper_config_fold.py.
 """
 
 from __future__ import annotations
@@ -30,21 +30,21 @@ def _error(te: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
 
 def test_update_keeps_every_stored_field_it_does_not_change() -> None:
     stored = {"id": "t", "name": "T", "min": 0.0, "max": 50.0, "mode": "box"}
-    body = merged_update("input_number", stored, None, None, {"max": 80.0}, "x")
+    body = merged_update("input_number", stored, None, None, {"max": 80.0})
     assert body == {"name": "T", "min": 0.0, "max": 80.0, "mode": "box"}
 
 
 def test_update_does_not_send_the_items_id() -> None:
     """Core's update schemas reject ``id``; the item is addressed separately."""
-    body = merged_update("input_boolean", {"id": "b", "name": "B"}, "C", None, {}, "x")
+    body = merged_update("input_boolean", {"id": "b", "name": "B"}, "C", None, {})
     assert "id" not in body
 
 
 def test_cleared_icon_is_left_out_of_the_item() -> None:
     """Core rejects an empty icon, so clearing removes the key instead."""
     stored = {"id": "b", "name": "B", "icon": "mdi:star"}
-    kept = merged_update("input_boolean", stored, None, None, {}, "input_boolean.b")
-    cleared = merged_update("input_boolean", stored, None, "", {}, "input_boolean.b")
+    kept = merged_update("input_boolean", stored, None, None, {})
+    cleared = merged_update("input_boolean", stored, None, "", {})
     assert kept["icon"] == "mdi:star"
     assert "icon" not in cleared
 
@@ -54,8 +54,8 @@ def test_tag_update_does_not_echo_the_listed_name() -> None:
     sent there: echoing the listed one would pin a never-named tag's default
     "Tag <id>" as a registry override."""
     stored = {"id": "abc", "name": "Tag abc", "description": "door"}
-    kept = merged_update("tag", stored, None, None, {"description": "gate"}, "abc")
-    renamed = merged_update("tag", stored, "Front", None, {}, "abc")
+    kept = merged_update("tag", stored, None, None, {"description": "gate"})
+    renamed = merged_update("tag", stored, "Front", None, {})
     assert kept == {"description": "gate"}
     assert renamed == {"name": "Front", "description": "door"}
 

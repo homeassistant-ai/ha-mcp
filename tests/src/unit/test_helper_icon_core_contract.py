@@ -13,10 +13,7 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
-from ha_mcp.tools.config_helpers.update import (
-    _execute_update_simple_helper,
-    _update_via_component,
-)
+from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
 from ha_mcp.tools.tools_zones import ZoneTools
 
 from .test_zone_tools_core_contract import (
@@ -51,17 +48,18 @@ _TAG_SCHEMAS = {
 }
 
 
-class TestCreatedIconStaysClearable:
-    """A new zone's icon goes to the entity registry, where it stays clearable.
+class TestIconFollowsCoresSchema:
+    """An icon goes where Core's schema for the type keeps it.
 
-    Core's zone/update merges into the stored item and rejects an empty icon, so
-    an icon stored in a zone can never be removed (#2643). Person and tag have no
-    icon field in Core's schemas, so their icon goes to the registry too. A
-    created person's, tag's or zone's entity is looked up in the registry.
+    A zone stores its icon, as the zone dialog writes it (#3001); person and
+    tag have no icon field in Core's schemas, so their icon goes to the entity
+    registry. A created person's, tag's or zone's entity is looked up in the
+    registry.
     """
 
-    async def test_zone_create_writes_the_icon_to_its_registry_entity(self) -> None:
-        """The new zone "Home" is zone.home_2: the built-in home zone holds zone.home."""
+    async def test_zone_create_stores_the_icon_in_the_zone(self) -> None:
+        """The Zones editor shows only the stored icon. The new zone "Home" is
+        zone.home_2: the built-in home zone holds zone.home."""
         home = {**OFFICE, "id": "home", "name": "Home"}
         client = _client(
             {
@@ -85,23 +83,9 @@ class TestCreatedIconStaysClearable:
         )
 
         (create,) = _sent(client, "zone/create")
-        assert "icon" not in create
-        assert _sent(client, "config/entity_registry/update")[0]["entity_id"] == (
-            "zone.home_2"
-        )
-        assert result["entity_id"] == "zone.home_2"
-
-    async def test_an_icon_that_found_no_entity_is_a_warning(self) -> None:
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": []}}
-        )
-
-        result = await ZoneTools(client).ha_set_zone(
-            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
-        )
-
+        assert create["icon"] == "mdi:house"
         assert _sent(client, "config/entity_registry/update") == []
-        assert "were not applied" in result["warnings"][0]
+        assert result["entity_id"] == "zone.home_2"
 
     @pytest.mark.parametrize(
         "failure",
@@ -246,66 +230,6 @@ class TestCreatedIconStaysClearable:
 
         assert "icon" not in write.call_args.args[3]
         assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
-
-    @pytest.mark.parametrize(
-        ("helper_type", "schemas", "item", "in_item"),
-        [
-            ("person", _PERSON_SCHEMAS, {"id": "anna", "name": "Anna"}, False),
-            (
-                "input_boolean",
-                {"input_boolean": {"update": [{"name": "name"}, {"name": "icon"}]}},
-                {"id": "anna", "name": "Anna"},
-                True,
-            ),
-        ],
-        ids=["person", "input_boolean"],
-    )
-    async def test_component_update_follows_the_schema_and_sets_the_registry(
-        self, helper_type: str, schemas: Any, item: Any, in_item: bool
-    ) -> None:
-        """The registry always takes the icon; the item only where Core has one."""
-        write = AsyncMock(return_value=None)
-        read = AsyncMock(return_value={"item": item, "item_id": "anna"})
-        with (
-            patch("ha_mcp.tools.config_helpers.update.read_stored_helper_item", read),
-            patch("ha_mcp.tools.config_helpers.update.write_helper_item", write),
-            patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)),
-        ):
-            await _update_via_component(
-                _client(), helper_type, f"{helper_type}.anna", f"{helper_type}.anna",
-                None, "mdi:account", None, None, None, {},
-            )  # fmt: skip
-
-        assert ("icon" in write.call_args.args[3]) is in_item
-        assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
-
-    async def test_an_icon_the_schema_declares_lands_in_item_and_registry(self) -> None:
-        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
-        entry = {
-            "entity_id": "input_boolean.lamp",
-            "platform": "input_boolean",
-            "unique_id": "lamp",
-        }
-        client = _client(
-            {
-                "input_boolean/list": {"success": True, "result": [stored]},
-                "input_boolean/update": {"success": True, "result": stored},
-                "config/entity_registry/get": {"success": True, "result": entry},
-            }
-        )
-        schemas = {"input_boolean": {"update": [{"name": "name"}, {"name": "icon"}]}}
-
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
-            await _execute_update_simple_helper(
-                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
-                None, "mdi:lightbulb", None, None, None, False, False, {},
-            )  # fmt: skip
-
-        (update,) = _sent(client, "input_boolean/update")
-        assert update["icon"] == "mdi:lightbulb"
-        assert (
-            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lightbulb"
-        )
 
     async def test_tag_update_without_its_entity_is_a_warning(self) -> None:
         tag = {"id": "abc-1", "name": "Front door"}
@@ -455,14 +379,3 @@ class TestCreatedIconStaysClearable:
         (update,) = _sent(client, "input_boolean/update")
         assert "icon" not in update
         assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
-
-    async def test_component_create_sends_the_icon_as_a_registry_field(self) -> None:
-        write = AsyncMock(return_value=None)
-        with patch("ha_mcp.tools.config_helpers.create.write_helper_item", write):
-            await ZoneTools(_client()).ha_set_zone(
-                name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
-            )
-
-        payload = write.call_args.args[3]
-        assert "icon" not in payload
-        assert write.call_args.kwargs["registry"] == {"icon": "mdi:briefcase"}

@@ -618,16 +618,16 @@ class TestHelperCaptureRestore:
                     "icon": "mdi:test-tube-empty",
                 },
             )
-            # Unless the edit wrote the registry icon, the read-back below
-            # passes whether or not the restore resets it.
+            # Unless the edit's icon shows, the read-back below passes whether
+            # or not the restore resets it.
             await wait_for_tool_result(
                 mcp_client,
-                tool_name="ha_get_entity",
+                tool_name="ha_get_state",
                 arguments={"entity_id": f"input_boolean.{helper_id}"},
                 predicate=lambda d: (
-                    d["entity_entry"].get("icon") == "mdi:test-tube-empty"
+                    d["data"]["attributes"].get("icon") == "mdi:test-tube-empty"
                 ),
-                description="edited input_boolean has the edited registry icon",
+                description="edited input_boolean shows the edited icon",
             )
 
             # Poll until the snapshot file appears — absorbs HA storage
@@ -643,9 +643,8 @@ class TestHelperCaptureRestore:
             )
             assert restore.get("success") is True
             assert restore.get("data", {}).get("safety_backup") is not None
-            # The edit also wrote its icon to the entity registry, whose icon the
-            # state shows over the stored one, so the pre-edit icon in the state
-            # shows the restore reset the registry icon as well.
+            # The pre-edit icon in the state shows the restore put back the
+            # icon wherever the edit wrote it.
             await wait_for_tool_result(
                 mcp_client,
                 tool_name="ha_get_state",
