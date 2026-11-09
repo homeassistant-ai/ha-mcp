@@ -303,7 +303,7 @@ jobs:
       # job's container image tag (group "uv"), so both move in one Renovate
       # PR and cannot drift apart.
       if: success() || failure()
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
@@ -608,7 +608,7 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
@@ -699,7 +699,7 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
@@ -807,7 +807,7 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
@@ -899,7 +899,7 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
@@ -1014,7 +1014,7 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
@@ -1094,7 +1094,7 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.13.4"
