@@ -247,6 +247,13 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
     config_path, temp_dir, local_blueprint, embedded_wheel_name = (
         _prepare_testcontainer_config(embedded)
     )
+    # The staged config can hold an injected GITHUB_TOKEN (see
+    # ``_prepare_testcontainer_config``), and every failure below — the
+    # readiness gate included — raises before the post-``yield`` cleanup. A
+    # request finalizer runs on setup failure too, and by then the
+    # ``with container:`` block has already stopped Home Assistant, so the bind
+    # mount is no longer in use.
+    request.addfinalizer(partial(shutil.rmtree, temp_dir, ignore_errors=True))
 
     container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
 
@@ -362,7 +369,9 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
             # ``remove(force=True)`` and is non-idempotent — a second call
             # from the enclosing ``with container:`` ``__exit__`` raises
             # ``docker.errors.NotFound`` at session teardown.
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            #
+            # The staged config is removed by the finalizer registered above,
+            # which also covers setup failures that never reach this block.
             logger.info("✅ Cleanup completed")
 
 
