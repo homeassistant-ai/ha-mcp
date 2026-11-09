@@ -795,6 +795,7 @@ action:
         suffix = uuid.uuid4().hex[:8]
         light_id = await self._find_test_light_entity(mcp_client)
         automation_id = None
+        light_was_on = False
         try:
             create_config = {
                 "alias": f"Trace Not Triggered {suffix}",
@@ -827,6 +828,11 @@ action:
                 f"ha_config_set_automation did not resolve an entity id: {create_data}"
             )
             cleanup_tracker.track("automation", automation_id)
+
+            prior_light = await safe_call_tool(
+                mcp_client, "ha_get_state", {"entity_id": light_id}
+            )
+            light_was_on = prior_light.get("data", {}).get("state") == "on"
 
             await mcp.call_tool_success(
                 "ha_call_service",
@@ -908,6 +914,18 @@ action:
                     mcp_client,
                     "ha_config_remove_automation",
                     {"entity_id": automation_id},
+                )
+            if light_was_on:
+                # The test turned the light off to force the state trigger;
+                # put the instance back the way it was for later tests.
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_call_service",
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_id": light_id,
+                    },
                 )
 
 
