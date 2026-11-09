@@ -185,6 +185,21 @@
           "entry_removed": "HA-MCP Server 項目已不存在。"
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP 從兩個商店清單進行了安裝",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "是否將 HA-MCP 保留線上單一商店清單？",
+            "description": "HA-MCP 被標記為從兩個 {records} 同時安裝。它們包含相同的整合（第二個是較舊的分發鏡像站）。Home Assistant 2026.11 中的 Marketplace 僅允許一個清單擁有一個整合，因此兩者在那裡都無法更新 HA-MCP；HACS 仍然會更新，但升級到 2026.11 將會使 HA-MCP 卡住。\n\n提交將保留 **{keep}**（預設目錄中不需要自訂儲存庫的清單），並將另一個清單標記為未安裝。不會刪除任何內容：你的 HA-MCP 項目、設定和檔案將完全保持原樣，從現在開始更新將如往常般顯示在 {keep} 下方。"
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP 現在已從單一商店清單安裝；無需修復。",
+          "store_unavailable": "商店（HACS 或 Marketplace）尚未載入，因此無法檢查清單。請在幾分鐘後再試一次。"
+        }
+      }
     }
   },
   "selector": {

@@ -185,6 +185,21 @@
           "entry_removed": "Záznam serveru HA-MCP již neexistuje."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP je nainstalován ze dvou záznamů v obchodě",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Ponechat HA-MCP v jednom obchodě?",
+            "description": "HA-MCP je označen jako nainstalovaný z obou zdrojů ({records}). Obsahují stejnou integraci (druhý je starší distribuční zrcadlo). Marketplace v Home Assistant 2026.11 umožňuje, aby integraci vlastnil pouze jeden záznam, takže tam ji ani jeden nemůže aktualizovat; HACS ji sice stále aktualizuje, ale přechod na verzi 2026.11 by zanechal HA-MCP zaseknuté.\n\nKliknutím na Odeslat ponecháte **{keep}**, což je záznam ve výchozím katalogu, který nevyžaduje vlastní repozitář, a druhý záznam označíte jako nenainstalovaný. Nic se neodstraní: vaše položky, nastavení a soubory HA-MCP zůstanou přesně tak, jak jsou, a aktualizace se od této chvíle budou objevovat pod položkou {keep} jako obvykle."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP je nyní nainstalován z jednoho obchodu; není co opravovat.",
+          "store_unavailable": "Obchod (HACS nebo Marketplace) ještě není načten, takže záznamy nelze zkontrolovat. Zkuste to za několik minut znovu."
+        }
+      }
     }
   },
   "selector": {
