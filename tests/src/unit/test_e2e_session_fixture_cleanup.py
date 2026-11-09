@@ -141,6 +141,48 @@ def test_a_staging_failure_still_removes_the_staged_config(
     _assert_finalizer_removed(request, Path(seen["config_path"]))
 
 
+def test_a_failure_after_token_injection_still_removes_the_staged_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The leaked directory is the one that matters: it holds an injected token."""
+    real_prepare = _conftest_testcontainer._prepare_testcontainer_config
+    seen: dict[str, Path] = {}
+    token = "ghp_staged_token_must_not_survive"
+
+    def recording_prepare(embedded: bool, config_path: Path) -> Any:
+        seen["config_path"] = config_path
+        return real_prepare(embedded, config_path)
+
+    def component_install_fails(
+        config_path: Path,
+        component_src: Path,
+        domain: str,
+        title: str,
+        *,
+        seed_entry: bool = True,
+    ) -> bool:
+        storage = Path(config_path) / ".storage" / "core.config_entries"
+        assert token in storage.read_text(), (
+            "precondition: the token is injected before this failing step"
+        )
+        raise RuntimeError(f"{domain} install failed")
+
+    # The HACS frontend download is a 51 MB network step; the token injection
+    # this test targets happens after it, so skip just the download.
+    monkeypatch.setattr(
+        _conftest_testcontainer, "_ensure_hacs_frontend", lambda path: None
+    )
+    monkeypatch.setattr(
+        _conftest_testcontainer, "_install_custom_component", component_install_fails
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+    request = _fixture_world(monkeypatch, recording_prepare, lambda *args: None)
+
+    _drive_to_failure(request, "install failed")
+
+    _assert_finalizer_removed(request, Path(seen["config_path"]))
+
+
 def test_a_readiness_failure_still_removes_the_staged_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
