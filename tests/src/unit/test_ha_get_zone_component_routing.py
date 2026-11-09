@@ -440,7 +440,7 @@ async def test_missing_covered_types_falls_back_to_legacy() -> None:
 
 
 class _IconRegistryClient(RoutingClient):
-    """zone.work's registry entry sets the icon a zone tool gave it (#2643)."""
+    """zone.work's registry entry sets an icon override over its stored icon."""
 
     def __init__(self, registry_ok: bool = True) -> None:
         super().__init__()
@@ -459,9 +459,11 @@ class _IconRegistryClient(RoutingClient):
 
 @pytest.mark.parametrize("served_by", ["component", "legacy"])
 @pytest.mark.asyncio
-async def test_a_zone_shows_the_icon_its_registry_entry_sets(served_by: str) -> None:
-    """The entity shows its registry icon over the stored one, so the listing
-    does too: a zone read back after ha_set_zone set an icon has it."""
+async def test_a_registry_icon_is_named_apart_from_the_stored_one(
+    served_by: str,
+) -> None:
+    """The Zones editor shows the stored icon, the map the registry override:
+    reported as the zone's icon, an override hid an empty Symbol field (#3001)."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS if served_by == "component" else None,
@@ -475,7 +477,8 @@ async def test_a_zone_shows_the_icon_its_registry_entry_sets(served_by: str) -> 
     with patch_ws(ws, tools_zones):
         resp = await get_zone(zone_id="work")
 
-    assert resp["zone"]["icon"] == "mdi:star"
+    assert resp["zone"]["icon"] == "mdi:briefcase"
+    assert resp["zone"]["entity_icon"] == "mdi:star"
 
 
 @pytest.mark.asyncio

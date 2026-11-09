@@ -51,17 +51,18 @@ _TAG_SCHEMAS = {
 }
 
 
-class TestCreatedIconStaysClearable:
-    """A new zone's icon goes to the entity registry, where it stays clearable.
+class TestIconFollowsCoresSchema:
+    """An icon goes where Core's schema for the type keeps it.
 
-    Core's zone/update merges into the stored item and rejects an empty icon, so
-    an icon stored in a zone can never be removed (#2643). Person and tag have no
-    icon field in Core's schemas, so their icon goes to the registry too. A
-    created person's, tag's or zone's entity is looked up in the registry.
+    A zone stores its icon, as the zone dialog writes it (#3001); person and
+    tag have no icon field in Core's schemas, so their icon goes to the entity
+    registry. A created person's, tag's or zone's entity is looked up in the
+    registry.
     """
 
-    async def test_zone_create_writes_the_icon_to_its_registry_entity(self) -> None:
-        """The new zone "Home" is zone.home_2: the built-in home zone holds zone.home."""
+    async def test_zone_create_stores_the_icon_in_the_zone(self) -> None:
+        """The Zones editor shows only the stored icon. The new zone "Home" is
+        zone.home_2: the built-in home zone holds zone.home."""
         home = {**OFFICE, "id": "home", "name": "Home"}
         client = _client(
             {
@@ -85,23 +86,9 @@ class TestCreatedIconStaysClearable:
         )
 
         (create,) = _sent(client, "zone/create")
-        assert "icon" not in create
-        assert _sent(client, "config/entity_registry/update")[0]["entity_id"] == (
-            "zone.home_2"
-        )
-        assert result["entity_id"] == "zone.home_2"
-
-    async def test_an_icon_that_found_no_entity_is_a_warning(self) -> None:
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": []}}
-        )
-
-        result = await ZoneTools(client).ha_set_zone(
-            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
-        )
-
+        assert create["icon"] == "mdi:house"
         assert _sent(client, "config/entity_registry/update") == []
-        assert "were not applied" in result["warnings"][0]
+        assert result["entity_id"] == "zone.home_2"
 
     @pytest.mark.parametrize(
         "failure",
@@ -260,10 +247,12 @@ class TestCreatedIconStaysClearable:
         ],
         ids=["person", "input_boolean"],
     )
-    async def test_component_update_follows_the_schema_and_sets_the_registry(
+    async def test_component_update_writes_the_icon_where_core_keeps_it(
         self, helper_type: str, schemas: Any, item: Any, in_item: bool
     ) -> None:
-        """The registry always takes the icon; the item only where Core has one."""
+        """The item takes the icon where Core's schema has one, the registry
+        otherwise: an override would hide later changes made in the helper's
+        own dialog, which writes only the item."""
         write = AsyncMock(return_value=None)
         read = AsyncMock(return_value={"item": item, "item_id": "anna"})
         with (
@@ -277,9 +266,9 @@ class TestCreatedIconStaysClearable:
             )  # fmt: skip
 
         assert ("icon" in write.call_args.args[3]) is in_item
-        assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
+        assert ("icon" in write.call_args.kwargs["registry"]) is not in_item
 
-    async def test_an_icon_the_schema_declares_lands_in_item_and_registry(self) -> None:
+    async def test_an_icon_the_schema_declares_is_no_registry_override(self) -> None:
         stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
         entry = {
             "entity_id": "input_boolean.lamp",
@@ -303,9 +292,7 @@ class TestCreatedIconStaysClearable:
 
         (update,) = _sent(client, "input_boolean/update")
         assert update["icon"] == "mdi:lightbulb"
-        assert (
-            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lightbulb"
-        )
+        assert _sent(client, "config/entity_registry/update") == []
 
     async def test_tag_update_without_its_entity_is_a_warning(self) -> None:
         tag = {"id": "abc-1", "name": "Front door"}
@@ -456,13 +443,12 @@ class TestCreatedIconStaysClearable:
         assert "icon" not in update
         assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
 
-    async def test_component_create_sends_the_icon_as_a_registry_field(self) -> None:
+    async def test_component_zone_create_stores_the_icon(self) -> None:
         write = AsyncMock(return_value=None)
         with patch("ha_mcp.tools.config_helpers.create.write_helper_item", write):
             await ZoneTools(_client()).ha_set_zone(
                 name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
             )
 
-        payload = write.call_args.args[3]
-        assert "icon" not in payload
-        assert write.call_args.kwargs["registry"] == {"icon": "mdi:briefcase"}
+        assert write.call_args.args[3]["icon"] == "mdi:briefcase"
+        assert "icon" not in write.call_args.kwargs["registry"]
