@@ -271,7 +271,22 @@ async def test_the_registered_trace_tool_resolves_automation_id():
 
     data = result.structured_content
     assert data["entity_id"] == "automation.trace"
+    assert data["automation_id"] == "automation.trace"
     assert data["traces"][0]["run_id"] == "r1"
+    text = json.loads(result.content[0].text)
+    assert text["automation_id"] == "automation.trace"
+
+
+@pytest.mark.asyncio
+async def test_current_trace_call_omits_legacy_automation_id():
+    """A caller on the current parameter does not receive the retired field."""
+    result = await _make_mcp().call_tool(
+        "ha_get_automation_traces", {"entity_id": "automation.trace"}
+    )
+
+    assert "automation_id" not in result.structured_content
+    text = json.loads(result.content[0].text)
+    assert "automation_id" not in text
 
 
 @pytest.mark.asyncio
