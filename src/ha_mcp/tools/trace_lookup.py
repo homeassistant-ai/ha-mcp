@@ -354,16 +354,19 @@ def _scan_result(
     )
 
 
-def _running_trace_warning(trace: dict[str, Any]) -> list[str]:
-    """Warn when a running trace makes the local clock bound the logbook read."""
+def _logbook_window_warning(trace: dict[str, Any]) -> list[str]:
+    """Warn when the logbook window's end bound comes from the local clock."""
     timestamp = trace.get("timestamp")
     finish = timestamp.get("finish") if isinstance(timestamp, dict) else None
-    if finish:
+    if finish and _trace_datetime(finish) is not None:
         return []
-    return [
-        "The trace is still running, so the logbook window ends at this "
-        "server's clock and may exclude rows recorded after it."
-    ]
+    tail = (
+        "the logbook window ends at this server's clock and may exclude rows "
+        "recorded after it."
+    )
+    if finish:
+        return [f"The trace's finish timestamp is unreadable, so {tail}"]
+    return [f"The trace has no finish timestamp, so {tail}"]
 
 
 async def fetch_trace_logbook(
@@ -408,7 +411,7 @@ async def fetch_trace_logbook(
 
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    warnings = _running_trace_warning(trace)
+    warnings = _logbook_window_warning(trace)
     transports: set[str] = set()
     for index, (lookup_id, lookup_start) in enumerate(contexts):
         entries, transport, context_warnings, timed_out = await _fetch_logbook_context(
