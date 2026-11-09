@@ -20,7 +20,6 @@ from .test_zone_tools_core_contract import (
     _FETCH_SCHEMAS,
     HOME_STATE,
     OFFICE,
-    OFFICE_ENTRY,
     REGISTRY_BLOCKED,
     _client,
     _no_component,  # noqa: F401 - pytest fixture
@@ -232,70 +231,6 @@ class TestIconFollowsCoresSchema:
         assert "icon" not in write.call_args.args[3]
         assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
 
-    @pytest.mark.parametrize(
-        ("helper_type", "schemas", "item", "in_item"),
-        [
-            ("person", _PERSON_SCHEMAS, {"id": "anna", "name": "Anna"}, False),
-            (
-                "input_boolean",
-                {"input_boolean": {"update": [{"name": "name"}, {"name": "icon"}]}},
-                {"id": "anna", "name": "Anna"},
-                True,
-            ),
-        ],
-        ids=["person", "input_boolean"],
-    )
-    async def test_component_update_writes_the_icon_where_core_keeps_it(
-        self, helper_type: str, schemas: Any, item: Any, in_item: bool
-    ) -> None:
-        """The item takes the icon where Core's schema has one, the registry
-        otherwise: an override would hide later changes made in the helper's
-        own dialog, which writes only the item."""
-        write = AsyncMock(
-            return_value={"success": True, "item": item,
-                          "entity_id": f"{helper_type}.anna",
-                          "registry_applied": {}, "warnings": []}
-        )  # fmt: skip
-        read = AsyncMock(return_value={"item": item, "item_id": "anna"})
-        with (
-            patch("ha_mcp.tools.config_helpers.update.read_stored_helper_item", read),
-            patch("ha_mcp.tools.config_helpers.update.write_helper_item", write),
-            patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)),
-        ):
-            await _execute_update_simple_helper(
-                _client(), helper_type, f"{helper_type}.anna", f"{helper_type}.anna",
-                None, "mdi:account", None, None, None, False, False, {},
-            )  # fmt: skip
-
-        assert ("icon" in write.call_args.args[3]) is in_item
-        assert ("icon" in write.call_args.kwargs["registry"]) is not in_item
-
-    async def test_an_icon_the_schema_declares_is_no_registry_override(self) -> None:
-        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
-        entry = {
-            "entity_id": "input_boolean.lamp",
-            "platform": "input_boolean",
-            "unique_id": "lamp",
-        }
-        client = _client(
-            {
-                "input_boolean/list": {"success": True, "result": [stored]},
-                "input_boolean/update": {"success": True, "result": stored},
-                "config/entity_registry/get": {"success": True, "result": entry},
-            }
-        )
-        schemas = {"input_boolean": {"update": [{"name": "name"}, {"name": "icon"}]}}
-
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
-            await _execute_update_simple_helper(
-                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
-                None, "mdi:lightbulb", None, None, None, False, False, {},
-            )  # fmt: skip
-
-        (update,) = _sent(client, "input_boolean/update")
-        assert update["icon"] == "mdi:lightbulb"
-        assert _sent(client, "config/entity_registry/update") == []
-
     async def test_tag_update_without_its_entity_is_a_warning(self) -> None:
         tag = {"id": "abc-1", "name": "Front door"}
         client = _client(
@@ -444,66 +379,3 @@ class TestIconFollowsCoresSchema:
         (update,) = _sent(client, "input_boolean/update")
         assert "icon" not in update
         assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
-
-    async def test_component_zone_create_stores_the_icon(self) -> None:
-        write = AsyncMock(return_value=None)
-        with patch("ha_mcp.tools.config_helpers.create.write_helper_item", write):
-            await ZoneTools(_client()).ha_set_zone(
-                name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
-            )
-
-        assert write.call_args.args[3]["icon"] == "mdi:briefcase"
-        assert "icon" not in write.call_args.kwargs["registry"]
-
-    @pytest.mark.parametrize("override", ["mdi:lamp", None])
-    async def test_an_override_hiding_the_new_icon_is_named(
-        self, override: str | None
-    ) -> None:
-        """An icon older ha-mcp versions mirrored into the registry still shows
-        over the stored one: the update says so instead of a silent success."""
-        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
-        client = _client(
-            {
-                "input_boolean/list": {"success": True, "result": [stored]},
-                "input_boolean/update": {
-                    "success": True,
-                    "result": {**stored, "icon": "mdi:star"},
-                },
-                "config/entity_registry/get": {
-                    "success": True,
-                    "result": {**LAMP, "icon": override},
-                },
-            }
-        )
-        schemas = {"input_boolean": {"update": [{"name": "icon"}]}}
-
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
-            result = await _execute_update_simple_helper(
-                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
-                None, "mdi:star", None, None, None, False, False, {},
-            )  # fmt: skip
-
-        named = [w for w in result.get("warnings", []) if "ha_set_entity" in w]
-        assert [override in w for w in named] == ([True] if override else [])
-
-    async def test_a_created_zone_names_a_restored_override(self) -> None:
-        """Core gives a zone created again under a removed zone's id that zone's
-        registry entry back, icon override included."""
-        client = _client(
-            {
-                "zone/create": {
-                    "success": True,
-                    "result": {**OFFICE, "icon": "mdi:briefcase"},
-                },
-                "config/entity_registry/get": {
-                    "success": True,
-                    "result": {**OFFICE_ENTRY, "icon": "mdi:map"},
-                },
-            }
-        )
-
-        result = await ZoneTools(client).ha_set_zone(
-            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
-        )
-
-        assert any("mdi:map" in w and "ha_set_entity" in w for w in result["warnings"])

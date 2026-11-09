@@ -340,11 +340,12 @@ class ZoneTools:
     async def _send_component_zone_list(self) -> dict[str, Any]:
         """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
         ws = await self._component_ws()
-        return await ws.send_command(
+        result: dict[str, Any] = await ws.send_command(
             "ha_mcp_tools/helpers_list",
             helper_types=["zone"],
             include_flow_helpers=False,
         )
+        return result
 
     async def _zone_states(self, entity_ids: list[str]) -> list[dict[str, Any]]:
         """The zones' states through the component's targeted read, or every
@@ -356,9 +357,9 @@ class ZoneTools:
                 raw = await ws.send_command(
                     "ha_mcp_tools/states", entity_ids=entity_ids
                 )
-                states = (raw.get("result") or {}).get("states")
-                if isinstance(states, dict):
-                    return list(states.values())
+                found = (raw.get("result") or {}).get("states")
+                if isinstance(found, dict):
+                    return list(found.values())
                 logger.warning("ha_mcp_tools/states returned a malformed payload")
             except (
                 HomeAssistantCommandError,

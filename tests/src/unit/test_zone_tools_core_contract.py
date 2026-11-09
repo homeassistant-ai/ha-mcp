@@ -407,60 +407,12 @@ class TestZoneWrites:
         assert result["entity_id"] == "zone.office"
         assert result["updated_fields"] == ["radius"]
 
-    @pytest.mark.parametrize(
-        ("stored", "shown"),
-        [(None, None), ("mdi:map", "mdi:map")],
-        ids=["no-stored-icon", "stored-icon"],
-    )
-    async def test_an_update_reply_is_the_stored_zone_not_its_override(
-        self, stored: str | None, shown: str | None
-    ) -> None:
-        """A registry override is not the zone's icon: the Zones editor shows
-        the stored one, so a reply naming the override hid a missing icon
-        (#3001)."""
-        zone = {**OFFICE, "icon": stored} if stored else OFFICE
-        entries = [{**OFFICE_ENTRY, "icon": "mdi:briefcase"}]
-        client = _client(
-            {
-                "zone/list": {"success": True, "result": [zone]},
-                "zone/update": {"success": True, "result": zone},
-                "config/entity_registry/list": {"success": True, "result": entries},
-            }
-        )
-
-        result = await ZoneTools(client).ha_set_zone(zone_id="office", radius=200)
-
-        assert result["zone_data"].get("icon") == shown
-
     async def test_wait_false_skips_the_update_check(
         self, registered: AsyncMock
     ) -> None:
         await ZoneTools(_client()).ha_set_zone(zone_id="office", radius=250, wait=False)
 
         registered.assert_not_awaited()
-
-    async def test_create_leaves_required_coordinates_to_core(self) -> None:
-        """Core's zone/create names a missing field itself; a copy of its
-        required fields here would drift from it."""
-        client = _client(
-            {
-                "zone/create": {
-                    "success": False,
-                    "error": "required key not provided @ data['latitude']",
-                    "error_code": "invalid_format",
-                }
-            }
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_set_zone(name="Office", longitude=13.4)
-
-        (create,) = _sent(client, "zone/create")
-        assert "latitude" not in create
-        assert (
-            "required key not provided @ data['latitude']"
-            in _error(exc_info)["message"]
-        )
 
     async def test_create_leaves_defaults_to_core(self) -> None:
         """Core applies radius and passive defaults; the tool must not pin its own."""

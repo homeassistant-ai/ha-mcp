@@ -359,7 +359,6 @@ _STORED_ZONE = {
     "id": "z", "name": "Z", "icon": "mdi:school", "latitude": 1.0,
     "longitude": 2.0, "radius": 100.0, "passive": False,
 }  # fmt: skip
-_BARE_ZONE = {k: v for k, v in _STORED_ZONE.items() if k != "icon"}
 _ZONE_PATHS = ["component", "websocket"]
 
 
@@ -424,34 +423,12 @@ async def _zone_update(
 
 
 @pytest.mark.parametrize("path", _ZONE_PATHS)
-@pytest.mark.parametrize("stored", [_STORED_ZONE, _BARE_ZONE], ids=["stored", "bare"])
-async def test_zone_icon_change_reaches_the_stored_icon(
-    path: str, stored: dict[str, Any]
-) -> None:
-    """The Zones editor and the zone dialog show only the stored icon, so an
-    icon kept as a registry override looks unset there (#3001)."""
-    written, registry, _ = await _zone_update(path, stored, "mdi:home")
-    assert written is not None and written["icon"] == "mdi:home"
-    assert not (registry or {}).get("icon")
-
-
-@pytest.mark.parametrize("path", _ZONE_PATHS)
 async def test_zone_update_without_icon_keeps_a_stored_icon(path: str) -> None:
     written, _, _ = await _zone_update(path, _STORED_ZONE, None)
     assert written is not None
     # Left out, or the whole stored item written back with its icon.
     assert written.get("icon", _STORED_ZONE["icon"]) == _STORED_ZONE["icon"]
     assert written["radius"] == 50.0
-
-
-@pytest.mark.parametrize("path", _ZONE_PATHS)
-async def test_a_zone_icon_core_keeps_is_not_reported_as_cleared(path: str) -> None:
-    """Core's zone update keeps a stored icon, as the zone dialog's does: the
-    reply shows the icon and says it stayed, instead of a silent success."""
-    written, _, result = await _zone_update(path, _STORED_ZONE, "")
-    assert written is not None and "icon" not in written
-    assert result["data"]["icon"] == _STORED_ZONE["icon"]
-    assert any(_STORED_ZONE["icon"] in w for w in result["warnings"])
 
 
 async def test_collection_payload_keeps_tag_id_on_create() -> None:

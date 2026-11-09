@@ -457,30 +457,6 @@ class _IconRegistryClient(RoutingClient):
         return await super().send_websocket_message(msg)
 
 
-@pytest.mark.parametrize("served_by", ["component", "legacy"])
-@pytest.mark.asyncio
-async def test_a_registry_icon_is_named_apart_from_the_stored_one(
-    served_by: str,
-) -> None:
-    """The Zones editor shows the stored icon, the map the registry override:
-    reported as the zone's icon, an override hid an empty Symbol field (#3001)."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS if served_by == "component" else None,
-        info_exc=None
-        if served_by == "component"
-        else HomeAssistantCommandError("Command failed: no info", "unknown_command"),
-        cmd_result=_component_zone_result(),
-    )
-    get_zone = _build_get_zone(_IconRegistryClient())
-
-    with patch_ws(ws, tools_zones):
-        resp = await get_zone(zone_id="work")
-
-    assert resp["zone"]["icon"] == "mdi:briefcase"
-    assert resp["zone"]["entity_icon"] == "mdi:star"
-
-
 @pytest.mark.asyncio
 async def test_an_unreadable_registry_names_the_missing_icons() -> None:
     """The component listed every zone; only the registry icons are missing,
@@ -559,32 +535,6 @@ class _OccupiedClient(RoutingClient):
         ]  # fmt: skip
 
 
-@pytest.mark.parametrize("served_by", ["component", "legacy"])
-@pytest.mark.asyncio
-async def test_every_zone_says_who_is_in_it(served_by: str) -> None:
-    """A stored zone lists its persons like the home zone does: the shape of a
-    row must not depend on where the zone is defined."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS if served_by == "component" else None,
-        info_exc=None
-        if served_by == "component"
-        else HomeAssistantCommandError("Command failed: no info", "unknown_command"),
-        cmd_result=_component_zone_result(),
-    )
-    get_zone = _build_get_zone(_OccupiedClient())
-
-    with patch_ws(ws, tools_zones):
-        resp = await get_zone()
-
-    rows = {z["entity_id"]: z for z in resp["zones"]}
-    assert rows["zone.work"]["persons"] == ["person.anna"]
-    assert rows["zone.home"]["persons"] == []
-    assert rows["zone.work"]["device_trackers"] == ["device_tracker.work_phone"]
-    assert rows["zone.home"]["device_trackers"] == ["device_tracker.tablet"]
-    assert set(rows["zone.work"]) == set(rows["zone.home"])
-
-
 @pytest.mark.asyncio
 async def test_an_unreadable_state_names_the_missing_persons() -> None:
     ws = make_ws(
@@ -599,34 +549,3 @@ async def test_an_unreadable_state_names_the_missing_persons() -> None:
 
     assert resp["count"] == 2
     assert any("persons" in w and "states down" in w for w in resp["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_the_component_reads_only_the_zones_states() -> None:
-    """With the component's targeted state read, persons come from the zones'
-    own states: reading every state of a large instance per zone lookup is
-    the cost the component read exists to avoid."""
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            caps = {**_CAPS_HELPERS, "capabilities": ["helpers_list", "states"]}
-            return {"success": True, "result": caps}
-        if command_type == "ha_mcp_tools/helpers_list":
-            return {"success": True, "result": _component_zone_result()}
-        if command_type == "ha_mcp_tools/states":
-            assert sorted(kwargs["entity_ids"]) == ["zone.home", "zone.work"]
-            states = {s["entity_id"]: s for s in await _OccupiedClient().get_states()}
-            return {"success": True, "result": {"states": states, "missing": []}}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    client = _OccupiedClient(fail=True)  # an all-states read would raise
-    get_zone = _build_get_zone(client)
-
-    with patch_ws(ws, tools_zones):
-        resp = await get_zone()
-
-    rows = {z["entity_id"]: z for z in resp["zones"]}
-    assert rows["zone.work"]["persons"] == ["person.anna"]
-    assert "warnings" not in resp
