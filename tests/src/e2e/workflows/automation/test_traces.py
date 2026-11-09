@@ -448,11 +448,10 @@ action:
             initial_state=True,
         )
 
-        create_result = await mcp_client.call_tool(
+        mcp = MCPAssertions(mcp_client)
+        create_data = await mcp.call_tool_success(
             "ha_config_set_automation", {"config": create_config}
         )
-        assert_mcp_success(create_result)
-        create_data = parse_mcp_result(create_result)
         # A create whose entity wait expired returns the numeric config id,
         # which the trace tool cannot resolve, so remove it before failing.
         automation_id = create_data.get("entity_id")
@@ -472,7 +471,7 @@ action:
             f"{automation_id} never became queryable"
         )
 
-        trigger_result = await mcp_client.call_tool(
+        await mcp.call_tool_success(
             "ha_call_service",
             {
                 "domain": "automation",
@@ -480,7 +479,6 @@ action:
                 "entity_id": automation_id,
             },
         )
-        assert_mcp_success(trigger_result)
 
         traces_data = await wait_for_tool_result(
             mcp_client,
@@ -517,11 +515,10 @@ action:
             initial_state=True,
         )
 
-        create_result = await mcp_client.call_tool(
+        mcp = MCPAssertions(mcp_client)
+        create_data = await mcp.call_tool_success(
             "ha_config_set_automation", {"config": create_config}
         )
-        assert_mcp_success(create_result)
-        create_data = parse_mcp_result(create_result)
         # A create whose entity wait expired returns the numeric config id,
         # which the trace tool cannot resolve, so remove it before failing.
         automation_id = create_data.get("entity_id")
@@ -541,7 +538,7 @@ action:
             f"{automation_id} never became queryable"
         )
 
-        trigger_result = await mcp_client.call_tool(
+        await mcp.call_tool_success(
             "ha_call_service",
             {
                 "domain": "automation",
@@ -549,7 +546,6 @@ action:
                 "entity_id": automation_id,
             },
         )
-        assert_mcp_success(trigger_result)
 
         traces_data = await wait_for_tool_result(
             mcp_client,
@@ -562,7 +558,7 @@ action:
         )
         run_id = traces_data["traces"][0]["run_id"]
 
-        detail_result = await mcp_client.call_tool(
+        detail_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
             {
                 "entity_id": automation_id,
@@ -570,16 +566,12 @@ action:
                 "detailed": True,
             },
         )
-        assert_mcp_success(detail_result)
-        detail_data = parse_mcp_result(detail_result)
         context_id = detail_data["context"]["id"]
 
-        by_context_result = await mcp_client.call_tool(
+        by_context_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
             {"entity_id": automation_id, "context_id": context_id},
         )
-        assert_mcp_success(by_context_result)
-        by_context_data = parse_mcp_result(by_context_result)
 
         assert by_context_data["run_id"] == run_id
         assert by_context_data["context_id"] == context_id
