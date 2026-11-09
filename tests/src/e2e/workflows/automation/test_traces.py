@@ -660,6 +660,9 @@ action:
         # Get the entity_id form (script.trace_test_script_e2e)
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
         cleanup_tracker.track("script", script_entity_id)
+        assert await wait_for_entity_registration(mcp_client, script_entity_id), (
+            f"{script_entity_id} never became queryable"
+        )
         logger.info(f"Created script: {script_entity_id}")
 
         # Wait for script registration
@@ -735,6 +738,9 @@ action:
         )
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
         cleanup_tracker.track("script", script_entity_id)
+        assert await wait_for_entity_registration(mcp_client, script_entity_id), (
+            f"{script_entity_id} never became queryable"
+        )
 
         await mcp.call_tool_success(
             "ha_call_service",
