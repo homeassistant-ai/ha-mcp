@@ -494,15 +494,17 @@ async def _fetch_component_logbook(
     return None, warnings, True
 
 
-def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
+def _logbook_window(
+    trace: dict[str, Any], now: datetime | None = None
+) -> tuple[str, str]:
     """Return a bounded start/finish for the logbook query.
 
     The trace's own timestamps bracket the action trace, while the recorder's
     logbook row for the triggering event can land just outside that window.
     Context filtering keeps the widened window scoped to this run. A malformed
     timestamp is replaced from the other bound, and a running trace's window
-    reaches the present, so both reads still receive an ordered window instead
-    of failing.
+    reaches ``now`` (the wall clock unless a caller passes a fixed instant), so
+    both reads still receive an ordered window instead of failing.
     """
     timestamp = trace.get("timestamp")
     start = _trace_datetime(
@@ -515,8 +517,12 @@ def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
         # A trace still running has no finish timestamp; its logbook keeps
         # growing, so the read must reach the present instead of one minute
         # past the start.
-        now = datetime.now(UTC)
-        finish = now if start is None or now > start else start + timedelta(minutes=1)
+        current = now or datetime.now(UTC)
+        finish = (
+            current
+            if start is None or current > start
+            else start + timedelta(minutes=1)
+        )
     if start is None or start >= finish:
         start = finish - timedelta(minutes=1)
     start -= timedelta(seconds=2)

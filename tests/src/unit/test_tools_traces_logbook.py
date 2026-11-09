@@ -365,13 +365,14 @@ class TestFetchTraceLogbook:
         assert running_finish > running_start + timedelta(minutes=1)
 
     def test_logbook_window_reaches_now_for_a_running_trace(self):
-        """A running trace's logbook window ends at the current time."""
-        start = datetime.now(UTC) - timedelta(minutes=5)
-        _, finish = _logbook_window({"timestamp": {"start": start.isoformat()}})
-
-        assert datetime.fromisoformat(finish) >= datetime.now(UTC) - timedelta(
-            seconds=5
+        """A running trace's logbook window ends at the supplied instant."""
+        start = datetime(2026, 11, 8, 16, 0, tzinfo=UTC)
+        now = start + timedelta(minutes=5)
+        _, finish = _logbook_window(
+            {"timestamp": {"start": start.isoformat()}}, now=now
         )
+
+        assert datetime.fromisoformat(finish) == now + timedelta(seconds=2)
 
     @pytest.mark.asyncio
     async def test_parent_context_rows_are_included(self):

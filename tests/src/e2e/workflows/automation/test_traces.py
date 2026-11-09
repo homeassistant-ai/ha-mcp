@@ -818,12 +818,18 @@ action:
             )
             assert_mcp_success(turn_on_result, "Turn the light on")
 
+            last_state_error: dict[str, str] = {}
+
             async def _light_is_on() -> bool:
                 state = await safe_call_tool(
                     mcp_client, "ha_get_state", {"entity_id": light_id}
                 )
                 if state.get("error"):
-                    pytest.fail(f"State query for {light_id} failed: {state['error']}")
+                    # Keep polling: a transient read error is not an off state,
+                    # and the deadline's message reports the last one.
+                    last_state_error["error"] = str(state["error"])
+                    return False
+                last_state_error.pop("error", None)
                 return state.get("data", {}).get("state") == "on"
 
             light_is_on = await wait_for_condition(
@@ -833,6 +839,11 @@ action:
             )
             assert light_is_on, (
                 f"{light_id} never turned on; the not-triggered trace setup is invalid"
+                + (
+                    f" (last state error: {last_state_error['error']})"
+                    if last_state_error
+                    else ""
+                )
             )
 
             turn_off_result = await mcp_client.call_tool(
