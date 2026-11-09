@@ -13,6 +13,10 @@ Driving the real fixture needs Docker, so the container build, the readiness
 gate, and (in the readiness case) staging are replaced with local doubles. The
 staging case runs the real staging function and fails it partway, which is the
 order the finalizer has to survive.
+
+The same doubles pin the URL the fixture hands the in-process client, so a
+regression that stops reading ``HA_E2E_BASE_HOST`` fails here rather than only
+in the resolver unit test.
 """
 
 from __future__ import annotations
@@ -183,3 +187,32 @@ def test_a_successful_session_removes_the_staged_config_after_the_container_stop
     for finalizer in request.finalizers:
         finalizer()
     assert not staged.exists(), "the finalizer must remove the staged config"
+
+
+@pytest.mark.parametrize(
+    ("override", "expected_host"),
+    [(None, "localhost"), ("192.0.2.10", "192.0.2.10")],
+)
+def test_the_fixture_builds_the_client_url_from_the_resolved_host(
+    monkeypatch: pytest.MonkeyPatch,
+    override: str | None,
+    expected_host: str,
+) -> None:
+    def fake_prepare(embedded: bool, config_path: Path) -> Any:
+        return config_path, {}, None
+
+    request = _fixture_world(monkeypatch, fake_prepare, lambda *args: None)
+    if override is None:
+        monkeypatch.delenv("HA_E2E_BASE_HOST", raising=False)
+    else:
+        monkeypatch.setenv("HA_E2E_BASE_HOST", override)
+
+    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
+    generator = fixture(request, None)
+    try:
+        info = next(generator)
+        assert info["base_url"] == f"http://{expected_host}:32768"
+    finally:
+        generator.close()
+        for finalizer in request.finalizers:
+            finalizer()
