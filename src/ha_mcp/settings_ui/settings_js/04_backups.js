@@ -262,10 +262,12 @@ async function saveFsCustomPaths() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paths }),
     });
-    const data = await resp.json();
+    // A proxy's error page is not JSON.
+    const data = await resp.json().catch(() => null);
     btn.disabled = false;
-    if (!resp.ok || !data.success) {
+    if (!resp.ok || !data || !data.success) {
       let msg = t('errors.save_failed', {}, 'Save failed');
+      if (!data) msg += ` (HTTP ${resp.status})`;
       if (data && data.error) {
         if (typeof data.error === 'string') msg = data.error;
         else if (data.error.message) msg = data.error.message;

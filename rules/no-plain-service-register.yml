@@ -1,0 +1,14 @@
+id: no-plain-service-register
+language: python
+rule:
+  any:
+    - pattern: $REGISTRY.async_register($$$)
+    - pattern: $REGISTRY.register($$$)
+files:
+  - "custom_components/ha_mcp_tools/**"
+message: |
+  Register ha_mcp_tools services with
+  `homeassistant.helpers.service.async_register_admin_service` instead, so
+  every service in the domain has the same admin requirement. HA's service
+  registry performs no permission check of its own.
+severity: error
