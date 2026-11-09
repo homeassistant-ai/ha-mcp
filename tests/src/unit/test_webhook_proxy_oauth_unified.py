@@ -1405,7 +1405,7 @@ async def test_fast_path_passes_through_malformed_port_client_id(oauth_stack):
 
 async def test_dcr_register_rejects_deeply_nested_json(oauth_stack, monkeypatch):
     """#2218 review: json.loads raises RecursionError on a deeply nested
-    body (depth set by the stack, so forced) — 400, never a 500."""
+    body (depth set by the stack, so forced via the module's json) — 400."""
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
     too_deep = SimpleNamespace(loads=MagicMock(side_effect=RecursionError))
     monkeypatch.setattr(dcr, "json", too_deep)

@@ -32,8 +32,9 @@ import asyncio
 import functools
 import logging
 import os
-import platform
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 import httpx
@@ -132,12 +133,9 @@ def _fetch_latest_from_pypi(package: str) -> PyPIRelease | None:
         if not isinstance(version, str):
             return None
         requires_python = info.get("requires_python")
-        return PyPIRelease(
-            version=version,
-            requires_python=requires_python
-            if isinstance(requires_python, str) and requires_python
-            else None,
-        )
+        if not isinstance(requires_python, str) or not requires_python:
+            requires_python = None
+        return PyPIRelease(version=version, requires_python=requires_python)
     except (httpx.HTTPError, KeyError, ValueError, TypeError) as err:
         logger.debug("ha-mcp update check skipped (PyPI fetch failed: %s)", err)
         return None
@@ -204,8 +202,7 @@ def _resolve_update_info() -> UpdateInfo | None:
         return None
     # A dev install (``.dev`` version) tracks the renamed ``ha-mcp-dev`` package;
     # a stable install tracks ``ha-mcp``.
-    package = _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE
-    release = _fetch_latest_from_pypi(package)
+    release = _fetch_latest_from_pypi(_package_for(current))
     if release is None:
         return None
     return UpdateInfo(
@@ -242,13 +239,18 @@ class UpdateField(TypedDict):
     latest: str
     update_available: bool
     # Set when the update cannot install on the running Python (see
-    # ``required_python``): the minor version it needs and how to run it.
+    # ``required_python``): the lowest Python the release admits and the uvx
+    # command that runs it.
     python_required: NotRequired[str]
     upgrade_command: NotRequired[str]
 
 
 def _python_floor(requires_python: str) -> str | None:
-    """The lowest ``major.minor`` a ``requires_python`` spec admits, if it has one."""
+    """The lowest Python a ``requires_python`` spec admits, at the spec's precision.
+
+    ``>=3.14`` gives ``3.14`` and ``>=3.14.2`` gives ``3.14.2``: rounding the
+    latter to ``3.14`` would name a Python the release still excludes.
+    """
     try:
         specifiers = SpecifierSet(requires_python)
     except InvalidSpecifier:
@@ -260,15 +262,21 @@ def _python_floor(requires_python: str) -> str | None:
                 release = Version(spec.version.rstrip(".*")).release
             except InvalidVersion:
                 continue
-            floors.append(release[:2] if len(release) > 1 else (release[0], 0))
+            floors.append(release if len(release) > 1 else (release[0], 0))
     if not floors:
         return None
-    major, minor = max(floors)
-    return f"{major}.{minor}"
+    return ".".join(map(str, max(floors)))
+
+
+def _running_python() -> str:
+    # From sys.version_info, not platform.python_version(): a CPython built
+    # from an untagged checkout reports "3.14.0+", which is not a PEP 440
+    # version, and packaging then reads it as outside every specifier.
+    return "{}.{}.{}".format(*sys.version_info[:3])
 
 
 def required_python(info: UpdateInfo) -> str | None:
-    """The Python ``major.minor`` the update needs when this interpreter can't run it.
+    """The lowest Python the update admits when this interpreter can't run it.
 
     Only a pip / uvx install is stuck on its interpreter: pip and uv skip a
     release whose ``requires_python`` excludes the running Python without an
@@ -286,7 +294,7 @@ def required_python(info: UpdateInfo) -> str | None:
         return None
     try:
         if SpecifierSet(info.requires_python).contains(
-            platform.python_version(), prereleases=True
+            _running_python(), prereleases=True
         ):
             return None
     except InvalidSpecifier:
@@ -294,11 +302,32 @@ def required_python(info: UpdateInfo) -> str | None:
     return _python_floor(info.requires_python)
 
 
+def _package_for(current: str) -> str:
+    """The PyPI package that tracks ``current``'s channel; also its uvx command."""
+    return _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE
+
+
+# The console scripts both packages ship (ha-mcp-dev adds its own).
+_ENTRY_POINTS = frozenset(
+    {"ha-mcp", "ha-mcp-web", "ha-mcp-oauth", "ha-mcp-oidc", "ha-mcp-dev"}
+)
+
+
+def _entry_point() -> str | None:
+    """The console script this process was started as, if it was one."""
+    name = Path(sys.argv[0]).stem if sys.argv else ""
+    return name if name in _ENTRY_POINTS else None
+
+
 def _uvx_command(python: str, current: str) -> str:
     # uvx downloads a uv-managed interpreter for --python when none is installed.
-    # The dev channel's package is also its command name (``uvx ha-mcp-dev``).
-    package = _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE
-    return f"uvx --python {python} {package}@latest"
+    # uvx runs the script named like the package, so any other entry point
+    # (ha-mcp-web, ha-mcp-oauth, ...) is kept with --from.
+    package = _package_for(current)
+    entry = _entry_point()
+    if entry is None or entry == package:
+        return f"uvx --python {python} {package}@latest"
+    return f"uvx --python {python} --from {package}@latest {entry}"
 
 
 async def get_update_field() -> UpdateField | None:
@@ -349,7 +378,7 @@ def update_command_hint(current: str, info: UpdateInfo | None = None) -> str:
     if info is not None and (python := required_python(info)):
         return (
             f"This release needs Python {python}; you are on "
-            f"{platform.python_version()}. Run it with: {_uvx_command(python, current)} "
+            f"{_running_python()}. Run it with: {_uvx_command(python, info.current)} "
             f'(in the MCP client config: "--python", "{python}").'
         )
     if is_embedded():
@@ -373,5 +402,4 @@ def update_command_hint(current: str, info: UpdateInfo | None = None) -> str:
             f"Pull the new image: docker pull "
             f"ghcr.io/homeassistant-ai/ha-mcp:{tag} (then restart)."
         )
-    package = _DEV_PACKAGE if dev else _STABLE_PACKAGE
-    return f"Upgrade with: pip install -U {package}."
+    return f"Upgrade with: pip install -U {_package_for(current)}."

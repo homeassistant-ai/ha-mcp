@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import platform
+import sys
 from typing import Any
 
 import httpx
@@ -375,6 +377,19 @@ class TestFetchLatestFromPypi:
         monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
         assert update_check._fetch_latest_from_pypi("ha-mcp") is None
 
+    def test_fetch_reads_requires_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class FakeResp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {"info": {"version": "9.2.0", "requires_python": ">=3.14"}}
+
+        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
+        assert update_check._fetch_latest_from_pypi("ha-mcp") == PyPIRelease(
+            "9.2.0", ">=3.14"
+        )
+
 
 class TestGetUpdateField:
     """The async tool-facing helper: shapes the dict and never raises."""
@@ -492,20 +507,7 @@ class TestReleaseNeedsNewerPython:
     @pytest.fixture(autouse=True)
     def _pip_install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
-        monkeypatch.setattr(update_check.platform, "python_version", lambda: "3.13.7")
-
-    def test_fetch_reads_requires_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        class FakeResp:
-            def raise_for_status(self) -> None:
-                pass
-
-            def json(self) -> dict:
-                return {"info": {"version": "9.2.0", "requires_python": ">=3.14"}}
-
-        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
-        assert update_check._fetch_latest_from_pypi("ha-mcp") == PyPIRelease(
-            "9.2.0", ">=3.14"
-        )
+        monkeypatch.setattr(update_check, "_running_python", lambda: "3.13.7")
 
     async def test_status_field_names_the_python_and_the_command(
         self, monkeypatch: pytest.MonkeyPatch
@@ -529,6 +531,15 @@ class TestReleaseNeedsNewerPython:
         assert "uvx --python 3.14 ha-mcp@latest" in hint
         assert "pip install" not in hint
 
+    def test_other_entry_point_is_kept_in_the_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """uvx runs the script named like the package: ha-mcp is stdio."""
+        monkeypatch.setattr(sys, "argv", ["/venv/bin/ha-mcp-web"])
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
+        hint = update_command_hint("9.1.2", info)
+        assert "uvx --python 3.14 --from ha-mcp@latest ha-mcp-web" in hint
+
     def test_dev_channel_command_keeps_the_dev_package(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -550,10 +561,40 @@ class TestReleaseNeedsNewerPython:
             "latest": "9.2.0",
             "update_available": True,
         }
+
+    def test_supported_python_keeps_the_pip_hint(self) -> None:
         info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.13")
         assert (
             update_command_hint("9.1.2", info) == "Upgrade with: pip install -U ha-mcp."
         )
+
+    async def test_patch_level_floor_names_that_patch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """3.14.1 is excluded by >=3.14.2; naming "3.14" would let uvx reuse it."""
+        monkeypatch.setattr(update_check, "_running_python", lambda: "3.14.1")
+        monkeypatch.setattr(
+            update_check,
+            "_fetch_latest_from_pypi",
+            lambda _p: PyPIRelease("9.2.0", ">=3.14.2"),
+        )
+        field = await update_check.get_update_field()
+        assert field is not None
+        assert field["python_required"] == "3.14.2"
+        assert field["upgrade_command"] == "uvx --python 3.14.2 ha-mcp@latest"
+
+    def test_embedded_install_keeps_the_hacs_hint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its server arrives with the component release, not with uvx."""
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
+        assert update_check.required_python(info) is None
+        assert "HACS" in update_command_hint("9.1.2", info)
+
+    def test_invalid_spec_keeps_the_pip_hint(self) -> None:
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python="not a spec")
+        assert update_check.required_python(info) is None
 
     def test_docker_image_update_still_pulls_the_image(
         self, monkeypatch: pytest.MonkeyPatch
@@ -566,7 +607,28 @@ class TestReleaseNeedsNewerPython:
 
     @pytest.mark.parametrize(
         ("spec", "floor"),
-        [(">=3.14,<3.15", "3.14"), ("~=3.14.2", "3.14"), (">=3", "3.0"), ("<4", None)],
+        [
+            (">=3.14,<3.15", "3.14"),
+            (">=3.14.2", "3.14.2"),
+            ("~=3.14.2", "3.14.2"),
+            ("==3.14.*", "3.14"),
+            (">=3", "3.0"),
+            ("<4", None),
+            ("not a spec", None),
+        ],
     )
     def test_python_floor(self, spec: str, floor: str | None) -> None:
         assert update_check._python_floor(spec) == floor
+
+
+def test_local_build_version_suffix_is_not_read_as_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CPython built from an untagged checkout reports "3.14.0+", which
+    packaging reads as outside every specifier."""
+    monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
+    monkeypatch.setattr(platform, "python_version", lambda: "3.14.0+")
+    major, minor = sys.version_info[:2]
+    spec = f">={major}.{minor},<{major}.{minor + 1}"
+    info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=spec)
+    assert update_check.required_python(info) is None

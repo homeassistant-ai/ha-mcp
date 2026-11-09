@@ -60,6 +60,18 @@ updates:
       # version; Renovate bumps them with the image pin and re-locks.
       - dependency-name: "homeassistant"
       - dependency-name: "pytest-homeassistant"
+      # Runtime dependencies Core pins exactly: uv.lock must hold Core's pin
+      # (check_ha_constraint_alignment.py rule 3), so Renovate's Core bump
+      # moves them (uv lock, then --sync-lock) and a Dependabot bump would
+      # only fail Fast Checks.
+      - dependency-name: "anyio"
+      - dependency-name: "cryptography"
+      - dependency-name: "httpx"
+      - dependency-name: "httpx2"
+      - dependency-name: "pydantic"
+      - dependency-name: "pyjwt"
+      - dependency-name: "pyyaml"
+      - dependency-name: "truststore"
     groups:
       # Group dev dependencies together
       dev-dependencies:
@@ -75,8 +87,6 @@ updates:
       # Group production dependencies
       production-dependencies:
         patterns:
-          - "httpx"
-          - "pydantic"
           - "websockets"
         update-types:
           - "patch"

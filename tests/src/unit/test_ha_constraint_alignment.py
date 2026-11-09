@@ -207,6 +207,21 @@ class TestLockAlignment:
             == 1
         )
 
+    def test_lock_missing_a_referenced_package_exits_two(self, tmp_path):
+        """An unreadable lock is not a constraint violation (exit 1)."""
+        lock = tmp_path / "uv.lock"
+        lock.write_text(
+            '[[package]]\nname = "ha-mcp"\nversion = "1.0"\n'
+            'dependencies = [{ name = "missing" }]\n',
+            encoding="utf-8",
+        )
+        constraints = tmp_path / "cons.txt"
+        constraints.write_text("pydantic==2.14.1\n", encoding="utf-8")
+        assert (
+            checker.main(["--constraints-file", str(constraints), "--lock", str(lock)])
+            == 2
+        )
+
 
 class TestSyncLock:
     def test_relocks_each_runtime_package_onto_ha_pin(self, tmp_path, monkeypatch):
@@ -234,6 +249,28 @@ class TestSyncLock:
         monkeypatch.setattr(checker.subprocess, "run", lambda *a, **k: None)
         constraints = checker.parse_requirement_lines("pydantic==2.14.1\n")
         assert checker.sync_lock(lock, constraints) == 1
+
+    def test_aligned_lock_is_left_alone(self, tmp_path, monkeypatch):
+        lock = tmp_path / "uv.lock"
+        lock.write_text(_LOCK_SAMPLE, encoding="utf-8")
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("uv lock ran on an aligned lock")
+
+        monkeypatch.setattr(checker.subprocess, "run", fail_run)
+        constraints = checker.parse_requirement_lines("pydantic==2.13.5\n")
+        assert checker.sync_lock(lock, constraints) == 0
+
+    def test_failed_relock_exits_two(self, tmp_path, monkeypatch):
+        lock = tmp_path / "uv.lock"
+        lock.write_text(_LOCK_SAMPLE, encoding="utf-8")
+
+        def failing_run(command, **kwargs):
+            raise checker.subprocess.CalledProcessError(1, command)
+
+        monkeypatch.setattr(checker.subprocess, "run", failing_run)
+        constraints = checker.parse_requirement_lines("pydantic==2.14.1\n")
+        assert checker.sync_lock(lock, constraints) == 2
 
     def test_dev_group_core_pins_follow_the_e2e_image(self):
         """Renovate moves all three together; uv.lock is checked against this Core."""

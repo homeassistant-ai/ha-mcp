@@ -39,7 +39,10 @@ def _restore_uat_logger():
     ``caplog`` listens, so every later test in the worker would see no records.
     """
     uat_logger = logging.getLogger("uat")
-    saved = (uat_logger.level, uat_logger.propagate, list(uat_logger.handlers))
+    level = uat_logger.level
+    propagate = uat_logger.propagate
+    handlers = list(uat_logger.handlers)
     yield
-    level, uat_logger.propagate, uat_logger.handlers[:] = saved
     uat_logger.setLevel(level)
+    uat_logger.propagate = propagate
+    uat_logger.handlers[:] = handlers

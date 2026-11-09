@@ -158,7 +158,8 @@ async def test_register_rejects_deeply_nested_json_body(
     MAX_DCR_BODY_BYTES so it reaches the parse rather than being turned away
     by the size guard added later (#2219 review round 3). Where that happens
     depends on the interpreter's stack (Python 3.14 parses this body on
-    glibc), so the parser's RecursionError is forced."""
+    glibc), so the parser's RecursionError is forced through the module's own
+    ``json`` name, which follows oauth_dcr's ``import json``."""
     client = await dcr_view_client_factory(dcr_key=KEY)
     monkeypatch.setattr(
         oauth_dcr,

@@ -1,5 +1,8 @@
 """Unit-test environment: no developer state, no side processes.
 
+The one exception is the JS harness worker, started for JSDOM modules (see
+``_js_harness_started_before_tests``).
+
 See ``pytest_configure`` for collection and ``_unit_test_env`` for the
 variables every unit test starts with.
 """
@@ -119,13 +122,9 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    try:
-        from ha_mcp.config import _reset_global_settings
-        from ha_mcp.utils.data_paths import get_data_dir
-    except ImportError:
-        # ha_mcp not importable in this test run; nothing to clear.
-        yield
-        return
+    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.utils.data_paths import get_data_dir
+
     get_data_dir.cache_clear()
     _reset_global_settings()
     yield
@@ -158,19 +157,17 @@ def _js_harness_started_before_tests(request: pytest.FixtureRequest) -> None:
         _js_harness.skip_if_unsupported()
     except pytest.skip.Exception:
         return
-    with _js_harness._worker_lock:
-        _js_harness._harness_worker()
+    _js_harness.start_worker()
 
 
 @pytest.fixture(autouse=True)
 def _no_threads_left_by_the_test() -> Iterator[None]:
-    """Stop the per-process threads a test started, before Core's plugin checks.
+    """Stop what a test started on its own, before Core's plugin checks threads.
 
-    A test that kills the JS harness's node worker starts a new one; a usage
-    log or a quickjs engine with its own executor (card definitions) opened in
-    the test runs its own thread.
-    Stopping them here also keeps the next test's usage log in its own config
-    directory.
+    That is a replacement JS harness worker (when the test killed the shared
+    one), quickjs engines created with ``own_executor`` (card definitions) and
+    the usage-log writer. Stopping the writer also keeps the next test's usage
+    log in its own config directory.
     """
     from . import _js_harness
 
@@ -193,12 +190,9 @@ def _no_threads_left_by_the_test() -> Iterator[None]:
             engine._threadpool.shutdown(wait=True)
         if _js_harness._worker is not worker:
             _js_harness._stop_worker()
-        try:
-            from ha_mcp.utils.usage_logger import shutdown_usage_logger
-        except ImportError:
-            pass
-        else:
-            shutdown_usage_logger()
+        from ha_mcp.utils.usage_logger import shutdown_usage_logger
+
+        shutdown_usage_logger()
 
 
 @pytest.fixture(autouse=True)
@@ -225,13 +219,9 @@ def _clear_update_check_memo():
     (which opts back into the check) would leak into unrelated tests in the same
     process. Cleared before each test so every test starts from a cold memo.
     """
-    try:
-        from ha_mcp.update_check import get_update_info
+    from ha_mcp.update_check import get_update_info
 
-        get_update_info.cache_clear()
-    except ImportError:
-        # ha_mcp not importable in this test run; nothing to clear.
-        pass
+    get_update_info.cache_clear()
     yield
 
 
@@ -248,12 +238,9 @@ def _restore_fastmcp_host_origin_guard():
     env_key = "FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"
     attr = "http_host_origin_protection"
     prev_env = os.environ.get(env_key)
-    try:
-        from ha_mcp._vendor import fastmcp
+    from ha_mcp._vendor import fastmcp
 
-        settings = getattr(fastmcp, "settings", None)
-    except ImportError:
-        settings = None
+    settings = getattr(fastmcp, "settings", None)
     has_attr = settings is not None and hasattr(settings, attr)
     prev_setting = getattr(settings, attr) if has_attr else None
     yield

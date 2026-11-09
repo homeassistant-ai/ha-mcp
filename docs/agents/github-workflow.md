@@ -328,7 +328,9 @@ pull request. Its post-upgrade tasks run `uv lock`, which takes the new Core's
 requirement pins, then `scripts/check_ha_constraint_alignment.py --sync-lock`,
 which moves the runtime packages Core pins only in `package_constraints.txt`
 (pydantic, httpx). Fast Checks compare the lock with that file on every pull
-request, so a Dependabot bump of a Core-pinned package fails there.
+request (they warn instead when the file is unreachable). Dependabot ignores
+the runtime dependencies Core pins exactly, since a bump of one would only
+fail that check.
 
 Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
 updates, and for its ungrouped vulnerability-alert fixes. Ordinary major

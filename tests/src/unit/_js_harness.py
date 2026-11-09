@@ -316,7 +316,8 @@ class _HarnessWorker:
         except subprocess.TimeoutExpired:
             self._proc.kill()
             self._proc.wait()
-        # The readers end at EOF; joining them leaves no thread behind.
+        # The readers end at EOF once node exits; join them so Core's
+        # leftover-thread check sees none.
         self._stdout_reader.join(timeout=5)
         self._stderr_reader.join(timeout=5)
 
@@ -346,6 +347,12 @@ def _harness_worker() -> _HarnessWorker:
     if _worker is None or _worker.closed:
         _worker = _HarnessWorker()
     return _worker
+
+
+def start_worker() -> None:
+    """Start the process's harness worker now, if it is not already running."""
+    with _worker_lock:
+        _harness_worker()
 
 
 def _stop_worker() -> None:

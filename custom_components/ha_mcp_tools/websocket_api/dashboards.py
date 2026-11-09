@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .registry import _plainify
+
+_LOGGER = logging.getLogger(__package__)
 
 # =============================================================================
 # ha_mcp_tools/dashboards
@@ -217,13 +220,13 @@ def _dashboard_list_rows(dashboards_map: Mapping[Any, Any]) -> list[dict[str, An
     return rows
 
 
-def _config_not_found() -> type[Exception] | None:
-    """Core's lovelace ``ConfigNotFound``, or None if core drift moved it."""
+def _is_config_not_found(err: BaseException) -> bool:
+    """Whether ``err`` is Core's lovelace ``ConfigNotFound`` (False if core drift moved it)."""
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound
     except ImportError:  # pragma: no cover - defensive; core drift
-        return None
-    return ConfigNotFound
+        return False
+    return isinstance(err, ConfigNotFound)
 
 
 async def _dashboard_get_config(
@@ -240,8 +243,6 @@ async def _dashboard_get_config(
     mutates the in-memory object synchronously, so this read never lags a save
     (audit-verified).
     """
-    config_not_found = _config_not_found()
-
     dash = dashboards_map.get(url_path)
     resolved = getattr(dash, "url_path", None) if dash is not None else url_path
     if dash is None:
@@ -253,9 +254,10 @@ async def _dashboard_get_config(
         return {"status": "not_found", "url_path": resolved, "config": None}
     try:
         config = await loader(False)
-    except Exception as err:  # noqa: BLE001  # any other load failure degrades to not_found (fail-soft)
-        if config_not_found is not None and isinstance(err, config_not_found):
+    except Exception as err:  # any other load failure degrades to not_found (fail-soft)
+        if _is_config_not_found(err):
             return {"status": "no_config", "url_path": resolved, "config": None}
+        _LOGGER.warning("Loading dashboard %s failed", resolved, exc_info=True)
         return {"status": "not_found", "url_path": resolved, "config": None}
     if not isinstance(config, dict):
         return {"status": "not_found", "url_path": resolved, "config": None}
@@ -294,8 +296,6 @@ async def _dashboard_search_docs(
     ``ConfigNotFound`` import, those loads degrade to ``load_failed`` —
     over-reported as partial, never silent.
     """
-    config_not_found = _config_not_found()
-
     docs: list[dict[str, Any]] = []
     yaml_skipped = 0
     load_failed = 0
@@ -311,7 +311,7 @@ async def _dashboard_search_docs(
         try:
             config = await loader(force)
         except Exception as err:  # noqa: BLE001
-            if config_not_found is not None and isinstance(err, config_not_found):
+            if _is_config_not_found(err):
                 # Auto-generated dashboard: nothing stored, nothing to scan.
                 continue
             load_failed += 1

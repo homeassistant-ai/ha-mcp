@@ -9,8 +9,9 @@ description = "Configure and automate Home Assistant with Claude, ChatGPT, and o
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
 # interpreter when run in-process by the ha_mcp_tools component (HA
-# core-2026.7 ships Python 3.14). src/ stays 3.13-compatible: ruff targets the
-# floor, while CI, the images and the dev environment run 3.14.
+# core-2026.7 ships Python 3.14). ruff infers its target from this floor, so
+# it writes no 3.14-only syntax while 3.13 can still install; CI, mypy, the
+# images and the dev environment run 3.14.
 requires-python = ">=3.13,<3.15"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -125,7 +126,7 @@ source-exclude = [
 ]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 mypy_path = "src"
 # /tmp keeps the cache on Linux tmpfs — avoids the slow Windows FS in WSL2.
 # Windows-native contributors can remove this line or override with MYPY_CACHE_DIR.
@@ -156,8 +157,8 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 # Core 2026.11 installs probatio as ``voluptuous`` at import; the component and
-# the webhook proxy run on both, so voluptuous schemas stay untyped rather than
-# typed as either.
+# the webhook proxy run on Core versions before and after that switch, so
+# voluptuous schemas stay untyped rather than typed as either library.
 module = ["voluptuous", "voluptuous.*"]
 follow_imports = "skip"
 
@@ -400,7 +401,9 @@ dev = [
     # Real Home Assistant Core and Core's own test package: unit tests run
     # against Core's modules and its `hass` fixture instead of hand-written
     # fakes, and uv.lock resolves Core's exact pins for the packages ha-mcp
-    # shares with the embedded install. Both stay on the Core version of the
+    # shares with the embedded install (packages Core pins only in
+    # package_constraints.txt are moved by check_ha_constraint_alignment.py
+    # --sync-lock). Both stay on the Core version of the
     # e2e image (tests/test_constants.py); Renovate bumps all three together.
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
     "homeassistant==2026.11.0",

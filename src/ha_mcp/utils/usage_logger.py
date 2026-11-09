@@ -507,9 +507,10 @@ class UsageLogger:
                 else:
                     # Wait briefly to avoid busy waiting; shutdown() wakes it at once.
                     self._stop_event.wait(0.1)
-            except Exception as e:  # noqa: BLE001
-                # Silent error handling to avoid disrupting MCP server
-                print(f"Usage logger error: {e}")
+            except Exception:
+                # Never raise out of the writer; log it instead of printing, since
+                # stdout carries the JSON-RPC stream in stdio mode.
+                logger.warning("Usage log writer error", exc_info=True)
 
     def _write_log_entry(self, log_entry: ToolUsageLog) -> None:
         """Write single log entry to disk."""
@@ -544,16 +545,17 @@ class UsageLogger:
         # Until open() returns a file object, nothing owns fd; close it here.
         try:
             f = open(fd, "a", encoding="utf-8")  # noqa: SIM115 - the with below owns it
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             os.close(fd)
+            logger.debug("Usage log entry dropped (%s: %s).", type(e).__name__, e)
             return
         try:
             with f:
                 json.dump(asdict(log_entry), f, ensure_ascii=False)
                 f.write("\n")
-        except Exception:  # noqa: BLE001
-            # Silent error handling
-            pass
+        except Exception as e:  # noqa: BLE001
+            # A full disk or an unserializable value drops this entry only.
+            logger.debug("Usage log entry dropped (%s: %s).", type(e).__name__, e)
 
     def log_tool_usage(
         self,

@@ -327,7 +327,8 @@ jobs:
       # For the image's Core, uv.lock must also hold Core's exact pin for every
       # runtime package, so the Docker/app images and the embedded install run
       # the same versions.
-      # This is direct-dependency coverage at the endpoints. Existing current
+      # Direct dependencies are checked at both endpoints, the locked runtime
+      # closure only for the image's Core. Existing current
       # Core/beta E2E lanes cover actual installs and runtime compatibility.
       # Rules unit-tested offline in
       # tests/src/unit/test_ha_constraint_alignment.py.
