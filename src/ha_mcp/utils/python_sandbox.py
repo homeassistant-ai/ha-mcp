@@ -483,7 +483,8 @@ def format_sandbox_error(
         if "unpack (expected 1)" in str(error) or "unpack (expected 1," in str(error):
             suggestions.insert(
                 0,
-                "A `[a] = [...]` guard matched no item or several: re-read the "
+                "A single-target unpack needs exactly one item. If this is a "
+                "`[a] = [...]` guard, it matched no item or several: re-read the "
                 "input and correct the filter or the expected value.",
             )
     else:

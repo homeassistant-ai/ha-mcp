@@ -51,7 +51,17 @@ class TestGuards:
             safe_execute(guard, config)
 
         _, suggestions = format_sandbox_error(exc_info.value, guard)
-        assert "guard matched no item or several" in suggestions[0]
+        assert "guard, it matched no item or several" in suggestions[0]
+
+    def test_plain_single_target_unpack_hint_states_the_mismatch_first(self) -> None:
+        expr = "[a] = config['actions']"
+
+        with pytest.raises(PythonSandboxExecutionError, match="unpack") as exc_info:
+            safe_execute(expr, _actions("X", "Y"))
+
+        _, suggestions = format_sandbox_error(exc_info.value, expr)
+        assert suggestions[0].startswith("A single-target unpack needs exactly one")
+        assert "If this is a `[a] = [...]` guard" in suggestions[0]
 
     def test_multi_target_unpack_error_gets_no_guard_hint(self) -> None:
         expr = "x, y = config['actions']"
