@@ -34,6 +34,7 @@ from ..utils.operation_manager import (
     get_operation_from_memory,
     store_pending_operation,
 )
+from .action_suggestions import invalid_action_suggestions
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -158,10 +159,9 @@ class DeviceControlTools:
                     create_error_response(
                         ErrorCode.SERVICE_INVALID_ACTION,
                         f"Invalid action '{action}' for domain '{domain}'",
-                        suggestions=[
-                            f"Valid actions for {domain}: {', '.join(valid_actions)}",
-                            "Use 'toggle' for simple on/off control",
-                        ],
+                        suggestions=invalid_action_suggestions(
+                            domain, entity_id, valid_actions
+                        ),
                         context={
                             "entity_id": entity_id,
                             "action": action,

@@ -401,9 +401,13 @@ def _validate_selector(selector: Mapping[str, Any], action: str) -> _ValidatedSe
         "valid_actions", ["on", "off", "toggle"]
     )
     if not normalized_action or normalized_action not in valid_actions:
+        remedy = (
+            f"valid actions: {', '.join(valid_actions)}"
+            if valid_actions
+            else "this domain is read-only and accepts no device actions"
+        )
         raise BulkSelectorValidationError(
-            f"Invalid action '{normalized_action}' for domain '{domain}'; "
-            f"valid actions: {', '.join(valid_actions)}",
+            f"Invalid action '{normalized_action}' for domain '{domain}'; {remedy}",
             parameter="action",
         )
     area_ids = _string_list(selector, "area_ids")
