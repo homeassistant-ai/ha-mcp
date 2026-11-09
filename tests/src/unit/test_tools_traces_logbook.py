@@ -375,6 +375,33 @@ class TestFetchTraceLogbook:
         assert datetime.fromisoformat(finish) == now + timedelta(seconds=2)
 
     @pytest.mark.asyncio
+    async def test_running_trace_warns_that_the_window_uses_the_server_clock(self):
+        """A trace without a finish timestamp says its window may end early."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        trace = {
+            "run_id": "r1",
+            "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+            "context": {"id": "own-1"},
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={"logbook_events": True}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=True,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, trace)
+
+        assert any("still running" in warning for warning in logbook.warnings)
+
+    @pytest.mark.asyncio
     async def test_parent_context_rows_are_included(self):
         """The run's rows are merged first and the triggering context follows."""
         client = _make_pooled_client(lambda mtype, message: {})
