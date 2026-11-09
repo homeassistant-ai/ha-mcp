@@ -663,12 +663,11 @@ action:
             ],
         )
 
-        create_result = await mcp_client.call_tool(
+        mcp = MCPAssertions(mcp_client)
+        create_data = await mcp.call_tool_success(
             "ha_config_set_script",
             {"script_id": script_id_base, "config": script_config},
         )
-        assert_mcp_success(create_result)
-        create_data = parse_mcp_result(create_result)
 
         # Get the entity_id form (script.trace_test_script_e2e)
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
@@ -678,7 +677,7 @@ action:
         # Wait for script registration
 
         # 3. Run the script
-        run_result = await mcp_client.call_tool(
+        await mcp.call_tool_success(
             "ha_call_service",
             {
                 "domain": "script",
@@ -686,7 +685,6 @@ action:
                 "entity_id": script_entity_id,
             },
         )
-        assert_mcp_success(run_result)
         logger.info("Script executed")
 
         # Wait for trace to be recorded
@@ -714,12 +712,10 @@ action:
             )
 
         # 4. Get traces for the script
-        traces_result = await mcp_client.call_tool(
+        traces_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
             {"entity_id": script_entity_id},
         )
-        assert_mcp_success(traces_result)
-        traces_data = parse_mcp_result(traces_result)
 
         assert traces_data.get("success") is True
         trace_count = traces_data.get("trace_count", 0)
