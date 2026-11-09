@@ -23,6 +23,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import AsyncGenerator, Iterator
@@ -244,16 +245,17 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
     # into this same testcontainer and drive it over its ingress webhook. The
     # wheel name is captured here and consumed by the entrypoint preinstall below.
     embedded = _is_embedded_backend_selected()
-    config_path, temp_dir, local_blueprint, embedded_wheel_name = (
-        _prepare_testcontainer_config(embedded)
-    )
     # The staged config can hold an injected GITHUB_TOKEN (see
-    # ``_prepare_testcontainer_config``), and every failure below — the
-    # readiness gate included — raises before the post-``yield`` cleanup. A
-    # request finalizer runs on setup failure too, and by then the
-    # ``with container:`` block has already stopped Home Assistant, so the bind
-    # mount is no longer in use.
+    # ``_prepare_testcontainer_config``), and staging itself can fail partway.
+    # Create the directory here and register its removal first, so pytest
+    # removes it however this fixture ends, setup failures included. The
+    # finalizer also runs after the ``with container:`` block has stopped Home
+    # Assistant, so the bind mount is released before the directory goes away.
+    temp_dir = Path(tempfile.mkdtemp(prefix="ha_e2e_test_"))
     request.addfinalizer(partial(shutil.rmtree, temp_dir, ignore_errors=True))
+    config_path, local_blueprint, embedded_wheel_name = _prepare_testcontainer_config(
+        embedded, temp_dir
+    )
 
     container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
 

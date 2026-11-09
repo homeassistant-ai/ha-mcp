@@ -1,25 +1,28 @@
 """A failed testcontainer setup must not leave the staged config on disk.
 
-``_prepare_testcontainer_config`` copies the seeded state into a temp dir and,
-when ``GITHUB_TOKEN`` is set, injects it into the HACS config entry there. The
-session fixture used to remove that dir only in the post-``yield`` ``finally``,
-so any failure before the yield — an unreachable base host, a readiness
-timeout, a boot error — skipped cleanup and left the token behind. The cleanup
-is registered as a request finalizer instead, which pytest runs on setup
+The staged config is seeded from ``initial_test_state`` and, when
+``GITHUB_TOKEN`` is set, that token is written into its HACS config entry. The
+session fixture used to remove the directory only in the post-``yield``
+``finally``, so any failure before the yield — a staging step, an unreachable
+base host, a readiness timeout, a boot error — skipped cleanup and left the
+token behind. The fixture now creates the directory and registers its removal
+as a request finalizer before staging starts; pytest runs finalizers on setup
 failure too.
 
-Driving the real fixture needs Docker, so the container build, the config
-staging, and the readiness gate are replaced with local doubles. What is under
-test here is only the registration: the finalizer must exist before the
-readiness gate runs.
+Driving the real fixture needs Docker, so the container build, the readiness
+gate, and (in the readiness case) staging are replaced with local doubles. The
+staging case runs the real staging function and fails it partway, which is the
+order the finalizer has to survive.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.src.e2e import _conftest_testcontainer
 from tests.src.e2e import conftest as e2e_conftest
 
 # Every variable the fixture writes for the in-process client; monkeypatch
@@ -71,49 +74,82 @@ class _FakeContainer:
         return "localhost"
 
 
-def test_a_readiness_failure_still_removes_the_staged_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    staged = tmp_path / "ha_e2e_test_staged"
-    (staged / ".storage").mkdir(parents=True)
-    tokenless = staged / ".storage" / "core.config_entries"
-    tokenless.write_text('{"data": {"token": "injected"}}')
+class _FakeDaemon:
+    def ping(self) -> bool:
+        return True
 
-    monkeypatch.setattr(
-        e2e_conftest,
-        "_prepare_testcontainer_config",
-        lambda embedded: (staged, str(staged), {}, None),
-    )
+
+def _fixture_world(
+    monkeypatch: pytest.MonkeyPatch, prepare: Any, readiness: Any
+) -> _FakeRequest:
+    """Patch everything the fixture touches except the staging and readiness seams."""
+    monkeypatch.setattr(e2e_conftest, "_prepare_testcontainer_config", prepare)
     monkeypatch.setattr(
         e2e_conftest, "_build_ha_testcontainer", lambda *args: _FakeContainer()
     )
     monkeypatch.setattr(e2e_conftest, "_is_embedded_backend_selected", lambda: False)
     monkeypatch.setattr(e2e_conftest, "is_haos_backend_selected", lambda: False)
     monkeypatch.setattr(e2e_conftest, "_reset_ha_in_process_caches", lambda: None)
+    monkeypatch.setattr(e2e_conftest, "_wait_for_testcontainer_ready", readiness)
+    docker_sdk = pytest.importorskip("docker")
+    monkeypatch.setattr(docker_sdk, "from_env", _FakeDaemon)
+    for name in _STAGED_ENV:
+        monkeypatch.setenv(name, "")
+    return _FakeRequest()
+
+
+def _drive_to_failure(request: _FakeRequest, error: str) -> None:
+    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
+    with pytest.raises(RuntimeError, match=error):
+        next(fixture(request, None))
+
+
+def _assert_finalizer_removed(request: _FakeRequest, staged: Path) -> None:
+    assert staged.is_dir(), "precondition: the fixture created the staging directory"
+    assert request.finalizers, "cleanup must be registered before staging starts"
+    for finalizer in request.finalizers:
+        finalizer()
+    assert not staged.exists(), "the finalizer must remove the staged config"
+
+
+def test_a_staging_failure_still_removes_the_staged_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_prepare = _conftest_testcontainer._prepare_testcontainer_config
+    seen: dict[str, Path] = {}
+
+    def recording_prepare(embedded: bool, config_path: Path) -> Any:
+        seen["config_path"] = config_path
+        return real_prepare(embedded, config_path)
+
+    def staging_fails(initial_state_path: Path) -> None:
+        raise RuntimeError("HACS frontend download failed")
+
+    monkeypatch.setattr(_conftest_testcontainer, "_ensure_hacs_frontend", staging_fails)
+    request = _fixture_world(monkeypatch, recording_prepare, lambda *args: None)
+
+    _drive_to_failure(request, "HACS frontend download failed")
+
+    _assert_finalizer_removed(request, Path(seen["config_path"]))
+
+
+def test_a_readiness_failure_still_removes_the_staged_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Path] = {}
+
+    def fake_prepare(embedded: bool, config_path: Path) -> Any:
+        seen["config_path"] = config_path
+        storage = config_path / ".storage"
+        storage.mkdir()
+        (storage / "core.config_entries").write_text('{"data": {"token": "x"}}')
+        return config_path, {}, None
 
     def unreachable(*args: Any) -> None:
         raise RuntimeError("Home Assistant API did not become ready")
 
-    monkeypatch.setattr(e2e_conftest, "_wait_for_testcontainer_ready", unreachable)
+    request = _fixture_world(monkeypatch, fake_prepare, unreachable)
 
-    docker_sdk = pytest.importorskip("docker")
+    _drive_to_failure(request, "Home Assistant API did not become ready")
 
-    class _FakeDaemon:
-        def ping(self) -> bool:
-            return True
-
-    monkeypatch.setattr(docker_sdk, "from_env", _FakeDaemon)
-    for name in _STAGED_ENV:
-        monkeypatch.setenv(name, "")
-
-    request = _FakeRequest()
-    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
-    generator = fixture(request, None)
-    with pytest.raises(RuntimeError, match="did not become ready"):
-        next(generator)
-
-    assert staged.is_dir(), "precondition: staging created the directory"
-    assert request.finalizers, "cleanup must be registered before the readiness gate"
-    for finalizer in request.finalizers:
-        finalizer()
-    assert not staged.exists(), "the finalizer must remove the staged config"
+    _assert_finalizer_removed(request, Path(seen["config_path"]))
