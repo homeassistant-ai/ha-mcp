@@ -21,7 +21,7 @@ def load_policy(data_dir: Path) -> Policy:
     if not path.exists():
         return Policy()
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
     try:
@@ -115,7 +115,7 @@ def migrate_policy_any_semantics(data_dir: Path) -> bool:
 def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
     path = data_dir / POLICY_FILENAME
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         return False
     except (OSError, json.JSONDecodeError):

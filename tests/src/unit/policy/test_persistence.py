@@ -88,3 +88,25 @@ def test_serialized_shape_is_stable(tmp_path: Path):
         # Whether a matching rule gates or approves the call (issue #2540).
         "rule_effect",
     }
+
+def test_load_accepts_a_utf8_bom(tmp_path: Path):
+    """Editors that always mark UTF-8 with a BOM must not break the load.
+
+    ``json.loads`` on a ``utf-8`` decode rejects a leading U+FEFF; reading as
+    ``utf-8-sig`` strips it so the same document a person saved still loads.
+    """
+    payload = {
+        "rules": [],
+        "version": 3,
+        "wait_seconds": 60,
+        "approval_ttl_minutes": 30,
+        "schema_version": 1,
+        "event_decisions_enabled": False,
+        "rule_effect": "require_approval",
+    }
+    (tmp_path / POLICY_FILENAME).write_bytes(
+        b"\xef\xbb\xbf" + json.dumps(payload).encode()
+    )
+    loaded = load_policy(tmp_path)
+    assert loaded.version == 3
+    assert loaded.wait_seconds == 60
