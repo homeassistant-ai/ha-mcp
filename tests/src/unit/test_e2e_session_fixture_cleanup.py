@@ -21,6 +21,7 @@ in the resolver unit test.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -212,6 +213,7 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
     try:
         info = next(generator)
         assert info["base_url"] == f"http://{expected_host}:32768"
+        assert os.environ["HOMEASSISTANT_URL"] == info["base_url"]
     finally:
         generator.close()
         for finalizer in request.finalizers:
