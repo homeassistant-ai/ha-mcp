@@ -354,19 +354,32 @@ def _scan_result(
     )
 
 
-def _logbook_window_warning(trace: dict[str, Any]) -> list[str]:
-    """Warn when the logbook window's end bound comes from the local clock."""
+def _logbook_window_warnings(trace: dict[str, Any]) -> list[str]:
+    """Warn about each logbook bound the window had to synthesize."""
     timestamp = trace.get("timestamp")
-    finish = timestamp.get("finish") if isinstance(timestamp, dict) else None
-    if finish and _trace_datetime(finish) is not None:
-        return []
-    tail = (
-        "the logbook window ends at this server's clock and may exclude rows "
-        "recorded after it."
-    )
-    if finish:
-        return [f"The trace's finish timestamp is unreadable, so {tail}"]
-    return [f"The trace has no finish timestamp, so {tail}"]
+    raw_start = timestamp.get("start") if isinstance(timestamp, dict) else None
+    raw_finish = timestamp.get("finish") if isinstance(timestamp, dict) else None
+    start = _trace_datetime(raw_start)
+    finish = _trace_datetime(raw_finish)
+    warnings: list[str] = []
+    if finish is None:
+        if raw_finish:
+            warnings.append(
+                "The trace's finish timestamp is unreadable, so the logbook "
+                "window ends at this server's clock and may exclude rows "
+                "recorded after it."
+            )
+        else:
+            warnings.append(
+                "The trace has no finish timestamp, so the logbook window ends "
+                "at this server's clock and may exclude rows recorded after it."
+            )
+    if start is None or (finish is not None and start >= finish):
+        warnings.append(
+            "The trace's start timestamp is unusable, so the logbook window "
+            "starts one minute before the finish bound and may omit earlier rows."
+        )
+    return warnings
 
 
 async def fetch_trace_logbook(
@@ -411,7 +424,7 @@ async def fetch_trace_logbook(
 
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    warnings = _logbook_window_warning(trace)
+    warnings = _logbook_window_warnings(trace)
     transports: set[str] = set()
     for index, (lookup_id, lookup_start) in enumerate(contexts):
         entries, transport, context_warnings, timed_out = await _fetch_logbook_context(
