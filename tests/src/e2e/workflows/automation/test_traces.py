@@ -897,10 +897,10 @@ class TestGetAutomationTracesNegativeInputs:
 
     async def test_wrong_domain_prefix_rejected(self, mcp_client: Any) -> None:
         """Rejects an entity ID that does not belong to a supported domain."""
-        result = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_failure(
             "ha_get_automation_traces",
             {"entity_id": "sensor.some_entity"},
+            expected_error="VALIDATION_INVALID_PARAMETER",
         )
-        assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
