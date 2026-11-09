@@ -129,13 +129,13 @@ def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _Bluepr
         candidate = Path(path) if path.startswith("/") else base / path
         real = candidate.resolve()
         base_real = base.resolve()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return _UNREADABLE_BLUEPRINT
     if not (real == base_real or real.is_relative_to(base_real)):
         return _UNREADABLE_BLUEPRINT
     try:
         text = real.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return _UNREADABLE_BLUEPRINT
     try:
         # Instance form (not yaml.load) mirrors the component's existing
@@ -146,7 +146,7 @@ def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _Bluepr
             parsed = loader.get_single_data()
         finally:
             loader.dispose()
-    except (ValueError, yaml.YAMLError):
+    except ValueError, yaml.YAMLError:
         return _BlueprintFile(text, None)
     return _BlueprintFile(text, parsed if isinstance(parsed, dict) else None)
 

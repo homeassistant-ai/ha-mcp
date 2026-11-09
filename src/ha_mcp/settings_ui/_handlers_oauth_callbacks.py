@@ -133,7 +133,7 @@ async def _save_oauth_callbacks(
         )
     try:
         change = _parse_change(await request.json())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         change = None
     if change is None:
         return JSONResponse(

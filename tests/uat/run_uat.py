@@ -320,7 +320,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         try:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=5)
-        except (TimeoutError, ProcessLookupError):
+        except TimeoutError, ProcessLookupError:
             proc.kill()
         return {
             "completed": False,

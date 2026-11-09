@@ -558,7 +558,7 @@ async def _save_advanced_settings(
 
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_JSON, "Invalid JSON body"

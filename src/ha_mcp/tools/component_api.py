@@ -355,7 +355,7 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     raw_limits = result.get("limits")
     try:
         schema_version = int(result.get("schema_version", 0) or 0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         schema_version = 0
     raw_timezone = result.get("timezone")
     raw_tools_services = result.get("tools_services")

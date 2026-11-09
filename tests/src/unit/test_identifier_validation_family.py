@@ -695,7 +695,7 @@ class TestDashboardsIdentifierValidation:
         # the assertion below cannot pass by accident.
         try:
             await ha_config_get_dashboard(list_only=True)
-        except (AttributeError, KeyError, TypeError):
+        except AttributeError, KeyError, TypeError:
             # Expected: the bare MagicMock response makes the list-mode body
             # trip on missing keys/attrs. Swallowed deliberately so the
             # call-count assertion below is the real check.

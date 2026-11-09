@@ -848,7 +848,7 @@ def _select_action_variables(
 
     try:
         fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         fingerprint = str(useful_vars)
 
     if fingerprint == last_fingerprint:

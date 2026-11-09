@@ -390,7 +390,7 @@ def safe_execute_expression(
 
     try:
         exec(expr, safe_globals, safe_locals)
-    except (MemoryError, RecursionError):
+    except MemoryError, RecursionError:
         # Resource exhaustion — let the host decide. Reframing
         # "ran out of memory" as "your transform was bad" would
         # mislead the agent into rewriting an expression that

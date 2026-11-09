@@ -302,35 +302,6 @@ def required_python(info: UpdateInfo) -> str | None:
     return _python_floor(info.requires_python)
 
 
-# The Python the next stable release requires; this release still runs on 3.13
-# so a 3.13 install can be told before the floor moves.
-_NEXT_PYTHON = (3, 14)
-
-
-def python_upgrade_hint() -> str | None:
-    """What to tell a pip/uvx user on a Python the next release drops, else None.
-
-    Docker, app (add-on) and in-process installs get their Python from the
-    image or Home Assistant, so they need no action.
-    """
-    if (
-        sys.version_info[:2] >= _NEXT_PYTHON
-        or is_embedded()
-        or is_running_in_addon()
-        or _running_in_docker()
-    ):
-        return None
-    python = ".".join(map(str, _NEXT_PYTHON))
-    return (
-        f"This ha-mcp runs on Python {_running_python()}. The next release "
-        f"needs Python {python}, and pip and uvx keep a {_running_python()} "
-        "install on the last release that supports it without saying so. "
-        f"Tell the user to move this server to Python {python}: with uvx, add "
-        f'"--python", "{python}" before the package in the MCP client config '
-        "(uvx downloads that Python if it is missing)."
-    )
-
-
 def _package_for(current: str) -> str:
     """The PyPI package that tracks ``current``'s channel; also its uvx command."""
     return _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE

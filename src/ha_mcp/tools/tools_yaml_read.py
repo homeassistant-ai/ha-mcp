@@ -117,7 +117,7 @@ def _failure_reason(err: Exception) -> str:
     """Readable resolver failure without the serialized error envelope."""
     try:
         payload = json.loads(str(err))
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return str(err)
     if isinstance(payload, dict):
         return _failure_text(payload)

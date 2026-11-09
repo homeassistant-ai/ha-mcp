@@ -674,7 +674,7 @@ class DeviceControlTools:
             return None
         try:
             timeout = float(value)
-        except (TypeError, ValueError, OverflowError):
+        except TypeError, ValueError, OverflowError:
             # OverflowError: an int too large for float must skip the row,
             # not abort the batch through the generic exception handler.
             return None
@@ -1431,7 +1431,7 @@ class DeviceControlTools:
         """Extract structured error dict from ToolError without double-encoding."""
         try:
             result: dict[str, Any] = json.loads(str(e))
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             logger.warning(f"Could not decode ToolError as structured response: {e!r}")
             result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, str(e))
         return result

@@ -290,7 +290,7 @@ class TestDirectRead:
         base.mkdir(parents=True, exist_ok=True)
         try:
             os.symlink(secret, base / "escape.yaml")
-        except (OSError, NotImplementedError, AttributeError):
+        except OSError, NotImplementedError, AttributeError:
             pytest.skip("symlink creation not permitted on this platform")
 
         found = await resolve_blueprint_source(
@@ -309,7 +309,7 @@ class TestDirectRead:
         real = _write_blueprint(tmp_path, "automation", "real.yaml", _FILE_YAML)
         try:
             os.symlink(real, base / "alias.yaml")
-        except (OSError, NotImplementedError, AttributeError):
+        except OSError, NotImplementedError, AttributeError:
             pytest.skip("symlink creation not permitted on this platform")
 
         found = await resolve_blueprint_source(

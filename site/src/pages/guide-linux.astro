@@ -122,7 +122,7 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
                 <pre class="code-block"><code>{`claude mcp add home-assistant --scope user \\
   --env HOMEASSISTANT_URL=${demoUrl} \\
   --env HOMEASSISTANT_TOKEN=demo \\
-  -- uvx --python 3.13 ha-mcp@latest`}</code></pre>
+  -- uvx --python 3.14 ha-mcp@latest`}</code></pre>
                 <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">--scope user</code> makes the server available in every project (the default scope is the current project only).</p>
               </div>
             </details>
@@ -199,7 +199,7 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
   "mcpServers": {
     "Home Assistant": {
       "command": "/home/YOUR_USER/.local/bin/uvx",
-      "args": ["--python", "3.13", "ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "${demoUrl}",
         "HOMEASSISTANT_TOKEN": "demo"
@@ -277,7 +277,7 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
 claude mcp add home-assistant --scope user \\
   --env HOMEASSISTANT_URL=http://homeassistant.local:8123 \\
   --env HOMEASSISTANT_TOKEN=your_long_lived_token \\
-  -- uvx --python 3.13 ha-mcp@latest`}</code></pre>
+  -- uvx --python 3.14 ha-mcp@latest`}</code></pre>
 
           <h3 class="font-medium text-white mb-2">Claude Desktop</h3>
           <p class="text-slate-400 text-sm mb-2">Open the config in your editor (swap <code class="bg-slate-800 px-1 rounded">nano</code> for your preferred one):</p>
@@ -287,7 +287,7 @@ claude mcp add home-assistant --scope user \\
   "mcpServers": {
     "Home Assistant": {
       "command": "/home/YOUR_USER/.local/bin/uvx",
-      "args": ["--python", "3.13", "ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token"
@@ -325,11 +325,11 @@ claude mcp add home-assistant --scope user \\
             </div>
 
             <div>
-              <p class="text-white font-medium mb-2">4. Python 3.13 required</p>
-              <p class="text-slate-300 mb-2">ha-mcp requires Python 3.13 (specifically 3.13.x). Older Python can't install the current ha-mcp.</p>
-              <pre class="code-block"><code>uv python install 3.13
-uvx --refresh ha-mcp@latest</code></pre>
-              <p class="text-slate-400 text-sm mt-2">If uvx still picks the old Python, make sure <code class="bg-slate-800 px-1 rounded">"--python", "3.13"</code> is in your config args (as shown above).</p>
+              <p class="text-white font-medium mb-2">4. Python 3.14 required</p>
+              <p class="text-slate-300 mb-2">ha-mcp requires Python 3.14 (specifically 3.14.x). Older Python can't install the current ha-mcp.</p>
+              <pre class="code-block"><code>uv python install 3.14
+uvx --python 3.14 --refresh ha-mcp@latest</code></pre>
+              <p class="text-slate-400 text-sm mt-2">If uvx still picks the old Python, make sure <code class="bg-slate-800 px-1 rounded">"--python", "3.14"</code> is in your config args (as shown above).</p>
             </div>
           </div>
 

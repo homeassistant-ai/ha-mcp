@@ -241,7 +241,7 @@ async def _restart_sibling_addon(
             timeout=5.0, verify=server.settings.verify_ssl
         ) as client:
             resp = await client.post(endpoint)
-    except (httpx.ReadError, httpx.RemoteProtocolError):
+    except httpx.ReadError, httpx.RemoteProtocolError:
         # Connection dropped mid-request — restart is happening.
         # `ConnectError` is deliberately NOT in this tuple: it fires
         # before a connection is established (DNS failure, TCP refused,
@@ -305,7 +305,7 @@ async def _restart_addon(
     # and gets the historical self-restart behavior.
     try:
         payload = await request.json()
-    except (ValueError, json.JSONDecodeError):
+    except ValueError, json.JSONDecodeError:
         payload = None
     target_slug = _parse_restart_slug(payload)
 
@@ -741,7 +741,7 @@ async def _save_feature_flags(
 
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_JSON, "Invalid JSON body"

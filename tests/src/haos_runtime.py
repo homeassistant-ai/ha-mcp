@@ -642,7 +642,7 @@ def refresh_recorder_in_qcow2(
                 text=True,
                 timeout=180,
             )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except subprocess.CalledProcessError, subprocess.TimeoutExpired:
             # Partial-write recovery hint: the previous copy-out + sqlite
             # mutate succeeded but the write-back is gone, so the qcow2's
             # recorder DB is whatever the bake left there. Subsequent runs
@@ -1006,7 +1006,7 @@ def read_embedded_staging_status() -> dict[str, Any] | None:
     """Return this worker's in-process server wheel-staging outcome, or None if unset."""
     try:
         return json.loads(_embedded_staging_status_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return None
 
 
@@ -2154,7 +2154,7 @@ def _http(
         # names the specific validation that failed.
         try:
             err_body = e.read().decode()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             err_body = ""
         LOG.error("%s %s → HTTP %s: %s", method, url, e.code, err_body)
         raise

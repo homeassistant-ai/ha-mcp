@@ -359,7 +359,7 @@ async def _find_collision_in_flow_helpers(
         result = await client.send_websocket_message(
             {"type": "config_entries/get", "domain": helper_type}
         )
-    except (HomeAssistantAPIError, ConnectionError, TimeoutError):
+    except HomeAssistantAPIError, ConnectionError, TimeoutError:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         return None
@@ -418,7 +418,7 @@ async def _find_collision_in_simple_helpers(
     """Search simple-helper {type}/list for an entry whose id or name slug matches target_slug."""
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    except (HomeAssistantAPIError, ConnectionError, TimeoutError):
+    except HomeAssistantAPIError, ConnectionError, TimeoutError:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         return None

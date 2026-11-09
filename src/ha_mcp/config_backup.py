@@ -88,7 +88,7 @@ def _read_backup_override_file() -> dict[str, object]:
         from .utils.data_paths import get_data_dir
 
         path: Path = get_data_dir() / _BACKUP_OVERRIDE_FILENAME
-    except (RuntimeError, OSError):
+    except RuntimeError, OSError:
         # Couldn't resolve the data dir at all — user has no override
         # file by definition. Silent.
         return {}
@@ -190,7 +190,7 @@ def _coerce_backup_override_value(
 
 
 def _apply_one_backup_override(
-    settings: "Settings",
+    settings: Settings,
     field_name: str,
     env_name: str,
     ftype: RegistryFieldType,
@@ -217,7 +217,7 @@ def _apply_one_backup_override(
         )
 
 
-def _apply_backup_overrides(settings: "Settings") -> None:
+def _apply_backup_overrides(settings: Settings) -> None:
     """Patch ``settings`` with values from the override file, in place.
 
     Honors the "env var wins" contract: a field whose env var is set in

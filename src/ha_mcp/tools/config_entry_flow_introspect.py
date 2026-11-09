@@ -134,7 +134,7 @@ async def _process_menu_flow_result(
                 ),
                 timeout=10.0,
             )
-        except (HomeAssistantAPIError, TimeoutError):
+        except HomeAssistantAPIError, TimeoutError:
             return info
         return _form_info(step)
 

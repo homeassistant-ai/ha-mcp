@@ -333,7 +333,7 @@ def _http(
         err_body: str = ""
         try:
             err_body = e.read().decode()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             # Closed socket or non-utf8 body — best-effort only; never hide
             # the original HTTPError, which is re-raised below.
             pass

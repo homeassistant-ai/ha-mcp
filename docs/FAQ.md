@@ -16,7 +16,7 @@ You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://ho
 
 If you *do* run the app, you don't also need `uvx` — that would be a second, separate instance. HTTP-native clients (Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. Codex is HTTP-native too, but as of early 2026 its HTTP MCP support has a [known initialization bug](https://github.com/openai/codex/issues/11284) where it loads no tools; if you hit that, run ha-mcp locally over stdio with `uvx` instead.
 
-**Don't run both for the same client.** If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running `uvx ha-mcp@latest` with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses `npx mcp-remote` with the app's URL and **no** token.
+**Don't run both for the same client.** If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running `uvx --python 3.14 ha-mcp@latest` with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses `npx mcp-remote` with the app's URL and **no** token.
 
 ### What's the difference between ha-mcp and Home Assistant's built-in MCP?
 
@@ -124,7 +124,7 @@ docker run -d -p 8086:8086 \
 # uvx
 HOMEASSISTANT_URL=https://your-ha-instance.example.com \
 MCP_BASE_URL=https://your-mcp-server.example.com \
-uvx --from=ha-mcp@latest ha-mcp-oauth
+uvx --python 3.14 --from=ha-mcp@latest ha-mcp-oauth
 ```
 
 The consent form now accepts only the token. See the [OAuth migration guide](OAUTH.md#migrating-from-v6x) for instructions.
@@ -206,22 +206,22 @@ Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Usi
 
 **4. Python version too old**
 
-ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, `uvx` installs an outdated version of ha-mcp that may have known bugs (including read-only filesystem errors). Upgrade Python:
+ha-mcp requires Python 3.14+. If you are on Python 3.14 or older, `uvx` installs an outdated version of ha-mcp that may have known bugs (including read-only filesystem errors). Upgrade Python:
 
 ```bash
-brew install python@3.13
+brew install python@3.14
 ```
 
 Then force a refresh:
 
 ```bash
-uvx --refresh ha-mcp@latest
+uvx --python 3.14 --refresh ha-mcp@latest
 ```
 
-If `uvx` still uses the old Python after installing 3.13, explicitly pin it by adding `--python 3.13` to your config args:
+If `uvx` still uses the old Python after installing 3.14, explicitly pin it by adding `--python 3.14` to your config args:
 
 ```json
-"args": ["--python", "3.13", "ha-mcp@latest"]
+"args": ["--python", "3.14", "ha-mcp@latest"]
 ```
 
 ### SSL certificate errors (self-signed certificates)
@@ -280,7 +280,7 @@ In Claude Desktop this often shows up as the server briefly connecting, then "tr
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token",
@@ -558,12 +558,12 @@ If you're seeing fewer tools than expected or outdated behavior, `uvx` may be us
 uv cache clean
 
 # Force refresh to latest version
-uvx --refresh ha-mcp@latest
+uvx --python 3.14 --refresh ha-mcp@latest
 ```
 
 **Verify the version:**
 ```bash
-uvx ha-mcp@latest --version
+uvx --python 3.14 ha-mcp@latest --version
 ```
 
 The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest). If you see a much older version, the cache needs clearing.
@@ -599,7 +599,7 @@ If the old tool list is still there after a refresh, delete the connector on tha
 
 - **"Unexpected server output" error:** Add `FASTMCP_SHOW_SERVER_BANNER=false` to your stdio env config. This disables the startup banner that Antigravity misinterprets as unexpected output.
 - **"EOF" errors:** Use absolute paths for the command, not relative paths.
-- **First run timeout:** Run `uvx ha-mcp@latest --version` in your terminal first to download and cache the package before Antigravity tries to start it.
+- **First run timeout:** Run `uvx --python 3.14 ha-mcp@latest --version` in your terminal first to download and cache the package before Antigravity tries to start it.
 - **`sending "subscriptions/listen": failed to connect (session ID: ): session not found`:** A bug in Antigravity's built-in MCP client, not a server or config problem: it opens a `subscriptions/listen` stream the server never offered, then misreads the spec-mandated `404 Method not found` reply as a lost session (request sequence in [#2545](https://github.com/homeassistant-ai/ha-mcp/issues/2545); fixed in Go MCP SDK v1.8.0 by [modelcontextprotocol/go-sdk#1193](https://github.com/modelcontextprotocol/go-sdk/pull/1193), which Antigravity has not shipped yet; the same error is reported in [google-antigravity/antigravity-cli#877](https://github.com/google-antigravity/antigravity-cli/issues/877)). Until Antigravity ships a fix, connect through the `mcp-remote` stdio bridge: `"command": "npx", "args": ["-y", "mcp-remote", "<your MCP server URL>"]` (append `"--allow-http"` for a LAN `http://` URL).
 - **Tools load but fail when called:** Try switching to stdio mode instead of HTTP. HTTP mode can experience "connection closed" or reconnection errors with this client.
 - **Connection issues after config changes:** Restart the Agent session in Antigravity after saving any config changes.
@@ -641,7 +641,7 @@ This is the same self-hosted authorization path used for [Google Gemini Spark](#
 Before setting up a client, you can run a quick smoke test against the public demo server to confirm `uvx` is installed and ha-mcp launches correctly:
 
 ```bash
-HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx ha-mcp@latest
+HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx --python 3.14 ha-mcp@latest
 ```
 
 This starts ha-mcp in stdio mode connected to the public demo Home Assistant instance. Press **Ctrl+C** to stop. If it launches without errors, your environment is ready — replace the URL and token with your own values to connect to your Home Assistant.
@@ -653,7 +653,7 @@ To run the ha-mcp HTTP server detached from the terminal so it survives logout:
 ```bash
 HOMEASSISTANT_URL=http://homeassistant.local:8123 \
 HOMEASSISTANT_TOKEN=your_long_lived_token \
-nohup uvx --from ha-mcp@latest ha-mcp-web > /dev/null 2>&1 &
+nohup uvx --python 3.14 --from ha-mcp@latest ha-mcp-web > /dev/null 2>&1 &
 ```
 
 Both variables are required: without them ha-mcp-web exits immediately, and because this command sends output to `/dev/null` the error explaining why is discarded with it. Drop them only if they are already exported in that shell.

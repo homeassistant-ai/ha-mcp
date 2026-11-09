@@ -67,7 +67,7 @@ def ensure_rich_handler_compat() -> bool:
 
     try:
         parameters = inspect.signature(original_init).parameters
-    except (TypeError, ValueError):  # pragma: no cover - exotic rich build
+    except TypeError, ValueError:  # pragma: no cover - exotic rich build
         logger.debug("RichHandler.__init__ is not introspectable; skipping shim")
         return False
 

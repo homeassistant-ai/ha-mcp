@@ -26,7 +26,7 @@ def _mount_points() -> set[str]:
     try:
         with open("/proc/self/mountinfo", encoding="utf-8") as info:
             return {line.split()[4].replace("\\040", " ") for line in info}
-    except (OSError, IndexError):
+    except OSError, IndexError:
         return set()
 
 

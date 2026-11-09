@@ -68,7 +68,7 @@ def collection_owner(hass: HomeAssistant, helper_type: str) -> Any:
 def _optional_attr(module: str, name: str) -> Any:
     try:
         return getattr(importlib.import_module(module), name)
-    except (ImportError, AttributeError):
+    except ImportError, AttributeError:
         return None
 
 
@@ -175,7 +175,7 @@ def _invalid_errors() -> tuple[type[BaseException], ...]:
     for module in ("voluptuous", "probatio"):
         try:
             invalid = importlib.import_module(module).Invalid
-        except (ImportError, AttributeError):
+        except ImportError, AttributeError:
             continue
         if isinstance(invalid, type) and issubclass(invalid, BaseException):
             errors.append(invalid)

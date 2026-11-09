@@ -6378,7 +6378,7 @@ class TestProxyConfigFilePersistence:
             # accepts an int fd, which fsdecode rejects — those pass through.
             try:
                 candidate = Path(os.fsdecode(path))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return real_open(path, *args, **kwargs)
             if candidate == tmp_path or candidate.is_relative_to(tmp_path):
                 raise OSError("no mode bits")

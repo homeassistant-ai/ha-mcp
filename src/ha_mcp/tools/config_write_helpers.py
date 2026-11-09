@@ -459,7 +459,7 @@ def augment_tool_error_with_skill_content(
     """
     try:
         error_dict = json.loads(str(te))
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return te
     if not isinstance(error_dict, dict):
         return te

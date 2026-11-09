@@ -34,7 +34,6 @@ from ..mcp_client_context import (
     protocol_version,
 )
 from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
-from ..update_check import python_upgrade_hint
 from ..utils.mcp_client_host import detect_client_host
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
@@ -378,7 +377,7 @@ def _detect_mcp_transport() -> str:
     try:
         if not sys.stdin.isatty():
             return "stdio"
-    except (AttributeError, OSError, ValueError):
+    except AttributeError, OSError, ValueError:
         # ``sys.stdin`` can be None or detached (pythonw, daemonized
         # contexts, certain test harnesses). Treat as no signal.
         pass
@@ -756,7 +755,7 @@ class BugReportTools:
                     "startup_log_count, formatted_report, issue_title, "
                     "issue_body, issue_url, anonymization_guide, "
                     "duplicate_check_urls, missing_tool_hint, "
-                    "known_client_issues_hint, python_upgrade_hint, instructions."
+                    "known_client_issues_hint, instructions."
                 ),
             ),
         ] = None,
@@ -979,7 +978,6 @@ class BugReportTools:
                 "duplicate_check_urls": duplicate_check_urls,
                 "missing_tool_hint": MISSING_TOOL_HINT,
                 "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
-                "python_upgrade_hint": python_upgrade_hint(),
                 "instructions": (
                     "WORKFLOW FOR FILING A REPORT:\n\n"
                     "0. **PRE-CHECK — missing tool or unknown parameter?** If the "
@@ -995,8 +993,6 @@ class BugReportTools:
                     "bug with an upstream ticket. See the `known_client_issues_hint` "
                     "field for the workaround to give the user, and only continue "
                     "if the problem persists after it.\n\n"
-                    "0c. **Python upgrade?** If `python_upgrade_hint` is set, pass "
-                    "it on to the user, whatever the report is about.\n\n"
                     "1. **Check for duplicates FIRST**:\n"
                     "   - Use the duplicate_check_urls to search for similar issues\n"
                     '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'

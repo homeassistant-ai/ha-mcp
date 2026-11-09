@@ -1979,7 +1979,7 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
         register_default_handlers(mgr, client)
         try:
             client._auto_backup_manager = mgr
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             # Read-only client (e.g. a slotted mock) — manager still works,
             # just isn't cached.
             pass

@@ -136,7 +136,7 @@ def _read_feature_flag_override_file() -> dict[str, object]:
         from .utils.data_paths import get_data_dir
 
         path: Path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-    except (RuntimeError, OSError):
+    except RuntimeError, OSError:
         # Couldn't resolve the data dir at all — user has no override
         # file by definition. Silent.
         return {}
@@ -215,7 +215,7 @@ def _coerce_feature_flag_value(
 
 
 def _apply_one_feature_flag_override(
-    settings: "Settings",
+    settings: Settings,
     field_name: str,
     env_name: str,
     ftype: RegistryFieldType,
@@ -256,7 +256,7 @@ def _apply_one_feature_flag_override(
         )
 
 
-def _apply_beta_master_gate(settings: "Settings") -> None:
+def _apply_beta_master_gate(settings: Settings) -> None:
     """Force BETA_FEATURE_FIELDS to False when ``enable_beta_features`` is off.
 
     This is the "master toggle" semantics: even a power user who sets
@@ -300,7 +300,7 @@ def _apply_beta_master_gate(settings: "Settings") -> None:
                 )
 
 
-def _apply_feature_flag_overrides(settings: "Settings") -> None:
+def _apply_feature_flag_overrides(settings: Settings) -> None:
     """Patch ``settings`` with override-file values + apply the master beta gate.
 
     Two behaviors interleave:
@@ -429,7 +429,7 @@ def _advanced_override_passes_constraints(fname: str, coerced: Any) -> bool:
 
 
 def _apply_one_advanced_override(
-    settings: "Settings",
+    settings: Settings,
     fname: str,
     env_name: str,
     ftype: RegistryFieldType,
@@ -461,7 +461,7 @@ def _apply_one_advanced_override(
         return
     try:
         setattr(settings, fname, coerced)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         # Narrowed from bare ``Exception`` to match the parallel
         # _apply_feature_flag_overrides handler. Pydantic validation
         # surfaces failures as ValueError; an
@@ -474,7 +474,7 @@ def _apply_one_advanced_override(
         )
 
 
-def _apply_advanced_overrides(settings: "Settings") -> None:
+def _apply_advanced_overrides(settings: Settings) -> None:
     """Patch ``settings`` with advanced-section override values from
     ``feature_flags.json``.
 
