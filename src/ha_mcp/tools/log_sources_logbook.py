@@ -291,7 +291,7 @@ class LogbookLogSourceMixin:
             end_time=end_time,
             context_id=context_id,
         )
-        return rest, "rest"
+        return rest or [], "rest"
 
     async def _fetch_logbook_component(
         self, command: dict[str, Any]

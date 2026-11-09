@@ -467,6 +467,35 @@ class TestFetchTraceLogbook:
         )
 
     @pytest.mark.asyncio
+    async def test_malformed_rest_reply_is_warned(self):
+        """A REST reply that is not a row list surfaces instead of reading empty."""
+        client = _make_pooled_client(lambda mtype, message: {})
+        client.get_logbook = AsyncMock(return_value=None)
+        trace = {
+            "run_id": "r1",
+            "timestamp": {
+                "start": "2026-11-08T16:00:00+00:00",
+                "finish": "2026-11-08T16:00:01+00:00",
+            },
+            "context": {"id": "own-1"},
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.trace_lookup.get_component_caps",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "ha_mcp.tools.trace_lookup.component_supports",
+                return_value=False,
+            ),
+        ):
+            logbook = await fetch_trace_logbook(client, trace)
+
+        assert logbook.entries == []
+        assert any("not a row list" in warning for warning in logbook.warnings)
+
+    @pytest.mark.asyncio
     async def test_parent_context_rows_are_included(self):
         """The run's rows are merged first and the triggering context follows."""
         client = _make_pooled_client(lambda mtype, message: {})

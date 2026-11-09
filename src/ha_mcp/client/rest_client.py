@@ -817,7 +817,7 @@ class HomeAssistantClient:
         start_time: str | None = None,
         end_time: str | None = None,
         context_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | None:
         """
         Get logbook entries.
 
@@ -828,7 +828,7 @@ class HomeAssistantClient:
             context_id: Optional context ID filter - used as query parameter
 
         Returns:
-            Logbook entries
+            Logbook entries, or None when the reply was not a row list.
         """
         logger.debug(
             f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}, context: {context_id}"
@@ -852,8 +852,7 @@ class HomeAssistantClient:
         result = await self._request("GET", endpoint, params=params)
         if isinstance(result, list):
             return result
-        else:
-            return []
+        return None
 
     async def fire_event(
         self, event_type: str, data: dict[str, Any] | None = None
