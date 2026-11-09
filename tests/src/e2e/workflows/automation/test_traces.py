@@ -889,6 +889,5 @@ class TestGetAutomationTracesNegativeInputs:
         result = await mcp.call_tool_failure(
             "ha_get_automation_traces",
             {"entity_id": "sensor.some_entity"},
-            expected_error="VALIDATION_INVALID_PARAMETER",
         )
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
