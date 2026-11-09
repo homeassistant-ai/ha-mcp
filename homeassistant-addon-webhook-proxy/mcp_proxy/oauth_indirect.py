@@ -7,9 +7,11 @@ client identities into the same-origin form accepted by core.
 
 MIRROR: this module is the near-verbatim twin of
 ``custom_components/ha_mcp_tools/oauth_ha_auth.py``. Keep behavioural changes
-on the two sides in step. This pair has exactly ONE intended delta and it is
-not behavioural: the loopback, redirect-shape, and base64url helpers are
-imported from ``oauth.py`` here and from ``oauth_legacy.py`` in the component.
+on the two sides in step. This pair has exactly TWO intended deltas. The
+loopback, redirect-shape, and base64url helpers are imported from ``oauth.py``
+here and from ``oauth_legacy.py`` in the component. And ``core_listener_url``
+lives only here: it copies the component's ``loopback_url.derive_loopback_url``,
+which the token forward uses there and this app cannot import.
 Those definitions are equivalent today, ``_LOOPBACK_HOSTNAMES`` and
 ``_AUTHORITY_CHARS_RE`` included — named here so it is noticed if that ever
 stops being true. Everything else that differs is drift, including the deltas
@@ -673,22 +675,40 @@ def _stable_origin_or_unreproducible(
     return stable
 
 
-def core_token_base_url(hass: HomeAssistant) -> str:
-    """Return a trusted base URL for forwarding to core's token and revocation
-    endpoints."""
-    api = getattr(hass.config, "api", None)
-    if api is not None and not getattr(api, "use_ssl", False):
-        return f"http://127.0.0.1:{api.port}"
-    from homeassistant.helpers.network import NoURLAvailableError, get_url
+_WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::"})
 
-    try:
-        return str(
-            get_url(
-                hass,
-                prefer_external=False,
-                allow_cloud=False,
-                require_ssl=True,
-            )
-        ).rstrip("/")
-    except NoURLAvailableError:
-        return f"https://127.0.0.1:{getattr(api, 'port', 8123)}"
+
+def core_listener_url(hass: HomeAssistant) -> tuple[str, bool | None]:
+    """``(url, verify_ssl)`` of core's own listener for the token and
+    revocation forwards; a copy of the component's
+    ``loopback_url.derive_loopback_url``, which this app cannot import.
+
+    Never request-derived: the anonymous endpoints relay core's answer, so a
+    caller-chosen host would receive the credential-bearing form (#2213).
+    ``verify_ssl`` is ``False`` for an https listener, whose certificate is
+    issued for HA's hostname rather than this address (#2950), and ``None``
+    (aiohttp's default) for plain http.
+    """
+    api = getattr(hass.config, "api", None)
+    if api is None:
+        return "http://127.0.0.1:8123", None
+    port_raw = getattr(api, "port", None)
+    port = (
+        port_raw
+        if isinstance(port_raw, int)
+        and not isinstance(port_raw, bool)
+        and 0 < port_raw <= 65535
+        else 8123
+    )
+    host_raw = getattr(api, "host", None)
+    host = (
+        host_raw
+        if isinstance(host_raw, str) and host_raw not in _WILDCARD_HOSTS
+        # An IPv6 wildcard alone opens an IPv6-only socket.
+        else ("::1" if host_raw == "::" else "127.0.0.1")
+    )
+    if ":" in host:
+        host = f"[{host}]"
+    if getattr(api, "use_ssl", False) is True:
+        return f"https://{host}:{port}", False
+    return f"http://{host}:{port}", None
