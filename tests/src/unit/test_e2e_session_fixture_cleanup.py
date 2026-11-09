@@ -153,3 +153,34 @@ def test_a_readiness_failure_still_removes_the_staged_config(
     _drive_to_failure(request, "Home Assistant API did not become ready")
 
     _assert_finalizer_removed(request, Path(seen["config_path"]))
+
+
+def test_a_successful_session_removes_the_staged_config_after_the_container_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Path] = {}
+
+    def fake_prepare(embedded: bool, config_path: Path) -> Any:
+        seen["config_path"] = config_path
+        (config_path / "configuration.yaml").write_text("default_config:\n")
+        return config_path, {}, None
+
+    request = _fixture_world(monkeypatch, fake_prepare, lambda *args: None)
+    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
+    generator = fixture(request, None)
+
+    info = next(generator)
+    staged = Path(seen["config_path"])
+    assert info["base_url"] == "http://localhost:32768"
+    assert staged.is_dir(), "the session needs its staged config while it runs"
+    assert request.finalizers, "cleanup must be registered for a successful session too"
+
+    generator.close()
+
+    assert staged.is_dir(), (
+        "the finalizer runs after the container block releases the bind mount; "
+        "removing the directory earlier would pull it out from under Home Assistant"
+    )
+    for finalizer in request.finalizers:
+        finalizer()
+    assert not staged.exists(), "the finalizer must remove the staged config"
