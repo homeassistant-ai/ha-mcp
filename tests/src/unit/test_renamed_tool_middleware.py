@@ -240,6 +240,41 @@ def test_every_tool_that_renamed_identifier_keeps_it_callable():
 
 
 @pytest.mark.asyncio
+async def test_the_registered_trace_tool_resolves_automation_id():
+    """A cached client's automation_id reaches the real trace tool and lists runs."""
+    from ha_mcp.tools.tools_traces import register_trace_tools
+
+    from .test_tools_traces import _make_pooled_client
+
+    def _dispatch(mtype, message):
+        if mtype == "config/entity_registry/get":
+            return {"success": True, "result": {"unique_id": "uid_1"}}
+        if mtype == "trace/list":
+            return {
+                "success": True,
+                "result": [
+                    {
+                        "run_id": "r1",
+                        "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+                    }
+                ],
+            }
+        return {"success": False, "error": f"unexpected {mtype}"}
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(RenamedToolAliasMiddleware())
+    register_trace_tools(mcp, _make_pooled_client(_dispatch))
+
+    result = await mcp.call_tool(
+        "ha_get_automation_traces", {"automation_id": "automation.trace"}
+    )
+
+    data = result.structured_content
+    assert data["entity_id"] == "automation.trace"
+    assert data["traces"][0]["run_id"] == "r1"
+
+
+@pytest.mark.asyncio
 async def test_the_trace_tool_keeps_automation_id_callable():
     """The trace tool renamed automation_id; a cached client still sends it."""
     result = await _make_mcp().call_tool(
