@@ -14,7 +14,6 @@ import pytest
 
 from ...utilities.assertions import (
     MCPAssertions,
-    assert_mcp_success,
     parse_mcp_result,
     safe_call_tool,
 )
@@ -214,12 +213,10 @@ class TestAutomationTraces:
         # 7. Get detailed trace using run_id
         run_id = first_trace.get("run_id")
         if run_id:
-            detailed_result = await mcp_client.call_tool(
+            detailed_data = await MCPAssertions(mcp_client).call_tool_success(
                 "ha_get_automation_traces",
                 {"entity_id": automation_id, "run_id": run_id},
             )
-            assert_mcp_success(detailed_result)
-            detailed_data = parse_mcp_result(detailed_result)
 
             assert detailed_data.get("success") is True
             assert detailed_data.get("run_id") == run_id
