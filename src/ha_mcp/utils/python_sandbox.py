@@ -137,6 +137,7 @@ SAFE_NODES = {
 # evaluable on any Python. Unmapped keys fall through to the generic
 # "Forbidden node type: X" message in `_validate_node`.
 _NODE_SUGGESTIONS: dict[str, str] = {
+    "Assert": "to require one match or a value, unpack a filtered list: [a] = [x for x in items if ...]",
     "Try": "validate inputs with isinstance/in/.get() instead of try/except",
     "TryStar": "validate inputs with isinstance/in/.get() instead of try/except",
     "ExceptHandler": "validate inputs with isinstance/in/.get() instead of try/except",
@@ -478,6 +479,13 @@ def format_sandbox_error(
             "Use .get(key, default) to handle missing keys",
             f"Expression: {preview}",
         ]
+        # A single-target unpack; Python 3.14 adds ", got N" to the too-many text.
+        if "unpack (expected 1)" in str(error) or "unpack (expected 1," in str(error):
+            suggestions.insert(
+                0,
+                "A `[a] = [...]` guard matched no item or several: re-read the "
+                "input and correct the filter or the expected value.",
+            )
     else:
         message = f"Expression validation failed: {error}"
         suggestions = [
@@ -529,6 +537,9 @@ PYTHON TRANSFORM SECURITY:
 - Dict unpacking (**) in calls and dict literals: {**d, 'k': v}
 - Keyword arguments: func(key=value)
 - Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])
+- Guards (a failed guard raises and the config is not changed):
+  one match: [a] = [a for a in config['actions'] if a.get('alias') == 'Y']
+  a value: [a] = [a for a in [config['actions'][2]] if a['data']['v'] == 1]
 - String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,
   removeprefix, removesuffix, split, join, replace, count, index
 - Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
