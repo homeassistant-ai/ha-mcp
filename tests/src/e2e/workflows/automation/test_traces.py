@@ -798,11 +798,9 @@ action:
                 "trace": {"stored_traces": 5},
                 "initial_state": True,
             }
-            create_result = await mcp_client.call_tool(
+            mcp = MCPAssertions(mcp_client)
+            create_data = await mcp.call_tool_success(
                 "ha_config_set_automation", {"config": create_config}
-            )
-            create_data = assert_mcp_success(
-                create_result, "Create not-triggered automation"
             )
             automation_id = create_data.get("entity_id") or create_data.get(
                 "automation_id"
@@ -810,7 +808,7 @@ action:
             assert automation_id is not None
             cleanup_tracker.track("automation", automation_id)
 
-            turn_on_result = await mcp_client.call_tool(
+            await mcp.call_tool_success(
                 "ha_call_service",
                 {
                     "domain": "light",
@@ -818,7 +816,6 @@ action:
                     "entity_id": light_id,
                 },
             )
-            assert_mcp_success(turn_on_result, "Turn the light on")
 
             last_state_error: dict[str, str] = {}
 
@@ -848,7 +845,7 @@ action:
                 )
             )
 
-            turn_off_result = await mcp_client.call_tool(
+            await mcp.call_tool_success(
                 "ha_call_service",
                 {
                     "domain": "light",
@@ -856,7 +853,6 @@ action:
                     "entity_id": light_id,
                 },
             )
-            assert_mcp_success(turn_off_result, "Turn the light off")
 
             traces_data = await wait_for_tool_result(
                 mcp_client,
@@ -875,11 +871,10 @@ action:
                 if trace.get("not_triggered")
             )
 
-            detail_result = await mcp_client.call_tool(
+            detail = await mcp.call_tool_success(
                 "ha_get_automation_traces",
                 {"entity_id": automation_id, "run_id": run_id, "sections": "trigger"},
             )
-            detail = assert_mcp_success(detail_result, "Read not-triggered trace")
 
             assert detail["not_triggered"] is True
             assert detail["script_execution"] == "not_triggered"
