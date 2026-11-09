@@ -41,10 +41,9 @@ class TestAutomationTraces:
         self, mcp_client, cleanup_tracker, config: dict[str, Any]
     ) -> str:
         """Create an automation and wait until its entity is queryable."""
-        create_result = await mcp_client.call_tool(
+        create_data = await MCPAssertions(mcp_client).call_tool_success(
             "ha_config_set_automation", {"config": config}
         )
-        create_data = assert_mcp_success(create_result, "Create automation")
         automation_id = create_data.get("entity_id")
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -148,7 +147,7 @@ class TestAutomationTraces:
         logger.info(f"Created automation: {automation_id}")
 
         # 3. Trigger the automation manually using automation.trigger service
-        trigger_result = await mcp_client.call_tool(
+        await MCPAssertions(mcp_client).call_tool_success(
             "ha_call_service",
             {
                 "domain": "automation",
@@ -156,7 +155,6 @@ class TestAutomationTraces:
                 "entity_id": automation_id,
             },
         )
-        assert_mcp_success(trigger_result)
         logger.info("Triggered automation")
 
         # Wait for trace to be recorded
@@ -184,12 +182,10 @@ class TestAutomationTraces:
             )
 
         # 4. Get traces for the automation
-        traces_result = await mcp_client.call_tool(
+        traces_data = await MCPAssertions(mcp_client).call_tool_success(
             "ha_get_automation_traces",
             {"entity_id": automation_id},
         )
-        assert_mcp_success(traces_result)
-        traces_data = parse_mcp_result(traces_result)
 
         # 5. Verify traces are non-empty
         assert traces_data.get("success") is True, "Traces request should succeed"
