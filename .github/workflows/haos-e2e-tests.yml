@@ -170,6 +170,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Cache invalidates when ANY input that gets baked into the qcow2
@@ -248,10 +252,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af --volumes || true
           df -h /
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Install build-script Python deps (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
@@ -415,6 +415,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Shared with every other HAOS lane in this file (``haos-e2e``,
@@ -479,10 +483,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af --volumes || true
           df -h /
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Install build-script Python deps (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
@@ -652,6 +652,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Shared with the ``haos-e2e`` lane and every other HAOS lane in
@@ -717,10 +721,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af --volumes || true
           df -h /
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Install build-script Python deps (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
@@ -931,6 +931,10 @@ jobs:
           # key deterministic.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         run: |
@@ -979,10 +983,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af --volumes || true
           df -h /
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Install build-script Python deps
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
@@ -1125,6 +1125,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Shared with the ``haos-e2e``, ``haos-e2e-inaddon``,
@@ -1190,10 +1194,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af --volumes || true
           df -h /
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Install build-script Python deps (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
@@ -1370,6 +1370,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Shared with the ``haos-e2e`` lane and every other HAOS lane in this
@@ -1436,10 +1440,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af --volumes || true
           df -h /
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Install build-script Python deps (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'

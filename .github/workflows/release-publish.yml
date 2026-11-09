@@ -240,6 +240,10 @@ jobs:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.14"
+
       - name: Install MCP Publisher CLI
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         env:
@@ -261,10 +265,6 @@ jobs:
             "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_${os}_${arch}.tar.gz"
           echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
           tar xzf mcp-publisher.tar.gz mcp-publisher
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "3.14"
 
       - name: Render server manifest for publish
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
