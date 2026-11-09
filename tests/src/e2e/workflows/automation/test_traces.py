@@ -383,8 +383,16 @@ action:
             "ha_config_set_automation", {"config": create_config}
         )
         # A create whose entity wait expired returns the numeric config id,
-        # which the trace tool cannot resolve.
+        # which the trace tool cannot resolve, so remove it before failing.
         automation_id = create_data.get("entity_id")
+        if not automation_id:
+            config_id = create_data.get("automation_id")
+            if config_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": config_id},
+                )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
         )
@@ -446,8 +454,16 @@ action:
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
         # A create whose entity wait expired returns the numeric config id,
-        # which the trace tool cannot resolve.
+        # which the trace tool cannot resolve, so remove it before failing.
         automation_id = create_data.get("entity_id")
+        if not automation_id:
+            config_id = create_data.get("automation_id")
+            if config_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": config_id},
+                )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
         )
@@ -507,8 +523,16 @@ action:
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
         # A create whose entity wait expired returns the numeric config id,
-        # which the trace tool cannot resolve.
+        # which the trace tool cannot resolve, so remove it before failing.
         automation_id = create_data.get("entity_id")
+        if not automation_id:
+            config_id = create_data.get("automation_id")
+            if config_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": config_id},
+                )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
         )

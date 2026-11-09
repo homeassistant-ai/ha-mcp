@@ -291,7 +291,11 @@ class LogbookLogSourceMixin:
             end_time=end_time,
             context_id=context_id,
         )
-        return rest or [], "rest"
+        if rest is None:
+            # get_logbook answers None only for a reply that was not a row
+            # list; an empty logbook is a real list, so this is a failure.
+            raise ToolError("The REST logbook reply was not a row list.")
+        return rest, "rest"
 
     async def _fetch_logbook_component(
         self, command: dict[str, Any]
