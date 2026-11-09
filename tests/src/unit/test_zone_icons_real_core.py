@@ -274,6 +274,30 @@ async def test_the_component_reads_only_the_zones_states(
 
 
 @pytest.mark.parametrize("core_client", ["component"], indirect=True)
+async def test_a_dropped_state_read_still_lists_who_is_in_each_zone(
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A socket reset during the component's state read falls back to reading
+    every state instead of failing a listing that was already complete."""
+    tools = ZoneTools(core_client)
+    await _create(tools)
+    send = _CoreWebSocket.send_command
+
+    async def reset_on_states(
+        self: _CoreWebSocket, command_type: str, **params: Any
+    ) -> dict[str, Any]:
+        if command_type == "ha_mcp_tools/states":
+            raise ConnectionResetError("connection reset by peer")
+        return await send(self, command_type, **params)
+
+    monkeypatch.setattr(_CoreWebSocket, "send_command", reset_on_states)
+
+    result = await tools.ha_get_zone()
+
+    assert all("persons" in z for z in result["zones"])
+
+
+@pytest.mark.parametrize("core_client", ["component"], indirect=True)
 async def test_a_helper_icon_update_sets_no_registry_override(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
