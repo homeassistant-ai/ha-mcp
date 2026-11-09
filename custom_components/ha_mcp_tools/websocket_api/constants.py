@@ -134,6 +134,10 @@ CAPABILITIES: list[str] = [
     # advertised, so an older build simply serves the parsed body and the server
     # looks for the text elsewhere.
     "blueprint_text",
+    # A flag on the read_file service: gates its ``keep_line_endings`` field,
+    # which returns CRLF as stored. The server's file auto-backup asks for it
+    # only when this is advertised; an older build rejects the unknown field.
+    "read_file_line_endings",
     "device_get",
     "device_list",
     # A semantic flag shared by every device-registry-backed read. Components

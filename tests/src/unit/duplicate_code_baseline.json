@@ -275,10 +275,6 @@
     "tests/src/unit/test_oauth.py::TestRunOAuthServerSettingsUI._reset_settings_globals",
     "tests/src/unit/test_oidc_entrypoint.py::TestRunOidcServerSettingsUI._reset_settings_globals"
   ],
-  "4eab686fd5ee": [
-    "tests/src/e2e/workflows/filesystem/test_custom_paths.py::_filesystem_feature_flag",
-    "tests/src/e2e/workflows/services/test_ha_mcp_tools_refusal.py::_filesystem_feature_flag"
-  ],
   "51526fb3c70b": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::bind_dcr_view",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::bind_dcr_view"
@@ -652,7 +648,7 @@
     "tests/src/unit/test_tools_bug_report.py::TestBugReportNewIdentityFields.mock_client"
   ],
   "a1cb99adf0fd": [
-    "tests/src/e2e/workflows/filesystem/test_custom_paths.py::mcp_client_fs",
+    "tests/src/e2e/workflows/filesystem/conftest.py::mcp_client_fs",
     "tests/src/e2e/workflows/services/test_ha_mcp_tools_refusal.py::mcp_client_for_refusal"
   ],
   "a4ab857982a4": [

@@ -856,7 +856,7 @@ class WellKnownProtectedResourceView(HomeAssistantView):
         self._bound_webhook_id = provider.webhook_id
         # Instance-level URL: the well-known path embeds this install's
         # webhook id, which is only known at runtime.
-        self.url = (
+        self.url: str = (
             f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
         )
         self.extra_urls = [f"{self.url}{suffix}" for suffix in ENDPOINT_SUFFIXES]

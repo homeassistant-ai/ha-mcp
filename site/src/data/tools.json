@@ -1864,7 +1864,7 @@
   {
     "name": "ha_write_file",
     "title": "Write File",
-    "description": "Write a file to allowed directories in the Home Assistant config.\n\nCreates or updates files (custom CSS/JS for dashboards, Jinja2 macro\ntemplates, theme YAML) in restricted directories only.\n\n**Allowed Write Directories:**\n- `www/` - Web assets for dashboards\n- `themes/` - Theme YAML files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus custom directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`)\n  from the ha-mcp settings UI; `/ssl` is read-only on HAOS and Supervised\nConfiguration files (configuration.yaml, etc.) cannot be written; path\ntraversal (../) is blocked.\n\nText content only. Overwriting a file that currently holds binary\ncontent still succeeds, but its prior bytes cannot be captured by\nauto-backup (only modifications/deletions of text files are\nsnapshotted); the skip is logged, the write is not blocked.\n\nEXAMPLE: ha_write_file(path=\"custom_templates/formatters.jinja\", content=\"{% macro shout(text) %}{{ text | upper }}{% endmacro %}\")",
+    "description": "Write a file to allowed directories in the Home Assistant config.\n\nCreates or updates files (custom CSS/JS for dashboards, Jinja2 macro\ntemplates, theme YAML) in restricted directories only.\n\nNot for configuration: use ha_config_set_yaml for configuration.yaml and\npackages, and ha_config_set_automation, ha_config_set_script,\nha_config_set_scene or ha_config_set_dashboard for storage-mode items.\n\n**Allowed Write Directories:**\n- `www/` - Web assets for dashboards\n- `themes/` - Theme YAML files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus custom directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`)\n  from the ha-mcp settings UI; `/ssl` is read-only on HAOS and Supervised\nConfiguration files (configuration.yaml, etc.) cannot be written; path\ntraversal (../) is blocked.\n\nText content only. Overwriting a file that currently holds binary\ncontent still succeeds, but its prior bytes cannot be captured by\nauto-backup (only modifications/deletions of text files are\nsnapshotted); the skip is logged, the write is not blocked.\n\nWith edits, nothing is saved unless every edit applies, and the rest of\nthe file, line endings included, stays as it is. ha_read_file shows a\nCRLF file with LF; edits to it match either way. In a file that mixes\nCRLF and LF, a multi-line 'old' matches only lines stored with the line\nending it uses.\n\nAfter a write, the response says what Home Assistant needs before it\nuses the file: a theme or custom template is reloaded (post_action,\nreload_service), a custom template Home Assistant cannot load (not\n*.jinja, or over its size limit) gets a warning, and a dashboards/ file\nlists the YAML dashboards that name it as their file (dashboards); they\nreread it when next opened. A file a dashboard !includes is not checked.\n\nEXAMPLE: ha_write_file(path=\"custom_templates/formatters.jinja\", content=\"{% macro shout(text) %}{{ text | upper }}{% endmacro %}\")\nEXAMPLE: ha_write_file(path=\"www/card.js\", edits=[{\"old\": \"const REFRESH = 30000;\", \"new\": \"const REFRESH = 10000;\"}])",
     "inputSchema": {
       "properties": {
         "path": {
@@ -1872,29 +1872,38 @@
           "description": "File path in an allowed write directory; pass the absolute path for a HAOS sibling volume. Example: 'www/custom.css', '/share/llm/out.txt'"
         },
         "content": {
-          "type": "str",
-          "description": "The content to write to the file."
+          "type": "str | None",
+          "default": null,
+          "description": "The whole content to write to the file. Exactly one of content and edits is required."
         },
         "overwrite": {
           "type": "bool",
           "default": false,
-          "description": "Whether to overwrite if the file exists."
+          "description": "Whether content may overwrite an existing file. Not needed with edits."
         },
         "create_dirs": {
           "type": "bool",
           "default": true,
           "description": "Whether to create parent directories if they don't exist."
+        },
+        "edits": {
+          "constraints": {
+            "min_length": 1,
+            "max_length": 100
+          },
+          "type": "list[ResourceEdit] | None",
+          "default": null,
+          "description": "Search/replace edits for an existing text file, applied in order; prefer them over content for a small change to a large file."
         }
       },
       "required": [
-        "path",
-        "content"
+        "path"
       ]
     },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true,
+      "idempotentHint": false,
       "openWorldHint": false
     },
     "tags": [
@@ -4066,12 +4075,12 @@
         "detail_level": {
           "type": "Literal['summary', 'full']",
           "default": "summary",
-          "description": "'summary': name, description, domain, service, and target when the service has one. 'full': additionally include parameter field schemas."
+          "description": "'summary': name, description, domain, service, target and response when the service returns data. 'full': additionally include parameter field schemas."
         },
         "service_fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records. Unknown keys yield empty records. Available keys: name, description, domain, service, target (when present), fields (full mode only)."
+          "description": "Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records. Unknown keys yield empty records. Available keys: name, description, domain, service, target (when present), response (when present), fields (full mode only)."
         },
         "fields": {
           "type": "str | list[str] | None",

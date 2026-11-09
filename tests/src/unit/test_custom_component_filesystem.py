@@ -2659,7 +2659,7 @@ class TestBinaryFileDeleteBackup:
             auto_backup_retain_per_entity=5,
             auto_backup_dir=str(tmp_path / "backups"),
         )
-        client = object()
+        client = type("Client", (), {})()  # weakref-able, as caps are cached per client
         mgr = bm.BackupManager(settings, client)
         bm.register_default_handlers(mgr, client)
         assert (

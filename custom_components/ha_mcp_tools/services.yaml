@@ -135,6 +135,16 @@ read_file:
       default: false
       selector:
         boolean:
+    keep_line_endings:
+      name: Keep Line Endings
+      description: >-
+        Return the content with its line endings as stored (CRLF stays CRLF)
+        instead of LF. ha-mcp's auto-backup uses it so a restore writes back
+        the same bytes.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 write_file:
   name: Write File
@@ -171,6 +181,33 @@ write_file:
       default: true
       selector:
         boolean:
+
+edit_file:
+  name: Edit File
+  description: >-
+    Apply exact-match replacements to a text file in the allowed write
+    directories. Nothing is saved unless every edit applies.
+  fields:
+    path:
+      name: Path
+      description: >-
+        Relative path from config directory. Must be in www/, themes/,
+        custom_templates/, dashboards/, or a directory added in the ha-mcp
+        settings; an absolute path for a HAOS sibling volume (/share, /media,
+        /ssl) added there.
+      required: true
+      example: "www/custom.css"
+      selector:
+        text:
+    edits:
+      name: Edits
+      description: >-
+        List of replacements applied in order, each with 'old' (text that must
+        occur exactly once) and 'new'.
+      required: true
+      example: '[{"old": "#333", "new": "#444"}]'
+      selector:
+        object:
 
 delete_file:
   name: Delete File

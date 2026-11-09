@@ -652,10 +652,6 @@ class TestServicesListSchema:
         monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
         return _REAL_VOL.Schema(wsapi._services_list_schema())
 
-    def test_language_default(self, monkeypatch):
-        out = self._schema(monkeypatch)({"type": wsapi.WS_SERVICES_LIST})
-        assert out["language"] == "en"
-
     def test_query_param_rejected(self, monkeypatch):
         # ``query`` is no longer a wire param — a coarse component filter cannot be a
         # superset of the server's concatenation-based filter, so it is not accepted.

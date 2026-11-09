@@ -149,6 +149,76 @@ class TestThemeEditHandler:
         assert len(hass.reload_calls) == 1
         assert hass.reload_calls[0] == ("frontend", "reload_themes", {})
 
+    async def test_theme_edit_waits_for_the_file_lock(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        """edit_file can write the same theme; an overlapping read-modify-write
+        would undo its change while both report success."""
+        import asyncio
+
+        from custom_components.ha_mcp_tools.file_ops import file_lock
+
+        (tmp_path / "themes").mkdir()
+        call = call_factory(
+            {
+                "file": "themes/dark.yaml",
+                "action": "add",
+                "yaml_path": "dark",
+                "content": "primary-color: red",
+            }
+        )
+
+        async with file_lock(hass):
+            edit = asyncio.ensure_future(handler(call))
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert not (tmp_path / "themes" / "dark.yaml").exists()
+        assert (await edit)["success"] is True
+
+    async def test_cancelled_theme_edit_keeps_the_lock_until_its_write_ends(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        """Its thread keeps writing; a later edit_file must not report success
+        before that write overwrites it."""
+        import asyncio
+
+        from custom_components.ha_mcp_tools.file_ops import (
+            file_lock,
+            write_text_atomic,
+        )
+
+        (tmp_path / "themes").mkdir()
+        release = asyncio.Event()
+
+        async def _blocked(fn, *args):
+            if fn is write_text_atomic:  # the write, after the lock is taken
+                await release.wait()
+            return fn(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_blocked)
+        call = call_factory(
+            {
+                "file": "themes/dark.yaml",
+                "action": "add",
+                "yaml_path": "dark",
+                "content": "primary-color: red",
+            }
+        )
+        edit = asyncio.ensure_future(handler(call))
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        edit.cancel()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert file_lock(hass).locked()
+
+        release.set()
+        (outcome,) = await asyncio.gather(edit, return_exceptions=True)
+        assert isinstance(outcome, asyncio.CancelledError)
+        assert not file_lock(hass).locked()
+        assert (tmp_path / "themes" / "dark.yaml").exists()
+
     async def test_theme_add_merges_into_existing_theme(
         self, handler, hass, call_factory, tmp_path
     ):

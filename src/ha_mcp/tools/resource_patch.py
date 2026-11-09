@@ -44,7 +44,7 @@ def resource_write_lock(resource_id: str | None) -> AbstractAsyncContextManager[
 
 
 class ResourceEdit(TypedDict):
-    """One exact-match replacement in an inline resource."""
+    """One exact-match replacement."""
 
     old: Annotated[
         str,

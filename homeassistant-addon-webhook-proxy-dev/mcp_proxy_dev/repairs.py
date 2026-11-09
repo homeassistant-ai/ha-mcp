@@ -36,13 +36,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+
+if TYPE_CHECKING:
+    from homeassistant.components.repairs import RepairsFlowResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,12 +68,12 @@ class OAuthRestartRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         return await self.async_step_confirm()
 
     async def async_step_confirm(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         if user_input is not None:
             # Restart HA so the root OAuth views bind cleanly. blocking=True so a
             # failed config check surfaces as a flow error instead of being
