@@ -16,26 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Mock the Home Assistant imports before importing the module
-sys.modules["voluptuous"] = MagicMock()
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.components"] = MagicMock()
-sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
-sys.modules["homeassistant.config"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function (production code decorates real closures with
-# it - a clobbered auto-mock attribute would silently replace them). This
-# file doesn't care what's already there, only that something importable is.
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
-sys.modules["homeassistant.helpers.storage"] = MagicMock()
-sys.modules["homeassistant.loader"] = MagicMock()
-
-
-# Now we can import the functions
-from custom_components.ha_mcp_tools import (  # noqa: E402
+from custom_components.ha_mcp_tools import (
     _PACKAGE_DIR_CACHE,
     TAILED_LOG_FILES,
     _decode_legacy_backup_name,
@@ -65,14 +46,14 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _volume_root_for,
     _write_file_sync,
 )
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools.const import (
     ALLOWED_READ_DIRS,
     ALLOWED_VOLUME_ROOTS,
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_KEYS,
 )
 
-from ._symlink_support import symlink_or_skip  # noqa: E402
+from ._symlink_support import symlink_or_skip
 
 
 class TestReadLogTailSync:
@@ -1357,7 +1338,7 @@ class TestDenyFloor:
 class TestLoadAllowedPaths:
     """_load_allowed_paths re-validates the persisted store and fails safe.
 
-    Store is mocked (HA is stubbed at import), so async_load is an AsyncMock.
+    Store is mocked, so async_load is an AsyncMock.
     Runs under asyncio_mode=auto (no explicit marker needed).
     """
 

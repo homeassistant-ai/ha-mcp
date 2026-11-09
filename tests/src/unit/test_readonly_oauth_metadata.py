@@ -2,7 +2,7 @@
 
 import pytest
 
-from ._embedded_stubs import make_request
+from ._embedded_helpers import make_request, response_json
 from .test_mcp_webhook import (
     DATA_WEBHOOK,
     DOMAIN,
@@ -41,7 +41,7 @@ class TestReadonlyDiscovery:
         assert path in [route.format(webhook_id=webhook_id) for route in routes]
         response = await view.get(request, webhook_id=webhook_id)
         assert response.status == 200
-        assert response.json_body == {
+        assert response_json(response) == {
             "resource": f"https://abc.ui.nabu.casa/api/webhook/{webhook_id}{suffix}",
             "authorization_servers": [f"https://abc.ui.nabu.casa{OAUTH_BASE}"],
             "bearer_methods_supported": ["header"],

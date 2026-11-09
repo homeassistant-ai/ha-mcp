@@ -12,33 +12,9 @@ module-size ratchet's limit and cannot grow.
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
-# Stub the HA modules the component surface imports (the same pattern the
-# sibling component test modules install). ``homeassistant.const`` needs
-# ``MATCH_ALL``: ``_do_call_event`` imports it function-locally.
-sys.modules.setdefault("homeassistant", SimpleNamespace())
-for _mod in (
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_mod, MagicMock())
-
-sys.modules.setdefault(
-    "homeassistant.const",
-    SimpleNamespace(EVENT_STATE_CHANGED="state_changed", MATCH_ALL="*"),
-)
-
-from ._component_ws_api import wsapi  # noqa: E402  (installs stubs, loads surface)
+from ._component_ws_api import wsapi
 
 
 class _CallEventBus:

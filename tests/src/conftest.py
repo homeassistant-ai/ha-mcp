@@ -1,8 +1,9 @@
 """Session guard: unit and e2e tests must not run in the same pytest session.
 
-They share ``asyncio_default_test_loop_scope = session`` (one event loop per
-xdist worker). E2e tests leave Docker/HTTP state in that loop; unit tests
-using AsyncMock then behave non-deterministically.
+Unit tests run under Core's test plugin (loaded by ``unit/conftest.py``),
+which blocks sockets and fails tests that leave threads behind; e2e tests reach
+real containers and share one session event loop per xdist worker. Neither
+works under the other's setup.
 
 Run them separately:
     cd tests && uv run pytest src/unit/ -n2
@@ -29,9 +30,9 @@ _UNIT = Path(__file__).parent / "unit"
 _E2E = Path(__file__).parent / "e2e"
 
 _MESSAGE = (
-    "Unit and e2e tests cannot run in the same pytest session. They share an "
-    "asyncio event loop per xdist worker, and e2e's Docker/HTTP state then "
-    "contaminates AsyncMock-based unit tests. Run them separately: "
+    "Unit and e2e tests cannot run in the same pytest session. Unit tests run "
+    "under Core's test plugin, which blocks the sockets and threads e2e tests "
+    "need, and the two use different event-loop scopes. Run them separately: "
     "'uv run pytest src/unit/ -n2' and "
     "'uv run pytest src/e2e/ -n2 --dist loadscope'."
 )

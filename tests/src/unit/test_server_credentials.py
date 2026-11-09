@@ -13,17 +13,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from ._embedded_stubs import install
-
-install()
-
-from homeassistant.auth.models import (  # noqa: E402
+from homeassistant.auth.models import (
     TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN as LLAT,
 )
 
-from custom_components.ha_mcp_tools import server_credentials as sc  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools import server_credentials as sc
+from custom_components.ha_mcp_tools.const import (
     DATA_ACCESS_TOKEN,
     DATA_ADMIN_TOKEN,
     DATA_ISSUED_TOKEN_ID,

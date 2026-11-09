@@ -101,14 +101,14 @@ def test_missing_core_defaults_does_not_hide_available_schema(
 ) -> None:
     from custom_components.ha_mcp_tools import core_contract as module
 
-    from .test_component_ws_search import _REAL_VOL
+    from .test_component_ws_search import vol
 
     monkeypatch.setattr(
         module, "_defaults", Mock(side_effect=AttributeError("Core changed"))
     )
     hass = FakeHass()
     hass.data["websocket_api"] = {"energy/save_prefs": (Mock(), lambda value: value)}
-    execute = module.command_specs(_REAL_VOL)[0][1]
+    execute = module.command_specs(vol)[0][1]
     result = execute(hass, {"command": "energy/save_prefs"})
     assert result["status"] == "available"
     assert "default_preferences" not in result
@@ -157,18 +157,17 @@ def test_contract_commands_require_admin_before_preparation(
     from custom_components.ha_mcp_tools import websocket_api as wsapi
 
     from .test_component_ws_search import (
-        _REAL_VOL,
         _FakeConnection,
         _FakeWSApi,
         _Unauthorized,
+        vol,
     )
 
     fake = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", fake)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     preparation = AsyncMock(return_value={"records": []})
     monkeypatch.setattr(wsapi.core_contract, "statistics_metadata", preparation)
-    for schema, execute, prep in wsapi.core_contract.command_specs(_REAL_VOL):
+    for schema, execute, prep in wsapi.core_contract.command_specs(vol):
         fake.async_register_command(
             FakeHass(), wsapi._build_handler(schema, execute, prep)
         )

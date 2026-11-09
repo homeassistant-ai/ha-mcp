@@ -1,6 +1,6 @@
 name: Mirror Python Base Image
 
-# CI pulls python:3.13-slim at the Dockerfiles' pinned digests from
+# CI pulls python:3.14-slim at the Dockerfiles' pinned digests from
 # ghcr.io/homeassistant-ai/ha-mcp-python-base first: ECR Public's and Docker
 # Hub's anonymous limits are shared by every GitHub runner and answer 429 under
 # load. This copies each pinned digest there unchanged (same manifest digest),

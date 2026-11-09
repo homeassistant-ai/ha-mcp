@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
@@ -14,11 +15,9 @@ _LOGGER = logging.getLogger(__package__)
 
 
 def _async_get_entity_settings(hass: HomeAssistant, entity_id: str) -> Any:
-    """core's ``async_get_entity_settings(hass, entity_id)``; test seam.
+    """core's ``async_get_entity_settings(hass, entity_id)``, as a seam tests replace.
 
-    Imported lazily so the fake-hass unit suite (which MagicMock-stubs
-    ``homeassistant.*`` at import time) can monkeypatch this whole function rather
-    than the deep core module. Returns ``{assistant: settings_mapping}`` and raises
+    Returns ``{assistant: settings_mapping}`` and raises
     ``HomeAssistantError("Unknown entity")`` for an id in neither the registry nor
     the exposed-entities store — caught by :func:`_entity_exposed_to`.
     """
@@ -32,20 +31,14 @@ def _async_get_entity_settings(hass: HomeAssistant, entity_id: str) -> Any:
 def _is_unknown_entity_error(exc: Exception) -> bool:
     """True for core's ``HomeAssistantError('Unknown entity')`` from the settings helper.
 
-    Keyed off the exception type NAME (not an ``isinstance`` against the imported
-    class) so the fake-hass suite — which stubs ``homeassistant.exceptions`` — can
-    raise a stand-in ``HomeAssistantError`` without importing the real class. The
-    type name alone is too wide: core raises a plain ``HomeAssistantError`` for
+    The type alone is too wide: core raises a plain ``HomeAssistantError`` for
     other faults too, so the message is also required to carry ``unknown entity``
     (case-insensitive). A store-read failure that raises a bare
     ``HomeAssistantError`` therefore propagates instead of being silently reported
     as not-exposed; the audit guardrail (junk id → not-exposed default) still
     matches because that raise carries the ``Unknown entity`` message.
     """
-    return (
-        type(exc).__name__ == "HomeAssistantError"
-        and "unknown entity" in str(exc).lower()
-    )
+    return isinstance(exc, HomeAssistantError) and "unknown entity" in str(exc).lower()
 
 
 def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:
@@ -103,8 +96,8 @@ def _explicit_assist_exposure(hass: HomeAssistant, entity_id: str) -> bool | Non
 def _assist_expose_new_entities(hass: HomeAssistant) -> bool:
     """core's ``ExposedEntities.async_get_expose_new_entities("conversation")`` — read-only.
 
-    Function-local import + a standalone seam so the fake-hass suite can monkeypatch
-    it. A ``@callback`` that only reads the assistant preferences (no store write).
+    A standalone seam tests replace. It only reads the assistant preferences (no
+    store write).
     """
     from homeassistant.components.homeassistant.exposed_entities import (
         DATA_EXPOSED_ENTITIES,
@@ -122,7 +115,7 @@ def _assist_default_exposed(hass: HomeAssistant, entity_id: str) -> bool:
     default-exposure constants (no drift — the running core defines them) and uses
     core's ``get_device_class``, so the domain / device-class verdict matches core
     exactly. entity_category / hidden_by entities are never a default exposure. A
-    standalone seam so the fake-hass suite can monkeypatch it.
+    standalone seam tests replace.
     """
     from homeassistant.components.homeassistant.exposed_entities import (
         DEFAULT_EXPOSED_BINARY_SENSOR_DEVICE_CLASSES,
@@ -140,7 +133,6 @@ def _assist_default_exposed(hass: HomeAssistant, entity_id: str) -> bool:
     domain = entity_id.split(".", maxsplit=1)[0] if "." in entity_id else entity_id
     if domain in DEFAULT_EXPOSED_DOMAINS:
         return True
-    from homeassistant.exceptions import HomeAssistantError
     from homeassistant.helpers.entity import get_device_class
 
     try:

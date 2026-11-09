@@ -502,7 +502,7 @@ def _log_startup_version() -> None:
             "A newer ha-mcp release is available: %s (you have %s). %s",
             info.latest,
             info.current,
-            update_command_hint(info.current),
+            update_command_hint(info.current, info),
         )
 
 

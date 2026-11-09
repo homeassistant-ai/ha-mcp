@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from homeassistant.helpers import device_registry as dr
+from homeassistant.loader import async_get_integration
+
 from .const import COMPONENT_VERSION, DOMAIN
 from .store_records import async_schedule_store_records_check
 
@@ -26,9 +29,6 @@ async def async_register_entry_device(
     device with it.
     """
     async_schedule_store_records_check(hass)
-    from homeassistant.helpers import device_registry as dr
-    from homeassistant.loader import async_get_integration
-
     version = COMPONENT_VERSION
     try:
         integration = await async_get_integration(hass, DOMAIN)

@@ -30,13 +30,11 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import voluptuous as vol
+from homeassistant.components.lovelace.const import ConfigNotFound
+from homeassistant.core import is_callback
+from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
-# Import EVERYTHING component-side (including ``wsapi`` itself) THROUGH the sibling
-# module — importing it installs the ``homeassistant.*`` MagicMock stubs and forces
-# the REAL voluptuous into sys.modules FIRST, so a direct ``custom_components``
-# import (which loads homeassistant) is never hoisted above the stub install.
-# Mirrors test_component_search_contract.py's ``wsapi`` re-import.
-from . import test_component_ws_search as _base
 from ._component_ws_fakes import _FakeBulkServices, _FakeCallServices
 from .test_component_ws_search import (
     FakeChildDevice,
@@ -52,28 +50,6 @@ from .test_component_ws_search import (
     make_view,
     wsapi,
 )
-
-_REAL_VOL = _base._REAL_VOL
-
-
-class _StubConfigNotFound(Exception):
-    """Stand-in for core's ``lovelace.const.ConfigNotFound``.
-
-    ``_dashboard_search_docs`` imports it function-locally to classify a
-    config-less (auto-generated) dashboard as a clean skip; the stubbed
-    ``homeassistant.*`` env has no real module, so pin one with a real
-    exception class (mirrors the ``HomeAssistantError`` stub in
-    ``test_component_ws_search``). Explicitly replace any prior stub that
-    lacks the attribute so the class identity is stable for isinstance.
-    """
-
-
-_lovelace_const = sys.modules.get("homeassistant.components.lovelace.const")
-if _lovelace_const is None or not hasattr(_lovelace_const, "ConfigNotFound"):
-    sys.modules["homeassistant.components.lovelace.const"] = SimpleNamespace(
-        ConfigNotFound=_StubConfigNotFound
-    )
-ConfigNotFound = sys.modules["homeassistant.components.lovelace.const"].ConfigNotFound
 
 
 # =============================================================================
@@ -531,8 +507,7 @@ class TestDashboardsMapResolution:
 # =============================================================================
 class TestDashboardsSchema:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._dashboards_schema())
+        return vol.Schema(wsapi._dashboards_schema())
 
     def test_defaults_to_list_mode(self, monkeypatch):
         out = self._schema(monkeypatch)({"type": wsapi.WS_DASHBOARDS})
@@ -552,7 +527,7 @@ class TestDashboardsSchema:
         ],
     )
     def test_malformed_rejected(self, monkeypatch, bad):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(bad)
 
 
@@ -640,22 +615,18 @@ class TestServicesList:
             "homeassistant.helpers.service",
             SimpleNamespace(async_get_all_descriptions=_bad_desc),
         )
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
-        with pytest.raises(_base._StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             asyncio.run(wsapi._fetch_service_descriptions(FakeHass()))
 
 
 class TestServicesListSchema:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._services_list_schema())
+        return vol.Schema(wsapi._services_list_schema())
 
     def test_query_param_rejected(self, monkeypatch):
         # ``query`` is no longer a wire param — a coarse component filter cannot be a
         # superset of the server's concatenation-based filter, so it is not accepted.
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(
                 {"type": wsapi.WS_SERVICES_LIST, "query": "light"}
             )
@@ -668,7 +639,7 @@ class TestServicesListSchema:
         ],
     )
     def test_malformed_rejected(self, monkeypatch, bad):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(bad)
 
 
@@ -711,21 +682,15 @@ class TestReferenceData:
         # RAISE (→ server command-error fallback to the legacy REST get_services),
         # NOT serve an empty catalog that makes every reference emit a false
         # "not found" warning where legacy skips validation (review-3 M-1).
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
-        with pytest.raises(_base._StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_reference_data(FakeHass(), {})
 
     def test_no_state_machine_substrate_raises(self, monkeypatch):
         # Core drift: hass.states.async_all is absent/renamed. With include_states
         # (the default), this must RAISE rather than serve an empty entity universe.
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
         hass = FakeHass(services=FakeServices({"light": {"turn_on": object()}}))
         hass.states = None  # no async_all → drifted state machine
-        with pytest.raises(_base._StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_reference_data(hass, {})
 
     def test_genuinely_empty_services_still_returns_empty(self, monkeypatch):
@@ -740,15 +705,14 @@ class TestReferenceData:
 
 class TestReferenceDataSchema:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._reference_data_schema())
+        return vol.Schema(wsapi._reference_data_schema())
 
     def test_include_states_default(self, monkeypatch):
         out = self._schema(monkeypatch)({"type": wsapi.WS_REFERENCE_DATA})
         assert out["include_states"] is True
 
     def test_malformed_rejected(self, monkeypatch):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(
                 {"type": wsapi.WS_REFERENCE_DATA, "include_states": "yes"}
             )
@@ -1601,8 +1565,7 @@ class TestSearchVisibilityPlacement:
 
 class TestSearchVisibilitySchema:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._search_schema())
+        return vol.Schema(wsapi._search_schema())
 
     def test_accepts_visibility_dict(self, monkeypatch):
         out = self._schema(monkeypatch)(
@@ -1634,28 +1597,19 @@ class TestSearchVisibilitySchema:
     def test_rejects_unknown_visibility_key(self, monkeypatch):
         # A typo'd / newer-server dimension is rejected loudly (the server then falls
         # back to legacy with the filter applied) rather than silently ignored.
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(
                 {"type": wsapi.WS_SEARCH, "visibility": {"exclude_area": ["x"]}}
             )
 
     def test_rejects_non_dict_visibility(self, monkeypatch):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)({"type": wsapi.WS_SEARCH, "visibility": "nope"})
 
 
 # =============================================================================
 # _assist_should_expose — READ-ONLY reconstruction of core's async_should_expose
 # =============================================================================
-class _NamedHomeAssistantError(Exception):
-    """Exception whose __name__ is ``HomeAssistantError`` (what _is_unknown_entity_error
-    keys off, since the fake suite stubs the real class)."""
-
-
-# _is_unknown_entity_error matches on the type NAME, so alias to the exact name.
-_NamedHomeAssistantError.__name__ = "HomeAssistantError"
-
-
 def _boom(*_a, **_k):
     raise AssertionError("must not be consulted")
 
@@ -1704,7 +1658,7 @@ class TestAssistShouldExposeReadOnly:
         # An id in neither the registry nor the store raises "Unknown entity" from the
         # settings read; that is NOT an explicit override — fall to the default.
         def _raise(hass, eid):
-            raise _NamedHomeAssistantError("Unknown entity")
+            raise HomeAssistantError("Unknown entity")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", _raise)
         monkeypatch.setattr(wsapi, "_assist_expose_new_entities", lambda hass: True)
@@ -1785,15 +1739,13 @@ class TestServerEntry:
 
 class TestServerEntrySchema:
     def test_schema_shape(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_schema())
+        schema = vol.Schema(wsapi._server_entry_schema())
         out = schema({"type": wsapi.WS_SERVER_ENTRY})
         assert out["type"] == wsapi.WS_SERVER_ENTRY
 
     def test_rejects_extra_keys(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._server_entry_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
+        schema = vol.Schema(wsapi._server_entry_schema())
+        with pytest.raises(vol.Invalid):
             schema({"type": wsapi.WS_SERVER_ENTRY, "entry_id": "x"})
 
 
@@ -1818,7 +1770,6 @@ _NEW_CMD_MSG_EXTRA = {
 def functional_ws(monkeypatch):
     fake = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", fake)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     monkeypatch.setattr(
         wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
     )
@@ -1859,10 +1810,7 @@ class TestNewCommandRegistration:
             # (→ command error → the server's legacy REST fallback). The admin
             # gate provably admitted the call because the raise comes from the
             # pure handler; result-shape coverage lives in TestReferenceData.
-            monkeypatch.setitem(
-                sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-            )
-            with pytest.raises(_base._StubHomeAssistantError):
+            with pytest.raises(HomeAssistantError):
                 handler(FakeHass(), conn, msg)
             return
         hass = FakeHass()
@@ -1879,32 +1827,6 @@ class TestNewCommandRegistration:
 # =============================================================================
 # call_service (Phase 3 — the FIRST write capability, issue #1813)
 # =============================================================================
-class _StubServiceNotFound(_base._StubHomeAssistantError):
-    """Stand-in for core's ``ServiceNotFound`` (a ``HomeAssistantError`` subclass).
-
-    ``_call_service_prep`` does a function-local ``from homeassistant.exceptions
-    import ServiceNotFound`` and ``raise ServiceNotFound(domain, service)``; the
-    module is MagicMock-stubbed, so a REAL exception class must back the attribute
-    for the raise path to be exercisable (mirrors ``_StubHomeAssistantError``).
-    Subclassing the HomeAssistantError stub mirrors core's real class hierarchy.
-    """
-
-    def __init__(self, domain=None, service=None):
-        super().__init__(f"Service {domain}.{service} not found")
-        self.domain = domain
-        self.service = service
-
-
-# Pin ServiceNotFound onto the shared exceptions stub so the raise-path tests'
-# ``monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)``
-# binds a real class (the base module already pins ``HomeAssistantError``).
-_base._exceptions_stub.ServiceNotFound = _StubServiceNotFound
-
-# ``_call_service_prep`` imports ``EVENT_STATE_CHANGED`` and ``call_event`` imports
-# ``MATCH_ALL`` from ``homeassistant.const`` function-locally; conftest's autouse
-# fixture guarantees both names for every unit test, so no module-level stub here.
-
-
 class _FakeEvent:
     """A ``state_changed`` event — only ``.data`` is read by the listener."""
 
@@ -1980,9 +1902,6 @@ class TestCallServiceDomainBlock:
 
     @pytest.mark.parametrize("domain", _HA_MCP_TOOLS_DOMAIN_VARIANTS)
     def test_domain_block_never_dispatches(self, monkeypatch, domain):
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
         bus = _FakeBus()
         # The gateway service EXISTS in the registry — only the D1 block stops it.
         services = _FakeCallServices(known={("ha_mcp_tools", "get_caller_token")})
@@ -1992,11 +1911,11 @@ class TestCallServiceDomainBlock:
             "domain": domain,
             "service": "get_caller_token",
         }
-        with pytest.raises(_base._StubHomeAssistantError) as exc:
+        with pytest.raises(HomeAssistantError) as exc:
             asyncio.run(wsapi._call_service_prep(hass, msg))
         # It is the D1 refusal, not a coincidental ServiceNotFound.
         assert "not callable" in str(exc.value)
-        assert not isinstance(exc.value, _StubServiceNotFound)
+        assert not isinstance(exc.value, ServiceNotFound)
         # THE assertion: async_call was NEVER reached; no listener was registered.
         assert services.call_count == 0
         assert bus.listeners == []
@@ -2005,9 +1924,6 @@ class TestCallServiceDomainBlock:
 
 class TestCallServiceNotFound:
     def test_unknown_service_raises_before_dispatch(self, monkeypatch):
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
         bus = _FakeBus()
         services = _FakeCallServices(known=set())  # nothing registered
         hass = _call_hass([], services, bus)
@@ -2016,7 +1932,7 @@ class TestCallServiceNotFound:
             "domain": "light",
             "service": "does_not_exist",
         }
-        with pytest.raises(_StubServiceNotFound):
+        with pytest.raises(ServiceNotFound):
             asyncio.run(wsapi._call_service_prep(hass, msg))
         assert services.call_count == 0  # refused before any dispatch
         assert bus.listeners == []  # raised before register-before-fire
@@ -2461,10 +2377,7 @@ class TestCallServiceUnsub:
     def test_unsub_runs_when_dispatch_raises(self, monkeypatch):
         # A post-registration dispatch failure (async_call raises) must still tear
         # down the listener via the finally, and the exception must propagate.
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
-        boom = _base._StubHomeAssistantError("dispatch failed")
+        boom = HomeAssistantError("dispatch failed")
         bus = _FakeBus()
         services = _FakeCallServices(known={("light", "turn_on")}, raises=boom)
         hass = _call_hass([FakeState("light.a", state="off")], services, bus)
@@ -2474,7 +2387,7 @@ class TestCallServiceUnsub:
             "service": "turn_on",
             "entity_ids": ["light.a"],
         }
-        with pytest.raises(_base._StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             asyncio.run(wsapi._call_service_prep(hass, msg))
         # Register-before-fire happened, and the finally unsubbed exactly once.
         assert len(bus.listeners) == 1
@@ -2488,9 +2401,7 @@ class TestCallServiceListenerJobType:
     A plain (non-callback) listener is ``HassJobType.Executor`` on real HA: every
     instance-wide ``state_changed`` gets dispatched to the thread pool and
     ``asyncio.Event.set()`` runs cross-thread on a non-thread-safe Event (delayed /
-    spurious ``partial`` + an ``InvalidStateError`` race). HA's ``is_callback`` reads
-    exactly ``getattr(func, "_hass_callback", False)``, so the fix pins that attribute
-    — proven here without needing real HA job-type inference.
+    spurious ``partial`` + an ``InvalidStateError`` race).
     """
 
     def test_single_call_listener_is_marked_callback(self):
@@ -2511,7 +2422,7 @@ class TestCallServiceListenerJobType:
         )
         (registered,) = bus.listeners
         _event_type, listener = registered
-        assert getattr(listener, "_hass_callback", False) is True
+        assert is_callback(listener)
 
     def test_bulk_listeners_are_marked_callback(self):
         bus = _FakeBus()
@@ -2544,13 +2455,12 @@ class TestCallServiceListenerJobType:
         )
         assert len(bus.listeners) == 2
         for _event_type, listener in bus.listeners:
-            assert getattr(listener, "_hass_callback", False) is True
+            assert is_callback(listener)
 
 
 class TestCallServiceSchema:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._call_service_schema())
+        return vol.Schema(wsapi._call_service_schema())
 
     def test_defaults(self, monkeypatch):
         out = self._schema(monkeypatch)(
@@ -2590,7 +2500,7 @@ class TestCallServiceSchema:
         ],
     )
     def test_malformed_rejected(self, monkeypatch, bad):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(bad)
 
     def test_timeout_at_cap_accepted(self, monkeypatch):
@@ -2636,9 +2546,6 @@ class TestBulkCallServiceDomainBlock:
 
     @pytest.mark.parametrize("bad_domain", _HA_MCP_TOOLS_DOMAIN_VARIANTS)
     def test_one_ha_mcp_tools_op_dispatches_nothing(self, monkeypatch, bad_domain):
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
         bus = _FakeBus()
         # Both services EXIST in the registry — only the D1 block stops the batch.
         services = _FakeBulkServices(
@@ -2652,11 +2559,11 @@ class TestBulkCallServiceDomainBlock:
                 {"domain": bad_domain, "service": "get_caller_token"},
             ],
         }
-        with pytest.raises(_base._StubHomeAssistantError) as exc:
+        with pytest.raises(HomeAssistantError) as exc:
             asyncio.run(wsapi._bulk_call_service_prep(hass, msg))
         # The D1 refusal, not a coincidental ServiceNotFound.
         assert "not callable" in str(exc.value)
-        assert not isinstance(exc.value, _StubServiceNotFound)
+        assert not isinstance(exc.value, ServiceNotFound)
         # THE assertion: ZERO dispatches for the whole batch — not even the valid
         # ``light`` op ahead of the refused one — and no listener was registered.
         assert services.call_count == 0
@@ -2666,9 +2573,6 @@ class TestBulkCallServiceDomainBlock:
 
 class TestBulkCallServiceNotFound:
     def test_one_unknown_service_aborts_whole_batch(self, monkeypatch):
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
-        )
         bus = _FakeBus()
         # Only ``light.turn_on`` exists; the second op's service is unknown.
         services = _FakeBulkServices(known={("light", "turn_on")})
@@ -2680,7 +2584,7 @@ class TestBulkCallServiceNotFound:
                 {"domain": "light", "service": "does_not_exist"},
             ],
         }
-        with pytest.raises(_StubServiceNotFound):
+        with pytest.raises(ServiceNotFound):
             asyncio.run(wsapi._bulk_call_service_prep(hass, msg))
         # Pre-dispatch abort: nothing fired, no register-before-fire listener.
         assert services.call_count == 0
@@ -2893,7 +2797,7 @@ class TestBulkCallServiceParallelIsolation:
     def test_one_op_raises_others_unaffected(self):
         # Under ``parallel`` (gather return_exceptions), one op's async_call raising
         # is captured on THAT op — the OTHER op still dispatches and confirms.
-        boom = _base._StubHomeAssistantError("boom")
+        boom = HomeAssistantError("boom")
         new_b = FakeState("switch.b", state="on")
         bus = _FakeBus()
         services = _FakeBulkServices(
@@ -3032,8 +2936,7 @@ class TestBulkCallServiceUnsub:
 
 class TestBulkCallServiceSchema:
     def _schema(self, monkeypatch):
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        return _REAL_VOL.Schema(wsapi._bulk_call_service_schema())
+        return vol.Schema(wsapi._bulk_call_service_schema())
 
     def test_defaults(self, monkeypatch):
         out = self._schema(monkeypatch)(
@@ -3069,7 +2972,7 @@ class TestBulkCallServiceSchema:
         ],
     )
     def test_malformed_rejected(self, monkeypatch, bad):
-        with pytest.raises(_REAL_VOL.Invalid):
+        with pytest.raises(vol.Invalid):
             self._schema(monkeypatch)(bad)
 
     def test_operation_expected_state_optional(self, monkeypatch):

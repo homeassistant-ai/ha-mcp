@@ -3,28 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
-import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.components.lovelace.const import ConfigNotFound
 
+from custom_components.ha_mcp_tools import dashboard_edit
 from ha_mcp.utils.config_hash import compute_config_hash
 
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
     wsapi,
 )
-
-
-class ConfigNotFound(Exception):
-    """An existing storage dashboard without a saved config."""
 
 
 class LiveDashboard:
@@ -58,38 +53,8 @@ class LiveDashboard:
 
 
 @pytest.fixture
-def edit(monkeypatch):
-    """Use existing component import stubs, with real serialization behavior."""
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.components.lovelace",
-        SimpleNamespace(LOVELACE_DATA="lovelace"),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.components.lovelace.const",
-        SimpleNamespace(ConfigNotFound=ConfigNotFound),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.helpers.json",
-        SimpleNamespace(
-            json_bytes=lambda value: json.dumps(
-                value,
-                default=lambda leaf: (
-                    leaf.isoformat()
-                    if isinstance(leaf, datetime)
-                    else _unsupported_json(leaf)
-                ),
-                allow_nan=False,
-            ).encode()
-        ),
-    )
-    return importlib.import_module("custom_components.ha_mcp_tools.dashboard_edit")
-
-
-def _unsupported_json(value):
-    raise TypeError(f"Unsupported JSON value: {type(value).__name__}")
+def edit():
+    return dashboard_edit
 
 
 def hass_for(dashboard, key="home-dashboard"):
@@ -437,7 +402,6 @@ async def test_another_writer_during_persistence_returns_latest_readback(edit):
 def test_new_command_is_registered_and_admin_gated(edit, monkeypatch):
     transport = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", transport)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     wsapi.async_register_commands(FakeHass())
     command = "ha_mcp_tools/dashboard_edit"
     assert "dashboard_edit" in wsapi._do_info(FakeHass())["capabilities"]

@@ -1,276 +1,127 @@
-"""Unit tests for the server entry-point wiring.
+"""The server entry-point wiring, on a real ``hass``.
 
-Focuses on what ``async_setup_server_entry`` / ``async_unload_server_entry``
-wire up: the background bring-up, the sidebar panel, the removal of the
-retired server update entity (the server now arrives with the component
-release, #2427), and the ``ha_mcp_tools/*`` WebSocket command surface the
+Home Assistant sets the server entry up and unloads it through its own
+config-entry machinery, with its real registries. What that wires up: the
+background bring-up, the sidebar panel, the removal of the retired server
+update entity (the server now arrives with the component release, #2427), the
+entry's device, and the ``ha_mcp_tools/*`` WebSocket command surface the
 server entry registers up front (issue #2289).
 
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (imported first so
-the fakes are installed before the component module binds them). The lazily
-imported ``embedded_setup`` / ``ui_panel`` collaborators are replaced with
-fakes so the entry-point wiring is exercised in isolation.
+The server itself and the sidebar panel are replaced (``_server_entry``).
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import secrets
-import sys
-from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
-from ._embedded_stubs import install
+import custom_components.ha_mcp_tools.embedded_entry as eentry
+from custom_components.ha_mcp_tools import const, oauth_legacy
+from custom_components.ha_mcp_tools.const import DOMAIN
 
-install()
-
-import custom_components.ha_mcp_tools.embedded_entry as eentry  # noqa: E402
-from custom_components.ha_mcp_tools import const  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
-    DATA_SECRET_PATH,
-    DATA_WEBHOOK_ID,
-    DOMAIN,
-)
-
-
-def _make_hass() -> MagicMock:
-    hass = MagicMock(name="hass")
-    hass.data = {}
-    hass.config_entries.async_forward_entry_setups = AsyncMock()
-    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
-
-    background_tasks: list[asyncio.Task] = []
-
-    def _create_bg_task(coro, name, eager_start=True):
-        # Mirrors HomeAssistant.async_create_background_task: schedule the
-        # coroutine so it actually runs (a bare MagicMock would leak it as a
-        # "was never awaited" warning and the drain helper would never see it).
-        task = asyncio.ensure_future(coro)
-        background_tasks.append(task)
-        return task
-
-    hass.async_create_background_task = MagicMock(side_effect=_create_bg_task)
-    hass.background_tasks = background_tasks
-    return hass
-
-
-def _make_entry() -> MagicMock:
-    entry = MagicMock(name="entry")
-    entry.options = {}
-    entry.data = {DATA_SECRET_PATH: "/private_x", DATA_WEBHOOK_ID: "mcp_x"}
-    entry.entry_id = "entry-1"
-    entry.async_on_unload = MagicMock()
-    entry.add_update_listener = MagicMock(return_value=MagicMock(name="listener"))
-
-    background_tasks: list[asyncio.Task] = []
-
-    def _create_bg_task(hass, coro, name):
-        # Real ConfigEntry.async_create_background_task schedules the
-        # coroutine immediately; a bare MagicMock would instead leak it (an
-        # "was never awaited" warning) since nothing would ever run it. The
-        # fake bring-up coroutine below is a plain MagicMock return value (not
-        # a real coroutine), so it is left alone — same as before.
-        if asyncio.iscoroutine(coro):
-            task = asyncio.ensure_future(coro)
-            background_tasks.append(task)
-            return task
-        return MagicMock(name=f"bg_task:{name}")
-
-    entry.async_create_background_task = MagicMock(side_effect=_create_bg_task)
-    entry.background_tasks = background_tasks
-    return entry
-
-
-async def _drain_background_tasks(hass, entry) -> None:
-    """Run every background task scheduled so far, including ones a still-
-    draining task schedules itself (both the entry's and hass's pools)."""
-    seen: set[asyncio.Task] = set()
-    while True:
-        pending = [
-            t
-            for t in (*entry.background_tasks, *hass.background_tasks)
-            if t not in seen
-        ]
-        if not pending:
-            break
-        seen.update(pending)
-        await asyncio.gather(*pending)
-
-
-class _FakeDeviceRegistry:
-    def __init__(self) -> None:
-        self.created: list[dict] = []
-
-    def async_get_or_create(self, **kwargs) -> None:
-        self.created.append(kwargs)
-
-
-class _FakeEntityRegistry:
-    """Just enough of the entity registry for the retired-entity cleanup."""
-
-    def __init__(self, existing: dict[tuple[str, str, str], str]) -> None:
-        self.existing = existing
-        self.removed: list[str] = []
-
-    def async_get_entity_id(
-        self, domain: str, platform: str, unique_id: str
-    ) -> str | None:
-        return self.existing.get((domain, platform, unique_id))
-
-    def async_remove(self, entity_id: str) -> None:
-        self.removed.append(entity_id)
+from ._server_entry import add_server_entry, replace_server, set_up
 
 
 @pytest.fixture
-def fake_collaborators(monkeypatch):
-    """Inject fake ``embedded_setup`` / ``ui_panel`` / entity-registry modules.
+def server(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    return replace_server(monkeypatch)
 
-    ``async_setup_server_entry`` imports ``async_bring_up_server`` from
-    ``embedded_setup``, ``async_register_ui_panel`` from ``ui_panel``,
-    ``async_register_commands`` from ``websocket_api`` and the entity
-    registry at call time; the fakes keep the full HA chain out of this test.
-    The registry holds the update entity a component 2.x install registered.
-    """
-    fake_setup = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
-    fake_setup.async_bring_up_server = MagicMock(
-        name="async_bring_up_server", return_value=MagicMock(name="bringup_task_arg")
-    )
-    fake_setup.async_teardown_server = AsyncMock(name="async_teardown_server")
 
-    fake_panel = ModuleType("custom_components.ha_mcp_tools.ui_panel")
-    fake_panel.async_register_ui_panel = AsyncMock(name="async_register_ui_panel")
-    fake_panel.async_unregister_ui_panel = MagicMock(name="async_unregister_ui_panel")
-
-    registry = _FakeEntityRegistry(
-        {("update", DOMAIN, "entry-1_server_update"): "update.ha_mcp_server_update"}
-    )
-    fake_er = ModuleType("homeassistant.helpers.entity_registry")
-    fake_er.async_get = MagicMock(return_value=registry)
-
-    devices = _FakeDeviceRegistry()
-    fake_dr = ModuleType("homeassistant.helpers.device_registry")
-    fake_dr.async_get = MagicMock(return_value=devices)
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.device_registry", fake_dr)
-    monkeypatch.setattr(
-        sys.modules["homeassistant.helpers"], "device_registry", fake_dr, raising=False
-    )
-    monkeypatch.setattr(
-        sys.modules["homeassistant.loader"],
-        "async_get_integration",
-        AsyncMock(return_value=SimpleNamespace(version="9.0.0")),
-        raising=False,
-    )
-
-    fake_wsapi = ModuleType("custom_components.ha_mcp_tools.websocket_api")
-    fake_wsapi.async_register_commands = MagicMock(name="async_register_commands")
-
-    monkeypatch.setitem(
-        sys.modules, "custom_components.ha_mcp_tools.embedded_setup", fake_setup
-    )
-    monkeypatch.setitem(
-        sys.modules, "custom_components.ha_mcp_tools.ui_panel", fake_panel
-    )
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", fake_er)
-    monkeypatch.setattr(
-        sys.modules["homeassistant.helpers"], "entity_registry", fake_er, raising=False
-    )
-    monkeypatch.setitem(
-        sys.modules, "custom_components.ha_mcp_tools.websocket_api", fake_wsapi
-    )
-    return SimpleNamespace(
-        setup=fake_setup,
-        panel=fake_panel,
-        registry=registry,
-        devices=devices,
-        websocket_api=fake_wsapi,
-    )
+def _ws_commands(hass: HomeAssistant) -> set[str]:
+    """The ``ha_mcp_tools/*`` commands registered with Home Assistant."""
+    return {
+        command
+        for command in hass.data.get("websocket_api", {})
+        if command.startswith(f"{DOMAIN}/")
+    }
 
 
 class TestSetup:
     async def test_schedules_bring_up_without_update_platform(
-        self, fake_collaborators: SimpleNamespace
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        server: SimpleNamespace,
     ) -> None:
         # The server arrives with the component release (#2427): no update
         # platform, no PyPI poll, no automatic reinstall.
-        hass = _make_hass()
-        entry = _make_entry()
+        entry = add_server_entry(hass)
 
-        result = await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
+        assert await set_up(hass, entry)
 
-        assert result is True
-        fake_collaborators.setup.async_bring_up_server.assert_called_once_with(
-            hass, entry, announce=True
-        )
-        [call] = hass.config_entries.async_forward_entry_setups.call_args_list
-        assert "update" not in call.args[1]
-        assert hass.async_create_background_task.call_count == 0
+        server.bring_up.assert_called_once_with(hass, entry, announce=True)
+        entities = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+        assert {entity.domain for entity in entities} == {"switch"}
 
     async def test_removes_the_retired_server_update_entity(
-        self, fake_collaborators: SimpleNamespace
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        server: SimpleNamespace,
     ) -> None:
-        hass = _make_hass()
-        entry = _make_entry()
+        entry = add_server_entry(hass)
+        retired = entity_registry.async_get_or_create(
+            "update", DOMAIN, f"{entry.entry_id}_server_update", config_entry=entry
+        )
 
-        await eentry.async_setup_server_entry(hass, entry)
+        assert await set_up(hass, entry)
 
-        assert fake_collaborators.registry.removed == ["update.ha_mcp_server_update"]
+        assert entity_registry.async_get(retired.entity_id) is None
 
     async def test_server_entry_has_a_current_device(
-        self, fake_collaborators: SimpleNamespace
+        self,
+        hass: HomeAssistant,
+        device_registry: dr.DeviceRegistry,
+        server: SimpleNamespace,
     ) -> None:
         # The retired update entity used to create the server's device; an
         # upgraded install must not keep it at its old version, and a new one
         # must not lack it.
-        hass = _make_hass()
-        entry = _make_entry()
+        entry = add_server_entry(hass)
+        identifiers = {(DOMAIN, entry.entry_id)}
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers=identifiers, sw_version="2.0.0"
+        )
 
-        await eentry.async_setup_server_entry(hass, entry)
+        assert await set_up(hass, entry)
 
-        [device] = fake_collaborators.devices.created
-        assert device["config_entry_id"] == entry.entry_id
-        assert device["identifiers"] == {(DOMAIN, entry.entry_id)}
-        assert device["sw_version"] == "9.0.0"
-
-    async def test_no_retired_entity_means_nothing_removed(
-        self, fake_collaborators: SimpleNamespace
-    ) -> None:
-        fake_collaborators.registry.existing.clear()
-        hass = _make_hass()
-        entry = _make_entry()
-
-        await eentry.async_setup_server_entry(hass, entry)
-
-        assert fake_collaborators.registry.removed == []
+        device = device_registry.async_get_device_by_identifier(
+            (DOMAIN, entry.entry_id), entry.entry_id
+        )
+        assert device is not None
+        manifest = Path(eentry.__file__).with_name("manifest.json")
+        assert device.sw_version == json.loads(manifest.read_text())["version"]
 
     async def test_default_registers_ui_panel(
-        self, fake_collaborators: SimpleNamespace
+        self, hass: HomeAssistant, server: SimpleNamespace
     ) -> None:
         # enable_sidebar_panel absent (default on): the admin-only "Open Web UI"
         # sidebar panel is registered during entry setup.
-        hass = _make_hass()
-        entry = _make_entry()
+        assert await set_up(hass, add_server_entry(hass))
 
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        fake_collaborators.panel.async_register_ui_panel.assert_awaited_once()
+        server.register_panel.assert_awaited_once()
 
     async def test_sidebar_panel_off_skips_ui_panel_registration(
-        self, fake_collaborators
-    ):
+        self, hass: HomeAssistant, server: SimpleNamespace
+    ) -> None:
         # enable_sidebar_panel=False: entry setup must not register the sidebar
         # panel (the user opted out of the sidebar entry point).
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.options = {const.OPT_ENABLE_SIDEBAR_PANEL: False}
+        entry = add_server_entry(hass, options={const.OPT_ENABLE_SIDEBAR_PANEL: False})
 
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
+        assert await set_up(hass, entry)
 
-        fake_collaborators.panel.async_register_ui_panel.assert_not_awaited()
+        server.register_panel.assert_not_awaited()
 
 
 class TestWebSocketCommandRegistration:
@@ -282,199 +133,195 @@ class TestWebSocketCommandRegistration:
     """
 
     async def test_setup_registers_ws_commands(
-        self, fake_collaborators: SimpleNamespace
+        self, hass: HomeAssistant, server: SimpleNamespace
     ) -> None:
-        hass = _make_hass()
-        entry = _make_entry()
+        assert not _ws_commands(hass)
 
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
+        assert await set_up(hass, add_server_entry(hass))
 
-        register = fake_collaborators.websocket_api.async_register_commands
-        register.assert_called_once_with(hass)
+        assert _ws_commands(hass)
 
     async def test_ws_commands_registered_before_fallible_setup_steps(
-        self, fake_collaborators
-    ):
+        self, hass: HomeAssistant, server: SimpleNamespace
+    ) -> None:
         # Placement pin: registration runs first, so a later setup step failing
         # (the sidebar panel here, the background bring-up in the field) never
         # costs a server-only install its command surface.
-        hass = _make_hass()
-        entry = _make_entry()
-        fake_collaborators.panel.async_register_ui_panel.side_effect = RuntimeError(
-            "panel registration failed"
-        )
+        server.register_panel.side_effect = RuntimeError("panel registration failed")
+        entry = add_server_entry(hass)
 
-        with pytest.raises(RuntimeError):
-            await eentry.async_setup_server_entry(hass, entry)
+        assert not await set_up(hass, entry)
 
-        register = fake_collaborators.websocket_api.async_register_commands
-        register.assert_called_once_with(hass)
+        assert entry.state is ConfigEntryState.SETUP_ERROR
+        assert _ws_commands(hass)
+
+
+@pytest.fixture
+async def register_view(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> MagicMock:
+    """Home Assistant's own view registration, counted."""
+    assert await async_setup_component(hass, "http", {})
+    spy = MagicMock(wraps=hass.http.register_view)
+    monkeypatch.setattr(hass.http, "register_view", spy)
+    return spy
 
 
 class TestPrebindOAuthViews:
     """Prebind every applicable OAuth route before slow background bring-up."""
 
-    def _legacy_entry(self) -> MagicMock:
-        entry = _make_entry()
-        entry.options = {
-            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
-            const.OPT_ENABLE_WEBHOOK: True,
-        }
-        entry.data = {
-            **entry.data,
-            const.DATA_OAUTH_CLIENT_ID: "cid",
-            const.DATA_OAUTH_CLIENT_SECRET: "secret",
-            const.DATA_OAUTH_SIGNING_KEY: secrets.token_hex(32),
-        }
-        return entry
+    def _legacy_entry(self, hass: HomeAssistant, **options: object) -> MockConfigEntry:
+        return add_server_entry(
+            hass,
+            options={
+                const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
+                const.OPT_ENABLE_WEBHOOK: True,
+                **options,
+            },
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "cid",
+                const.DATA_OAUTH_CLIENT_SECRET: "secret",
+                const.DATA_OAUTH_SIGNING_KEY: secrets.token_hex(32),
+            },
+        )
 
-    def test_legacy_mode_binds_root_views_at_setup(self):
-        from custom_components.ha_mcp_tools import oauth_legacy
+    async def test_legacy_mode_binds_root_views_at_setup(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
+        hass.set_state(CoreState.not_running)
 
-        hass = _make_hass()
-        hass.is_running = False
-        hass.http = MagicMock()
-
-        eentry._prebind_oauth_views(hass, self._legacy_entry())
+        eentry._prebind_oauth_views(hass, self._legacy_entry(hass))
 
         # 6 discovery + 3 scoped authorize/token/revoke + 2 root legacy aliases.
-        assert hass.http.register_view.call_count == 11
+        assert register_view.call_count == 11
         assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
 
     @pytest.mark.parametrize(
         "auth_mode",
         [const.WEBHOOK_AUTH_NONE, const.WEBHOOK_AUTH_HA],
     )
-    def test_none_and_ha_auth_modes_prebind_full_scoped_surface(self, auth_mode):
-        hass = _make_hass()
-        hass.http = MagicMock()
-        entry = _make_entry()
-        entry.options = {
-            const.OPT_WEBHOOK_AUTH: auth_mode,
-            const.OPT_ENABLE_WEBHOOK: True,
-        }
+    async def test_none_and_ha_auth_modes_prebind_full_scoped_surface(
+        self, hass: HomeAssistant, register_view: MagicMock, auth_mode: str
+    ) -> None:
+        entry = add_server_entry(
+            hass,
+            options={
+                const.OPT_WEBHOOK_AUTH: auth_mode,
+                const.OPT_ENABLE_WEBHOOK: True,
+            },
+        )
 
         eentry._prebind_oauth_views(hass, entry)
 
         # 6 discovery + 3 scoped authorize/token/revoke + 1 DCR registration
         # route.
-        assert hass.http.register_view.call_count == 10
+        assert register_view.call_count == 10
 
-    def test_unsaved_options_prebind_the_secret_url_surface(self):
+    async def test_unsaved_options_prebind_the_secret_url_surface(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
         # An entry that never saved its options runs in the secret-URL mode
         # bring-up defaults to (embedded_setup), so its OAuth routes must be
         # bound at boot too, or they never go live until a restart.
-        hass = _make_hass()
-        hass.http = MagicMock()
-        entry = _make_entry()
-        entry.options = {}
+        eentry._prebind_oauth_views(hass, add_server_entry(hass))
+
+        assert register_view.call_count == 10
+
+    async def test_webhook_disabled_binds_nothing(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
+        entry = self._legacy_entry(hass, **{const.OPT_ENABLE_WEBHOOK: False})
 
         eentry._prebind_oauth_views(hass, entry)
 
-        assert hass.http.register_view.call_count == 10
+        register_view.assert_not_called()
 
-    def test_webhook_disabled_binds_nothing(self):
-        hass = _make_hass()
-        hass.http = MagicMock()
-        entry = self._legacy_entry()
-        entry.options = {**entry.options, const.OPT_ENABLE_WEBHOOK: False}
-
-        eentry._prebind_oauth_views(hass, entry)
-
-        hass.http.register_view.assert_not_called()
-
-    def test_partial_legacy_credentials_still_prebind_scoped_routes(self):
+    async def test_partial_legacy_credentials_still_prebind_scoped_routes(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
         # _ensure_secrets mints all three whenever legacy is configured; a gap
         # means a partial config, deferred to the bring-up path to surface.
-        hass = _make_hass()
-        hass.http = MagicMock()
-        entry = self._legacy_entry()
-        entry.data = {
-            k: v for k, v in entry.data.items() if k != const.DATA_OAUTH_CLIENT_SECRET
-        }
+        entry = self._legacy_entry(hass)
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                k: v
+                for k, v in entry.data.items()
+                if k != const.DATA_OAUTH_CLIENT_SECRET
+            },
+        )
 
         eentry._prebind_oauth_views(hass, entry)
 
         # Root aliases wait for credentials, but advertised scoped routes must
         # still beat Home Assistant's HTTP freeze: 6 discovery + 3 scoped
         # authorize/token/revoke.
-        assert hass.http.register_view.call_count == 9
+        assert register_view.call_count == 9
 
-    def test_route_conflict_is_swallowed_at_setup(self):
+    async def test_route_conflict_is_swallowed_at_setup(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
         # The webhook-proxy add-on owning the root routes makes
         # bind_legacy_views raise; setup must survive (the bring-up
         # re-encounters the conflict and files the user-facing repair).
-        from custom_components.ha_mcp_tools import oauth_legacy
-
-        hass = _make_hass()
-        hass.is_running = False
-        hass.http = MagicMock()
+        hass.set_state(CoreState.not_running)
         hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
 
-        eentry._prebind_oauth_views(hass, self._legacy_entry())
+        eentry._prebind_oauth_views(hass, self._legacy_entry(hass))
 
         assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy_addon"
         # The foreign owner blocks only the root aliases; scoped routes remain
         # (6 discovery + 3 scoped authorize/token/revoke).
-        assert hass.http.register_view.call_count == 9
+        assert register_view.call_count == 9
 
 
 class TestEnsureSecretsLegacyWiring:
     """`_ensure_secrets` is the persistence path for the legacy credential
     lifecycle: it must fold `_ensure_legacy_oauth_secrets` mutations into the
-    same `async_update_entry` call — including OPTIONS (the one-shot
-    regenerate flag lives there), which pre-legacy code never persisted."""
+    same entry update — including OPTIONS (the one-shot regenerate flag lives
+    there), which pre-legacy code never persisted."""
 
-    def _capturing_hass(self) -> tuple[MagicMock, dict]:
-        hass = _make_hass()
-        captured: dict = {}
-
-        def _update(entry, *, data=None, options=None):
-            captured["data"] = data
-            captured["options"] = options
-
-        hass.config_entries.async_update_entry = MagicMock(side_effect=_update)
-        return hass, captured
-
-    def test_legacy_regenerate_persists_new_creds_and_clears_flag(self):
-        hass, captured = self._capturing_hass()
-        entry = _make_entry()
-        entry.options = {
-            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
-            const.OPT_OAUTH_REGENERATE: True,
-        }
+    def test_legacy_regenerate_persists_new_creds_and_clears_flag(
+        self, hass: HomeAssistant
+    ) -> None:
+        entry = add_server_entry(
+            hass,
+            options={
+                const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
+                const.OPT_OAUTH_REGENERATE: True,
+            },
+        )
 
         eentry._ensure_secrets(hass, entry)
 
-        assert captured["data"][const.DATA_OAUTH_CLIENT_ID].startswith("hamcp-")
-        assert captured["data"][const.DATA_OAUTH_CLIENT_SECRET]
-        assert captured["data"][const.DATA_OAUTH_SIGNING_KEY]
-        assert captured["options"][const.OPT_OAUTH_REGENERATE] is False
+        assert entry.data[const.DATA_OAUTH_CLIENT_ID].startswith("hamcp-")
+        assert entry.data[const.DATA_OAUTH_CLIENT_SECRET]
+        assert entry.data[const.DATA_OAUTH_SIGNING_KEY]
+        assert entry.options[const.OPT_OAUTH_REGENERATE] is False
 
-    def test_non_legacy_mode_mints_no_oauth_credentials(self):
-        hass, captured = self._capturing_hass()
-        entry = _make_entry()
-        entry.options = {const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+    def test_non_legacy_mode_mints_no_oauth_credentials(
+        self, hass: HomeAssistant
+    ) -> None:
+        entry = add_server_entry(
+            hass, options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+        )
+        before = dict(entry.data)
 
         eentry._ensure_secrets(hass, entry)
 
-        # Webhook id + secret path already present -> nothing changed, no
-        # update call at all (and in particular no OAuth minting).
-        assert captured == {}
+        # Webhook id + secret path already present -> nothing changed (and in
+        # particular no OAuth minting).
+        assert entry.data == before
 
 
 class TestUnload:
     async def test_unload_tears_down_the_server(
-        self, fake_collaborators: SimpleNamespace
+        self, hass: HomeAssistant, server: SimpleNamespace
     ) -> None:
-        hass = _make_hass()
-        entry = _make_entry()
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
+        entry = add_server_entry(hass)
+        assert await set_up(hass, entry)
 
-        result = await eentry.async_unload_server_entry(hass, entry)
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
-        assert result is True
-        fake_collaborators.setup.async_teardown_server.assert_awaited_once_with(hass)
-        fake_collaborators.panel.async_unregister_ui_panel.assert_called_once_with(hass)
+        server.teardown.assert_awaited_once_with(hass)
+        server.unregister_panel.assert_called_once_with(hass)

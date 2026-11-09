@@ -6,7 +6,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from ..const import DOMAIN
 from .constants import CALL_SERVICE_DEFAULT_TIMEOUT
@@ -232,15 +233,11 @@ def _guard_call_service_target(hass: HomeAssistant, domain: str, service: str) -
       a phantom write. Both raises propagate to the WS handler (D7).
     """
     if str(domain).strip().lower() == DOMAIN:
-        from homeassistant.exceptions import HomeAssistantError
-
         raise HomeAssistantError(
             "the ha_mcp_tools domain is not callable through call_service; "
             "use the dedicated ha_* tools"
         )
     if not hass.services.has_service(domain, service):
-        from homeassistant.exceptions import ServiceNotFound
-
         raise ServiceNotFound(domain, service)
 
 
@@ -286,6 +283,13 @@ def _register_transition_waiter(
     evt = asyncio.Event()
     captured: dict[str, Any] = {}
 
+    # A HA callback, so ``EventBus.async_listen`` classifies its ``HassJob`` as
+    # ``HassJobType.Callback`` and runs it INLINE on the event loop. A plain
+    # function is ``HassJobType.Executor``: every instance-wide ``state_changed``
+    # gets thrown at the thread pool, and ``evt.set()`` then runs cross-thread on
+    # a non-thread-safe ``asyncio.Event`` → delayed/spurious ``partial``
+    # confirmations and an ``InvalidStateError`` race with the timeout-cancel.
+    @callback
     def _on_change(event: Any) -> None:
         data = getattr(event, "data", None) or {}
         eid = data.get("entity_id")
@@ -302,20 +306,6 @@ def _register_transition_waiter(
                 captured[eid] = new
                 if target_set <= set(captured):
                     evt.set()
-
-    # Mark the listener a HA callback so ``EventBus.async_listen`` classifies its
-    # ``HassJob`` as ``HassJobType.Callback`` and runs it INLINE on the event loop
-    # (``is_callback`` reads exactly ``getattr(func, "_hass_callback", False)``).
-    # Without this a plain function is ``HassJobType.Executor``: every instance-wide
-    # ``state_changed`` gets thrown at the thread pool, and ``evt.set()`` then runs
-    # cross-thread on a non-thread-safe ``asyncio.Event`` → delayed/spurious
-    # ``partial`` confirmations and an ``InvalidStateError`` race with the
-    # timeout-cancel. We set the attribute directly rather than using ``@callback``:
-    # the unit-test harness MagicMock-stubs ``homeassistant.core``, so the decorator
-    # would be a MagicMock and break the listener, whereas the plain attribute set is
-    # exactly what ``callback`` does (``func.__dict__["_hass_callback"] = True``) and
-    # is inert under the stub.
-    _on_change._hass_callback = True  # type: ignore[attr-defined]
 
     unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, _on_change)
     return evt, captured, unsub

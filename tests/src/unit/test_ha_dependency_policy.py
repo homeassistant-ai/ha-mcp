@@ -66,9 +66,10 @@ def test_alignment_checks_both_versions_and_preserves_failures(
         f"#!{sys.executable}\n"
         "import sys\n"
         "from pathlib import Path\n"
-        "version = sys.argv[-1]\n"
+        "version = sys.argv[sys.argv.index('--ha-version') + 1]\n"
+        "lock = 'lock' if '--lock' in sys.argv else '-'\n"
         "with Path('checked').open('a') as output:\n"
-        "    output.write(version + '\\n')\n"
+        "    output.write(f'{version} {lock}\\n')\n"
         f"sys.exit({{'2026.9.1': {current_status}, '2026.8.0': {floor_status}}}[version])\n"
     )
     uv.chmod(0o755)
@@ -85,7 +86,8 @@ def test_alignment_checks_both_versions_and_preserves_failures(
         check=False,
     )
     assert result.returncode == expected, result.stdout + result.stderr
+    # uv.lock follows the image's Core (the dev group pins it), not the floor.
     assert set((tmp_path / "checked").read_text().splitlines()) == {
-        "2026.8.0",
-        "2026.9.1",
+        "2026.8.0 -",
+        "2026.9.1 lock",
     }

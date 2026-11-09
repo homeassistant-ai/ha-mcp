@@ -10,7 +10,7 @@ packages, logs their errors, and drops rejected ones from the result.
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,6 @@ from homeassistant.config import YAML_CONFIG_FILE, load_yaml_config_file
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
-    ServiceResponse,
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
@@ -61,11 +60,11 @@ def build_find_yaml_key_handler(
     *,
     caller_token_ok: Callable[[HomeAssistant, ServiceCall], bool],
     unauthorized_response: Callable[[str], dict[str, Any]],
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build the handler that locates a key in Core's loaded YAML config."""
     config_dir = Path(hass.config.config_dir)
 
-    async def handle_find_yaml_key(call: ServiceCall) -> ServiceResponse:
+    async def handle_find_yaml_key(call: ServiceCall) -> dict[str, Any]:
         if not caller_token_ok(hass, call):
             return unauthorized_response(SERVICE_FIND_YAML_KEY)
         yaml_path = call.data["yaml_path"]

@@ -1,0 +1,22 @@
+id: no-core-module-stand-ins
+language: python
+rule:
+  any:
+    - pattern: patch.dict(sys.modules, $$$)
+    - pattern: patch.dict("sys.modules", $$$)
+    - pattern: mock.patch.dict(sys.modules, $$$)
+    - pattern: mock.patch.dict("sys.modules", $$$)
+    - kind: assignment
+      regex: ^sys\.modules\[\s*["'](homeassistant|aiohttp|voluptuous|probatio|yarl)["'.]
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+message: |
+  Do not put a stand-in where a Home Assistant module belongs (`homeassistant.*`,
+  `aiohttp`, `voluptuous`, `yarl`): import the real module and patch the one
+  function the test needs. `tests/core_stand_in_guard.py` checks `sys.modules`
+  after each test body, so it cannot see a swap that `patch.dict` or a
+  `try/finally` has already undone; for a module that is not Home Assistant's,
+  use `monkeypatch.setitem(sys.modules, ...)`, which is still in place when the
+  guard looks. See tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core".
+severity: error

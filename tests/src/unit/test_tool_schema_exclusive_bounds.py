@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import probatio
 import pytest
 
 from .test_container_param_coercion_complete import _all_registered_tools
@@ -205,9 +206,7 @@ def test_no_tool_schema_advertises_an_exclusive_bound(all_tools: Any) -> None:
     )
 
 
-def test_the_real_search_schema_survives_cores_round_trip(
-    all_tools: Any, real_probatio: Any
-) -> None:
+def test_the_real_search_schema_survives_cores_round_trip(all_tools: Any) -> None:
     """The end of the chain, on the schema Core actually converts.
 
     The guard above reads the emitted schema; this puts the real ``ha_search``
@@ -219,14 +218,14 @@ def test_the_real_search_schema_survives_cores_round_trip(
     """
     from jsonschema import Draft202012Validator
 
-    emitted = real_probatio.to_openapi(
-        real_probatio.from_openapi(all_tools["ha_search"].parameters)
+    emitted = probatio.to_openapi(
+        probatio.from_openapi(all_tools["ha_search"].parameters)
     )
 
     Draft202012Validator.check_schema(emitted)
 
 
-def test_the_round_trip_check_rejects_an_exclusive_bound(real_probatio: Any) -> None:
+def test_the_round_trip_check_rejects_an_exclusive_bound() -> None:
     """Positive control: the check above fails on the form this PR removes.
 
     Without it, the assertion beside it would pass just as happily against a
@@ -236,8 +235,8 @@ def test_the_round_trip_check_rejects_an_exclusive_bound(real_probatio: Any) -> 
     from jsonschema import Draft202012Validator
     from jsonschema.exceptions import SchemaError
 
-    emitted = real_probatio.to_openapi(
-        real_probatio.from_openapi(
+    emitted = probatio.to_openapi(
+        probatio.from_openapi(
             {
                 "type": "object",
                 "properties": {"b": {"type": "number", "exclusiveMinimum": 0}},
