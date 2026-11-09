@@ -354,9 +354,10 @@ def test_the_base_host_uses_the_override(
     assert _conftest_knobs.resolve_base_host() == raw.strip()
 
 
-@pytest.mark.parametrize("raw", ["", "   "])
 def test_a_blank_base_host_falls_back_to_localhost(
-    raw: str, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HA_E2E_BASE_HOST", raw)
+    # Whitespace-only covers the strip() and the ``or "localhost"`` fallback;
+    # an empty string takes the same path, so it needs no separate case.
+    monkeypatch.setenv("HA_E2E_BASE_HOST", "   ")
     assert _conftest_knobs.resolve_base_host() == "localhost"
