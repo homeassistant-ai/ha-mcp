@@ -740,16 +740,15 @@ action:
             trace={"stored_traces": 0},
         )
 
-        create_result = await mcp_client.call_tool(
+        mcp = MCPAssertions(mcp_client)
+        create_data = await mcp.call_tool_success(
             "ha_config_set_script",
             {"script_id": script_id_base, "config": script_config},
         )
-        assert_mcp_success(create_result)
-        create_data = parse_mcp_result(create_result)
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
         cleanup_tracker.track("script", script_entity_id)
 
-        run_result = await mcp_client.call_tool(
+        await mcp.call_tool_success(
             "ha_call_service",
             {
                 "domain": "script",
@@ -757,7 +756,6 @@ action:
                 "entity_id": script_entity_id,
             },
         )
-        assert_mcp_success(run_result)
 
         traces_data = await wait_for_tool_result(
             mcp_client,
