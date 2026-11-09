@@ -356,6 +356,38 @@ class TestResolveContextTrace:
         assert error["scan_errors"] == []
 
     @pytest.mark.asyncio
+    async def test_connection_failure_after_a_parent_match_keeps_it(self):
+        """A later dropped connection returns the match the scan already read."""
+        traces = [
+            {"run_id": "good", "timestamp": {"start": "2026-11-08T16:00:02+00:00"}},
+            {"run_id": "dead", "timestamp": {"start": "2026-11-08T16:00:01+00:00"}},
+        ]
+
+        def _dispatch(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                return {"success": True, "result": traces}
+            if message["run_id"] == "dead":
+                return {
+                    "success": False,
+                    "error": "Failed to connect to Home Assistant",
+                }
+            return {
+                "success": True,
+                "result": {"run_id": "good", "context": {"parent_id": "parent-1"}},
+            }
+
+        client = _make_pooled_client(_dispatch)
+
+        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        assert match.run_id == "good"
+        assert match.scan_errors == (
+            "dead: the scan stopped after a connection failure",
+        )
+
+    @pytest.mark.asyncio
     async def test_parent_context_scan_is_bounded(self):
         """An oversized trace list reports that the scan was truncated."""
         traces = [

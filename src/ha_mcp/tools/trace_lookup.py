@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 PARENT_CONTEXT_SCAN_LIMIT = 50
 LOGBOOK_ROW_LIMIT = 50
+# Returned by _read_candidate_context when a dropped connection ends the scan.
+_SCAN_ABORTED = object()
 # A state trigger with a ``for:`` duration fires long after the state change
 # that shares the triggering context, so the parent-context read reaches back
 # further than the run's own window.
@@ -213,8 +215,15 @@ async def _read_candidate_context(
     item_id: str,
     run_id: str,
     scan_errors: list[str],
-) -> dict[str, Any] | None:
-    """Read one stored trace, recording why it could not be inspected."""
+    *,
+    have_match: bool = False,
+) -> Any:
+    """Read one stored trace, recording why it could not be inspected.
+
+    A dropped connection aborts the scan: it raises when the scan has nothing
+    to fall back on, and otherwise reports the abort so a match already read
+    is returned instead of being discarded.
+    """
     detail = await client.send_websocket_message(
         {
             "type": "trace/get",
@@ -226,10 +235,13 @@ async def _read_candidate_context(
     if not detail.get("success"):
         error = detail.get("error")
         if is_connection_error_message(error):
-            _raise_trace_ws_failure(
-                error,
-                {"domain": domain, "item_id": item_id, "run_id": run_id},
-            )
+            if not have_match:
+                _raise_trace_ws_failure(
+                    error,
+                    {"domain": domain, "item_id": item_id, "run_id": run_id},
+                )
+            scan_errors.append(f"{run_id}: the scan stopped after a connection failure")
+            return _SCAN_ABORTED
         scan_errors.append(f"{run_id}: {error}")
         return None
     trace_data = detail.get("result")
@@ -261,6 +273,27 @@ async def _resolve_parent_context(
     truncated = len(candidates) > PARENT_CONTEXT_SCAN_LIMIT
     candidates = candidates[:PARENT_CONTEXT_SCAN_LIMIT]
 
+    match, scanned = await _scan_for_context(
+        client, domain, item_id, context_id, candidates, truncated, scan_errors
+    )
+    if match is not None:
+        return match
+
+    _raise_context_not_found(
+        context_id, domain, item_id, scanned, truncated, scan_errors
+    )
+
+
+async def _scan_for_context(
+    client: Any,
+    domain: str,
+    item_id: str,
+    context_id: str,
+    candidates: list[dict[str, Any]],
+    truncated: bool,
+    scan_errors: list[str],
+) -> tuple[ContextTraceMatch | None, int]:
+    """Walk the bounded candidate list and settle on one stored trace."""
     scanned = 0
     parent_match: tuple[str, dict[str, Any]] | None = None
     fallback_match: tuple[str, dict[str, Any]] | None = None
@@ -268,18 +301,27 @@ async def _resolve_parent_context(
         scanned += 1
         run_id = str(trace["run_id"])
         trace_data = await _read_candidate_context(
-            client, domain, item_id, run_id, scan_errors
+            client,
+            domain,
+            item_id,
+            run_id,
+            scan_errors,
+            have_match=parent_match is not None or fallback_match is not None,
         )
+        if trace_data is _SCAN_ABORTED:
+            break
         if trace_data is None:
             continue
-        context = trace_data.get("context")
-        kind = _match_kind(context, context_id)
+        kind = _match_kind(trace_data.get("context"), context_id)
         if kind == "trace":
             # The run that owns the requested context id is authoritative. It
             # can appear after a newer run that merely names it as a parent, so
             # the bounded scan checks every candidate before settling.
-            return ContextTraceMatch(
-                run_id, "trace", scanned, truncated, tuple(scan_errors), trace_data
+            return (
+                ContextTraceMatch(
+                    run_id, "trace", scanned, truncated, tuple(scan_errors), trace_data
+                ),
+                scanned,
             )
         if kind == "parent":
             if trace.get("not_triggered"):
@@ -292,12 +334,7 @@ async def _resolve_parent_context(
                 parent_match = (run_id, trace_data)
 
     match = _scan_result(scanned, truncated, scan_errors, parent_match, fallback_match)
-    if match is not None:
-        return match
-
-    _raise_context_not_found(
-        context_id, domain, item_id, scanned, truncated, scan_errors
-    )
+    return match, scanned
 
 
 def _scan_result(
