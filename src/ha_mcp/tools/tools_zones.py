@@ -45,6 +45,9 @@ from .ws_waiters import wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
+# The zone state attributes that say who is in the zone.
+_OCCUPANCY_ATTRS = ("persons", "device_trackers")
+
 
 def _build_zone_result(
     zones: list[dict[str, Any]], zone_id: str | None, gaps: list[str] | None = None
@@ -143,6 +146,21 @@ def _with_registry_icons(
         else row
         for row in rows
     ]
+
+
+def _with_occupancy(
+    rows: list[dict[str, Any]], states: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The rows with who is in each zone, from the zone entity's state: Core
+    puts it there for every zone, stored or not, as the Map panel shows it."""
+    occupancy = {
+        s.get("entity_id"): {
+            key: attrs[key] for key in _OCCUPANCY_ATTRS if key in attrs
+        }
+        for s in states
+        if isinstance(s, dict) and isinstance(attrs := s.get("attributes"), dict)
+    }
+    return [{**row, **occupancy.get(row.get("entity_id"), {})} for row in rows]
 
 
 def _shape_component_zone_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -290,11 +308,22 @@ class ZoneTools:
             entries, registry_error = await self._zone_registry()
         except HomeAssistantConnectionError as exc:
             entries, registry_error = [], str(exc)
-        # The listing is complete without the registry; only its icons are missing.
-        response = _build_zone_result(_with_registry_icons(rows, entries), zone_id)
+        states_error = None
+        try:
+            states = await self._client.get_states()
+        except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
+            states, states_error = [], str(exc)
+        # The listing is complete without the registry and the states; only
+        # their icons and persons are missing.
+        rows = _with_occupancy(_with_registry_icons(rows, entries), states)
+        response = _build_zone_result(rows, zone_id)
         if registry_error:
             response.setdefault("warnings", []).append(
                 f"Icons set in the entity registry are missing: {registry_error}"
+            )
+        if states_error:
+            response.setdefault("warnings", []).append(
+                f"Who is in each zone (persons) is missing: {states_error}"
             )
         return response
 
@@ -320,9 +349,9 @@ class ZoneTools:
         """Storage zones from Core's ``zone/list``, then every other zone state.
 
         A storage row is the stored body with its registry icon; the home
-        zone's and YAML zones' rows are their state attributes
-        (``friendly_name`` also as ``name``, plus ``persons`` and
-        ``device_trackers``). Every row carries ``entity_id``,
+        zone's and YAML zones' rows are their state attributes, with
+        ``friendly_name`` as ``name``. Every row carries who is in the zone
+        (``persons``, ``device_trackers``) from its state, ``entity_id``,
         ``editable`` and ``source``, like the component's. The registry links a
         storage zone to its entity (its ``unique_id`` is the zone_id); a zone
         state without such an entry is not stored. Returns the rows and the
@@ -360,19 +389,22 @@ class ZoneTools:
             states = await self._client.get_states()
         except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
             return rows, [
-                f"Zones outside the zone storage such as 'home' are missing: {exc}"
+                "Zones outside the zone storage such as 'home', and who is in "
+                f"each zone, are missing: {exc}"
             ]
+        rows = _with_occupancy(rows, states)
         stored = set(entity_ids.values())
         for state in states:
             entity_id = state.get("entity_id", "") if isinstance(state, dict) else ""
             if not entity_id.startswith("zone.") or entity_id in stored:
                 continue
-            attrs = state.get("attributes") or {}
+            attrs = dict(state.get("attributes") or {})
             object_id = entity_id.split(".", 1)[1]
+            name = attrs.pop("friendly_name", object_id)
             rows.append(
                 {
                     **attrs,
-                    "name": attrs.get("friendly_name", object_id),
+                    "name": name,
                     "id": object_id,
                     "entity_id": entity_id,
                     "editable": False,
@@ -637,11 +669,11 @@ class ZoneTools:
                 response["updated_fields"] = updated
                 return response
 
-            if name is None or latitude is None or longitude is None:
+            # Core's zone/create names any other missing field itself; the
+            # shared create path refuses a missing name in its own tool's terms.
+            if name is None:
                 raise_tool_error(
-                    create_validation_error(
-                        "name, latitude, and longitude are required when creating a zone.",
-                    )
+                    create_validation_error("name is required when creating a zone.")
                 )
             result = await _execute_create_simple_helper(
                 self._client,
