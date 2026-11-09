@@ -28,13 +28,14 @@ jobs:
           python-version: "3.14"
 
       - name: Install ha-mcp, ruff + pytest
-        # The unit conftest imports ha_mcp and loads Core's test plugin, so
-        # install the dev group's pinned pytest-homeassistant (it brings pytest
-        # and Core).
+        # The unit conftest imports ha_mcp and quickjs and loads Core's test
+        # plugin, so install the dev group's pinned pytest-homeassistant (it
+        # brings pytest and Core) and quickjs-ng.
         run: |
           set -euo pipefail
-          pin=$(python3 -c 'import tomllib; print(next(d for d in tomllib.load(open("pyproject.toml", "rb"))["dependency-groups"]["dev"] if isinstance(d, str) and d.startswith("pytest-homeassistant==")))')
-          pip install -e . ruff pytest-timeout "$pin"
+          pins=$(python3 -c 'import tomllib; print(" ".join(d for d in tomllib.load(open("pyproject.toml", "rb"))["dependency-groups"]["dev"] if isinstance(d, str) and d.startswith(("pytest-homeassistant==", "quickjs-ng=="))))')
+          # shellcheck disable=SC2086 # one argument per pin
+          pip install -e . ruff pytest-timeout $pins
 
       - name: Run the promote transform in place
         id: promote

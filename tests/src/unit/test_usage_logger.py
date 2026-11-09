@@ -212,15 +212,30 @@ class TestUsageLoggerDefaults:
 
 
 def test_shutdown_wakes_the_idle_writer_at_once(tmp_path, monkeypatch) -> None:
-    """An idle writer used to sleep out a full 0.1 s poll before it saw the
-    stop flag, so every shutdown (each server stop, each unit test) waited."""
+    """An idle writer used to sleep out a full 0.1 s poll on a fresh Event
+    before it saw the stop flag, so every shutdown (each server stop, each
+    unit test) waited. It now idles on the stop event itself."""
+
+    class _SignallingEvent(threading.Event):
+        def __init__(self) -> None:
+            super().__init__()
+            self.idling = threading.Event()
+
+        def wait(self, timeout: float | None = None) -> bool:
+            self.idling.set()
+            return super().wait(timeout)
+
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
     logger = UsageLogger()
     thread = logger._logger_thread
-    assert thread is not None and thread.is_alive()
+    assert thread is not None
+    stop = _SignallingEvent()
+    logger._stop_event = stop
 
-    logger._stop_event.set()
-    thread.join(timeout=0.05)
+    # The writer idles on the stop event: shutdown() can wake it.
+    assert stop.idling.wait(timeout=5)
+    stop.set()
+    thread.join(timeout=5)
 
     assert not thread.is_alive()
 

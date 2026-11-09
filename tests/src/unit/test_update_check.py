@@ -529,6 +529,13 @@ class TestReleaseNeedsNewerPython:
         assert "uvx --python 3.14 ha-mcp@latest" in hint
         assert "pip install" not in hint
 
+    def test_dev_channel_command_keeps_the_dev_package(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        info = UpdateInfo("9.2.0.dev3", "9.2.0.dev4", True, requires_python=">=3.14")
+        hint = update_command_hint("9.2.0.dev3", info)
+        assert "uvx --python 3.14 ha-mcp-dev@latest" in hint
+
     async def test_supported_python_keeps_the_plain_notice(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

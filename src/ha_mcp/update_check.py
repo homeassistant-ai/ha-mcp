@@ -294,9 +294,11 @@ def required_python(info: UpdateInfo) -> str | None:
     return _python_floor(info.requires_python)
 
 
-def _uvx_command(python: str) -> str:
+def _uvx_command(python: str, current: str) -> str:
     # uvx downloads a uv-managed interpreter for --python when none is installed.
-    return f"uvx --python {python} ha-mcp@latest"
+    # The dev channel's package is also its command name (``uvx ha-mcp-dev``).
+    package = _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE
+    return f"uvx --python {python} {package}@latest"
 
 
 async def get_update_field() -> UpdateField | None:
@@ -330,7 +332,7 @@ async def get_update_field() -> UpdateField | None:
     }
     if python := required_python(info):
         field["python_required"] = python
-        field["upgrade_command"] = _uvx_command(python)
+        field["upgrade_command"] = _uvx_command(python, info.current)
     return field
 
 
@@ -347,7 +349,7 @@ def update_command_hint(current: str, info: UpdateInfo | None = None) -> str:
     if info is not None and (python := required_python(info)):
         return (
             f"This release needs Python {python}; you are on "
-            f"{platform.python_version()}. Run it with: {_uvx_command(python)} "
+            f"{platform.python_version()}. Run it with: {_uvx_command(python, current)} "
             f'(in the MCP client config: "--python", "{python}").'
         )
     if is_embedded():
