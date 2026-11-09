@@ -44,6 +44,16 @@ class TestAutomationTraces:
             "ha_config_set_automation", {"config": config}
         )
         automation_id = create_data.get("entity_id")
+        if not automation_id:
+            # The config exists even though entity discovery timed out; remove
+            # it before failing so it cannot pollute later tests on this HA.
+            config_id = create_data.get("automation_id")
+            if config_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": config_id},
+                )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
         )
@@ -295,10 +305,18 @@ action:
             create_data = await mcp.call_tool_success(
                 "ha_config_set_automation", {"config": create_config}
             )
-            automation_id = create_data.get("entity_id") or create_data.get(
-                "automation_id"
+            automation_id = create_data.get("entity_id")
+            if not automation_id:
+                config_id = create_data.get("automation_id")
+                if config_id:
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_config_remove_automation",
+                        {"identifier": config_id},
+                    )
+            assert automation_id, (
+                f"ha_config_set_automation did not resolve an entity id: {create_data}"
             )
-            assert automation_id is not None
             cleanup_tracker.track("automation", automation_id)
 
             await mcp.call_tool_success(
@@ -796,10 +814,18 @@ action:
             create_data = await mcp.call_tool_success(
                 "ha_config_set_automation", {"config": create_config}
             )
-            automation_id = create_data.get("entity_id") or create_data.get(
-                "automation_id"
+            automation_id = create_data.get("entity_id")
+            if not automation_id:
+                config_id = create_data.get("automation_id")
+                if config_id:
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_config_remove_automation",
+                        {"identifier": config_id},
+                    )
+            assert automation_id, (
+                f"ha_config_set_automation did not resolve an entity id: {create_data}"
             )
-            assert automation_id is not None
             cleanup_tracker.track("automation", automation_id)
 
             await mcp.call_tool_success(
