@@ -206,7 +206,7 @@ Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Usi
 
 **4. Python version too old**
 
-ha-mcp requires Python 3.14+. If you are on Python 3.14 or older, `uvx` installs an outdated version of ha-mcp that may have known bugs (including read-only filesystem errors). Upgrade Python:
+ha-mcp requires Python 3.14+. If you are on Python 3.13 or older, `uvx` installs an outdated version of ha-mcp that may have known bugs (including read-only filesystem errors). Upgrade Python:
 
 ```bash
 brew install python@3.14

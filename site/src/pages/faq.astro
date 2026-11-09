@@ -232,7 +232,7 @@ uvx --python 3.14 --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-300 mb-3">Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using <code class="bg-slate-800 px-1 rounded">https://</code> causes a TLS handshake error. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you have explicitly configured SSL/TLS or a reverse proxy.</p>
 
           <h4 class="font-medium text-white mt-4 mb-2">4. Python version too old</h4>
-          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.14+. If you are on Python 3.14 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
+          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.14+. If you are on Python 3.13 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
           <pre class="code-block mb-2"><code>brew install python@3.14</code></pre>
           <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
           <pre class="code-block"><code>uvx --python 3.14 --refresh ha-mcp@latest</code></pre>
