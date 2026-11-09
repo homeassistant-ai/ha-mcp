@@ -38,6 +38,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ..utilities.forecast_solar import create_forecast_solar_entry
 
 
 async def _build_redacting_server(container_info, monkeypatch, tmp_path):
@@ -152,34 +153,9 @@ async def test_options_are_withheld_until_the_options_form_is_asked_for(
         )
 
 
-async def _add_forecast_solar(mcp: MCPAssertions) -> str:
-    """Add a forecast_solar entry: Core's options form for it carries a secret
-    field and needs no device, and setup validates nothing over the network."""
-    step = await mcp.call_tool_success(
-        "ha_set_integration",
-        {
-            "domain": "forecast_solar",
-            "config": {
-                "location": "home",
-                "declination_source": "fixed",
-                "azimuth_source": "fixed",
-            },
-        },
-    )
-    created = await mcp.call_tool_success(
-        "ha_set_integration",
-        {
-            "domain": "forecast_solar",
-            "flow_id": step["flow_id"],
-            "config": {"declination": 25, "azimuth": 180, "modules_power": 10000},
-        },
-    )
-    return created["entry_id"]
-
-
 @pytest.mark.asyncio
 async def test_stored_integration_secret_stays_out_of_options_form_reads(
-    redacting_mcp,
+    redacting_mcp, ha_client
 ):
     """An agent opening an integration's options form must not get the stored
     API key back. Core marks the field secret in its own serialization (since
@@ -187,8 +163,12 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
     Core changes that marker and ha-mcp no longer recognises it (#3002)."""
     client, _server = redacting_mcp
     api_key = uuid.uuid4().hex[:16]
+    # Core's options form for forecast_solar carries a secret field and needs
+    # no device; the shared helper waits out the forecast fetch setup runs.
+    flow_done = await create_forecast_solar_entry(ha_client)
+    assert flow_done.get("type") == "create_entry", flow_done
+    entry_id = flow_done["result"]["entry_id"]
     async with MCPAssertions(client) as mcp:
-        entry_id = await _add_forecast_solar(mcp)
         flow_id = None
         try:
             await mcp.call_tool_success(
