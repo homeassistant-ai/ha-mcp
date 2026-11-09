@@ -45,7 +45,11 @@ from ..client.rest_client import HomeAssistantAuthError
 from ..config import get_global_settings
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
-from .helpers import exception_to_structured_error, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    raise_tool_error,
+    tool_error_from_response,
+)
 from .resource_patch import resource_write_lock
 
 logger = logging.getLogger(__name__)
@@ -128,7 +132,7 @@ def path_refusal(err: BaseException) -> PathNotAllowedError | None:
     """The component's path refusal that is, or caused, ``err``; else ``None``."""
     if isinstance(err, PathNotAllowedError):
         return err
-    cause = _component_refusal_cause(err)
+    cause = refusal_behind_capture_failure(err)
     return cause if isinstance(cause, PathNotAllowedError) else None
 
 
@@ -167,18 +171,20 @@ def raise_if_snapshot_path_refused(
     ) from None
 
 
-def _component_refusal_cause(err: BaseException) -> ToolError | None:
-    """Return the component's own refusal behind a capture failure.
+def refusal_behind_capture_failure(err: BaseException) -> ToolError | None:
+    """Return the ``ToolError`` to report instead of a capture failure, else None.
 
     A mandatory pre-write snapshot reads the current content through the same
-    File & YAML Tools services the wrapped write needs, so when the component
-    refuses the call the capture fails FIRST and the write would be refused as
-    ``BACKUP_CAPTURE_FAILED``, burying the real error one level deep. Three
-    refusals are surfaced: ``COMPONENT_NOT_INSTALLED`` (no tools entry, #2292)
-    and ``PathNotAllowedError`` (the path is outside the allowlist, #2908)
-    unchanged, and a Home Assistant auth error (these services are admin-only)
-    under its own code. Retrying the backup cannot succeed for any of them, and
-    the remediation is not the backup pipeline's.
+    backend the wrapped write needs, so when that refuses the call the capture
+    fails FIRST and the write would be refused as ``BACKUP_CAPTURE_FAILED``,
+    burying the real error one level deep. Three refusals are surfaced:
+    ``COMPONENT_NOT_INSTALLED`` (no tools entry, #2292) and
+    ``PathNotAllowedError`` (the path is outside the allowlist, #2908) as they
+    were raised, and a ``HomeAssistantAuthError`` from any capture backend, not
+    only the File & YAML Tools services, as a new error under the auth code.
+    ``capture_on_demand`` uses the same check, and is where a capture reaches
+    the other backends. Retrying the backup cannot succeed for any of them, and the remediation is
+    not the backup pipeline's.
     """
     seen: set[int] = set()
     # Worklist over BOTH chain links: an explicit ``raise ... from other``
@@ -195,9 +201,8 @@ def _component_refusal_cause(err: BaseException) -> ToolError | None:
         if isinstance(cause, PathNotAllowedError):
             return cause
         if isinstance(cause, HomeAssistantAuthError):
-            return ToolError(
-                json.dumps(exception_to_structured_error(cause, raise_error=False)),
-                log_level=TOOL_ERROR_LOG_LEVEL,
+            return tool_error_from_response(
+                exception_to_structured_error(cause, raise_error=False)
             )
         if isinstance(cause, ToolError):
             try:
@@ -529,26 +534,26 @@ async def _capture_pre_write_snapshot(
             # wrapped write never runs, so nothing has been changed.
             # The ToolError this raises propagates rather than being
             # swallowed by the best-effort handler below.
-            component_error = _component_refusal_cause(err)
-            if component_error is not None:
-                # The capture failed because the component refused the call —
-                # the same reason the wrapped write itself would refuse. Surface
-                # that actionable error, not a backup complaint (#2292, #2908).
+            refusal = refusal_behind_capture_failure(err)
+            if refusal is not None:
+                # The capture was refused — the same reason the wrapped write
+                # itself would fail. Surface that actionable error, not a
+                # backup complaint (#2292, #2908).
                 # The write is still blocked. ``from None`` because this IS the
                 # underlying error being unwrapped; chaining it back onto the
                 # wrapper it came out of would only print the chain twice (and
                 # B904 wants the intent explicit). ``from None`` also drops the
                 # wrapper's own text from the traceback, so record it here or
                 # the only account of WHICH mandatory capture was re-pointed at
-                # the component error is gone.
+                # the refusal is gone.
                 logger.warning(
                     "Auto-backup: mandatory capture for '%s' failed (%s) — "
-                    "surfacing the underlying component error instead; the "
-                    "write is blocked either way",
+                    "surfacing the refusal instead; the write is blocked "
+                    "either way",
                     func.__name__,
                     err,
                 )
-                raise component_error from None
+                raise refusal from None
             raise_tool_error(
                 create_error_response(
                     ErrorCode.BACKUP_CAPTURE_FAILED,

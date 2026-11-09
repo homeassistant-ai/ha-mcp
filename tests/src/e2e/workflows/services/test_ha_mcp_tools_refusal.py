@@ -271,20 +271,23 @@ class TestCallerTokenAdminGate:
             f"service. Status={response.status_code}, body={response.text!r}"
         )
 
-    async def test_non_admin_caller_rejected_on_write_service(
+    async def test_non_admin_caller_rejected_on_edit_file(
         self,
         _filesystem_feature_flag,
         ha_container_with_fresh_config,
     ):
-        """The admin requirement also covers the write services."""
+        """edit_file registers on its own, outside the loop the bootstrap is in."""
         response = await post_service(
             ha_container_with_fresh_config["base_url"],
             NON_ADMIN_TEST_TOKEN,
-            "write_file",
-            {"path": f"www/non_admin_{uuid.uuid4().hex[:8]}.txt", "content": "x"},
+            "edit_file",
+            {
+                "path": f"www/non_admin_{uuid.uuid4().hex[:8]}.txt",
+                "edits": [{"old": "a", "new": "b"}],
+            },
         )
         # The handler itself answers 200, so a 401 can only come from Core.
         assert response.status_code == 401, (
-            f"HA core must refuse a non-admin caller of write_file. "
+            f"HA core must refuse a non-admin caller of edit_file. "
             f"Status={response.status_code}, body={response.text!r}"
         )

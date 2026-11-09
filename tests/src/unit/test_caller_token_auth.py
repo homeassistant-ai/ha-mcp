@@ -40,6 +40,7 @@ sys.modules.setdefault("homeassistant.helpers.config_validation", MagicMock())
 sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
 sys.modules.setdefault("homeassistant.loader", MagicMock())
 
+import custom_components.ha_mcp_tools as comp  # noqa: E402
 from custom_components.ha_mcp_tools import (  # noqa: E402
     _HASS_DATA_TOKEN_KEY,
     CALLER_TOKEN_FIELD,
@@ -71,10 +72,10 @@ def _fake_hass(token: str | None) -> MagicMock:
     return hass
 
 
-def _fake_call(presented_token: str | None, **extra: str) -> MagicMock:
+def _fake_call(presented_token: str | None, **extra: object) -> MagicMock:
     """Build a ServiceCall stand-in with .data containing the presented token."""
     call = MagicMock()
-    payload: dict[str, str] = dict(extra)
+    payload: dict[str, object] = dict(extra)
     if presented_token is not None:
         payload[CALLER_TOKEN_FIELD] = presented_token
     call.data = payload
@@ -138,6 +139,36 @@ class TestUnauthorizedResponse:
         resp = _unauthorized_response("list_files", files=[])
         assert resp["files"] == []
         assert resp["error_code"] == "unauthorized"
+
+
+class TestSettingsHandlersRefuseABadToken:
+    """The caller token is the only check inside these handlers."""
+
+    @pytest.mark.parametrize(
+        ("build_handler", "data"),
+        [
+            ("_build_get_allowed_paths_handler", {}),
+            ("_build_set_allowed_paths_handler", {"paths": ["pyscript"]}),
+            ("_build_get_extra_yaml_keys_handler", {}),
+            ("_build_set_extra_yaml_keys_handler", {"keys": ["alert2"]}),
+        ],
+        ids=["get_paths", "set_paths", "get_keys", "set_keys"],
+    )
+    async def test_bad_token_is_unauthorized_and_changes_nothing(
+        self, monkeypatch, build_handler, data
+    ):
+        save = AsyncMock()
+        monkeypatch.setattr(comp, "_save_allowed_paths", save)
+        monkeypatch.setattr(comp, "_save_extra_yaml_keys", save)
+        hass = _fake_hass("good")
+        handler = getattr(comp, build_handler)(hass)
+
+        result = await handler(_fake_call("bad", **data))
+
+        assert result["success"] is False
+        assert result["error_code"] == "unauthorized"
+        save.assert_not_awaited()
+        assert hass.data == _fake_hass("good").data
 
 
 class TestManifestVersionCoupling:

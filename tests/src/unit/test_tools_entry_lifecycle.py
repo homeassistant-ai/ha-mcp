@@ -427,7 +427,7 @@ class TestEditFileWiring:
     async def test_handler_refuses_a_caller_without_the_token(
         self, tools_env, tmp_path, store_backing
     ):
-        """Core checks admin only for calls with a user; the token covers the rest."""
+        """The token refuses admins and calls without a user, which Core lets through."""
         registration = await self._registration(tools_env, tmp_path, store_backing)
 
         response = await registration.args[3](_edit_call(None, "www/card.js"))

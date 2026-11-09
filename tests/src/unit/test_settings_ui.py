@@ -15,6 +15,7 @@ import pytest
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.settings_ui import (
     _SETTINGS_CSS,
     _SETTINGS_HTML,
@@ -4699,7 +4700,7 @@ class TestFsCustomPathsEndpoints:
         req = MagicMock()
         req.json = AsyncMock(return_value={"paths": ["pyscript"]})
         resp = await handlers["save_fs_custom_paths"](req)
-        assert resp.status_code == 502
+        assert resp.status_code < 500
         body = json.loads(resp.body)
         message = body["error"]["message"]
         assert message == "The optional entry is not set up. Press Add entry to add it."
@@ -4787,36 +4788,20 @@ class TestFsCustomPathsEndpoints:
         assert "caller token" in body["reason"].lower()
 
     @pytest.mark.asyncio
-    async def test_save_502_on_component_non_success(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "cause", [None, OSError("connection refused")], ids=["bare", "os-cause"]
+    )
+    @pytest.mark.parametrize("error", [RuntimeError, HomeAssistantConnectionError])
+    async def test_save_502_on_component_unreachable(self, monkeypatch, error, cause):
         import ha_mcp.tools.tools_filesystem as tf
         from ha_mcp.settings_ui import build_settings_handlers
 
-        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
-
-        async def fake_call(client, service, data):
-            return {
-                "service_response": {
-                    "success": False,
-                    "error": "Unauthorized: caller token missing or invalid.",
-                }
-            }
-
-        monkeypatch.setattr(tf, "call_mcp_tools_service", fake_call)
-        handlers = build_settings_handlers(server=MagicMock())
-        req = MagicMock()
-        req.json = AsyncMock(return_value={"paths": ["pyscript"]})
-        resp = await handlers["save_fs_custom_paths"](req)
-        assert resp.status_code == 502
-
-    @pytest.mark.asyncio
-    async def test_save_502_on_component_unreachable(self, monkeypatch):
-        import ha_mcp.tools.tools_filesystem as tf
-        from ha_mcp.settings_ui import build_settings_handlers
-
+        settings = MagicMock(homeassistant_token="a-long-lived-token")
+        monkeypatch.setattr("ha_mcp.config.get_global_settings", lambda: settings)
         monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
 
         async def boom(client, service, data):
-            raise RuntimeError("connection refused")
+            raise error("Failed to connect") from cause
 
         monkeypatch.setattr(tf, "call_mcp_tools_service", boom)
         handlers = build_settings_handlers(server=MagicMock())
@@ -4824,6 +4809,8 @@ class TestFsCustomPathsEndpoints:
         req.json = AsyncMock(return_value={"paths": ["pyscript"]})
         resp = await handlers["save_fs_custom_paths"](req)
         assert resp.status_code == 502
+        message = json.loads(resp.body)["error"]["message"]
+        assert message.startswith("Could not reach the ha_mcp_tools component:")
 
     @pytest.mark.asyncio
     async def test_save_400_on_invalid_json_body(self, monkeypatch):

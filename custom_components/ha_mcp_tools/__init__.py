@@ -105,11 +105,12 @@ SERVICE_LIST_LEGACY_BACKUPS = "list_legacy_backups"
 SERVICE_READ_LEGACY_BACKUP = "read_legacy_backup"
 
 # Caller-token auth (PR: restrict ha_mcp_tools.* to ha-mcp callers).
-# ha-mcp injects this field in every service-call payload; non-ha-mcp callers
-# (HA UI, automations, other integrations, the ha_call_service LLM bypass)
-# omit it. Non-admin users are already refused by the admin-only service
-# registration; admin and no-user-context callers without the token are
-# rejected with a structured unauthorized response.
+# ha-mcp injects this field in every service call except the get_caller_token
+# bootstrap; non-ha-mcp callers (HA UI, automations, other integrations, the
+# ha_call_service LLM bypass) omit it. Non-admin users are already refused by
+# the admin-only service registration; admin and no-user-context callers
+# without the token are rejected with a structured unauthorized response by
+# every handler except that bootstrap.
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 _TOKEN_STORAGE_KEY = f"{DOMAIN}_auth"
 _TOKEN_STORAGE_VERSION = 1
@@ -231,11 +232,12 @@ SERVICE_GET_CALLER_TOKEN_SCHEMA = vol.Schema(
 )
 
 # get_allowed_paths / set_allowed_paths back the ha-mcp settings UI's custom
-# filesystem-directory editor (issues #1567, #1586). Both are caller-token +
-# admin gated. set_allowed_paths receives the FULL replacement list (mirrors how
-# disabled_packages_keys sends the whole set each call); the handler validates
-# and drops any entry that hits the deny floor, or that escapes the config dir
-# without being one of the fixed HAOS sibling-volume roots (#1586).
+# filesystem-directory editor (issues #1567, #1586). Both are caller-token
+# gated; the registration is admin-only. set_allowed_paths receives the FULL
+# replacement list (mirrors how disabled_packages_keys sends the whole set each
+# call); the handler validates and drops any entry that hits the deny floor, or
+# that escapes the config dir without being one of the fixed HAOS sibling-volume
+# roots (#1586).
 SERVICE_GET_ALLOWED_PATHS_SCHEMA = vol.Schema(
     {
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
@@ -250,10 +252,10 @@ SERVICE_SET_ALLOWED_PATHS_SCHEMA = vol.Schema(
 )
 
 # get_extra_yaml_keys / set_extra_yaml_keys back the component's own options
-# flow and the ha-mcp settings UI (#1887). Both are caller-token + admin gated,
-# matching the allowed-paths pair. set_extra_yaml_keys receives the FULL
-# replacement list; the handler strips whitespace/empties and drops any
-# YAML_KEY_DENYLIST member, reporting drops in ``rejected``.
+# flow and the ha-mcp settings UI (#1887). Both are caller-token gated, and the
+# registration is admin-only, like the allowed-paths pair. set_extra_yaml_keys
+# receives the FULL replacement list; the handler strips whitespace/empties and
+# drops any YAML_KEY_DENYLIST member, reporting drops in ``rejected``.
 SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA = vol.Schema(
     {
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
@@ -3154,8 +3156,8 @@ def _build_get_allowed_paths_handler(
         allowlists and the non-overridable deny floor (issue #1567).
 
         Backs the ha-mcp settings UI's custom filesystem-directory editor.
-        Caller-token + admin gated (matching get_caller_token): it reveals the
-        filesystem layout, so it is not a public read.
+        Caller-token gated on top of the admin-only registration: it reveals
+        the filesystem layout, so it is not a public read.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_GET_ALLOWED_PATHS, paths=[])
@@ -3185,7 +3187,7 @@ def _build_set_allowed_paths_handler(
         sibling-volume roots (#1586 — see ``const.ALLOWED_VOLUME_ROOTS``) are
         accepted; any other absolute path is dropped. Persists to .storage AND
         updates hass.data so enforcement applies live with no HA restart.
-        Caller-token + admin gated.
+        Caller-token gated; the registration is admin-only.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_SET_ALLOWED_PATHS, paths=[])
@@ -3217,8 +3219,8 @@ def _build_get_extra_yaml_keys_handler(
 
         Backs the component's own options flow and the ha-mcp settings UI, and
         is how the server reads this store to union it with its own
-        ``HA_MCP_EXTRA_YAML_KEYS``. Caller-token + admin gated, matching
-        get_allowed_paths.
+        ``HA_MCP_EXTRA_YAML_KEYS``. Caller-token gated; the registration is
+        admin-only.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_GET_EXTRA_YAML_KEYS, keys=[])
@@ -3242,7 +3244,8 @@ def _build_set_extra_yaml_keys_handler(
         Receives the FULL replacement list. Each entry is stripped and
         validated; blanks and ``YAML_KEY_DENYLIST`` members are dropped and
         reported in ``rejected``. Persists to .storage AND updates hass.data so
-        enforcement applies live with no HA restart. Caller-token + admin gated.
+        enforcement applies live with no HA restart. Caller-token gated; the
+        registration is admin-only.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_SET_EXTRA_YAML_KEYS, keys=[])
@@ -3438,7 +3441,9 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 type(err).__name__,
                 err,
             )
-    # Admin-only across the domain; calls without a user context pass Core's check.
+
+    # Every service registered below is admin-only; calls without a user context
+    # pass Core's check.
     register_find_yaml_key(hass, _caller_token_ok, _unauthorized_response)
     register_edit_file(
         hass,

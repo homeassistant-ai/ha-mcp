@@ -31,17 +31,36 @@ def _component_error_reason(exc: Exception) -> str | None:
     ``raise_tool_error`` serializes the whole error envelope into the
     exception string, so rendering ``str(exc)`` verbatim shows the settings
     UI a raw JSON blob behind a misleading "could not reach" prefix — the
-    hard-to-read surface from #1996. Thin seam over the shared extractor
-    (imported lazily like the other tools imports in this module).
+    hard-to-read surface from #1996. The tools imports are lazy, like the
+    others in this module.
 
-    A non-admin token is refused by Home Assistant itself (the services are
-    admin-only); that is reported as-is, not as unreachable.
+    Home Assistant answered when it refuses the token, non-admin or rejected,
+    so that is classified like in the tools and not reported as unreachable,
+    also when it arrives behind the connection error of a refused WebSocket
+    retry. OAuth mode without a server token is the exception: the settings
+    page sends no request token there, so the proxy client raises the auth
+    error without asking Home Assistant, and the remedy the tools suggest does
+    not apply.
     """
-    from ..client.rest_client import HomeAssistantAdminRequiredError
-    from ..tools.helpers import extract_structured_error_reason
+    from ..client.rest_client import (
+        HomeAssistantAuthError,
+        HomeAssistantConnectionError,
+    )
+    from ..config import OAUTH_MODE_TOKEN, get_global_settings
+    from ..tools.helpers import (
+        exception_to_structured_error,
+        extract_structured_error_reason,
+        tool_error_from_response,
+    )
 
-    if isinstance(exc, HomeAssistantAdminRequiredError):
-        return str(exc)
+    cause = exc.__cause__ if isinstance(exc, HomeAssistantConnectionError) else exc
+    if (
+        isinstance(cause, HomeAssistantAuthError)
+        and get_global_settings().homeassistant_token != OAUTH_MODE_TOKEN
+    ):
+        exc = tool_error_from_response(
+            exception_to_structured_error(cause, raise_error=False)
+        )
     return extract_structured_error_reason(exc)
 
 
@@ -83,7 +102,8 @@ async def _get_fs_custom_paths(
     blurb (issue #1567).
 
     Always 200s with an ``available`` flag: when filesystem tools are off,
-    the component is missing/too old, or HA is unreachable, ``available``
+    the component is missing/too old, or HA is unreachable or refuses the
+    token, ``available``
     is False with a human-readable ``reason`` so the UI can show a disabled
     section instead of an error.
     """
@@ -142,7 +162,9 @@ async def _save_fs_custom_paths(
     The component validates each entry and drops anything that hits the
     deny floor or escapes the config dir; the dropped entries come back in
     ``rejected``. ``restart_required`` is False — the component applies the
-    new allowlist live.
+    new allowlist live. A failure with a readable reason is a 400: a proxy such
+    as Cloudflare replaces the body of a 502, and with it the reason the page
+    shows.
     """
     from ..tools.tools_filesystem import is_filesystem_tools_enabled
     from ..tools.util_helpers import unwrap_service_response
@@ -183,13 +205,13 @@ async def _save_fs_custom_paths(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("fs-custom-paths POST failed calling ha_mcp_tools: %s", exc)
+        reason = _component_error_reason(exc)
         return JSONResponse(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                _component_error_reason(exc)
-                or f"Could not reach the ha_mcp_tools component: {exc}",
+                reason or f"Could not reach the ha_mcp_tools component: {exc}",
             ),
-            status_code=502,
+            status_code=400 if reason else 502,
         )
 
     data = unwrap_service_response(result) if isinstance(result, dict) else {}
@@ -199,7 +221,7 @@ async def _save_fs_custom_paths(
         ) or "ha_mcp_tools rejected the update."
         return JSONResponse(
             create_error_response(ErrorCode.SERVICE_CALL_FAILED, str(reason)),
-            status_code=502,
+            status_code=400,
         )
     return JSONResponse(
         {

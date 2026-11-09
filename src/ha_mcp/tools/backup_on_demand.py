@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ..backup_manager import BackupManager, MandatoryBackupError, _is_flow_helper_domain
 from ..errors import ErrorCode, create_error_response
-from .auto_backup import _component_refusal_cause
+from .auto_backup import refusal_behind_capture_failure
 from .helper_flows import require_helper_type
 from .helpers import raise_tool_error
 
@@ -28,7 +28,7 @@ async def capture_on_demand(mgr: BackupManager, domain: str, entity_id: str) -> 
             mandatory=True,
         )
     except MandatoryBackupError as err:
-        if (refusal := _component_refusal_cause(err)) is not None:
+        if (refusal := refusal_behind_capture_failure(err)) is not None:
             raise refusal from None  # refused, not a failed capture; not retryable
         cause = err.__cause__
         raise_tool_error(

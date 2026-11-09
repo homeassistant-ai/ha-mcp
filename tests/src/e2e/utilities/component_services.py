@@ -1,7 +1,8 @@
 """Admin calls to ``ha_mcp_tools`` component services over HA REST.
 
 The E2E suites drive these services directly with the admin token, the way the
-ha-mcp server drives them. Each helper asserts that the call succeeded: the
+ha-mcp server drives them. ``post_service`` returns the raw response, for tests
+that send another token. The admin helpers assert that the call succeeded: the
 setters answer a rejected caller token with HTTP 200 and ``success: false``.
 """
 

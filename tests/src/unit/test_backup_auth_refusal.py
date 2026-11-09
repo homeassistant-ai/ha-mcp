@@ -110,6 +110,19 @@ async def test_mandatory_write_reports_the_failure_and_stays_blocked(
     assert ran == []
 
 
+async def test_on_demand_capture_reports_a_missing_tools_entry(
+    settings: _StubSettings,
+) -> None:
+    client: Any = _StubClient()
+    client.get_services = AsyncMock(return_value=[])
+    mgr = get_backup_manager(client, settings)
+
+    with pytest.raises(ToolError) as exc:
+        await capture_on_demand(mgr, *_FILE)
+
+    assert _code(exc) == "COMPONENT_NOT_INSTALLED"
+
+
 async def test_on_demand_capture_reports_the_failure(
     refusal: tuple[Any, str, tuple[str, str]], settings: _StubSettings
 ) -> None:

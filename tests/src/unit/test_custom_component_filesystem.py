@@ -1570,18 +1570,6 @@ class TestExtraYamlKeysHandlers:
         assert result["keys"] == ["alert2"]
         assert "homeassistant" in result["deny_floor"]
 
-    async def test_get_rejects_bad_token(self):
-        import custom_components.ha_mcp_tools as comp
-
-        # Real _caller_token_ok: a mismatched presented token is rejected before
-        # any store read.
-        hass = MagicMock()
-        hass.data = {comp.DOMAIN: {"caller_token": "good"}}
-        handler = comp._build_get_extra_yaml_keys_handler(hass)
-        result = await handler(MagicMock(data={comp.CALLER_TOKEN_FIELD: "bad"}))
-        assert result["success"] is False
-        assert result["error_code"] == "unauthorized"
-
 
 class TestLoadCallerToken:
     """_load_or_create_caller_token must fail safe on a corrupt store rather
