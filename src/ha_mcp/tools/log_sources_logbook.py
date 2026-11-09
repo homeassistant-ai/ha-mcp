@@ -29,7 +29,7 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -294,9 +294,17 @@ class LogbookLogSourceMixin:
         if rest is None:
             # get_logbook answers None only for a reply that was not a row
             # list; an empty logbook is a real list, so this is a failure.
-            raise ToolError(
-                "The REST logbook reply was not a row list.",
-                log_level=TOOL_ERROR_LOG_LEVEL,
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The REST logbook reply was not a row list.",
+                    context={"source": "logbook", "transport": "rest"},
+                    suggestions=[
+                        "Retry the request; the REST logbook endpoint answered "
+                        "with an unexpected payload",
+                        "Check the Home Assistant logs if it keeps happening",
+                    ],
+                )
             )
         return rest, "rest"
 
