@@ -105,6 +105,38 @@ class TestTraceContextLookup:
         assert result["context_scanned"] == 1
 
     @pytest.mark.asyncio
+    async def test_evicted_trace_falls_back_to_the_scanned_detail(self):
+        """A trace evicted between the scan and refetch still returns its detail."""
+        scanned = {
+            "run_id": "r1",
+            "state": "stopped",
+            "trace": {},
+            "context": {"id": "own-1", "parent_id": "parent-1"},
+        }
+        client = _make_pooled_client(
+            _dispatch(
+                detail_result={
+                    "success": False,
+                    "error": "The trace could not be found",
+                }
+            )
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_traces.resolve_context_trace",
+            AsyncMock(
+                return_value=ContextTraceMatch("r1", "parent", 1, False, (), scanned)
+            ),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test", context_id="parent-1"
+            )
+
+        assert result["run_id"] == "r1"
+        assert result["context_match"] == "parent"
+        assert result["context_scanned"] == 1
+
+    @pytest.mark.asyncio
     async def test_context_scan_truncated_is_reported(self):
         """A bounded parent scan reports that older traces were not checked."""
         detail_result = {

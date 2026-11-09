@@ -154,10 +154,9 @@ class TraceTools:
            including trigger info, condition results, action trace with timing,
            and context variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
-        3. Resolve a trace by context (provide context_id): accepts the trace
-           run's own `context.id` or the context id of the event or service
-           call that triggered it. The response reports `context_match` as
-           `trace` or `parent`.
+        3. Resolve a trace by context (provide context_id); the field
+           description lists the accepted ids. The response reports
+           `context_match` as `trace` or `parent`.
            ha_get_automation_traces("automation.motion_light", context_id="01J...")
         4. Add logbook entries and context metadata: detailed=True. Script-style
            action paths (sequence/, numeric) are always matched regardless of
@@ -273,6 +272,9 @@ class TraceTools:
                     detailed=detailed,
                     sections=sections,
                     ctx=ctx,
+                    fallback_trace=(
+                        context_match.trace_data if context_match is not None else None
+                    ),
                 )
                 if context_match is not None:
                     _add_context_match(detail, context_id, context_match)
@@ -315,8 +317,14 @@ class TraceTools:
         detailed: bool,
         sections: str | None,
         ctx: Context | None,
+        fallback_trace: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Retrieve and format a single trace by run_id."""
+        """Retrieve and format a single trace by run_id.
+
+        ``fallback_trace`` is the detail the context scan already read. A newer
+        run can evict it before this refetch, so an unsuccessful read falls
+        back to that copy instead of reporting a race as a missing trace.
+        """
         result = await self._client.send_websocket_message(
             {
                 "type": "trace/get",
@@ -326,18 +334,21 @@ class TraceTools:
             }
         )
 
-        if not result.get("success"):
+        if result.get("success"):
+            trace_data = result.get("result", {})
+        elif fallback_trace is not None:
+            trace_data = fallback_trace
+        else:
             _raise_trace_ws_failure(
                 result.get("error", "Failed to retrieve trace"),
                 {"entity_id": entity_id, "run_id": run_id},
             )
 
-        trace_data = result.get("result", {})
         requested = _requested_sections(sections)
         logbook: TraceLogbook | None = None
         # An explicit section list decides on its own: detailed=True must not
         # spend a slow recorder query on rows the caller then filters out.
-        if "logbook" in requested or (detailed and not requested):
+        if "logbook" in requested or (detailed and not sections):
             logbook = await fetch_trace_logbook(self._client, trace_data)
         await safe_progress(ctx, progress=3, total=3, message="formatting trace")
         formatted = _format_detailed_trace(

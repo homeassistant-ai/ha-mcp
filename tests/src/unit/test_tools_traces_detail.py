@@ -554,6 +554,14 @@ class TestFormatDetailedTrace:
         result = _format_detailed_trace("automation.x", "1", trace)
         assert "error" not in result["condition_results"][0]
 
+    def test_overall_trace_error_is_surfaced(self):
+        """An error on the trace itself is returned beside the step details."""
+        trace = {"state": "stopped", "trace": {}, "error": "Action failed"}
+
+        result = _format_detailed_trace("automation.x", "1", trace)
+
+        assert result["error"] == "Action failed"
+
 
 class TestFilterTraceSections:
     """Test _filter_trace_sections function."""

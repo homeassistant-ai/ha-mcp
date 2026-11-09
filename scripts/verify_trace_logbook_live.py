@@ -34,6 +34,7 @@ async def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     unique_id = f"trace_logbook_live_{suffix}"
     entity_id = None
+    write_attempted = False
     try:
         states = await client.get_states()
         light = next(
@@ -55,6 +56,7 @@ async def main() -> None:
             "mode": "single",
             "trace": {"stored_traces": 5},
         }
+        write_attempted = True
         created = await client.upsert_automation_config(
             config, identifier=unique_id, wait_for_entity=True
         )
@@ -81,7 +83,9 @@ async def main() -> None:
             detail["logbook_entries"][0].get("message"),
         )
     finally:
-        if entity_id:
+        # Clean up when the config may exist, not only when the entity
+        # discovery returned an id: a wait timeout still leaves the write.
+        if write_attempted:
             try:
                 await client.delete_automation_config(unique_id)
             except Exception as err:  # noqa: BLE001

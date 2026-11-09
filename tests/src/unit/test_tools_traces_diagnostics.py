@@ -122,6 +122,19 @@ class TestGatherDiagnostics:
         assert "could not find" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
+    async def test_missing_entity_state_reports_not_found(self):
+        """An empty state reply is reported as a missing entity, not a crash."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = None
+
+        result = await _gather_diagnostics(client, "automation.test", "automation")
+
+        assert result["entity_exists"] is False
+        assert result["entity_state"] is None
+        assert result["trace_storage_enabled"] is None
+        assert "could not find" in result["suggestion"].lower()
+
+    @pytest.mark.asyncio
     async def test_trace_storage_disabled(self):
         """Diagnostics detect when trace storage is disabled."""
         client = AsyncMock()
@@ -146,27 +159,12 @@ class TestGatherDiagnostics:
     @pytest.mark.parametrize(
         "config_response",
         [
-            {"success": True, "result": {}},
             {"success": True, "result": {"config": {}}},
             {"success": True, "result": {"config": {"trace": {}}}},
-            {
-                "success": True,
-                "result": {"config": {"trace": {"stored_traces": "abc"}}},
-            },
-            {"success": True, "result": {"config": {"trace": {"stored_traces": {}}}}},
-            {"success": True, "result": {"config": None}},
-            {"success": True, "result": "not-a-dict"},
-            {"success": False, "error": "unknown command"},
         ],
         ids=[
-            "no-config-key",
             "no-trace-key",
             "no-stored-traces-key",
-            "non-numeric-stored-traces",
-            "mapping-stored-traces",
-            "null-config",
-            "malformed-result",
-            "failed-command",
         ],
     )
     async def test_trace_storage_defaults_enabled_when_config_lacks_trace(
@@ -186,6 +184,50 @@ class TestGatherDiagnostics:
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
         assert result["trace_storage_enabled"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config_response",
+        [
+            {"success": True, "result": {}},
+            {
+                "success": True,
+                "result": {"config": {"trace": {"stored_traces": "abc"}}},
+            },
+            {"success": True, "result": {"config": {"trace": {"stored_traces": {}}}}},
+            {"success": True, "result": {"config": None}},
+            {"success": True, "result": "not-a-dict"},
+            {"success": False, "error": "unknown command"},
+        ],
+        ids=[
+            "no-config-key",
+            "non-numeric-stored-traces",
+            "mapping-stored-traces",
+            "null-config",
+            "malformed-result",
+            "failed-command",
+        ],
+    )
+    async def test_trace_storage_reports_unknown_when_config_is_unreadable(
+        self, config_response
+    ):
+        """A config probe that cannot answer leaves the check unknown, not enabled."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "on",
+            "attributes": {
+                "id": "test_unique_id",
+                "last_triggered": "2025-11-30T15:00:00Z",
+            },
+        }
+        client.send_websocket_message.return_value = config_response
+
+        result = await _gather_diagnostics(client, "automation.test", "automation")
+
+        assert result["trace_storage_enabled"] is None
+        assert "could not read whether trace storage is enabled" in (
+            result["suggestion"].lower()
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stored", ["0", 0.0], ids=["string-zero", "float-zero"])
@@ -278,8 +320,8 @@ class TestGatherDiagnostics:
         )
 
     @pytest.mark.asyncio
-    async def test_config_fetch_failure_graceful(self):
-        """Diagnostics handle config fetch failure gracefully."""
+    async def test_config_fetch_failure_reports_unknown_storage(self):
+        """A failed config read leaves the storage check unknown, not enabled."""
         client = AsyncMock()
         client.get_entity_state.return_value = {
             "state": "on",
@@ -292,11 +334,34 @@ class TestGatherDiagnostics:
 
         result = await _gather_diagnostics(client, "automation.test", "automation")
 
-        # Should still return diagnostics even if config fetch fails
         assert result["entity_exists"] is True
         assert result["entity_enabled"] is True
-        # trace_storage_enabled defaults to True when we can't fetch config
-        assert result["trace_storage_enabled"] is True
+        assert result["trace_storage_enabled"] is None
+        assert "could not read whether trace storage is enabled" in (
+            result["suggestion"].lower()
+        )
+        # The unknown check must not claim the traces expired.
+        assert "expired" not in result["suggestion"].lower()
+
+    @pytest.mark.asyncio
+    async def test_unavailable_script_is_not_reported_as_off(self):
+        """An unavailable script's state is named instead of being called off."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {
+            "state": "unavailable",
+            "attributes": {"last_triggered": None},
+        }
+        client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"config": {"trace": {"stored_traces": 5}}},
+        }
+
+        result = await _gather_diagnostics(client, "script.test", "script")
+
+        assert result["entity_state"] == "unavailable"
+        assert result["entity_enabled"] is False
+        assert "unavailable" in result["suggestion"].lower()
+        assert "state: off" not in result["suggestion"].lower()
 
     @pytest.mark.asyncio
     async def test_traces_cleared_or_expired_suggestion(self):

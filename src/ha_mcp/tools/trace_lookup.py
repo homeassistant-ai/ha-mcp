@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 PARENT_CONTEXT_SCAN_LIMIT = 50
 LOGBOOK_ROW_LIMIT = 50
+# A state trigger with a ``for:`` duration fires long after the state change
+# that shares the triggering context, so the parent-context read reaches back
+# further than the run's own window.
+PARENT_CONTEXT_LOOKBACK = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,7 @@ class ContextTraceMatch:
     scanned: int
     truncated: bool
     scan_errors: tuple[str, ...] = ()
+    trace_data: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -145,7 +150,7 @@ def _raise_context_not_found(
         suggestions.insert(
             0,
             f"Only the newest {PARENT_CONTEXT_SCAN_LIMIT} stored traces were "
-            "scanned; increase stored_traces or pass the trace's run_id",
+            "scanned; pass the trace's run_id",
         )
     if scan_errors:
         suggestions.insert(
@@ -202,6 +207,38 @@ def _match_kind(context: Any, context_id: str) -> Literal["trace", "parent"] | N
     return None
 
 
+async def _read_candidate_context(
+    client: Any,
+    domain: str,
+    item_id: str,
+    run_id: str,
+    scan_errors: list[str],
+) -> dict[str, Any] | None:
+    """Read one stored trace, recording why it could not be inspected."""
+    detail = await client.send_websocket_message(
+        {
+            "type": "trace/get",
+            "domain": domain,
+            "item_id": item_id,
+            "run_id": run_id,
+        }
+    )
+    if not detail.get("success"):
+        error = detail.get("error")
+        if is_connection_error_message(error):
+            _raise_trace_ws_failure(
+                error,
+                {"domain": domain, "item_id": item_id, "run_id": run_id},
+            )
+        scan_errors.append(f"{run_id}: {error}")
+        return None
+    trace_data = detail.get("result")
+    if not isinstance(trace_data, dict):
+        scan_errors.append(f"{run_id}: trace/get returned no trace detail")
+        return None
+    return trace_data
+
+
 async def _resolve_parent_context(
     client: Any,
     domain: str,
@@ -225,56 +262,58 @@ async def _resolve_parent_context(
     candidates = candidates[:PARENT_CONTEXT_SCAN_LIMIT]
 
     scanned = 0
-    fallback_run_id: str | None = None
+    parent_match: tuple[str, dict[str, Any]] | None = None
+    fallback_match: tuple[str, dict[str, Any]] | None = None
     for trace in candidates:
         scanned += 1
         run_id = str(trace["run_id"])
-        detail = await client.send_websocket_message(
-            {
-                "type": "trace/get",
-                "domain": domain,
-                "item_id": item_id,
-                "run_id": run_id,
-            }
+        trace_data = await _read_candidate_context(
+            client, domain, item_id, run_id, scan_errors
         )
-        if not detail.get("success"):
-            error = detail.get("error")
-            if is_connection_error_message(error):
-                _raise_trace_ws_failure(
-                    error,
-                    {
-                        "context_id": context_id,
-                        "domain": domain,
-                        "item_id": item_id,
-                    },
-                )
-            scan_errors.append(f"{run_id}: {error}")
+        if trace_data is None:
             continue
-        trace_data = detail.get("result")
-        context = trace_data.get("context") if isinstance(trace_data, dict) else None
+        context = trace_data.get("context")
         kind = _match_kind(context, context_id)
+        if kind == "trace":
+            # The run that owns the requested context id is authoritative. It
+            # can appear after a newer run that merely names it as a parent, so
+            # the bounded scan checks every candidate before settling.
+            return ContextTraceMatch(
+                run_id, "trace", scanned, truncated, tuple(scan_errors), trace_data
+            )
         if kind == "parent":
             if trace.get("not_triggered"):
                 # A not-triggered diagnostic is useful, but a real run for the
                 # same triggering context is the better match.
-                if fallback_run_id is None:
-                    fallback_run_id = run_id
+                if fallback_match is None:
+                    fallback_match = (run_id, trace_data)
                 continue
-            return ContextTraceMatch(
-                run_id, "parent", scanned, truncated, tuple(scan_errors)
-            )
-        if kind == "trace":
-            return ContextTraceMatch(
-                run_id, "trace", scanned, truncated, tuple(scan_errors)
-            )
+            if parent_match is None:
+                parent_match = (run_id, trace_data)
 
-    if fallback_run_id is not None:
-        return ContextTraceMatch(
-            fallback_run_id, "parent", scanned, truncated, tuple(scan_errors)
-        )
+    match = _scan_result(scanned, truncated, scan_errors, parent_match, fallback_match)
+    if match is not None:
+        return match
 
     _raise_context_not_found(
         context_id, domain, item_id, scanned, truncated, scan_errors
+    )
+
+
+def _scan_result(
+    scanned: int,
+    truncated: bool,
+    scan_errors: list[str],
+    parent_match: tuple[str, dict[str, Any]] | None,
+    fallback_match: tuple[str, dict[str, Any]] | None,
+) -> ContextTraceMatch | None:
+    """Choose the stored trace the bounded scan settled on, if any."""
+    match = parent_match or fallback_match
+    if match is None:
+        return None
+    run_id, trace_data = match
+    return ContextTraceMatch(
+        run_id, "parent", scanned, truncated, tuple(scan_errors), trace_data
     )
 
 
@@ -308,19 +347,23 @@ async def fetch_trace_logbook(
         )
 
     start_time, end_time = _logbook_window(trace)
-    contexts: list[str] = []
+    # Read the run's own context first: its rows describe the run itself and
+    # must survive the row cap even when the triggering context is busy.
+    contexts: list[tuple[str, str]] = [(str(context_id), start_time)]
     parent_id = context.get("parent_id")
     if isinstance(parent_id, str) and parent_id:
-        contexts.append(parent_id)
-    contexts.append(str(context_id))
+        parent_start = (
+            datetime.fromisoformat(start_time) - PARENT_CONTEXT_LOOKBACK
+        ).isoformat()
+        contexts.append((parent_id, parent_start))
 
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     warnings: list[str] = []
     transports: set[str] = set()
-    for lookup_id in contexts:
-        entries, transport, context_warnings = await _fetch_logbook_context(
-            client, lookup_id, start_time, end_time
+    for index, (lookup_id, lookup_start) in enumerate(contexts):
+        entries, transport, context_warnings, timed_out = await _fetch_logbook_context(
+            client, lookup_id, lookup_start, end_time
         )
         warnings.extend(context_warnings)
         if transport:
@@ -333,6 +376,17 @@ async def fetch_trace_logbook(
                 continue
             seen.add(key)
             merged.append(row)
+        if timed_out:
+            # The recorder is already past one deadline; a second query would
+            # double the wait, so stop and say which context went unread.
+            skipped = [skipped_id for skipped_id, _ in contexts[index + 1 :]]
+            if skipped:
+                warnings.append(
+                    "Skipped the logbook read for "
+                    + ", ".join(skipped)
+                    + " after the component read timed out."
+                )
+            break
 
     total = len(merged)
     entries = merged[:LOGBOOK_ROW_LIMIT]
@@ -354,15 +408,15 @@ async def _fetch_logbook_context(
     context_id: str,
     start_time: str,
     end_time: str,
-) -> tuple[list[dict[str, Any]], str | None, list[str]]:
+) -> tuple[list[dict[str, Any]], str | None, list[str], bool]:
     """Read one context's logbook, component first with a REST fallback."""
     entries, warnings, retry_rest = await _fetch_component_logbook(
         client, context_id, start_time, end_time
     )
     if entries is not None:
-        return entries, "component", warnings
+        return entries, "component", warnings, False
     if not retry_rest:
-        return [], None, warnings
+        return [], None, warnings, True
 
     try:
         rest_entries = await client.get_logbook(
@@ -372,12 +426,12 @@ async def _fetch_logbook_context(
         )
     except Exception as err:  # noqa: BLE001
         warnings.append(f"Could not read the trace logbook: {err}")
-        return [], None, warnings
+        return [], None, warnings, False
 
     if not isinstance(rest_entries, list):
         warnings.append("The REST logbook reply was not a row list.")
-        return [], None, warnings
-    return rest_entries, "rest", warnings
+        return [], None, warnings, False
+    return rest_entries, "rest", warnings, False
 
 
 def _component_logbook_error(err: Exception) -> tuple[str, bool]:
@@ -446,8 +500,9 @@ def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
     The trace's own timestamps bracket the action trace, while the recorder's
     logbook row for the triggering event can land just outside that window.
     Context filtering keeps the widened window scoped to this run. A malformed
-    or missing timestamp is replaced from the other bound, so both reads still
-    receive an ordered window of roughly one minute instead of failing.
+    timestamp is replaced from the other bound, and a running trace's window
+    reaches the present, so both reads still receive an ordered window instead
+    of failing.
     """
     timestamp = trace.get("timestamp")
     start = _trace_datetime(
@@ -457,9 +512,11 @@ def _logbook_window(trace: dict[str, Any]) -> tuple[str, str]:
         timestamp.get("finish") if isinstance(timestamp, dict) else None
     )
     if finish is None:
-        finish = (
-            start + timedelta(minutes=1) if start is not None else datetime.now(UTC)
-        )
+        # A trace still running has no finish timestamp; its logbook keeps
+        # growing, so the read must reach the present instead of one minute
+        # past the start.
+        now = datetime.now(UTC)
+        finish = now if start is None or now > start else start + timedelta(minutes=1)
     if start is None or start >= finish:
         start = finish - timedelta(minutes=1)
     start -= timedelta(seconds=2)
