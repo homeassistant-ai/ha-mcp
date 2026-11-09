@@ -133,11 +133,12 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
 def _with_registry_icons(
     rows: list[dict[str, Any]], entries: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """The rows with the icon each zone's entity shows: its registry icon, where
-    the zone tools keep a new zone's icon (#2643), over the stored one."""
+    """The rows with each zone entity's registry icon override as
+    ``entity_icon``, beside the stored ``icon`` the Zones editor shows: the
+    override is what the map and the zone's state show (#3001)."""
     icons = {e.get("entity_id"): e["icon"] for e in entries if e.get("icon")}
     return [
-        {**row, "icon": icons[row["entity_id"]]}
+        {**row, "entity_icon": icons[row["entity_id"]]}
         if row.get("entity_id") in icons
         else row
         for row in rows
@@ -191,6 +192,11 @@ class ZoneTools:
         settings) and YAML zones, are listed with ``editable=false`` /
         ``source="yaml"``; editable means ha_set_zone and ha_remove_zone can
         change the zone. Each zone carries its entity_id.
+
+        A stored zone's ``icon`` is the one stored in the zone, which the
+        Zones editor shows. ``entity_icon`` is an icon override in the zone
+        entity's registry entry: the map and the zone's state show it instead.
+        Set or clear the override with ha_set_entity.
         """
         try:
             # Prefer the ha_mcp_tools component's helpers_list, one call for
@@ -410,17 +416,16 @@ class ZoneTools:
             )
         return state
 
-    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str, str | None]:
-        """The entity_id, storage zone_id and registry icon of a stored zone,
-        given its entity_id or zone_id.
+    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str]:
+        """The entity_id and storage zone_id of a stored zone, given its
+        entity_id or zone_id.
 
         Resolved as ``stored_target`` resolves it, and so as the zone backups
         do: a bare ``zone_id`` is a storage id from ``zone/list``, and
         ``zone.<name>`` is the zone whose registry entry has that entity_id. A
         renamed entity can carry another zone's id as its name, so a bare id
         never names an entity, and a repeated removal deletes nothing.
-        Both entity_id and icon are None for a stored zone without a registry
-        entry; the icon is also None when the entry sets none. The
+        The entity_id is None for a stored zone without a registry entry. The
         home zone and YAML zones are not in the storage; Core gives them no
         ``unique_id``, so they have no registry entry.
         """
@@ -446,11 +451,7 @@ class ZoneTools:
         stored = {str(zone.get("id")) for zone in listed.get("result") or []}
         storage_id, entity = stored_target("zone", zone_id, stored, entries)
         if storage_id in stored:
-            icon = next(
-                (e.get("icon") for e in entries if e.get("unique_id") == storage_id),
-                None,
-            )
-            return entity, storage_id, icon
+            return entity, storage_id
         entity_id = zone_id if zone_id.startswith("zone.") else f"zone.{zone_id}"
         # A registry entry links a stored zone, so only a state without one is
         # a YAML or the home zone.
@@ -533,7 +534,7 @@ class ZoneTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon stored in the zone itself (as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed",
+                description="Material Design Icon (e.g., 'mdi:briefcase'), stored in the zone as the Home Assistant zone dialog stores it. Home Assistant keeps a zone's stored icon on update: it can be changed but not removed, so '' leaves it. An icon override in the entity registry (ha_get_zone's entity_icon) is set or cleared with ha_set_entity",
                 default=None,
             ),
         ] = None,
@@ -616,10 +617,8 @@ class ZoneTools:
                             context={"zone_id": zone_id},
                         )
                     )
-                entity_id, storage_id, registry_icon = await self._resolve_zone(zone_id)
-                # The helper write path merges into the stored zone and keeps a
-                # new icon in the registry, where it stays clearable, unless the
-                # zone already stores one (#2643). It takes the storage id first.
+                entity_id, storage_id = await self._resolve_zone(zone_id)
+                # The helper write path takes the storage id first.
                 result = await _execute_update_simple_helper(
                     self._client,
                     "zone",
@@ -635,12 +634,6 @@ class ZoneTools:
                     fields,
                 )
                 response = _zone_write_response(result, storage_id, "updated")
-                # The reply holds the stored zone plus the registry fields this
-                # write set; the entity shows its registry icon over the stored
-                # one, as ha_get_zone reports it. An icon this write set or
-                # cleared ('') is already in the reply.
-                if icon is None and registry_icon:
-                    response["zone_data"]["icon"] = registry_icon
                 response["updated_fields"] = updated
                 return response
 
@@ -725,7 +718,7 @@ class ZoneTools:
                 suggestions=["Use ha_get_zone() to find existing zone_ids"],
                 context={"operation": "remove_zone"},
             )
-            entity_id, storage_id, _ = await self._resolve_zone(zone_id)
+            entity_id, storage_id = await self._resolve_zone(zone_id)
             result = await self._client.send_websocket_message(
                 {"type": "zone/delete", "zone_id": storage_id}
             )

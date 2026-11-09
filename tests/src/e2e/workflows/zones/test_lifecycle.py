@@ -13,6 +13,7 @@ production-level functionality and compatibility.
 """
 
 import logging
+import uuid
 
 import pytest
 
@@ -472,70 +473,53 @@ class TestZoneLifecycle:
             )
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
 
-    async def test_icon_from_create_can_be_cleared(self, mcp_client):
-        """An icon given at creation stays clearable (#2643).
+    async def test_icon_from_create_is_stored_in_the_zone(self, mcp_client):
+        """An icon given at creation is the zone's own icon (#3001).
 
-        Written into the stored zone it could never be removed again, because
-        Core's zone update merges into the stored zone and rejects an empty icon.
+        The Zones editor and the zone dialog show only the icon stored in the
+        zone; kept as an entity registry override it looked unset there.
         """
         async with MCPAssertions(mcp_client) as mcp:
             created = await mcp.call_tool_success(
                 "ha_set_zone",
                 {
-                    "name": "E2E Created Icon Zone",
+                    "name": f"E2E Created Icon Zone {uuid.uuid4().hex[:8]}",
                     "latitude": 41.6,
                     "longitude": -73.6,
                     "icon": "mdi:school",
                 },
             )
             zone_id = created["zone_id"]
-            entity_id = created["entity_id"]
             try:
                 listed = await mcp.call_tool_success(
                     "ha_get_zone", {"zone_id": zone_id}
                 )
-                # Read back as the entity shows it, from the registry.
                 assert listed["zone"]["icon"] == "mdi:school", listed
-
-                await mcp.call_tool_success(
-                    "ha_set_zone", {"zone_id": zone_id, "icon": ""}
-                )
-                state = await mcp.call_tool_success(
-                    "ha_get_state", {"entity_id": entity_id}
-                )
-                assert "icon" not in state["data"]["attributes"], state
-                cleared = await mcp.call_tool_success(
-                    "ha_get_zone", {"zone_id": zone_id}
-                )
-                assert "icon" not in cleared["zone"], cleared
+                assert "entity_icon" not in listed["zone"], listed
             finally:
                 await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 
-    async def test_icon_set_on_update_can_be_cleared(self, mcp_client):
-        """An icon added by an update stays clearable (#2643)."""
+    async def test_icon_set_on_update_is_stored_in_the_zone(self, mcp_client):
+        """An icon added to a zone created without one is stored in it (#3001)."""
         async with MCPAssertions(mcp_client) as mcp:
             created = await mcp.call_tool_success(
                 "ha_set_zone",
-                {"name": "E2E Icon Zone", "latitude": 41.5, "longitude": -73.5},
+                {
+                    "name": f"E2E Icon Zone {uuid.uuid4().hex[:8]}",
+                    "latitude": 41.5,
+                    "longitude": -73.5,
+                },
             )
             zone_id = created["zone_id"]
-            entity_id = created["entity_id"]
             try:
                 await mcp.call_tool_success(
                     "ha_set_zone", {"zone_id": zone_id, "icon": "mdi:briefcase"}
                 )
-                state = await mcp.call_tool_success(
-                    "ha_get_state", {"entity_id": entity_id}
+                listed = await mcp.call_tool_success(
+                    "ha_get_zone", {"zone_id": zone_id}
                 )
-                assert state["data"]["attributes"].get("icon") == "mdi:briefcase", state
-
-                await mcp.call_tool_success(
-                    "ha_set_zone", {"zone_id": entity_id, "icon": ""}
-                )
-                state = await mcp.call_tool_success(
-                    "ha_get_state", {"entity_id": entity_id}
-                )
-                assert "icon" not in state["data"]["attributes"], state
+                assert listed["zone"]["icon"] == "mdi:briefcase", listed
+                assert "entity_icon" not in listed["zone"], listed
             finally:
                 await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 

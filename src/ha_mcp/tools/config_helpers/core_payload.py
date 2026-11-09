@@ -61,7 +61,6 @@ def merged_update(
     name: str | None,
     icon: str | None,
     fields: dict[str, Any],
-    entity_id: str,
 ) -> dict[str, Any]:
     """The stored item plus the changes: Core's update writes the whole item.
 
@@ -75,8 +74,6 @@ def merged_update(
         body.pop("name", None)
     if name is not None:
         body["name"] = name
-    if helper_type == "zone":
-        icon = _zone_item_icon(stored, icon, entity_id)
     if icon is not None:
         if icon:
             body["icon"] = icon
@@ -84,33 +81,6 @@ def merged_update(
             body.pop("icon", None)
     body.update(fields)
     return body
-
-
-def _zone_item_icon(
-    stored: dict[str, Any], icon: str | None, entity_id: str
-) -> str | None:
-    """The icon to write into a zone's stored item, ``None`` to leave it (#2643).
-
-    The zone entity shows the registry icon over the item's, and Core's zone
-    update merges into the item and rejects an empty icon, so an icon stored
-    there can never be removed. A new icon therefore goes into the item only
-    when it already holds one; otherwise the registry alone carries it and
-    stays clearable. Clearing an icon the item holds is refused.
-    """
-    if not stored.get("icon"):
-        return None
-    if icon == "":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"The icon of {entity_id} cannot be removed: the zone's stored "
-                f"icon ({stored['icon']}) is kept by Home Assistant's zone update "
-                "and would show again.",
-                context=_simple_helper_error_context("zone", entity_id=entity_id),
-                suggestions=["Set a different icon instead of an empty one"],
-            )
-        )
-    return icon
 
 
 def _reject(helper_type: str, message: str, **context: Any) -> None:
