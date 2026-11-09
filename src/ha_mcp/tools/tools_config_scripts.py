@@ -77,19 +77,7 @@ _SCRIPT_SKILL_FILES: tuple[str, ...] = (
 
 
 def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Strip empty sequence array from script config.
-
-    Blueprint-based scripts should not have a sequence field since this comes
-    from the blueprint itself. If an empty array is present, it overrides the
-    blueprint's configuration and breaks the script.
-
-    Args:
-        config: Script configuration dict
-
-    Returns:
-        Configuration with empty sequence array removed
-    """
+    """Strip empty sequence array from blueprint script config."""
     cleaned = config.copy()
 
     # Remove empty sequence array for blueprint scripts
@@ -271,10 +259,7 @@ class ConfigScriptTools:
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 f"Script not found: {script_id}",
-                context={
-                    "script_id": script_id,
-                    "available_script_ids": available_ids,
-                },
+                context={"script_id": script_id, "available_script_ids": available_ids},
                 suggestions=[
                     "Use ha_search(domain_filter='script') to find existing scripts"
                 ],
@@ -354,6 +339,26 @@ class ConfigScriptTools:
                 )
             )
         return actual_config, resolved_id
+
+    async def _resolve_write_target(
+        self, script_id: str, config_hash: str | None
+    ) -> tuple[str, str | None]:
+        """Resolve write operation ('created' | 'updated') and storage key."""
+        if config_hash:
+            _, key = await self._fetch_and_verify_hash(script_id, config_hash, "set")
+            return "updated", key
+        try:
+            get_config = getattr(self._client, "get_script_config", None)
+            if callable(get_config):
+                res = get_config(script_id)
+                if hasattr(res, "__await__"):
+                    await res
+                return "updated", None
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                return "created", None
+            raise
+        return "created", None
 
     async def _upsert_script(
         self, config: dict[str, Any], script_id: str, resolved_id: str | None
@@ -707,11 +712,9 @@ class ConfigScriptTools:
             # resolves ``script_id`` to the storage key — thread that through so
             # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
             # the no-hash path (raw script_id resolved once, inside upsert).
-            resolved_key: str | None = None
-            if config_hash:
-                _, resolved_key = await self._fetch_and_verify_hash(
-                    script_id, config_hash, "set"
-                )
+            operation, resolved_key = await self._resolve_write_target(
+                script_id, config_hash
+            )
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
@@ -736,6 +739,7 @@ class ConfigScriptTools:
                 bp_warnings,
                 MandatoryBPS,
                 detached_blueprint,
+                operation=operation,
             )
 
         except ToolError as te:
@@ -865,10 +869,7 @@ class ConfigScriptTools:
                         "Call ha_config_get_script() first",
                         "Use the config_hash from that response",
                     ],
-                    context={
-                        "action": "python_transform",
-                        "script_id": script_id,
-                    },
+                    context={"action": "python_transform", "script_id": script_id},
                 )
             )
 
@@ -887,10 +888,7 @@ class ConfigScriptTools:
                     ErrorCode.VALIDATION_FAILED,
                     message,
                     suggestions=suggestions,
-                    context={
-                        "action": "python_transform",
-                        "script_id": script_id,
-                    },
+                    context={"action": "python_transform", "script_id": script_id},
                 )
             )
 
@@ -913,10 +911,7 @@ class ConfigScriptTools:
                         "The transform may have removed required fields",
                         "Ensure the config still has a 'sequence' or 'use_blueprint' key",
                     ],
-                    context={
-                        "action": "python_transform",
-                        "script_id": script_id,
-                    },
+                    context={"action": "python_transform", "script_id": script_id},
                 )
             )
         return transformed_config, resolved_id
@@ -992,13 +987,14 @@ class ConfigScriptTools:
 
         response: dict[str, Any] = {
             "success": True,
+            "operation": "updated",
             "action": "python_transform",
             "script_id": script_id,
             "config_hash": new_config_hash,
             "python_expression": python_transform,
             "message": f"Script {script_id} updated via Python transform",
-            # Merge upsert result, excluding "success" (we set it ourselves)
-            **{k: v for k, v in result.items() if k != "success"},
+            # Merge upsert result, excluding "success" and "operation"
+            **{k: v for k, v in result.items() if k not in ("success", "operation")},
         }
         if bp_warnings:
             response["best_practice_warnings"] = list(bp_warnings)
@@ -1038,10 +1034,12 @@ class ConfigScriptTools:
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
         detached_blueprint: str | None = None,
+        operation: str = "created",
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
         references = await ref_check(self._client, config_dict, "script")
         result = await self._upsert_script(config_dict, script_id, resolved_key)
+        result["operation"] = operation
 
         await self._finalize_script_write(
             result, script_id, resolved_key, wait, effective_category

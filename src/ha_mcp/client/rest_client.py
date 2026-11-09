@@ -2237,7 +2237,6 @@ class HomeAssistantClient:
                 "success": True,
                 "script_id": write_id,
                 "result": response.get("result", "ok"),
-                "operation": "created" if response.get("result") == "ok" else "updated",
             }
         except Exception as e:
             logger.error(f"Failed to upsert script config for {script_id}: {e}")
