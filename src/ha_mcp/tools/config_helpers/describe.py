@@ -88,6 +88,8 @@ def compact_field(field: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"name": field.get("name")}
     if field.get("required"):
         out["required"] = True
+    if field.get("secret") is True:
+        out["secret"] = True
     if isinstance(field.get("selector"), dict) and field["selector"]:
         out.update(_compact_selector(field["selector"]))
     elif field.get("type") in {"expandable", "grid"}:
