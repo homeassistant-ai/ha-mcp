@@ -87,14 +87,17 @@ class _FakeDaemon:
 def _fixture_world(
     monkeypatch: pytest.MonkeyPatch, prepare: Any, readiness: Any
 ) -> _FakeRequest:
-    """Patch everything the fixture touches except the staging and readiness seams."""
+    """Patch everything the fixture touches except its own behaviour.
+
+    The settings/WebSocket reset stays real: it is what makes the fixture's URL
+    reach settings-backed clients, and one test asserts exactly that.
+    """
     monkeypatch.setattr(e2e_conftest, "_prepare_testcontainer_config", prepare)
     monkeypatch.setattr(
         e2e_conftest, "_build_ha_testcontainer", lambda *args: _FakeContainer()
     )
     monkeypatch.setattr(e2e_conftest, "_is_embedded_backend_selected", lambda: False)
     monkeypatch.setattr(e2e_conftest, "is_haos_backend_selected", lambda: False)
-    monkeypatch.setattr(e2e_conftest, "_reset_ha_in_process_caches", lambda: None)
     monkeypatch.setattr(e2e_conftest, "_wait_for_testcontainer_ready", readiness)
     docker_sdk = pytest.importorskip("docker")
     monkeypatch.setattr(docker_sdk, "from_env", _FakeDaemon)
@@ -199,6 +202,11 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
     override: str | None,
     expected_host: str,
 ) -> None:
+    from types import SimpleNamespace
+
+    from ha_mcp import config
+    from ha_mcp.client.websocket_client import websocket_manager
+
     def fake_prepare(embedded: bool, config_path: Path) -> Any:
         return config_path, {}, None
 
@@ -208,13 +216,28 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
     else:
         monkeypatch.setenv("HA_E2E_BASE_HOST", override)
 
+    # A client built before the session must not keep the stale URL: prime the
+    # settings cache with one, then let the fixture's real reset replace it.
+    stale = SimpleNamespace(homeassistant_url="http://stale.invalid:1")
+    monkeypatch.setattr(config, "_settings", stale)
+    assert config.get_global_settings() is stale
+    pooled = dict(websocket_manager._clients)
+    last_used = dict(websocket_manager._last_used)
+    current_loop = websocket_manager._current_loop
+
     fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
     generator = fixture(request, None)
     try:
         info = next(generator)
         assert info["base_url"] == f"http://{expected_host}:32768"
         assert os.environ["HOMEASSISTANT_URL"] == info["base_url"]
+        assert config.get_global_settings().homeassistant_url == info["base_url"]
     finally:
         generator.close()
         for finalizer in request.finalizers:
             finalizer()
+        websocket_manager._clients.clear()
+        websocket_manager._clients.update(pooled)
+        websocket_manager._last_used.clear()
+        websocket_manager._last_used.update(last_used)
+        websocket_manager._current_loop = current_loop
