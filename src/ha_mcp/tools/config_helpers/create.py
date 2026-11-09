@@ -17,7 +17,7 @@ from ..ws_waiters import wait_for_entity_registered
 from .core_payload import (
     with_create_defaults,
 )
-from .icon_route import icon_targets
+from .icon_route import icon_targets, note_hidden_icon
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -132,6 +132,7 @@ async def _execute_create_simple_helper(
     )
     if native is not None:
         native_data, native_entity_id, native_warnings = native
+        await note_hidden_icon(client, native_entity_id, item_icon, native_warnings)
         create_response = _helper_response(
             "create",
             helper_type,
@@ -201,6 +202,7 @@ async def _execute_create_simple_helper(
             registry_icon,
         )
         await _apply_create_category(client, entity_id, category, helper_data, warnings)
+        await note_hidden_icon(client, entity_id, item_icon, warnings)
 
     create_response = _helper_response(
         "create",

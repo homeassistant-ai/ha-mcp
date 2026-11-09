@@ -22,7 +22,7 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import merged_update
-from .icon_route import icon_targets
+from .icon_route import icon_targets, note_hidden_icon
 from .listing import listed_items
 from .registry import _ws_error_msg
 from .schemas import (
@@ -318,6 +318,7 @@ async def _execute_update_simple_helper(
                 except Exception as e:  # noqa: BLE001
                     warnings.append(f"Update applied but verification failed: {e}")
 
+    await note_hidden_icon(client, entity, item_icon, warnings)
     update_response = _helper_response(
         "update",
         helper_type,

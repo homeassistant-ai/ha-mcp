@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from ...client.rest_client import HomeAssistantError
 from ..component_helper_collections import fetch_helper_schemas
 
 
@@ -34,3 +35,32 @@ async def icon_targets(
     if helper_type == "zone":
         return icon, None
     return (icon, icon) if icon == "" else (None, icon)
+
+
+async def note_hidden_icon(
+    client: Any, entity_id: str | None, item_icon: str | None, warnings: list[str]
+) -> None:
+    """Warn when the entity's registry icon hides the icon just stored.
+
+    The entity shows a registry icon over the stored one, and older ha-mcp
+    versions mirrored every helper icon there, so a changed stored icon can
+    stay invisible. The registry read is advisory: when it fails the write
+    has still succeeded, so no warning is given.
+    """
+    if not item_icon or not entity_id:
+        return
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+    except (HomeAssistantError, OSError, TimeoutError):
+        return
+    entry = result.get("result") if result.get("success") else None
+    override = entry.get("icon") if isinstance(entry, dict) else None
+    if not override or override == item_icon:
+        return
+    warnings.append(
+        f"{entity_id} shows its entity registry icon {override} over the stored "
+        f"icon {item_icon}; clear it with ha_set_entity(entity_id='{entity_id}', "
+        "icon='') for the stored icon to show."
+    )

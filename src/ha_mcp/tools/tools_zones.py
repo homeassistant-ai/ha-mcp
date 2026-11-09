@@ -310,7 +310,9 @@ class ZoneTools:
             entries, registry_error = [], str(exc)
         states_error = None
         try:
-            states = await self._client.get_states()
+            states = await self._zone_states(
+                [row["entity_id"] for row in rows if row.get("entity_id")]
+            )
         except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
             states, states_error = [], str(exc)
         # The listing is complete without the registry and the states; only
@@ -327,18 +329,49 @@ class ZoneTools:
             )
         return response
 
-    async def _send_component_zone_list(self) -> dict[str, Any]:
-        """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
-        ws = await get_websocket_client(
+    async def _component_ws(self) -> Any:
+        """The per-client WebSocket the component commands go over."""
+        return await get_websocket_client(
             url=self._client.base_url,
             token=self._client.token,
             verify_ssl=getattr(self._client, "verify_ssl", None),
         )
+
+    async def _send_component_zone_list(self) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
+        ws = await self._component_ws()
         return await ws.send_command(
             "ha_mcp_tools/helpers_list",
             helper_types=["zone"],
             include_flow_helpers=False,
         )
+
+    async def _zone_states(self, entity_ids: list[str]) -> list[dict[str, Any]]:
+        """The zones' states through the component's targeted read, or every
+        state when the component has no ``states`` command or it fails."""
+        caps = await get_component_caps(self._client)
+        if component_supports(caps, "states"):
+            try:
+                ws = await self._component_ws()
+                raw = await ws.send_command(
+                    "ha_mcp_tools/states", entity_ids=entity_ids
+                )
+                states = (raw.get("result") or {}).get("states")
+                if isinstance(states, dict):
+                    return list(states.values())
+                logger.warning("ha_mcp_tools/states returned a malformed payload")
+            except (
+                HomeAssistantCommandError,
+                HomeAssistantCommandTimeout,
+                HomeAssistantConnectionError,
+            ) as exc:
+                if is_unknown_command(exc):
+                    invalidate_caps(self._client)
+                logger.warning(
+                    "ha_mcp_tools/states failed; reading all states: %r", exc
+                )
+        states: list[dict[str, Any]] = await self._client.get_states()
+        return states
 
     async def _legacy_zone_result(self, zone_id: str | None) -> dict[str, Any]:
         """Serve ha_get_zone from Core's own commands."""
