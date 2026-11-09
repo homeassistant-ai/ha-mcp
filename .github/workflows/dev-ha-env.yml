@@ -153,6 +153,10 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.14"
+
       - name: Build HAOS image (cache miss)
         if: inputs.platform == 'haos' && steps.restore-cache.outputs.cache-matched-key == ''
         working-directory: src

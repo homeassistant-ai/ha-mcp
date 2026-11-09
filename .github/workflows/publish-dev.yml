@@ -208,6 +208,10 @@ jobs:
           echo "::error::PyPI never served ha-mcp-dev ${VERSION}; not tagging a component that pins it."
           exit 1
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.14"
+
       - name: Stamp the component for this build
         env:
           VERSION: ${{ needs.prepare.outputs.dev_version }}
