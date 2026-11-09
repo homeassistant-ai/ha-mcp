@@ -110,6 +110,59 @@ component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
 
+## Unit Tests Run on Real Home Assistant Core
+
+`tests/src/unit/` and `tests/addon/` import Core from the dev group
+(`homeassistant`, pinned with `pytest-homeassistant` to the e2e image's Core)
+and run under Core's own test plugin, which their `conftest.py` loads; its
+entry point is blocked in `pyproject.toml`, so E2E sessions never load it.
+A test never writes its own Home Assistant. A hand-made one asserts against a
+guess of what Core does, and such guesses have shipped bugs (#2752):
+
+- No stand-in for `hass`, a registry, a registry entry, a state, a config
+  entry, a WebSocket connection, an entity, a store or any other Core object.
+  Use the plugin's `hass` fixture, `MockConfigEntry`, the registry fixtures
+  (`entity_registry`, `device_registry`, `area_registry`, ...),
+  `hass.states.async_set`, `async_setup_component`, and `hass_ws_client`
+  (`component_ws` in `src/unit/conftest.py` registers the `ha_mcp_tools/*`
+  commands on it).
+- No stand-in module: nothing but the imported module in `sys.modules` for
+  `homeassistant.*`, `aiohttp`, `voluptuous` or `yarl`.
+- Config entries are set up by Core (`hass.config_entries.async_setup`), which
+  loads this repository's `custom_components/ha_mcp_tools` like any custom
+  integration; `src/unit/_server_entry.py` adds a server entry whose server is
+  replaced.
+- What may be replaced: this repository's own collaborators (the in-process
+  server, the REST/WebSocket client, an upstream), another integration through
+  Core's `mock_integration`, and one function or constant on a real Core module
+  when the test needs an answer Core cannot be made to give in a unit test (a
+  failure, a URL, another Core version's shape). Raise Core's real exceptions.
+- An integration whose requirements are not installed with Core (`cloud`,
+  `camera`, `conversation`) cannot be imported here; the component reaches it
+  through a small function of its own that the test replaces.
+
+Four ast-grep rules refuse these in the source: a hand-made `hass`
+(`rules/no-hand-made-hass.yml`), a fake Core object class
+(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
+(`rules/no-shared-core-fakes.yml`), and `patch.dict(sys.modules, ...)` or an
+assignment of a Core module name in `sys.modules`
+(`rules/no-core-module-stand-ins.yml`). `tests/core_stand_in_guard.py` checks
+`sys.modules` after every test body and fails a test whose stand-in module is
+still there, which covers `monkeypatch` swaps and computed names; it cannot see
+a swap the test has already undone, which is why the fourth rule exists. Test
+files written before the unit tests ran on real Core are listed in the rules'
+`ignores` and in the guard. Converting such a file removes it from the lists;
+no file is ever added to them.
+
+The plugin enforces, for every test:
+
+- a fresh event loop (the E2E tree keeps one session loop, see
+  `src/e2e/_conftest_collection.py`);
+- no sockets: a test that runs its own loopback listener requests
+  `socket_enabled`, and only `127.0.0.1` accepts connections;
+- no thread, task or timer left behind (`_no_threads_left_by_the_test` in
+  `src/unit/conftest.py` stops the per-process ones).
+
 ## Test Design Rules
 
 Every test under `tests/` follows these. Reviewers check new and changed

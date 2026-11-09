@@ -32,7 +32,7 @@ concurrency:
   queue: max
 
 env:
-  PYTHON_VERSION: "3.13"
+  PYTHON_VERSION: "3.14"
 
 jobs:
   # Skip on odd ISO weeks (biweekly cadence) unless manually triggered

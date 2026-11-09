@@ -6,8 +6,9 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+import voluptuous as vol
 
-from .test_component_ws_search import _REAL_VOL, FakeHass
+from .test_component_ws_search import FakeHass
 
 
 def _execute() -> Any:
@@ -15,8 +16,8 @@ def _execute() -> Any:
 
     return next(
         execute
-        for schema, execute, _prep in core_contract.command_specs(_REAL_VOL)
-        if schema[_REAL_VOL.Required("type")] == core_contract.INTEGRATION_COMMAND
+        for schema, execute, _prep in core_contract.command_specs(vol)
+        if schema[vol.Required("type")] == core_contract.INTEGRATION_COMMAND
     )
 
 
@@ -41,10 +42,10 @@ def test_lists_only_the_domains_own_commands_with_their_schemas(
     serializer: Mock,
 ) -> None:
     hass = _hass(
-        knx__delete_entity=_REAL_VOL.Schema({"entity_id": str}),
-        knx__get_base_data=_REAL_VOL.Schema({"future": int}),
-        knxx__other=_REAL_VOL.Schema({}),
-        config__core__update=_REAL_VOL.Schema({}),
+        knx__delete_entity=vol.Schema({"entity_id": str}),
+        knx__get_base_data=vol.Schema({"future": int}),
+        knxx__other=vol.Schema({}),
+        config__core__update=vol.Schema({}),
     )
     result = _execute()(hass, {"domain": "knx"})
     assert result["status"] == "available"
@@ -60,8 +61,8 @@ def test_a_command_without_fields_is_described_with_cores_message_schema(
     monkeypatch: pytest.MonkeyPatch, serializer: Mock
 ) -> None:
     messages = ModuleType("messages")
-    messages.BASE_COMMAND_MESSAGE_SCHEMA = _REAL_VOL.Schema(  # type: ignore[attr-defined]
-        {_REAL_VOL.Required("id"): int}
+    messages.BASE_COMMAND_MESSAGE_SCHEMA = vol.Schema(  # type: ignore[attr-defined]
+        {vol.Required("id"): int}
     )
     monkeypatch.setitem(
         sys.modules, "homeassistant.components.websocket_api.messages", messages
@@ -69,7 +70,7 @@ def test_a_command_without_fields_is_described_with_cores_message_schema(
     hass = _hass(knx__get_knx_project=False)
     listing = _execute()(hass, {"domain": "knx"})
     assert set(listing["commands"][0]["schema"]["described"]) == {
-        _REAL_VOL.Required("id"),
+        vol.Required("id"),
         "type",
     }
 

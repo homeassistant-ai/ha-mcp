@@ -15,9 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
+from ._embedded_helpers import response_json
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
@@ -131,7 +129,7 @@ async def test_dcr_none_mode_advertises_authorization_code_only(oauth_stack):
     ).post(_json_request({"redirect_uris": ["https://a.example/cb"]}))
 
     assert response.status == 201
-    assert response.json_body["grant_types"] == ["authorization_code"]
+    assert response_json(response)["grant_types"] == ["authorization_code"]
 
 
 @pytest.mark.parametrize(
@@ -163,11 +161,11 @@ async def test_dcr_ha_auth_advertises_refresh_for_every_registration(
     )
 
     assert response.status == 201
-    assert response.json_body["grant_types"] == [
+    assert response_json(response)["grant_types"] == [
         "authorization_code",
         "refresh_token",
     ]
-    assert dcr.client_redirect_uris(KEY, response.json_body["client_id"]) == (
+    assert dcr.client_redirect_uris(KEY, response_json(response)["client_id"]) == (
         redirect_uris
     )
 
@@ -185,7 +183,7 @@ async def test_dcr_preserves_explicit_zero_port_origin(oauth_stack):
     )
 
     assert response.status == 201
-    assert dcr.client_redirect_uris(KEY, response.json_body["client_id"]) == (
+    assert dcr.client_redirect_uris(KEY, response_json(response)["client_id"]) == (
         redirect_uris
     )
 
@@ -198,7 +196,7 @@ async def test_dcr_rejects_non_loopback_http_redirect(oauth_stack):
     ).post(_json_request({"redirect_uris": ["http://evil.example/cb"]}))
 
     assert response.status == 400
-    assert response.json_body["error"] == "invalid_redirect_uri"
+    assert response_json(response)["error"] == "invalid_redirect_uri"
 
 
 def test_cimd_timing_and_negative_cache_contract(oauth_stack):
@@ -579,9 +577,9 @@ async def test_as_documents_pin_the_claude_cimd_selection_contract(oauth_stack):
         authorization_server_url=lambda value: f"{value}{oauth.OAUTH_BASE}",
     )
     hass.data[oauth.DOMAIN]["oauth"] = provider
-    legacy_doc = (
+    legacy_doc = response_json(
         await oauth.AuthorizationServerMetadataView(provider).get(_oauth_request())
-    ).json_body
+    )
     ha_auth_doc = oauth_stack.auth_native.authorization_server_document(base)
     none_doc = oauth_stack.autoapprove.authorization_server_document(base)
 
@@ -781,7 +779,7 @@ async def test_ha_auth_refresh_rejects_unreproducible_identity_locally(oauth_sta
     )
 
     assert response.status == 400
-    assert response.json_body["error"] == "invalid_grant"
+    assert response_json(response)["error"] == "invalid_grant"
 
 
 async def test_ha_auth_refresh_with_redirect_translates_presented_origin(
@@ -1405,10 +1403,12 @@ async def test_fast_path_passes_through_malformed_port_client_id(oauth_stack):
     assert resolved == "https://client.example:99999/metadata.json"
 
 
-async def test_dcr_register_rejects_deeply_nested_json(oauth_stack):
+async def test_dcr_register_rejects_deeply_nested_json(oauth_stack, monkeypatch):
     """#2218 review: json.loads raises RecursionError on a deeply nested
-    body — malformed metadata answers 400, never a 500."""
+    body (depth set by the stack, so forced via the module's json) — 400."""
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
+    too_deep = SimpleNamespace(loads=MagicMock(side_effect=RecursionError))
+    monkeypatch.setattr(dcr, "json", too_deep)
 
     payload = b"[" * 30000 + b"]" * 30000
     assert len(payload) < dcr.MAX_DCR_BODY_BYTES
@@ -1416,10 +1416,10 @@ async def test_dcr_register_rejects_deeply_nested_json(oauth_stack):
     response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
 
     assert response.status == 400
-    assert response.json_body["error"] == "invalid_client_metadata"
+    assert response_json(response)["error"] == "invalid_client_metadata"
     # The description distinguishes the arms: both guards answer the same
     # error code, so only this pins that the PARSER rejected it.
-    assert response.json_body["error_description"] == "body must be JSON"
+    assert response_json(response)["error_description"] == "body must be JSON"
 
 
 async def test_dcr_register_reassembles_a_chunked_body(oauth_stack):
@@ -1444,8 +1444,8 @@ async def test_dcr_register_rejects_oversized_body(oauth_stack):
     response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
 
     assert response.status == 400
-    assert response.json_body["error"] == "invalid_client_metadata"
-    assert response.json_body["error_description"] == "body is too large"
+    assert response_json(response)["error"] == "invalid_client_metadata"
+    assert response_json(response)["error_description"] == "body is too large"
 
 
 # ---------------------------------------------------------------------------
@@ -1528,7 +1528,7 @@ async def test_scoped_revoke_404s_outside_ha_auth(oauth_stack, mode):
     )
 
     assert response.status == 404
-    assert response.json_body["error"] == "not_found"
+    assert response_json(response)["error"] == "not_found"
 
 
 async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
@@ -1561,7 +1561,7 @@ async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
     )
 
     assert response.status == 503
-    assert response.json_body["error"] == "temporarily_unavailable"
+    assert response_json(response)["error"] == "temporarily_unavailable"
     assert response.headers["Retry-After"] == autoapprove._REVOKE_RETRY_AFTER
 
 
@@ -1728,7 +1728,7 @@ async def test_revocation_503_names_the_retry_delay_on_both_surfaces(
     response = await _post_revocation(autoapprove, hass, surface, envelope)
 
     assert response.status == 503
-    assert response.json_body["error"] == "temporarily_unavailable"
+    assert response_json(response)["error"] == "temporarily_unavailable"
     assert response.headers["Retry-After"] == autoapprove._REVOKE_RETRY_AFTER
 
 

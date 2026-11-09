@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
@@ -23,7 +24,6 @@ from .test_component_automation_config import (
     _run,
     core,  # noqa: F401 - pytest fixture
 )
-from .test_component_ws_search import _StubHomeAssistantError
 from .test_ha_call_service_component_routing import (
     _clear_caps_cache,  # noqa: F401 - autouse fixture shared across routing tests
 )
@@ -217,5 +217,5 @@ async def test_request_without_its_input_is_refused_not_answered(
     """Answered, a validate without a config or a describe without a kind
     would read as Core's verdict on nothing, and a lookup of ``""`` as an
     automation that does not exist."""
-    with pytest.raises(_StubHomeAssistantError):
+    with pytest.raises(HomeAssistantError):
         await _run(core, action, **fields)

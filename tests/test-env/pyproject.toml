@@ -10,7 +10,7 @@ build-backend = "uv_build"
 name = "hamcp-test-env"
 version = "0.1.0"
 description = "Starts the ha-mcp Home Assistant test container"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 
 [project.scripts]
 hamcp-test-env = "hamcp_test_env:main"

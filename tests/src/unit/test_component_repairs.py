@@ -7,53 +7,12 @@ restarts Home Assistant instead of only allowing the issue to be ignored.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from ._embedded_stubs import install
-
-install()
-
-
-class _RepairsFlow:
-    """Small HA RepairsFlow stand-in with real flow-result behavior."""
-
-    def async_show_form(
-        self,
-        *,
-        step_id: str,
-        data_schema: Any,
-        errors: dict[str, str] | None = None,
-        description_placeholders: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "type": "form",
-            "step_id": step_id,
-            "data_schema": data_schema,
-            "errors": errors or {},
-            "description_placeholders": description_placeholders,
-        }
-
-    def async_create_entry(self, *, data: dict[str, Any]) -> dict[str, Any]:
-        return {"type": "create_entry", "data": data}
-
-    def async_abort(self, *, reason: str) -> dict[str, Any]:
-        return {"type": "abort", "reason": reason}
-
-
-data_entry_flow = ModuleType("homeassistant.data_entry_flow")
-data_entry_flow.FlowResult = dict
-sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
-sys.modules["homeassistant"].data_entry_flow = data_entry_flow
-
-repairs_platform = ModuleType("homeassistant.components.repairs")
-repairs_platform.RepairsFlow = _RepairsFlow
-sys.modules["homeassistant.components.repairs"] = repairs_platform
 
 
 def _load_repairs_module() -> ModuleType:
@@ -82,7 +41,7 @@ async def test_legacy_oauth_fix_flow_restarts_home_assistant_blocking() -> None:
         {},
         blocking=True,
     )
-    assert result == {"type": "create_entry", "data": {}}
+    assert (result["type"], result["data"]) == ("create_entry", {})
 
 
 async def test_legacy_oauth_fix_flow_prompts_before_restart() -> None:
@@ -255,7 +214,7 @@ async def test_token_repair_aborts_when_the_entry_is_gone(
 
     result = await flow.async_step_token({"admin_token": "tok"})
 
-    assert result == {"type": "abort", "reason": "entry_removed"}
+    assert (result["type"], result["reason"]) == ("abort", "entry_removed")
 
 
 async def test_an_unknown_repair_issue_has_no_fix_flow() -> None:
@@ -373,7 +332,7 @@ async def test_package_repair_explains_when_it_cannot_reinstall(
 
     result = await flow.async_step_init()
 
-    assert result == {"type": "abort", "reason": reason}
+    assert (result["type"], result["reason"]) == ("abort", reason)
     hass.services.async_call.assert_not_awaited()
 
 
@@ -418,7 +377,7 @@ async def test_store_repair_waits_when_no_store_is_loaded(
 
     result = await flow.async_step_init()
 
-    assert result == {"type": "abort", "reason": "store_unavailable"}
+    assert (result["type"], result["reason"]) == ("abort", "store_unavailable")
     cleared.assert_not_called()
 
 
@@ -431,7 +390,7 @@ async def test_store_repair_clears_a_stale_card_when_the_store_reads_clean(
 
     result = await flow.async_step_init()
 
-    assert result == {"type": "abort", "reason": "already_resolved"}
+    assert (result["type"], result["reason"]) == ("abort", "already_resolved")
     cleared.assert_called_once_with(flow.hass)
 
 

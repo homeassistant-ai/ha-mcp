@@ -6,12 +6,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import entry_migration  # noqa: E402
-from custom_components.ha_mcp_tools.const import OPT_PIP_SPEC  # noqa: E402
+from custom_components.ha_mcp_tools import entry_migration
+from custom_components.ha_mcp_tools.const import OPT_PIP_SPEC
 
 
 def _migrate(minor_version: int, options: dict) -> MagicMock:

@@ -14,9 +14,8 @@ itself rather than a mock of it. Each scenario gets its own subdirectory:
 ``importlib.metadata`` caches its directory listing per root path, so reusing
 one root across two scans within a test can serve a stale listing.
 
-The module under test imports only the standard library and ``packaging``, but
-lives inside the component package, whose ``__init__`` pulls in Home Assistant
-— stubbed via ``_embedded_stubs`` like the component's other unit suites.
+The module under test imports only the standard library and ``packaging``; it
+lives inside the component package, whose ``__init__`` pulls in Home Assistant.
 """
 
 from __future__ import annotations
@@ -25,11 +24,7 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools.dependency_diagnostics import (  # noqa: E402
+from custom_components.ha_mcp_tools.dependency_diagnostics import (
     DependencyViolation,
     PinningIntegration,
     audit_dependency_graph,

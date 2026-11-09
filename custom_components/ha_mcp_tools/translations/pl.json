@@ -185,6 +185,21 @@
           "entry_removed": "Wpis serwera HA-MCP już nie istnieje."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP jest zainstalowany z dwóch wpisów w sklepie",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Pozostawić HA-MCP na jednym wpisie w sklepie?",
+            "description": "HA-MCP jest oznaczony jako zainstalowany z obu {records}. Zawierają tę samą integrację (drugi to starsze lustro dystrybucyjne). Marketplace w Home Assistant 2026.11 pozwala, aby tylko jeden wpis obsługiwał integrację, więc tam żaden z nich nie może zaktualizować HA-MCP; HACS nadal aktualizuje, ale aktualizacja do wersji 2026.11 pozostawiłaby HA-MCP w martwym punkcie.\n\nKliknięcie Zatwierdź zachowuje **{keep}**, wpis w domyślnym katalogu, który nie wymaga niestandardowego repozytorium, i oznacza drugi wpis jako niezainstalowany. Nic nie zostanie usunięte: Twoje wpisy, ustawienia i pliki HA-MCP pozostaną bez zmian, a od teraz aktualizacje będą pojawiać się pod {keep} jak zwykle."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP jest teraz zainstalowany z jednego wpisu w sklepie; nie ma nic do naprawienia.",
+          "store_unavailable": "Sklep (HACS lub Marketplace) nie został jeszcze załadowany, więc nie można sprawdzić wpisów. Spróbuj ponownie za kilka minut."
+        }
+      }
     }
   },
   "selector": {

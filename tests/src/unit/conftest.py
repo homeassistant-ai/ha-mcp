@@ -1,5 +1,8 @@
 """Unit-test environment: no developer state, no side processes.
 
+The one exception is the JS harness worker, started for JSDOM modules (see
+``_js_harness_started_before_tests``).
+
 See ``pytest_configure`` for collection and ``_unit_test_env`` for the
 variables every unit test starts with.
 """
@@ -11,9 +14,10 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,84 +25,15 @@ import pytest
 if TYPE_CHECKING:
     from ha_mcp.tools.component_api import ComponentCaps
 
-# annotatedyaml is a Home Assistant runtime dependency; the component imports
-# FastSafeLoader directly so the loader's real tag registry is the only source.
-# Unit tests run without HA, so provide its constructor registry before any
-# component import.
-if "annotatedyaml.loader" not in sys.modules:
-    _annotatedyaml = SimpleNamespace()
-    _annotatedyaml_loader = SimpleNamespace()
+# Core's own test plugin: the ``hass`` fixture, ``MockConfigEntry`` and its
+# socket/thread/task checks. pyproject.toml blocks its entry point so the E2E
+# tree never loads it. Nothing above imports Home Assistant: the plugin patches
+# Core's JSON and time helpers before Core is first imported.
+pytest_plugins = ["pytest_homeassistant.plugins", "tests.core_stand_in_guard"]
 
-    class _AnnotatedYamlLoader:
-        pass
-
-    _AnnotatedYamlLoader.yaml_constructors = {
-        "!include": None,
-        "!include_dir_list": None,
-        "!include_dir_named": None,
-        "!include_dir_merge_list": None,
-        "!include_dir_merge_named": None,
-        "!secret": None,
-        "!env_var": None,
-        "!input": None,
-    }
-    _annotatedyaml_loader.FastSafeLoader = _AnnotatedYamlLoader
-    _annotatedyaml.loader = _annotatedyaml_loader
-    _annotatedyaml.Secrets = MagicMock
-    _annotatedyaml.SECRET_YAML = "secrets.yaml"
-    sys.modules["annotatedyaml"] = _annotatedyaml
-    sys.modules["annotatedyaml.loader"] = _annotatedyaml_loader
-
-# Core's generated flow registry, which the component imports at module level
-# for its flow-helper set. Home Assistant is not a unit-test dependency, and the
-# module must exist before any test module imports the component. The helper
-# list is Core 2026.10's (refresh it from homeassistant/generated/config_flows.py);
-# bayesian is a Core integration of type "service", so Core files it under
-# "integration".
-sys.modules.setdefault(
-    "homeassistant.generated.config_flows",
-    SimpleNamespace(
-        FLOWS={
-            "helper": [
-                "derivative",
-                "filter",
-                "generic_hygrostat",
-                "generic_thermostat",
-                "group",
-                "history_stats",
-                "integration",
-                "min_max",
-                "mold_indicator",
-                "otp",
-                "random",
-                "statistics",
-                "switch_as_x",
-                "template",
-                "threshold",
-                "tod",
-                "trend",
-                "utility_meter",
-            ],
-            "integration": ["bayesian"],
-        }
-    ),
-)
-
-# Core's logbook/recorder helpers are imported at module scope by the
-# component's ``ha_mcp_tools/logbook_events`` command. Home Assistant is not a
-# unit-test dependency, so the modules must exist before ANY test module
-# imports the component surface (same reason as the flow registry above).
-for _ha_logbook_stub in (
-    "homeassistant.components.logbook",
-    "homeassistant.components.logbook.helpers",
-    "homeassistant.components.logbook.processor",
-    "homeassistant.components.recorder",
-    "homeassistant.components.websocket_api",
-    "homeassistant.helpers.json",
-    "homeassistant.util",
-    "homeassistant.util.dt",
-):
-    sys.modules.setdefault(_ha_logbook_stub, MagicMock())
+# quickjs starts its shared worker thread on import; importing it here starts
+# that thread before any test, so Core's leftover-thread check never sees it.
+import quickjs  # noqa: E402
 
 
 @pytest.fixture
@@ -188,18 +123,97 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    try:
-        from ha_mcp.config import _reset_global_settings
-        from ha_mcp.utils.data_paths import get_data_dir
-    except ImportError:
-        # ha_mcp not importable in this test run; nothing to clear.
-        yield
-        return
+    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.utils.data_paths import get_data_dir
+
     get_data_dir.cache_clear()
     _reset_global_settings()
     yield
     get_data_dir.cache_clear()
     _reset_global_settings()
+
+
+def _uses_js_harness(module: object) -> bool:
+    from . import _js_harness
+
+    return any(
+        getattr(value, "__module__", None) == _js_harness.__name__
+        for value in vars(module).values()
+    )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _js_harness_started_before_tests(request: pytest.FixtureRequest) -> None:
+    """Start the JS harness's node worker before a JSDOM test module runs.
+
+    The worker and its two pipe-reader threads live for the whole process
+    (see ``_js_harness``). Core's plugin fails a test that ends with a thread it
+    did not start with, so the worker starts here, ahead of every test.
+    """
+    if not _uses_js_harness(request.module):
+        return
+    from . import _js_harness
+
+    try:
+        _js_harness.skip_if_unsupported()
+    except pytest.skip.Exception:
+        return
+    _js_harness.start_worker()
+
+
+@pytest.fixture(autouse=True)
+def _no_threads_left_by_the_test() -> Iterator[None]:
+    """Stop what a test started on its own, before Core's plugin checks threads.
+
+    That is a replacement JS harness worker (when the test killed the shared
+    one), quickjs engines created with ``own_executor`` (card definitions) and
+    the usage-log writer. Stopping the writer also keeps the next test's usage
+    log in its own config directory. AnyIO stops its worker threads when the
+    test's task ends, but does not wait for them to exit; they are joined here.
+    """
+    from . import _js_harness
+
+    worker = _js_harness._worker
+    threads_before = set(threading.enumerate())
+    engines: list[Any] = []
+    real_function = quickjs.Function
+
+    def recording_function(*args: Any, **kwargs: Any) -> Any:
+        engine = real_function(*args, **kwargs)
+        if kwargs.get("own_executor"):
+            engines.append(engine)
+        return engine
+
+    quickjs.Function = recording_function
+    try:
+        yield
+    finally:
+        quickjs.Function = real_function
+        for engine in engines:
+            engine._threadpool.shutdown(wait=True)
+        if _js_harness._worker is not worker:
+            _js_harness._stop_worker()
+        from ha_mcp.utils.usage_logger import shutdown_usage_logger
+
+        shutdown_usage_logger()
+        for thread in set(threading.enumerate()) - threads_before:
+            if thread.name == "AnyIO worker thread":
+                thread.join(timeout=5)
+
+
+@pytest.fixture(autouse=True)
+def _ssl_without_truststore_injection() -> None:
+    """Undo the ``truststore.inject_into_ssl()`` that importing ``ha_mcp.__main__`` runs.
+
+    The CLI injects truststore into ``ssl`` process-wide; the in-process server
+    never imports ``__main__`` for exactly this reason. Core replaces
+    truststore's context with a certifi one, and with both in place every new
+    ``ssl.SSLContext`` recurses. Test modules import ``__main__`` during
+    collection, so each test starts from the stock ``ssl`` module.
+    """
+    import truststore
+
+    truststore.extract_from_ssl()
 
 
 @pytest.fixture(autouse=True)
@@ -211,13 +225,9 @@ def _clear_update_check_memo():
     (which opts back into the check) would leak into unrelated tests in the same
     process. Cleared before each test so every test starts from a cold memo.
     """
-    try:
-        from ha_mcp.update_check import get_update_info
+    from ha_mcp.update_check import get_update_info
 
-        get_update_info.cache_clear()
-    except ImportError:
-        # ha_mcp not importable in this test run; nothing to clear.
-        pass
+    get_update_info.cache_clear()
     yield
 
 
@@ -234,12 +244,9 @@ def _restore_fastmcp_host_origin_guard():
     env_key = "FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"
     attr = "http_host_origin_protection"
     prev_env = os.environ.get(env_key)
-    try:
-        from ha_mcp._vendor import fastmcp
+    from ha_mcp._vendor import fastmcp
 
-        settings = getattr(fastmcp, "settings", None)
-    except ImportError:
-        settings = None
+    settings = getattr(fastmcp, "settings", None)
     has_attr = settings is not None and hasattr(settings, attr)
     prev_setting = getattr(settings, attr) if has_attr else None
     yield
@@ -251,101 +258,49 @@ def _restore_fastmcp_host_origin_guard():
         setattr(settings, attr, prev_setting)
 
 
-# The constants the ``ha_mcp_tools`` component imports from
-# ``homeassistant.const`` function-locally, with Home Assistant's values.
-_HA_CONST_DEFAULTS = {
-    "EVENT_STATE_CHANGED": "state_changed",
-    "ENTITY_MATCH_NONE": "none",
-    "ENTITY_MATCH_ALL": "all",
-    "MATCH_ALL": "*",
-}
-
-
-@pytest.fixture(autouse=True)
-def _ensure_ha_const_names():
-    """Guarantee the ``homeassistant.const`` names the component imports.
-
-    The ``call_service`` confirmation-waiter imports ``EVENT_STATE_CHANGED``,
-    ``call_event`` imports ``MATCH_ALL``, and ``reference_data`` imports
-    ``ENTITY_MATCH_NONE`` / ``ENTITY_MATCH_ALL`` from ``homeassistant.const``
-    function-locally. Home Assistant is not a unit-test dependency, so that
-    submodule is whatever a test module stubbed — and under full-suite
-    collection an earlier module can install a ``homeassistant.const`` stub
-    lacking those names, making the import raise (component tests + the
-    write-path contract/routing tests then fail only in the full suite, never in
-    isolation). This adds the missing constants — always present in real HA —
-    onto whatever stub is live, preserving its other attributes; it never
-    replaces a populated stub.
-
-    A ``Mock`` attribute counts as missing: a ``MagicMock`` stub answers every
-    name with a Mock, which imports fine but is not Core's value, so
-    ``MATCH_ALL`` would come back as a Mock instead of ``"*"``.
-    """
-    import sys
-    from types import SimpleNamespace
-    from unittest.mock import Mock
-
-    mod = sys.modules.get("homeassistant.const")
-    if mod is None:
-        sys.modules["homeassistant.const"] = SimpleNamespace(**_HA_CONST_DEFAULTS)
-    else:
-        try:
-            for name, value in _HA_CONST_DEFAULTS.items():
-                current = getattr(mod, name, None)
-                if not current or isinstance(current, Mock):
-                    setattr(mod, name, value)
-        except (AttributeError, TypeError):
-            sys.modules["homeassistant.const"] = SimpleNamespace(**_HA_CONST_DEFAULTS)
-    yield
-
-
 @pytest.fixture(autouse=True)
 def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the component's Core loader call with the stubbed helper flow list.
+    """Answer the component's Core loader call with Core's built-in helper flows.
 
     ``helpers_list`` and ``search`` ask ``homeassistant.loader`` for the helper
-    flows in their async pre-steps. The loader is a ``MagicMock`` stub in unit
-    tests, which cannot be awaited, so this answers with the ``FLOWS["helper"]``
-    stub above, i.e. no custom helper integrations. It does nothing until the
-    component is loaded; in a test that loads it later the await fails and the
-    pre-step degrades to Core's built-in list with ``helper_flows_degraded``.
-    A test that needs custom helper integrations patches the name again.
+    flows in their async pre-steps, which needs a set-up ``hass``. Tests that
+    hand the commands a fake ``hass`` get Core's own ``FLOWS["helper"]``, i.e.
+    no custom helper integrations. It does nothing until the component is
+    loaded. A test that needs custom helper integrations patches the name again.
     """
-    from unittest.mock import AsyncMock
-
     mod = sys.modules.get("custom_components.ha_mcp_tools.websocket_api.flow_domains")
     if mod is None:
         return
-    flows = sys.modules["homeassistant.generated.config_flows"].FLOWS["helper"]
+    from ._core_helper_flows import CORE_HELPER_FLOWS
+
     monkeypatch.setattr(
-        mod, "async_get_config_flows", AsyncMock(return_value=set(flows))
+        mod, "async_get_config_flows", AsyncMock(return_value=set(CORE_HELPER_FLOWS))
     )
 
 
 @pytest.fixture(autouse=True)
 def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the server's ``flow_handlers?type=helper`` read with the stubbed list.
+    """Answer the server's ``flow_handlers?type=helper`` read with Core's list.
 
     The helper tools read Core's helper flows at call time
     (``helper_flows.helper_flow_types``) through the REST client, which unit
-    tests mock per test. This answers with the ``FLOWS["helper"]`` stub above and
+    tests mock per test. This answers with Core's own ``FLOWS["helper"]`` and
     starts every test with an empty per-client cache. A test that needs another
     list patches ``_fetch_helper_flow_types`` again.
     """
-    from unittest.mock import AsyncMock
-
     from ha_mcp.tools import helper_flows
 
-    flows = sys.modules["homeassistant.generated.config_flows"].FLOWS["helper"]
+    from ._core_helper_flows import CORE_HELPER_FLOWS
+
     monkeypatch.setattr(
         helper_flows,
         "_fetch_helper_flow_types",
-        AsyncMock(return_value=frozenset(flows)),
+        AsyncMock(return_value=CORE_HELPER_FLOWS),
     )
     monkeypatch.setattr(
         helper_flows,
         "_fetch_core_helper_domains",
-        AsyncMock(return_value=frozenset(flows)),
+        AsyncMock(return_value=CORE_HELPER_FLOWS),
         raising=False,
     )
     helper_flows._CACHE.clear()
@@ -358,40 +313,6 @@ def tool_search_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from ha_mcp.config import get_global_settings
 
     monkeypatch.setattr(get_global_settings(), "enable_tool_search", True)
-
-
-@pytest.fixture
-def real_probatio():
-    """The installed probatio, past the stub this tier installs for it.
-
-    ``_embedded_stubs`` replaces the module unconditionally with a two-line
-    fake, so a plain import in a test would assert against that fake instead
-    of the library Core actually converts with. Shared, because both the
-    component's normalisation tests and the registry-wide schema guard need
-    the real codec.
-    """
-    import importlib
-    import sys
-
-    saved = {
-        name: module
-        for name, module in sys.modules.items()
-        if name == "probatio" or name.startswith("probatio.")
-    }
-    for name in saved:
-        del sys.modules[name]
-    try:
-        module = importlib.import_module("probatio")
-        assert hasattr(module, "to_openapi"), "got the stub, not the library"
-        yield module
-    finally:
-        for name in [
-            name
-            for name in sys.modules
-            if name == "probatio" or name.startswith("probatio.")
-        ]:
-            del sys.modules[name]
-        sys.modules.update(saved)
 
 
 @pytest.fixture
@@ -447,3 +368,28 @@ def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
         "ha_mcp.redaction.get_global_settings",
         lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
     )
+
+
+@pytest.fixture
+async def component_ws(hass: Any, hass_ws_client: Any) -> Any:
+    """A WebSocket client of a real ``hass`` with the ``ha_mcp_tools/*`` commands.
+
+    The caller is an admin; ``component_ws_read_only`` is the same for a
+    non-admin. Use ``await ws_call(client, "ha_mcp_tools/info")`` from
+    ``_component_core`` to send one command and get its reply.
+    """
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    return await hass_ws_client(hass)
+
+
+@pytest.fixture
+async def component_ws_read_only(
+    hass: Any, hass_ws_client: Any, hass_read_only_access_token: str
+) -> Any:
+    """``component_ws`` for a user who is not an admin."""
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    return await hass_ws_client(hass, hass_read_only_access_token)

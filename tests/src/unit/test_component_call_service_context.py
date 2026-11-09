@@ -30,7 +30,6 @@ from .test_component_ws_phase2_async import (
     wsapi,
 )
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _FakeWSApi,
@@ -44,7 +43,6 @@ def _registered(monkeypatch: Any, command: str) -> Any:
     """Register the real commands through the functional WS fake; return one handler."""
     fake = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", fake)
-    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     wsapi.async_register_commands(FakeHass())
     return fake.registered[command]
 

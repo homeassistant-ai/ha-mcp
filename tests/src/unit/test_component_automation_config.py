@@ -17,15 +17,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import voluptuous as vol
+from homeassistant.exceptions import HomeAssistantError
 
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeEntityReg,
     FakeHass,
     FakeRegEntry,
-    _exceptions_stub,
     _FakeConnection,
-    _StubHomeAssistantError,
     _Unauthorized,
     functional_ws,  # noqa: F401 - pytest fixture
     wsapi,
@@ -123,7 +122,7 @@ def core(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     ns = SimpleNamespace(
         validate=_Validator(),
         validate_or_raise=None,
-        invalid=(_Invalid, _StubHomeAssistantError),
+        invalid=(_Invalid, HomeAssistantError),
         statuses=_Status,
         descriptions={"trigger": None, "condition": None},
         entity_registry=lambda hass: registry,
@@ -141,7 +140,6 @@ def core(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         failed=failed,
     )
     monkeypatch.setattr(automation_config, "_core", lambda: ns)
-    monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
     return ns
 
 
@@ -379,7 +377,7 @@ async def test_references_are_absent_while_the_automation_is_not_loaded(
 async def test_lookup_without_a_key_is_refused_not_answered_not_found(
     core: SimpleNamespace,
 ) -> None:
-    with pytest.raises(_StubHomeAssistantError):
+    with pytest.raises(HomeAssistantError):
         await _run(core, "lookup")
 
 
@@ -403,7 +401,7 @@ async def test_core_missing_a_lookup_part_is_unavailable(
     ],
 )
 def test_schema_takes_each_action_the_server_sends(frame: dict[str, Any]) -> None:
-    schema = _REAL_VOL.Schema(automation_config.command_specs(_REAL_VOL)[0][0])
+    schema = vol.Schema(automation_config.command_specs(vol)[0][0])
     msg = {"type": automation_config.WS_AUTOMATION_CONFIG, **frame}
     assert schema(msg) == msg
 
@@ -454,7 +452,6 @@ def test_component_key_is_read_from_the_package_on_older_core(
         "homeassistant.components.automation.config": config,
         "homeassistant.components.automation.const": const,
         "homeassistant.helpers": helpers,
-        "homeassistant.exceptions": _exceptions_stub,
     }.items():
         monkeypatch.setitem(sys.modules, name, mod)
 

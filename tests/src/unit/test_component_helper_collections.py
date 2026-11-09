@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import functools
 import importlib
-import sys
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import voluptuous as vol
+from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
@@ -20,10 +21,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_helper_collections as client_mod
 from ha_mcp.tools.component_api import ComponentCaps
 
-# The sibling module installs the homeassistant.* stubs the component needs, so
-# the component module is imported only after it.
 from .test_component_ws_search import (
-    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _Unauthorized,
@@ -148,8 +146,6 @@ def test_server_and_component_list_the_same_storage_helpers() -> None:
 
 
 def test_serialize_falls_back_per_field(monkeypatch) -> None:
-    vol = _REAL_VOL  # sibling modules stub voluptuous in sys.modules
-
     def convert(schema):
         (key,) = schema
         if str(key) == "icon":
@@ -210,18 +206,16 @@ def test_write_creates_then_applies_registry_fields() -> None:
 
 
 def test_invalid_errors_include_real_voluptuous(monkeypatch) -> None:
-    # Sibling modules stub voluptuous in sys.modules; pin the real one here.
-    monkeypatch.setitem(sys.modules, "voluptuous", _REAL_VOL)
-    assert _REAL_VOL.Invalid in hc._invalid_errors()
+    assert vol.Invalid in hc._invalid_errors()
 
 
 def test_invalid_reports_every_error(monkeypatch) -> None:
     # The tuple is built at import, possibly while a sibling stubbed voluptuous.
-    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, _REAL_VOL.Invalid))
+    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, vol.Invalid))
     collection = FakeCollection()
-    collection.invalid = _REAL_VOL.MultipleInvalid(
-        [_REAL_VOL.Invalid("too low", path=["min"]),
-         _REAL_VOL.Invalid("not a mode", path=["mode"])]
+    collection.invalid = vol.MultipleInvalid(
+        [vol.Invalid("too low", path=["min"]),
+         vol.Invalid("not a mode", path=["mode"])]
     )  # fmt: skip
     msg = {"helper_type": "input_number", "action": "create", "data": {"name": "X"}}
     result = asyncio.run(hc.async_write_item(_hass(collection), FakeRegistry(), msg))
@@ -281,7 +275,7 @@ def test_listener_error_after_store_is_not_reported_as_invalid(
     monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
     # Core stores the item, then awaits its listeners (entity setup or update).
-    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, _REAL_VOL.Invalid))
+    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, vol.Invalid))
     monkeypatch.setattr(hc, "_home_assistant_error", lambda: _CoreError)
 
     class StoredThenFailed(FakeCollection):
@@ -342,10 +336,12 @@ def test_commands_registered_and_advertised(functional_ws) -> None:  # noqa: F81
 def test_commands_are_admin_gated(functional_ws, command, extra) -> None:  # noqa: F811
     handler = functional_ws.registered[command]
     msg = {"id": 1, "type": command, **extra}
+    # The commands read Core's entity registry once past the gate.
+    hass = FakeHass(data={er.DATA_REGISTRY: MagicMock()})
     with pytest.raises(_Unauthorized):
-        handler(FakeHass(), _FakeConnection(is_admin=False), msg)
+        handler(hass, _FakeConnection(is_admin=False), msg)
     connection = _FakeConnection()
-    handler(FakeHass(), connection, msg)
+    handler(hass, connection, msg)
     assert 1 in connection.results
 
 

@@ -9,49 +9,32 @@ Covers three layers:
 3. **ha_call_service refusal** — the wrapper-layer block on the
    ``ha_mcp_tools`` domain.
 
-Custom-component tests stub the homeassistant.* imports the same way
-``test_custom_component_filesystem.py`` does so they can run without
-the real HA package available.
+Custom-component tests run against real Home Assistant Core.
 """
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-# --- Custom-component-side imports (must stub HA first) ---------------------
-
-sys.modules.setdefault("voluptuous", MagicMock())
-sys.modules.setdefault("homeassistant", MagicMock())
-sys.modules.setdefault("homeassistant.components", MagicMock())
-sys.modules.setdefault("homeassistant.components.persistent_notification", MagicMock())
-sys.modules.setdefault("homeassistant.config", MagicMock())
-sys.modules.setdefault("homeassistant.config_entries", MagicMock())
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules.setdefault("homeassistant.helpers", MagicMock())
-sys.modules.setdefault("homeassistant.helpers.config_validation", MagicMock())
-sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
-sys.modules.setdefault("homeassistant.loader", MagicMock())
-
-import custom_components.ha_mcp_tools as comp  # noqa: E402
-from custom_components.ha_mcp_tools import (  # noqa: E402
+# --- Custom-component-side imports ------------------------------------------
+import custom_components.ha_mcp_tools as comp
+from custom_components.ha_mcp_tools import (
     _HASS_DATA_TOKEN_KEY,
     CALLER_TOKEN_FIELD,
     _build_get_caller_token_handler,
     _caller_token_ok,
     _unauthorized_response,
 )
-from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
+from custom_components.ha_mcp_tools.const import DOMAIN
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # --- ha-mcp wrapper-side imports --------------------------------------------
-from ha_mcp.tools.tools_filesystem import (  # noqa: E402
+from ha_mcp.tools.tools_filesystem import (
     CALLER_TOKEN_BOOTSTRAP_SERVICE,
     MCP_TOOLS_DOMAIN,
     MIN_COMPONENT_VERSION,

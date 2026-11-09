@@ -591,9 +591,12 @@ async def _async_dom(hass: HomeAssistant) -> str | None:
         if await hass.async_add_executor_job(cache.is_file):
             dom: str = await hass.async_add_executor_job(cache.read_text, "utf-8")
             return dom
+        from aiohttp import ClientTimeout
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        async with async_get_clientsession(hass).get(LINKEDOM_URL, timeout=30) as resp:
+        async with async_get_clientsession(hass).get(
+            LINKEDOM_URL, timeout=ClientTimeout(total=30)
+        ) as resp:
             resp.raise_for_status()
             tarball = bytearray()
             async for chunk in resp.content.iter_chunked(64 * 1024):

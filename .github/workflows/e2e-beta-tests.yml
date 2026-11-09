@@ -51,7 +51,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.13"
+  PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: /tmp/.uv-cache
   # No HA image pin here: resolve-beta below computes it per run and every job
   # sets HA_IMAGE_GHCR / HA_TEST_IMAGE from that job's outputs.
