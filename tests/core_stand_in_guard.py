@@ -3,8 +3,13 @@
 The unit and app (add-on) trees run against real Home Assistant Core. A test
 that swaps a fake into ``sys.modules`` for ``homeassistant.*`` (or for the
 libraries Core is built on) asserts against its own guess of what Core does
-instead of Core. This runs after each test body, while the test's patches are
-still in place.
+instead of Core.
+
+The check runs after each test body, so it sees what is in ``sys.modules`` at
+that moment: a ``monkeypatch`` swap, which is undone later at fixture teardown,
+or one the test left behind. A swap the test itself has already undone
+(``patch.dict``, ``try``/``finally``) is gone by then;
+``rules/no-core-module-stand-ins.yml`` refuses those forms in the source.
 """
 
 from __future__ import annotations
@@ -47,6 +52,12 @@ def core_module_stand_ins() -> list[str]:
             or getattr(module, "__spec__", None) is None
         )
     )
+
+
+def is_registered(config: pytest.Config) -> bool:
+    """Whether this session runs the check: each tree's conftest must load it."""
+    impls = config.pluginmanager.hook.pytest_runtest_call.get_hookimpls()
+    return any(impl.function is pytest_runtest_call for impl in impls)
 
 
 @pytest.hookimpl(wrapper=True)

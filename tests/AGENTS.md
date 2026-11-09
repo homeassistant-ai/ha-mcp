@@ -141,12 +141,18 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Three ast-grep rules (`rules/no-hand-made-hass.yml`,
-`rules/no-fake-core-objects.yml`, `rules/no-shared-core-fakes.yml`) and
-`tests/core_stand_in_guard.py`, which runs after every test, fail a test that
-breaks this. Test files written before the unit tests ran on real Core are
-listed in those rules' `ignores` and in the guard. Converting such a file
-removes it from the lists; no file is ever added to them.
+Four ast-grep rules refuse these in the source: a hand-made `hass`
+(`rules/no-hand-made-hass.yml`), a fake Core object class
+(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
+(`rules/no-shared-core-fakes.yml`), and `patch.dict(sys.modules, ...)` or an
+assignment of a Core module name in `sys.modules`
+(`rules/no-core-module-stand-ins.yml`). `tests/core_stand_in_guard.py` checks
+`sys.modules` after every test body and fails a test whose stand-in module is
+still there, which covers `monkeypatch` swaps and computed names; it cannot see
+a swap the test has already undone, which is why the fourth rule exists. Test
+files written before the unit tests ran on real Core are listed in the rules'
+`ignores` and in the guard. Converting such a file removes it from the lists;
+no file is ever added to them.
 
 The plugin enforces, for every test:
 
