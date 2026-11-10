@@ -306,7 +306,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       if: success() || failure()
@@ -490,7 +490,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.13.6-python3.14-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
@@ -619,7 +619,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -710,7 +710,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -818,7 +818,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -910,7 +910,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1025,7 +1025,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1105,7 +1105,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
