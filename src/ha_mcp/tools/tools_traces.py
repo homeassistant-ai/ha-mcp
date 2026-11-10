@@ -342,13 +342,10 @@ class TraceTools:
                 message="resolving trace target",
             )
 
-            # Route through the shared pooled WebSocket (issue #1813) instead of
-            # a dedicated connect/auth/disconnect handshake per call. Every trace
-            # command below is a single request/response — no subscription or
-            # streaming needs a dedicated socket — so the pooled client owns the
+            # Every trace command below is a single request/response with no
+            # subscription or streaming, so the shared pooled WebSocket owns the
             # connection lifecycle. A connection-shaped failure on the fetch
-            # surfaces as CONNECTION_FAILED, the same structured error the old
-            # up-front connect check raised.
+            # surfaces as CONNECTION_FAILED.
 
             await safe_progress(
                 ctx,
