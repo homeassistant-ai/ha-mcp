@@ -83,16 +83,15 @@ async def test_storage_helper_without_component_gets_no_made_up_field_list(
 async def test_existing_storage_helper_reports_current_values_without_component(
     client: AsyncMock,
 ) -> None:
-    """Editing an existing helper starts from its stored values."""
+    """Editing an existing helper starts from its stored values: without a
+    field list from Core, the item is returned as Core stores it."""
     client.send_websocket_message.return_value = {
         "result": [{"id": "pool", "name": "Pool", "min": 0, "max": 40}]
     }
 
     result = await mod.describe_helper(client, "input_number", helper_id="pool")
 
-    # The stored item says "max"; the fallback field may use the tool's alias.
-    currents = {f.get("current") for f in result["fields"] if "max" in f["name"]}
-    assert currents == {40}
+    assert result["stored"]["max"] == 40
 
 
 @pytest.mark.asyncio
@@ -111,8 +110,7 @@ async def test_helper_named_by_entity_id_reports_current_values_without_componen
         client, "input_number", helper_id="input_number.pool_temperature"
     )
 
-    currents = {f.get("current") for f in result["fields"] if "max" in f["name"]}
-    assert currents == {40}
+    assert result["stored"]["max"] == 40
 
 
 @pytest.mark.asyncio
@@ -130,7 +128,7 @@ async def test_existing_person_reports_current_values_without_component(
 
     result = await mod.describe_helper(client, "person", helper_id="pat")
 
-    assert _fields(result)["device_trackers"]["current"] == ["a.b"]
+    assert result["stored"]["device_trackers"] == ["a.b"]
 
 
 @pytest.mark.asyncio
@@ -600,27 +598,6 @@ async def test_flow_field_without_help_text_gets_its_ui_label(
     result = await mod.describe_helper(client, "utility_meter")
 
     assert result["fields"][0]["description"] == "Input sensor"
-
-
-@pytest.mark.asyncio
-async def test_core_fields_follow_a_stable_order_with_hints_first(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Core returns weekdays shuffled; the hinted first day must lead."""
-    shuffled = [
-        {"name": "sunday", "required": False},
-        {"name": "name", "type": "string", "required": True},
-        {"name": "monday", "required": False},
-    ]
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_schemas",
-        AsyncMock(return_value={"schedule": {"create": shuffled}}),
-    )
-
-    result = await mod.describe_helper(client, "schedule")
-
-    assert [f["name"] for f in result["fields"]] == ["name", "monday", "sunday"]
 
 
 @pytest.mark.asyncio

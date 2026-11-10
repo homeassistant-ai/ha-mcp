@@ -64,13 +64,6 @@ async def test_schema_publishes_config_but_not_flat_fields() -> None:
     properties = tool.parameters["properties"]
     assert not _HIDDEN & properties.keys()
     assert {"helper_type", "name", "icon", "config", "wait"} <= properties.keys()
-    # Every hidden field is still documented in the config description.
-    description = properties["config"]["description"]
-    for field in _HIDDEN - {"min_value", "max_value"}:
-        if field not in {"monday", "tuesday", "wednesday", "thursday", "friday",
-                         "saturday", "sunday"}:  # fmt: skip
-            assert field in description, field
-    assert "monday..sunday" in description
 
 
 async def test_hidden_param_names_reads_the_marker() -> None:

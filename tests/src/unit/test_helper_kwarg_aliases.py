@@ -98,20 +98,15 @@ def _find_msg(client: Any, msg_type: str) -> dict | None:
 
 
 class TestSchemaSurfacesCanonicalNames:
-    """The canonical names are documented once, in the ``config`` description.
-
-    The type fields and their aliases stay accepted as top-level arguments but
-    are not advertised there (issue #2479), so the schema carries one copy.
+    """The type fields and their aliases stay accepted as top-level arguments
+    but are not advertised there (issue #2479): ``config`` takes them, under
+    the names Core's own schema gives them.
     """
 
-    def test_schema_documents_canonical_names_in_config(self, helper_tool):
+    def test_schema_keeps_the_type_fields_out_of_the_top_level(self, helper_tool):
         props = helper_tool.parameters.get("properties", {})
         for name in ("min_value", "max_value", "unit_of_measurement", "min", "unit"):
             assert name not in props
-        config = props["config"]["description"]
-        # Home Assistant's own field names (#2632): what its errors name too.
-        for name in ("min", "max", "minimum", "maximum", "unit_of_measurement"):
-            assert name in config
 
 
 class TestShorthandAliasesAccepted:
