@@ -535,14 +535,14 @@ async def _check_name_collision(
     if not name or not name.strip():
         return None
     slug = None
-    in_yaml = False
+    not_stored = False
     unchecked: str | None = _NEAR_DUPLICATES_UNCHECKED
     named = await ask_component(client, "helpers_named", domain=helper_type, name=name)
     if named is not None and isinstance(named.get("ids"), list):
         unchecked = None
         existing_id = named["ids"][0] if named["ids"] else None
         slug = named.get("slug")
-        in_yaml = existing_id in (named.get("yaml_ids") or [])
+        not_stored = existing_id in (named.get("not_stored") or [])
     # ha_config_set_helper checked the type: not storage means a helper flow.
     elif helper_type not in SIMPLE_HELPER_TYPES:
         existing_id = await _find_collision_in_flow_helpers(client, helper_type, name)
@@ -561,9 +561,10 @@ async def _check_name_collision(
             f"A {helper_type} helper named {name!r} already exists "
             f"(id: {existing_id!r}). "
             + (
-                "It is defined in YAML, which this tool does not edit; use a "
+                "It is not a stored helper (it is defined in YAML or by Home "
+                "Assistant itself), so this tool cannot update it; use a "
                 "different name to create a new helper."
-                if in_yaml
+                if not_stored
                 else f"Pass helper_id={existing_id!r} to update it, "
                 "or use a different name to create a new helper."
             ),
@@ -579,7 +580,7 @@ async def _check_name_collision(
                 "existing_helper_id": existing_id,
             },
             suggestions=[different_name]
-            if in_yaml
+            if not_stored
             else [
                 f"To update the existing helper, pass helper_id={existing_id!r} "
                 "(and omit `name`).",

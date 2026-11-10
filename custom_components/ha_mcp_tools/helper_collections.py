@@ -147,7 +147,7 @@ def helpers_named(
     """The helpers of ``domain`` a new one named ``name`` would be numbered
     after: those whose id, or whose name, Core's ``slugify`` turns into the
     same id. Ids are storage ids, or config entry ids for a flow helper;
-    ``yaml_ids`` are the ones defined in YAML, which no storage write reaches.
+    ``not_stored`` are the ones no storage write reaches.
     """
     from homeassistant.util import slugify
 
@@ -160,31 +160,31 @@ def helpers_named(
             "ids": [e.entry_id for e in entries if slugify(e.title) == slug],
         }
     stored = owner.storage_collection
-    # person lists its YAML people beside the stored ones, as person/list does.
-    in_yaml = getattr(stored, "yaml_collection", None)
     ids: list[str] = []
-    yaml_ids: list[str] = []
-    for found, items in (
-        (ids, stored.async_items()),
-        (yaml_ids, in_yaml.async_items() if in_yaml else ()),
-    ):
-        for item in items:
-            item_id, item_name = item["id"], item.get("name")
-            # A tag's name is the registry's, as Core's own tag listing reads it.
-            if item_name is None and (
-                entity_id := _entity_id_for(registry, domain, item_id)
-            ):
-                entry = registry.async_get(entity_id)
-                item_name = entry and (entry.name or entry.original_name)
-            if item_id == slug or (
-                isinstance(item_name, str) and slugify(item_name) == slug
-            ):
-                found.append(item_id)
-    # Core generates a new id with this manager, which also holds the ids of
-    # the type's YAML helpers: an id taken there and not stored is YAML's.
-    if slug not in ids + yaml_ids and stored.id_manager.has_id(slug):
-        yaml_ids.append(slug)
-    return {"slug": slug, "ids": ids + yaml_ids, "yaml_ids": yaml_ids}
+    for item in stored.async_items():
+        item_id, item_name = item["id"], item.get("name")
+        # A tag's name is the registry's, as Core's own tag listing reads it.
+        if item_name is None and (
+            entity_id := _entity_id_for(registry, domain, item_id)
+        ):
+            entry = registry.async_get(entity_id)
+            item_name = entry and (entry.name or entry.original_name)
+        if item_id == slug or (
+            isinstance(item_name, str) and slugify(item_name) == slug
+        ):
+            ids.append(item_id)
+    # Core numbers the new helper's entity after any entity of this id, and
+    # not every one is a stored helper: a helper defined in YAML is not, nor
+    # is the home zone Core makes itself.
+    not_stored: list[str] = []
+    taken = f"{domain}.{slug}"
+    if not ids and (hass.states.get(taken) or registry.async_is_registered(taken)):
+        entry = registry.async_get(taken)
+        if entry and entry.platform == domain and entry.unique_id in stored.data:
+            ids.append(entry.unique_id)
+        else:
+            not_stored.append(slug)
+    return {"slug": slug, "ids": ids + not_stored, "not_stored": not_stored}
 
 
 def read_item(
