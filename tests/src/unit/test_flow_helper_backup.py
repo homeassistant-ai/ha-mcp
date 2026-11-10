@@ -281,39 +281,6 @@ async def test_recreation_answers_the_menu_from_the_snapshot() -> None:
     ]
 
 
-async def test_recreation_picks_the_branch_key_over_a_matching_option_value() -> None:
-    """A template binary_sensor with device_class "light" holds two values that
-    name template branches; template_type is the branch, not device_class."""
-    client = _creation_client(
-        {
-            "type": "form",
-            "flow_id": "create",
-            "step_id": "binary_sensor",
-            "data_schema": [{"name": n} for n in ("name", "state", "device_class")],
-            "last_step": True,
-        },
-        _CREATED,
-        first={
-            "type": "menu",
-            "flow_id": "create",
-            "menu_options": ["binary_sensor", "light", "sensor"],
-        },
-    )
-    options = {
-        "template_type": "binary_sensor",
-        "device_class": "light",
-        "name": "Hall light",
-        "state": "{{ 1 }}",
-    }
-    result = await recreate_flow_helper(client, "template", options)
-    assert result["entry_id"] == "new-entry"
-    assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
-        {"next_step_id": "binary_sensor"},
-        {"device_class": "light", "name": "Hall light", "state": "{{ 1 }}"},
-    ]
-    assert "warnings" not in result
-
-
 async def test_recreation_fills_every_form_of_a_multi_step_flow() -> None:
     """statistics asks for its characteristic on a second form."""
     form = {"type": "form", "flow_id": "create", "last_step": False}

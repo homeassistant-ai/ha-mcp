@@ -31,6 +31,7 @@ from pytest_homeassistant.common import (
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.config_entry_flow import (
+    CreationFlowError,
     recreate_flow_helper,
     restore_config_entry_options,
 )
@@ -506,6 +507,48 @@ async def test_a_deleted_menu_helper_is_recreated_from_its_options(
 
     assert recreated["entry_id"] != entry_id
     assert _options(hass, recreated["entry_id"]) == snapshot
+
+
+_HALL_LIGHT = {"name": "Hall Light", "state": "{{ true }}", "device_class": "light"}
+
+
+async def _deleted_hall_light(hass: HomeAssistant, tools: HelperConfigTools) -> dict:
+    """The options of a deleted template binary_sensor whose device_class is
+    also the name of another template sub-type."""
+    created = await tools.ha_config_set_helper(
+        helper_type="template", menu_choice="binary_sensor", config=dict(_HALL_LIGHT)
+    )
+    snapshot = _options(hass, created["entry_id"])
+    await hass.config_entries.async_remove(created["entry_id"])
+    return snapshot
+
+
+async def test_a_snapshot_naming_two_menu_branches_is_recreated_on_the_right_one(
+    hass: HomeAssistant, component_tools: HelperConfigTools
+) -> None:
+    """template_type "binary_sensor" and device_class "light" both name a
+    template sub-type. Core's declaration of the flow says which is the
+    branch: the one whose form takes the snapshot's other options."""
+    snapshot = await _deleted_hall_light(hass, component_tools)
+
+    recreated = await recreate_flow_helper(
+        component_tools._client, "template", snapshot
+    )
+
+    assert _options(hass, recreated["entry_id"]) == snapshot
+
+
+async def test_without_the_component_two_possible_branches_are_refused(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """Nothing but Core's declaration tells the two apart, so no branch is
+    guessed and no helper of the wrong sub-type is created."""
+    snapshot = await _deleted_hall_light(hass, tools)
+
+    with pytest.raises(CreationFlowError):
+        await recreate_flow_helper(tools._client, "template", snapshot)
+
+    assert hass.config_entries.async_entries("template") == []
 
 
 _SUBENTRY_DOMAIN = "flow_steps_test"

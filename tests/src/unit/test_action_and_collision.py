@@ -291,9 +291,7 @@ class TestBug12NameCollisionSimpleHelpers:
     async def test_empty_name_falls_through_to_required_check(
         self, register_tools, mock_client
     ):
-        """Empty `name` must raise the existing 'name is required' error,
-        not a collision error.
-        """
+        """Empty `name` must raise the blank-name error, not a collision error."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_simple_handler(helper_type="input_boolean")
         )

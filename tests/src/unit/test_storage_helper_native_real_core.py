@@ -50,6 +50,21 @@ async def test_a_tag_created_without_an_id_gets_the_id_core_generates(
     assert str(uuid.UUID(tag.unique_id)) == tag.unique_id
 
 
+async def test_core_decides_which_helper_needs_a_name(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """A tag needs no name in Core and an input_boolean does: the tool sends
+    both as written and Core refuses the one it cannot create."""
+    await tools.ha_config_set_helper(helper_type="tag", config={"tag_id": "front-door"})
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(helper_type="input_boolean")
+
+    assert "name" in json.loads(str(exc_info.value))["error"]["message"]
+    assert hass.states.async_entity_ids("input_boolean") == []
+    tags = [e for e in er.async_get(hass).entities.values() if e.domain == "tag"]
+    assert [tag.unique_id for tag in tags] == ["front-door"]
+
+
 async def test_an_input_datetime_without_date_or_time_is_cores_to_refuse(
     hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:

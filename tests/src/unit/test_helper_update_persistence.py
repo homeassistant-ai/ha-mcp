@@ -1232,16 +1232,3 @@ class TestOptionalNameOnUpdate:
         ]
         assert reg_updates, f"no registry update: {ws_calls}"
         assert reg_updates[0].get("area_id") is None, reg_updates[0]
-
-    async def test_simple_helper_create_still_requires_name(
-        self, register_tools, mock_client
-    ):
-        """Creating a helper without name still fails (but at the tool logic, not Pydantic)."""
-        # No mocking needed: create path raises ToolError before any WS call
-        # when name is missing.
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError, match="name is required for create"):
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-            )

@@ -34,6 +34,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
+from .component_flow import flow_outline, steps_after
 from .config_entry_flow_form import MISSING, shown_value
 from .config_entry_flow_introspect import (
     _FlowType,
@@ -347,34 +348,62 @@ class _CreationFlowProgress(_OptionsFlowProgress):
         )
 
 
-# The option a menu-rooted helper stores its creation branch under.
-_MENU_BRANCH_KEYS = {
-    "template": "template_type",
-    "group": "group_type",
-    "random": "entity_type",
-}
+async def _creation_fields(
+    client: Any, helper_type: str
+) -> dict[str, set[str] | None] | None:
+    """For each step of a creation flow, the fields its form and the forms
+    after it declare, read from Core's declaration of the flow. ``None`` for a
+    step whose forms Core builds from the answers, and for the whole flow when
+    no component reads the declaration.
+    """
+    steps = await flow_outline(client, helper_type, "config")
+    if steps is None:
+        return None
+    declared: dict[str, set[str] | None] = {}
+    for step in steps:
+        chain = [
+            step,
+            *(later for later, _ in steps_after(steps, step["step_id"]) or []),
+        ]
+        if any(link.get("schema_from_answers") for link in chain):
+            declared[step["step_id"]] = None
+            continue
+        declared[step["step_id"]] = {
+            field["name"]
+            for link in chain
+            for field in link.get("data_schema") or []
+            if isinstance(field, dict) and isinstance(field.get("name"), str)
+        }
+    return declared
 
 
-def _menu_branch_from_snapshot(
-    progress: _OptionsFlowProgress, menu: dict[str, Any], helper_type: str
+async def _menu_branch_from_snapshot(
+    client: Any,
+    progress: _OptionsFlowProgress,
+    menu: dict[str, Any],
+    helper_type: str,
 ) -> str:
     """The creation menu's branch the snapshot names.
 
     A menu-rooted helper stores its branch among its options (template's
-    ``template_type``, group's ``group_type``); that key selects it, and no
-    creation form takes it. Other option values can also be menu names (a
-    template binary_sensor's ``device_class`` "light"), so the branch key is
-    looked up by helper type first and matched by value only for a type
-    without a known key.
+    ``template_type``, group's ``group_type``), and no creation form takes
+    that option. Another option's value can be a menu name too (a template
+    binary_sensor's ``device_class`` "light"): then the branch is the one
+    whose forms, as Core declares them, take the snapshot's other options.
+    Without that declaration such a snapshot is refused.
     """
     options = menu.get("menu_options")
     choices = options if isinstance(options, list) else list(options or {})
     config = progress.config
-    branch_key = _MENU_BRANCH_KEYS.get(helper_type)
-    if branch_key is not None and config.get(branch_key) in choices:
-        keys = [branch_key]
-    else:
-        keys = [key for key, value in config.items() if value in choices]
+    keys = [key for key, value in config.items() if value in choices]
+    declared = await _creation_fields(client, helper_type) if len(keys) > 1 else None
+    if declared is not None:
+
+        def takes_the_rest(key: str) -> bool:
+            fields = declared.get(config[key])
+            return fields is None or set(config) - {key} <= fields
+
+        keys = [key for key in keys if takes_the_rest(key)]
     if len(keys) != 1:
         progress.refuse("unsupported_form")
     return str(config.pop(keys[0]))
@@ -412,7 +441,7 @@ async def replay_snapshot(
     progress: _OptionsFlowProgress,
     step: dict[str, Any],
     *,
-    menu_branch: Callable[[dict[str, Any]], str] | None = None,
+    menu_branch: Callable[[dict[str, Any]], Awaitable[str]] | None = None,
 ) -> dict[str, Any]:
     """Answer a restore flow's forms from ``progress.config``, the snapshot.
 
@@ -426,7 +455,7 @@ async def replay_snapshot(
     for _ in range(_MAX_REPLAY_STEPS):
         step_type = step.get("type")
         if step_type == _FlowType.MENU and menu_branch is not None:
-            payload = {"next_step_id": menu_branch(step)}
+            payload = {"next_step_id": await menu_branch(step)}
             menu_branch = None
         elif step_type == _FlowType.FORM:
             payload = _snapshot_answers(step, progress.config)
@@ -462,7 +491,7 @@ async def recreate_flow_helper(
             progress,
             initial_step,
             menu_branch=lambda menu: _menu_branch_from_snapshot(
-                progress, menu, helper_type
+                client, progress, menu, helper_type
             ),
         )
         entry = result.get("result")
