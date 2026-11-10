@@ -76,7 +76,7 @@ the info handshake carries no capability entry:
   enriched too — the join keys off the registry, not the state machine.
 * ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
   List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
-  {id: {assistant: True}}}`` — byte-identical to ``homeassistant/expose_entity/
+  {id: {assistant: True}}}`` — the same entries as ``homeassistant/expose_entity/
   list``); single-entity mode reads core's module-level
   ``async_get_entity_settings``. Both add a sibling ``entity_info`` map enriching
   each id through the same registry join (friendly_name/domain/area/floor/labels),

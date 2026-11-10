@@ -1,8 +1,11 @@
-"""Bulk ``homeassistant/expose_entity`` calls for ``ha_set_entity``."""
+"""Assistant checks and bulk ``homeassistant/expose_entity`` calls."""
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
+
+from ..errors import create_error_response
+from .helpers import raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +16,32 @@ def changed_entity_ids(reply: dict[str, Any]) -> set[str] | None:
     if isinstance(result, dict) and isinstance(result.get("changed_entity_ids"), list):
         return set(result["changed_entity_ids"])
     return None
+
+
+async def reject_unknown_assistants(
+    client: Any,
+    assistants: Iterable[str] | None,
+) -> None:
+    """Have Core judge each assistant name before it is used.
+
+    ``homeassistant/expose_new_entities/get`` validates its ``assistant``
+    against Core's own list, so an unknown name fails here instead of after
+    a write already applied or as an empty filter result.
+    """
+    for assistant in assistants or ():
+        reply = await client.send_websocket_message(
+            {"type": "homeassistant/expose_new_entities/get", "assistant": assistant},
+            expected_error_codes=frozenset({"invalid_format"}),
+        )
+        if not reply.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ws_failure_code(reply),
+                    f"Checking assistant {assistant!r} failed: {reply.get('error')}",
+                    context={"assistant": assistant},
+                    suggestions=reply.get("suggestions"),
+                )
+            )
 
 
 async def apply_bulk_expose(

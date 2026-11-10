@@ -187,16 +187,16 @@ class TestEntityRename:
         Test: Attempting to change domain should fail
 
         Entity renaming cannot change the domain (e.g., light -> switch).
+        Home Assistant refuses it before anything is written.
         """
         logger.info("Testing domain mismatch rejection")
 
-        # Attempt to rename with domain change
         rename_data = await safe_call_tool(
             mcp_client,
             "ha_set_entity",
             {
-                "entity_id": "input_boolean.some_entity",
-                "new_entity_id": "input_number.some_entity",
+                "entity_id": "light.bed_light",
+                "new_entity_id": "switch.bed_light",
             },
         )
 
@@ -216,7 +216,8 @@ class TestEntityRename:
 
     async def test_rename_invalid_format_rejected(self, mcp_client):
         """
-        Test: Invalid entity_id formats should be rejected
+        Test: Invalid entity_id formats are refused by Home Assistant, before
+        anything is written
         """
         logger.info("Testing invalid entity_id format rejection")
 
@@ -233,7 +234,7 @@ class TestEntityRename:
                 mcp_client,
                 "ha_set_entity",
                 {
-                    "entity_id": "input_boolean.test",
+                    "entity_id": "light.bed_light",
                     "new_entity_id": invalid_id,
                 },
             )
@@ -249,9 +250,8 @@ class TestEntityRename:
             assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
                 f"Expected VALIDATION_INVALID_PARAMETER for {invalid_id}, got: {error}"
             )
-            error_msg = error.get("message", "")
-            assert invalid_id in error_msg, (
-                f"Error message should identify rejected input '{invalid_id}', got: {error_msg}"
+            assert "Invalid entity ID" in error.get("message", ""), (
+                f"Expected Home Assistant's refusal for {invalid_id}, got: {error}"
             )
             logger.info(f"Invalid format correctly rejected: {invalid_id}")
 
@@ -271,7 +271,7 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Non-existent entity rename should fail"
-        assert rename_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert rename_data["error"]["code"] == "RESOURCE_NOT_FOUND"
         logger.info(
             f"Non-existent entity correctly rejected: {rename_data.get('error')}"
         )

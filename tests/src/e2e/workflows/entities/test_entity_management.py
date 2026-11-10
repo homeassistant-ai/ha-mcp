@@ -179,7 +179,7 @@ class TestEntityManagement:
             {"entity_id": "sensor.nonexistent_entity_xyz", "name": "Test Name"},
         )
         assert not data.get("success", False), "Should fail for non-existent entity"
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
         logger.info("Non-existent entity error handling verified")
 
@@ -447,18 +447,12 @@ class TestEntityManagement:
             f"area_id mismatch: {entity_entry}"
         )
 
-        # Verify disabled_by/hidden_by and translated booleans
+        # Verify disabled_by/hidden_by
         assert entity_entry.get("disabled_by") is None, (
             f"disabled_by should be None: {entity_entry}"
         )
         assert entity_entry.get("hidden_by") is None, (
             f"hidden_by should be None: {entity_entry}"
-        )
-        assert entity_entry.get("enabled") is True, (
-            f"enabled should be True when disabled_by is None: {entity_entry}"
-        )
-        assert entity_entry.get("hidden") is False, (
-            f"hidden should be False when hidden_by is None: {entity_entry}"
         )
 
         # Verify aliases

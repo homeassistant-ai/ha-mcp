@@ -899,7 +899,7 @@ class TestExposureSeam:
 
     Drives the real list/single exposure command (its should_expose filter and
     registry-join enrichment) through the real server shaper, pinning that the
-    legacy ``exposed_to`` keys stay byte-identical while the ``entity_info`` /
+    ``exposed_to`` row stays Core's while the ``entity_info`` /
     single-entity enrichment is additive.
     """
 
@@ -920,7 +920,10 @@ class TestExposureSeam:
             return settings_map.get(entity_id, {})
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
-        monkeypatch.setattr(wsapi, "_legacy_exposed_entity_ids", lambda h: [])
+        candidates = {"conversation": dict.fromkeys(settings_map)}
+        monkeypatch.setattr(
+            wsapi, "_async_get_assistant_settings", lambda h: candidates
+        )
 
     @pytest.mark.asyncio
     async def test_single_exposure_enriched_from_real_component(
@@ -937,12 +940,8 @@ class TestExposureSeam:
         with patch_ws(ws, tools_voice_assistant):
             resp = await tool(entity_id="light.lamp")
 
-        # Legacy keys byte-identical.
-        assert resp["exposed_to"] == {
-            "conversation": True,
-            "cloud.alexa": False,
-            "cloud.google_assistant": False,
-        }
+        # Legacy keys: the entity's row of Core's map.
+        assert resp["exposed_to"] == {"conversation": True}
         assert resp["is_exposed_anywhere"] is True
         # Additive enrichment from the real join.
         assert resp["friendly_name"] == "Lamp"
@@ -993,7 +992,6 @@ class TestExposureSeam:
             "_async_get_entity_settings",
             lambda h, entity_id: {"conversation": {"should_expose": True}},
         )
-        monkeypatch.setattr(wsapi, "_legacy_exposed_entity_ids", lambda h: [])
         client = ExposureRoutingClient({"sensor.child": {"conversation": True}})
         hass = FakeHass(
             states=[FakeState("sensor.child", "21", friendly_name="Child Sensor")]

@@ -10,6 +10,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.tools import tools_entities
 from ha_mcp.tools.tools_entities import register_entity_tools
 
 
@@ -21,6 +22,12 @@ def _registry_list(id_field, *ids):
     those parameters must answer the lookup first.
     """
     return {"success": True, "result": [{id_field: entry_id} for entry_id in ids]}
+
+
+@pytest.fixture(autouse=True)
+def _core_accepts_assistants(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Core's assistant check passes; test_entity_registry_real_core pins it."""
+    monkeypatch.setattr(tools_entities, "reject_unknown_assistants", AsyncMock())
 
 
 class TestHaSetEntityLabels:
@@ -551,25 +558,6 @@ class TestHaSetEntityExposeTo:
         assert (
             mock_client.send_websocket_message.call_args_list[1][0][0]["type"]
             == "config/entity_registry/get"
-        )
-
-    @pytest.mark.asyncio
-    async def test_expose_to_invalid_assistant_rejected(self, set_entity_tool):
-        """Invalid assistant name in expose_to should raise ToolError."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id="light.test",
-                expose_to={"invalid_assistant": True},
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert (
-            "invalid_assistant" in error_msg.lower() or "invalid" in error_msg.lower()
         )
 
     @pytest.mark.asyncio
@@ -2152,7 +2140,11 @@ class TestHaSetEntityShowAs:
         say 'Failed to update' — not 'Partially updated'. A regression that
         flips this would silently turn clean failures into partial-success lies.
         """
-        fail = {"success": False, "error": {"message": "unsupported_domain"}}
+        fail = {
+            "success": False,
+            "error": {"message": "unsupported_domain"},
+            "error_code": "invalid_info",
+        }
         mock_client.send_websocket_message = AsyncMock(side_effect=[fail])
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -2164,7 +2156,7 @@ class TestHaSetEntityShowAs:
             )
 
         body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body["partial"] is False
         assert body["options_succeeded"] == {}
         assert body["error"]["message"].startswith("Failed to update options for")
@@ -2333,44 +2325,6 @@ class TestHaGetEntityRegistryOptions:
         entry = result["entity_entry"]
         assert entry["config_entry_id"] == "01KB6B1Z1SA8B6AVAEMQ4FM8SD"
         assert entry["platform"] == "template"
-
-    @pytest.mark.asyncio
-    async def test_config_entry_id_is_none_for_yaml_only_entity(
-        self, mock_mcp, mock_client
-    ):
-        # YAML-defined entities (e.g. legacy template platform) have no
-        # config entry — the field is surfaced as None rather than omitted
-        # so consumers can rely on a stable schema.
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_id": "sensor.legacy",
-                    "name": None,
-                    "original_name": "Legacy",
-                    "icon": None,
-                    "area_id": None,
-                    "disabled_by": None,
-                    "hidden_by": None,
-                    "aliases": [],
-                    "labels": [],
-                    "categories": {},
-                    "device_class": None,
-                    "original_device_class": None,
-                    "options": {},
-                    "platform": "sensor",
-                    "device_id": None,
-                    # No config_entry_id key in HA's response.
-                    "unique_id": None,
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity"]
-
-        result = await tool(entity_id="sensor.legacy")
-
-        assert result["entity_entry"]["config_entry_id"] is None
 
 
 class TestHaSetEntityAliases:

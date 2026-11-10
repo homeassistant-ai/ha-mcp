@@ -175,7 +175,7 @@ class TestSetEntityUseDeviceName:
         client.send_websocket_message.assert_not_called()
 
 
-class TestGetEntityReportsSwitch:
+class TestGetEntityServesCoreEntry:
     @pytest.fixture
     def tools(self):
         registered: dict = {}
@@ -190,23 +190,11 @@ class TestGetEntityReportsSwitch:
         register_entity_tools(mcp, client)
         return registered, client
 
-    @pytest.mark.parametrize(
-        ("name", "device_id", "expected"),
-        [
-            ("", "dev1", True),
-            ("", None, False),
-            (None, "dev1", False),
-            ("Custom", "dev1", False),
-        ],
-    )
-    async def test_uses_device_name_flag(
-        self, tools, name, device_id, expected
-    ) -> None:
+    async def test_entry_is_served_as_core_returns_it(self, tools) -> None:
         registered, client = tools
-        entry = dict(ENTRY, name=name, device_id=device_id)
+        entry = dict(ENTRY, name="", device_id="dev1")
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": entry}
         )
         result = await registered["ha_get_entity"](entity_id="sensor.sun_next_dawn")
-        assert result["entity_entry"]["uses_device_name"] is expected
-        assert result["entity_entry"]["name"] == name
+        assert result["entity_entry"] == entry

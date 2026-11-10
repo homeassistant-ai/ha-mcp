@@ -3,14 +3,10 @@ Voice Assistant Exposure Query Tools for Home Assistant.
 
 This module provides tools for querying entity exposure to voice assistants
 (Alexa, Google Home, Assist). To modify exposure, use ha_set_entity(expose_to=...).
-
-Known assistant identifiers:
-- "conversation" - Home Assistant Assist (local voice control)
-- "cloud.alexa" - Alexa via Nabu Casa cloud
-- "cloud.google_assistant" - Google Assistant via Nabu Casa cloud
 """
 
 import logging
+from collections import Counter
 from typing import Annotated, Any
 
 from pydantic import Field
@@ -31,6 +27,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .entity_expose_batch import reject_unknown_assistants
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -41,9 +38,6 @@ from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
-# Known voice assistant identifiers in Home Assistant
-KNOWN_ASSISTANTS = ["conversation", "cloud.alexa", "cloud.google_assistant"]
-
 # The ha_mcp_tools/exposure WS command: the legacy expose_entity/list map PLUS a
 # sibling entity_info enrichment (names/areas). Named once so the routing helper
 # and its tests agree on the wire string.
@@ -52,8 +46,8 @@ WS_EXPOSURE = "ha_mcp_tools/exposure"
 # Additive keys the component's exposure enrichment (entity_info) contributes to a
 # single-entity response. friendly_name / state are live-state fields (omitted by
 # the component when the entity has no state); domain / area / floor / labels are
-# registry-derived and always present. Merged strictly on top of the byte-identical
-# legacy keys (exposed_to / is_exposed_anywhere / has_custom_settings / note).
+# registry-derived and always present. Merged strictly on top of the legacy keys
+# (exposed_to / is_exposed_anywhere).
 _EXPOSURE_ENRICHMENT_KEYS = (
     "friendly_name",
     "domain",
@@ -76,8 +70,8 @@ class VoiceAssistantTools:
         """One ``ha_mcp_tools/exposure`` read; ``None`` ⇒ run the legacy path.
 
         Returns the component payload — ``{exposed_entities: {id: {assistant:
-        True}}, entity_info: {id: {...}}}`` — where ``exposed_entities`` is
-        byte-identical to the legacy ``homeassistant/expose_entity/list`` map so
+        True}}, entity_info: {id: {...}}}`` — where ``exposed_entities`` holds
+        the same entries as the legacy ``homeassistant/expose_entity/list`` map so
         the existing ``_get_entity_exposure`` / ``_list_exposures`` shapers consume
         it unchanged. ``None`` on capability miss, downgrade (``unknown_command`` →
         invalidate the cached caps), command error/timeout (logged), or a
@@ -132,7 +126,7 @@ class VoiceAssistantTools:
         """Additively merge one entity's ``entity_info`` onto its exposure response.
 
         Adds friendly_name / domain / area / floor / labels (and state, when the
-        component included it) on top of the byte-identical legacy keys. A ``None``
+        component included it) on top of the legacy keys. A ``None``
         / empty ``info`` is a no-op (capability miss ⇒ fields simply absent).
         """
         if not info:
@@ -145,22 +139,13 @@ class VoiceAssistantTools:
     def _get_entity_exposure(
         entity_id: str, exposed_entities: dict[str, Any]
     ) -> dict[str, Any]:
-        """Build response for a specific entity's exposure settings."""
-        entity_settings = exposed_entities.get(entity_id, {})
-        is_exposed = any(entity_settings.get(asst) for asst in KNOWN_ASSISTANTS)
+        """One entity's row of Core's map: the assistants stored as exposed."""
+        exposed_to = exposed_entities.get(entity_id, {})
         return {
             "success": True,
             "entity_id": entity_id,
-            "exposed_to": {
-                asst: entity_settings.get(asst, False) for asst in KNOWN_ASSISTANTS
-            },
-            "is_exposed_anywhere": is_exposed,
-            "has_custom_settings": entity_id in exposed_entities,
-            "note": (
-                "If has_custom_settings is False, the entity uses default exposure settings"
-                if entity_id not in exposed_entities
-                else None
-            ),
+            "exposed_to": exposed_to,
+            "is_exposed_anywhere": bool(exposed_to),
         }
 
     @staticmethod
@@ -169,31 +154,26 @@ class VoiceAssistantTools:
     ) -> dict[str, Any]:
         """Build response listing all exposed entities with optional filter."""
         filtered = exposed_entities
+        filters_applied: dict[str, Any] = {}
         if assistant:
             filtered = {
                 eid: settings
                 for eid, settings in filtered.items()
                 if settings.get(assistant)
             }
-
-        summary: dict[str, int] = dict.fromkeys(KNOWN_ASSISTANTS, 0)
-        for settings in filtered.values():
-            for asst in KNOWN_ASSISTANTS:
-                if settings.get(asst):
-                    summary[asst] += 1
-
-        filters_applied: dict[str, Any] = {}
-        if assistant:
             filters_applied["assistant"] = assistant
+            summary = {assistant: len(filtered)}
+        else:
+            summary = dict(
+                Counter(asst for settings in filtered.values() for asst in settings)
+            )
 
         return {
             "success": True,
             "exposed_entities": filtered,
             "count": len(filtered),
             "total_entities_with_settings": len(exposed_entities),
-            "summary": (
-                summary if not assistant else {assistant: summary.get(assistant, 0)}
-            ),
+            "summary": summary,
             "filters_applied": filters_applied,
         }
 
@@ -216,8 +196,8 @@ class VoiceAssistantTools:
             str | None,
             Field(
                 description=(
-                    "Filter by assistant: 'conversation', 'cloud.alexa', or "
-                    "'cloud.google_assistant'."
+                    "Filter by assistant, an ID Home Assistant knows (today "
+                    "'conversation', 'cloud.alexa', 'cloud.google_assistant')."
                 ),
                 default=None,
             ),
@@ -225,16 +205,16 @@ class VoiceAssistantTools:
     ) -> dict[str, Any]:
         """Get entity exposure settings - list all or get settings for a specific entity.
 
-        Without an entity_id: lists the entities that have explicit exposure
-        settings for voice assistants (Alexa, Google Assistant, Assist) as
-        `exposed_entities`, plus a per-assistant `summary` count. An entity absent
-        from that list uses the default exposure settings.
+        Without an entity_id: lists the entities exposed to at least one voice
+        assistant (Alexa, Google Assistant, Assist) as `exposed_entities`, the
+        map Home Assistant's own expose_entity/list returns, plus a per-assistant
+        `summary` count (unfiltered, an assistant with no exposed entity is left
+        out). An entity absent from that list is not stored as exposed: either it
+        is stored as not exposed, or nothing is stored yet and Home Assistant
+        applies its expose-new-entities default when an assistant first asks.
 
-        With an entity_id: returns `exposed_to` (assistant -> True/False from the
-        entity's explicit settings), `is_exposed_anywhere`, and
-        `has_custom_settings`. When has_custom_settings is False the defaults
-        apply and exposed_to is all False; the default values themselves are
-        not computed.
+        With an entity_id: returns `exposed_to`, naming the assistants Home
+        Assistant has stored as exposed, and `is_exposed_anywhere`.
 
         EXAMPLES:
         - Filter by assistant: ha_get_entity_exposure(assistant="cloud.alexa")
@@ -248,24 +228,11 @@ class VoiceAssistantTools:
         These fields are absent when the component is unavailable.
         """
         try:
-            if assistant and assistant not in KNOWN_ASSISTANTS:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid assistant: {assistant}",
-                        context={
-                            "assistant": assistant,
-                            "valid_assistants": KNOWN_ASSISTANTS,
-                        },
-                        suggestions=[
-                            f"Valid assistants are: {', '.join(KNOWN_ASSISTANTS)}",
-                            "Check the assistant parameter spelling",
-                        ],
-                    )
-                )
+            if assistant:
+                await reject_unknown_assistants(self._client, [assistant])
 
             # Prefer the component's in-process exposure read when advertised: it
-            # returns the byte-identical expose_entity/list map PLUS the additive
+            # returns the same map as expose_entity/list PLUS the additive
             # entity_info enrichment (names/areas), so a caller no longer needs a
             # second ha_search to name an exposed entity. Falls back to the legacy
             # WS list on any miss/error (taxonomy in _fetch_exposure_via_component).

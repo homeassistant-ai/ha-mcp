@@ -83,7 +83,7 @@ class TestVoiceAssistantExposure:
         )
 
         assert not data.get("success"), "Invalid assistant should fail"
-        assert "valid_assistants" in data, "Should suggest valid assistants"
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
 
         logger.info("Invalid assistant correctly rejected")
 

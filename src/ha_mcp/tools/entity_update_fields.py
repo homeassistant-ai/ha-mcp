@@ -32,11 +32,6 @@ def reject_name_with_use_device_name(
         )
 
 
-def uses_device_name(entry: dict[str, Any]) -> bool:
-    """An empty name override follows the device name; without a device there is nothing to follow."""
-    return entry.get("name") == "" and bool(entry.get("device_id"))
-
-
 def reject_use_device_name_without_device(
     entity_id: str, entry: dict[str, Any]
 ) -> None:

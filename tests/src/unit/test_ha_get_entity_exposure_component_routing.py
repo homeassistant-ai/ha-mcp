@@ -3,9 +3,9 @@
 The legacy tool returns a bare ``{entity_id: {assistant: bool}}`` map with no
 names/areas, forcing a second ha_search to identify an exposed entity. When the
 component advertises ``exposure`` one ``ha_mcp_tools/exposure`` frame returns the
-byte-identical ``expose_entity/list`` map PLUS an additive ``entity_info``
+same ``expose_entity/list`` map PLUS an additive ``entity_info``
 enrichment (friendly_name/domain/area/floor/labels). These tests pin: the
-component-served single + list shapes (legacy keys byte-identical, enrichment
+component-served single + list shapes (legacy keys unchanged, enrichment
 additive), and the error-taxonomy fallbacks — capability miss, ``unknown_command``
 (invalidate caps + legacy), and a command error/timeout — all serving the legacy
 ``homeassistant/expose_entity/list`` result unchanged.
@@ -69,7 +69,11 @@ class RoutingClient:
         self._legacy_map = dict(legacy_map)
         self.legacy_calls = 0
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self, msg: dict[str, Any], expected_error_codes: frozenset[str] = frozenset()
+    ) -> dict[str, Any]:
+        if msg.get("type") == "homeassistant/expose_new_entities/get":
+            return {"success": True, "result": {"expose_new": False}}
         if msg.get("type") == "homeassistant/expose_entity/list":
             self.legacy_calls += 1
             return {
@@ -115,7 +119,7 @@ def _exposure_calls(ws: Any) -> list[Any]:
 
 @pytest.mark.asyncio
 async def test_single_entity_served_and_enriched() -> None:
-    """Single mode: byte-identical legacy keys + additive name/area enrichment."""
+    """Single mode: legacy keys + additive name/area enrichment."""
     ws = make_ws(
         "ha_mcp_tools/exposure",
         info_result=_CAPS_EXPOSURE,
@@ -130,14 +134,9 @@ async def test_single_entity_served_and_enriched() -> None:
     with patch_ws(ws, tools_voice_assistant):
         resp = await exposure(entity_id="light.a")
 
-    # Legacy keys, byte-identical.
-    assert resp["exposed_to"] == {
-        "conversation": True,
-        "cloud.alexa": False,
-        "cloud.google_assistant": False,
-    }
+    # Legacy keys: the entity's row of Core's map.
+    assert resp["exposed_to"] == {"conversation": True}
     assert resp["is_exposed_anywhere"] is True
-    assert resp["has_custom_settings"] is True
     # Additive enrichment merged on top.
     assert resp["friendly_name"] == "Lamp A"
     assert resp["domain"] == "light"
@@ -302,7 +301,7 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
 @pytest.mark.asyncio
 async def test_single_mode_missing_entity_info_omits_enrichment() -> None:
     """Single mode where the component's ``entity_info`` has no entry for the queried
-    id (``None`` info) merges nothing: the byte-identical legacy exposure keys are
+    id (``None`` info) merges nothing: the exposure keys are
     returned and no enrichment key is invented, no crash (issue #1813 T6)."""
     ws = make_ws(
         "ha_mcp_tools/exposure",

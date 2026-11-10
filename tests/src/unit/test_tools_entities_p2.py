@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools import tools_entities
 from ha_mcp.tools.tools_entities import register_entity_tools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
@@ -44,9 +45,17 @@ def _error_body(exc_info) -> dict:
     return json.loads(str(exc_info.value))
 
 
+@pytest.fixture(autouse=True)
+def _core_accepts_assistants(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Core's assistant check passes; test_entity_registry_real_core pins it."""
+    monkeypatch.setattr(tools_entities, "reject_unknown_assistants", AsyncMock())
+
+
 # --------------------------------------------------------------------------
 # Item 1 — ha_get_entity bulk via config/entity_registry/get_entries
 # --------------------------------------------------------------------------
+
+
 class TestBulkGetViaGetEntries:
     def _entry(self, eid, **overrides):
         entry = {
@@ -95,13 +104,9 @@ class TestBulkGetViaGetEntries:
         msg = client.send_websocket_message.call_args[0][0]
         assert msg["type"] == "config/entity_registry/get_entries"
         assert msg["entity_ids"] == ["light.a", "switch.b"]
-        # Shape is projected through the same formatter as the single path.
+        # Core's entries, as Core served them.
         by_id = {e["entity_id"]: e for e in result["entity_entries"]}
-        assert by_id["light.a"]["enabled"] is True
-        assert by_id["light.a"]["platform"] == "hue"
-        assert by_id["light.a"]["unique_id"] == "uid_light.a"
-        assert by_id["switch.b"]["enabled"] is False
-        assert by_id["switch.b"]["disabled_by"] == "user"
+        assert by_id == client.send_websocket_message.return_value["result"]
 
     @pytest.mark.asyncio
     async def test_bulk_get_missing_id_maps_to_error(self):
@@ -465,17 +470,28 @@ class TestUniqueIdResolver:
             "config_entry_id": "ce1",
         }
 
+    def _client(self, rows, entries_reply=None):
+        """Core's registry: the list rows, and get_entries for the ids asked."""
+
+        async def send(msg, **_):
+            if msg["type"] == "config/entity_registry/list":
+                return {"success": True, "result": rows}
+            if entries_reply is not None:
+                return entries_reply
+            by_id = {row["entity_id"]: row for row in rows}
+            return {"success": True, "result": {e: by_id[e] for e in msg["entity_ids"]}}
+
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(side_effect=send)
+        return client
+
     @pytest.mark.asyncio
     async def test_resolve_single_match(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.temp", "abc123", "zwave_js"),
-                    self._list_entry("sensor.other", "zzz", "hue"),
-                ],
-            }
+        client = self._client(
+            [
+                self._list_entry("sensor.temp", "abc123", "zwave_js"),
+                self._list_entry("sensor.other", "zzz", "hue"),
+            ]
         )
         tool = _register(client)["ha_get_entity"]
 
@@ -488,24 +504,20 @@ class TestUniqueIdResolver:
         assert entry["entity_id"] == "sensor.temp"
         assert entry["unique_id"] == "abc123"
         assert entry["platform"] == "zwave_js"
-        # Single list fetch only.
-        assert client.send_websocket_message.call_count == 1
-        assert client.send_websocket_message.call_args[0][0] == {
-            "type": "config/entity_registry/list"
-        }
+        # The list finds the id; get_entries reads the full entry for it.
+        sent = [c.args[0] for c in client.send_websocket_message.call_args_list]
+        assert sent[0] == {"type": "config/entity_registry/list"}
+        assert sent[1]["type"] == "config/entity_registry/get_entries"
+        assert sent[1]["entity_ids"] == ["sensor.temp"]
 
     @pytest.mark.asyncio
     async def test_resolve_multi_platform_collision(self):
         """Same unique_id under two platforms => both returned."""
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.a", "shared", "hue"),
-                    self._list_entry("light.a", "shared", "zwave_js"),
-                ],
-            }
+        client = self._client(
+            [
+                self._list_entry("sensor.a", "shared", "hue"),
+                self._list_entry("light.a", "shared", "zwave_js"),
+            ]
         )
         tool = _register(client)["ha_get_entity"]
 
@@ -518,44 +530,39 @@ class TestUniqueIdResolver:
         }
 
     @pytest.mark.asyncio
-    async def test_resolve_narrowing_by_platform(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.a", "shared", "hue"),
-                    self._list_entry("light.a", "shared", "zwave_js"),
-                ],
-            }
+    @pytest.mark.parametrize(
+        ("key", "value", "expected"),
+        [("platform", "zwave_js", "light.a"), ("domain", "sensor", "sensor.a")],
+    )
+    async def test_resolve_narrowing(self, key, value, expected):
+        client = self._client(
+            [
+                self._list_entry("sensor.a", "shared", "hue"),
+                self._list_entry("light.a", "shared", "zwave_js"),
+            ]
         )
         tool = _register(client)["ha_get_entity"]
 
-        result = await tool(unique_id="shared", platform="zwave_js")
+        result = await tool(unique_id="shared", **{key: value})
 
         assert result["matches"] == 1
-        assert result["platform"] == "zwave_js"
-        assert result["entity_entries"][0]["entity_id"] == "light.a"
+        assert result[key] == value
+        assert result["entity_entries"][0]["entity_id"] == expected
 
     @pytest.mark.asyncio
-    async def test_resolve_narrowing_by_domain(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.a", "shared", "hue"),
-                    self._list_entry("light.a", "shared", "zwave_js"),
-                ],
-            }
+    async def test_unreadable_match_is_an_error_not_zero_matches(self):
+        client = self._client(
+            [self._list_entry("sensor.a", "u", "hue")],
+            entries_reply={"success": False, "error": "timeout"},
         )
         tool = _register(client)["ha_get_entity"]
 
-        result = await tool(unique_id="shared", domain="sensor")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(unique_id="u")
 
-        assert result["matches"] == 1
-        assert result["domain"] == "sensor"
-        assert result["entity_entries"][0]["entity_id"] == "sensor.a"
+        body = _error_body(exc_info)
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert list(body["errors"]) == ["sensor.a"]
 
     @pytest.mark.asyncio
     async def test_resolve_not_found_raises(self):

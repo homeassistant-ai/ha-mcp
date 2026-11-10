@@ -14,6 +14,8 @@ from ha_mcp.tools.entity_expose_batch import apply_bulk_expose
 from ha_mcp.tools.tools_entities import register_entity_tools
 
 _ENTRY = {"entity_id": "light.test", "original_name": "Test", "aliases": []}
+# Core's answer to the assistant check that runs before any write.
+_ASSISTANT_OK = {"success": True, "result": {"expose_new": False}}
 
 
 def _set_entity_tool(client: MagicMock) -> Any:
@@ -37,7 +39,7 @@ async def test_single_entity_update_says_when_nothing_changed(
 ) -> None:
     client = MagicMock()
     client.send_websocket_message = AsyncMock(
-        side_effect=[expose_reply, {"success": True, "result": _ENTRY}]
+        side_effect=[_ASSISTANT_OK, expose_reply, {"success": True, "result": _ENTRY}]
     )
     result = await _set_entity_tool(client)(
         entity_id="light.test", expose_to={"conversation": True}
@@ -70,6 +72,8 @@ async def test_a_change_in_an_earlier_assistant_group_counts() -> None:
     client = MagicMock()
     client.send_websocket_message = AsyncMock(
         side_effect=[
+            _ASSISTANT_OK,
+            _ASSISTANT_OK,
             {"success": True, "result": {"changed_entity_ids": ["light.test"]}},
             {"success": True, "result": {"changed_entity_ids": []}},
             {"success": True, "result": _ENTRY},
@@ -89,6 +93,7 @@ async def test_bulk_update_marks_only_the_unchanged_entities() -> None:
     }
     client.send_websocket_message = AsyncMock(
         side_effect=[
+            _ASSISTANT_OK,
             {"success": True, "result": {"changed_entity_ids": ["light.a"]}},
             {"success": True, "result": entries},
         ]

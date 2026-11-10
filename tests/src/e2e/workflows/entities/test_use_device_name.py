@@ -76,7 +76,6 @@ class TestUseDeviceName:
             assert on.get("success"), on
             entry = await _entry(mcp_client)
             assert entry["name"] == "", entry
-            assert entry["uses_device_name"] is True, entry
             assert await _friendly_name(mcp_client) == "Sun"
 
             off = parse_mcp_result(
@@ -87,7 +86,6 @@ class TestUseDeviceName:
             assert off.get("success"), off
             entry = await _entry(mcp_client)
             assert entry["name"] is None, entry
-            assert entry["uses_device_name"] is False, entry
             assert await _friendly_name(mcp_client) == default_friendly
         finally:
             with CleanupSteps() as cleanup, cleanup.step():
