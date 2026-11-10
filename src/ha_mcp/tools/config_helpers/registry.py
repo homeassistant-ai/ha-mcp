@@ -588,6 +588,7 @@ async def _check_name_collision(
             ],
         )
     )
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _get_entities_for_config_entry(
