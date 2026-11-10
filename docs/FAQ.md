@@ -781,18 +781,29 @@ Two things differ on the Marketplace in Home Assistant 2026.11:
 To switch anyway, reinstall: the Marketplace has no in-place move, and it will
 not uninstall a listing while an HA-MCP entry exists.
 
-1. Note the options you changed in the **HA-MCP Server** entry's Configure
-   dialog. To keep your connect URL, also copy the webhook secret (the part
+1. Open the **HA-MCP Server** entry's Configure dialog and note every setting
+   it shows, not only the ones you changed. An entry created by an older
+   release can have **Remote access via webhook** and local-network access on
+   without ever having saved them, while a new entry starts with what you pick
+   at setup. To keep your connect URL, also copy the webhook secret (the part
    after `/api/webhook/`) and, if you use direct port access, the
-   `/private_...` path.
+   `/private_...` path. In `legacy` mode, copy the Client ID and Client Secret
+   too.
 2. Delete every HA-MCP entry under **Settings → Devices & services**.
 3. In the store, uninstall `homeassistant-ai/ha-mcp-integration`, then remove
    it from your custom repositories.
 4. Restart Home Assistant.
 5. Install **HA-MCP** from the catalog listing and restart again.
-6. Add the entries back. In the server entry's Configure dialog, re-enter your
-   options, with the copied values as **Custom webhook secret** and **Custom
-   direct-access path**. Without them the entry gets a new connect URL.
+6. Add the entries back. In the server entry's Configure dialog, restore your
+   settings, with the copied values as **Custom webhook secret** and **Custom
+   direct-access path**, and in `legacy` mode as the custom Client ID and
+   Client Secret. Without them the entry gets a new connect URL and new
+   credentials.
+
+Two things do not carry over. Clients that sign in with OAuth have to sign in
+again, because the new entry has its own signing keys. And a new entry starts
+with access on: if you had turned its **Access** switch off, turn it off again
+(the switch entity is disabled by default, so enable it first).
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
