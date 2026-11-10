@@ -53,11 +53,13 @@ from .config_helpers.schemas import (
     _SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
     StorageHelperType,
-    _attach_helper_skill,
 )
 from .config_helpers.typed_config import _core_schema_context, _prepare_typed_params
 from .config_helpers.update import _execute_update_simple_helper
-from .config_helpers.validation import _validate_set_helper_action
+from .config_helpers.validation import (
+    _reject_flow_params_on_storage_helper,
+    _validate_set_helper_action,
+)
 from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
@@ -521,6 +523,9 @@ class HelperConfigTools:
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
         id_fn=helper_backup_id,
+        # Any other flow call can save, since Core runs the step when a flow
+        # opens and on a re-read; an abort cannot.
+        skip_fn=lambda kw: bool(kw.get("abort")),
     )
     @log_tool_usage
     async def ha_config_set_helper(
@@ -533,12 +538,11 @@ class HelperConfigTools:
             str | None,
             Field(
                 description=(
-                    "Display name for simple/flow helper creation. Optional on helper update. "
-                    "Ignored for helper_type='config_subentry', which uses "
-                    "entry_id/subentry_type/subentry_id instead. For flow-based "
-                    "helper updates (template, group, utility_meter, ...), this is "
-                    "ignored because options flows don't expose renaming; change the "
-                    "resulting entity's display name with ha_set_entity(name=...)."
+                    "Display name. Required to create a SIMPLE helper, optional "
+                    "on its update. Creating a FLOW helper, it answers the "
+                    "form's `name` field when config sets none; a FLOW update "
+                    "does not use it (rename the entity with ha_set_entity). "
+                    "Not used by config_subentry."
                 ),
                 default=None,
             ),
@@ -548,8 +552,9 @@ class HelperConfigTools:
             Field(
                 description=(
                     "The helper's storage id ('my_button'), not the name of its "
-                    "entity, or its full entity_id ('input_button.my_button'). "
-                    "Omit to create a new helper."
+                    "entity, or its full entity_id ('input_button.my_button'); "
+                    "for a FLOW helper its config entry id. Omit to create a "
+                    "new helper."
                 ),
                 default=None,
             ),
@@ -584,17 +589,6 @@ class HelperConfigTools:
                 default=None,
             ),
         ] = None,
-        show_advanced_options: Annotated[
-            bool,
-            Field(
-                description=(
-                    "When helper_type='config_subentry', ask older Home "
-                    "Assistant versions to expose advanced flow options. No-op "
-                    "on HA 2026.6+; pending removal before HA 2027.6."
-                ),
-                default=False,
-            ),
-        ] = False,
         icon: Annotated[
             str | None,
             Field(
@@ -697,18 +691,49 @@ class HelperConfigTools:
                     "Type-specific fields. On update it is a patch: a field "
                     "you omit keeps its current value. SIMPLE types take "
                     f"these keys: {_SIMPLE_CONFIG_KEYS_DESCRIPTION} "
-                    "FLOW types and config_subentry take the flow's fields; a "
-                    "field set to null is cleared where the schema allows "
-                    "that field to be empty. A field two "
-                    "steps declare gets your one value both times; pass "
-                    "step_values={'<step_id>': {'<field>': <value>}} to give "
-                    "a step its own value, or to leave it out of that step; a "
-                    "LIST of those objects supplies one per encounter when the "
-                    "flow presents a step more than once."
+                    "FLOW types and config_subentry: the answers to the form "
+                    "the flow is at, under the form's own field names (a "
+                    "section's fields nested under the section's name). A "
+                    "field you omit is sent as the form shows it (its "
+                    "`current` value), a field set to null is left empty, and "
+                    "Home Assistant validates the rest. Omit config to get "
+                    "the form without answering it."
                 ),
                 default=None,
             ),
         ] = None,
+        menu_choice: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "FLOW types and config_subentry: the option to pick at a "
+                    "menu step (template and group open with one): with "
+                    "flow_id the menu the flow is at, without it the menu a "
+                    "new flow opens with."
+                ),
+                default=None,
+            ),
+        ] = None,
+        flow_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Continue an open flow: the flow_id a previous call "
+                    "returned, with the same helper_type and helper_id (or "
+                    "entry_id, subentry_type and subentry_id), until ha-mcp "
+                    "restarts. With config or menu_choice it answers the "
+                    "step; alone it returns the step again."
+                ),
+                default=None,
+            ),
+        ] = None,
+        abort: Annotated[
+            bool,
+            Field(
+                description="With flow_id: end the open flow without saving.",
+                default=False,
+            ),
+        ] = False,
         wait: Annotated[
             bool,
             Field(
@@ -746,40 +771,50 @@ class HelperConfigTools:
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
         zone, person, tag. Create requires `name`; update requires `helper_id`.
 
-        FLOW types (pass `config` dict, Config Entry Flow API): every helper flow
-        Home Assistant lists, read from it at call time — template, group,
-        utility_meter, derivative, min_max, threshold, integration, statistics,
-        trend, ... and custom helper integrations. Create requires `name`; for
-        updates pass the existing entry_id as `helper_id` (options flows reject
-        the `name` key).
+        FLOW types: every helper flow Home Assistant lists, read from it at
+        call time — template, group, utility_meter, derivative, min_max,
+        threshold, integration, statistics, trend, ... and custom helper
+        integrations. Creating one runs its config flow; `helper_id` (the
+        config entry id) runs its options flow instead.
         Do not create `otp` here although Home Assistant lists it: the user sets
         it up in the HA UI, since its secret is a credential they enroll in an
         authenticator app.
 
-        CONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,
-        `subentry_type` and `config`; pass `subentry_id` to reconfigure an existing
-        subentry, omit it to create one.
+        CONFIG_SUBENTRY type: pass `entry_id` and `subentry_type`; with
+        `subentry_id` the subentry's reconfigure flow runs, without it its
+        create flow.
+
+        Flows, one step per call, as the HA UI runs them: a call answers the
+        step the flow is at and returns Home Assistant's next answer. A form
+        comes back with its fields (type, default, current value, Home
+        Assistant's help text) and flow_id; a menu with menu_options. Answer
+        with flow_id and config (a form) or menu_choice (a menu); flow_id alone
+        returns the step again, and flow_id with abort=True ends the flow.
+        Without flow_id a new flow starts: menu_choice answers its opening
+        menu and config the form after it, so a one-form helper is created or
+        updated in one call; without config the call returns the form. A form
+        Home Assistant rejects is an error with Core's text, and the flow
+        stays open to correct it. Nothing is saved until the flow finishes.
 
         Behavior:
-        - UPDATE preserves type-specific fields not re-passed (a rename never wipes
-          initial/icon/etc.); flow-helper and config subentry updates behave the same
-          way (see `config`).
+        - A SIMPLE update preserves type-specific fields not re-passed (a rename
+          never wipes initial/icon/etc.).
         - Omitted `action` falls back to the `helper_id`-presence discriminator
           (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config
           subentries).
-        - For flow-based helpers, config keys not declared by any step's data_schema
-          are silently ignored by HA. Validation errors carry the helper's
-          `data_schema` (and `menu_options` for menu-rooted helpers like
-          `template`/`group` when no sub-type is chosen yet), so a follow-up call
-          can self-correct without a separate schema-discovery round-trip.
-        - Flows that present more than one menu (e.g. an MQTT device subentry
-          reconfigure looping through its summary menu) take `next_step_id` as a
-          LIST of successive selections, consumed one per menu encounter.
+        - area_id, labels, category and icon are applied to a flow helper's
+          entities by the call that finishes the flow.
+        - A progress step (Home Assistant working in the background) is waited
+          out for up to 120 s. When Home Assistant does not answer a submit,
+          the error carries status applied_but_unverified: check the helper
+          before retrying.
 
         EXAMPLES:
         - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min": 0, "max": 100, "step": 5})
-        - template sensor: ha_config_set_helper(helper_type="template", name="Room Temp", config={"next_step_id": "sensor", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
-        - group: ha_config_set_helper(helper_type="group", name="Kitchen Lights", config={"group_type": "light", "entities": ["light.a", "light.b"]})
+        - template sensor: ha_config_set_helper(helper_type="template", menu_choice="sensor", config={"name": "Room Temp", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
+        - group: ha_config_set_helper(helper_type="group", menu_choice="light", config={"name": "Kitchen Lights", "entities": ["light.a", "light.b"]})
+        - see a form first: ha_config_set_helper(helper_type="statistics"), then answer it: ha_config_set_helper(helper_type="statistics", flow_id="...", config={...})
+        - update one option: ha_config_set_helper(helper_type="group", helper_id="01HXYZ...", config={"hide_members": true})
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """
         try:
@@ -793,15 +828,20 @@ class HelperConfigTools:
                     entry_id,
                     subentry_type,
                     subentry_id,
-                    show_advanced_options,
                     config,
                     MandatoryBPS,
+                    flow_id=flow_id,
+                    menu_choice=menu_choice,
+                    abort=abort,
                 )
 
             await require_helper_type(self._client, helper_type)
-            action = await _validate_set_helper_action(
-                self._client, action, helper_id, helper_type
-            )  # type: ignore[assignment]
+            action = _validate_set_helper_action(action, helper_id, helper_type)  # type: ignore[assignment]
+            flow_args = {
+                "flow_id": flow_id,
+                "menu_choice": menu_choice,
+                "abort": abort or None,
+            }
             async with _core_schema_context(self._client, helper_type, action):
                 type_kw: dict[str, Any] = {
                     "options": options,
@@ -837,12 +877,8 @@ class HelperConfigTools:
                     helper_type, config, name, icon, type_kw
                 )
 
-                # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
-                if action == "create":
-                    await _check_name_collision(self._client, helper_type, name)
-
                 if helper_type not in SIMPLE_HELPER_TYPES:
-                    flow_response = await _handle_flow_helper(
+                    return await _handle_flow_helper(
                         self._client,
                         helper_type,
                         name,
@@ -853,10 +889,17 @@ class HelperConfigTools:
                         category,
                         wait,
                         icon=icon,
-                        action=action,
+                        action=action,  # type: ignore[arg-type]
+                        MandatoryBPS=MandatoryBPS,
+                        flow_id=flow_id,
+                        menu_choice=menu_choice,
+                        abort=abort,
                     )
-                    _attach_helper_skill(flow_response, MandatoryBPS)
-                    return flow_response
+
+                _reject_flow_params_on_storage_helper(helper_type, flow_args)
+                # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
+                if action == "create":
+                    await _check_name_collision(self._client, helper_type, name)
 
                 try:
                     labels = parse_string_list_param(labels, "labels")

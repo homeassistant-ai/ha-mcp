@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools.config_entry_flow import OptionsFlowError, update_config_entry_options
+from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    restore_config_entry_options,
+)
 
 
 @pytest.fixture
@@ -54,12 +57,11 @@ async def test_nested_restore_fields_preserve_only_fully_safe_paths(
         }
 
     with caplog.at_level(logging.WARNING), pytest.raises(OptionsFlowError) as caught:
-        await update_config_entry_options(
+        await restore_config_entry_options(
             flow_client,
             "entry",
             config,
             expected_domain="template",
-            keep_current_values=False,
         )
 
     assert caught.value.fields == ("additional_options.availability",)
@@ -78,12 +80,11 @@ async def test_restore_abort_cleanup_logs_safe_failure_context(
     )
 
     with caplog.at_level(logging.WARNING), pytest.raises(OptionsFlowError) as caught:
-        await update_config_entry_options(
+        await restore_config_entry_options(
             flow_client,
             "entry",
             {"state": "secret-marker-template", "unit_of_measurement": "secret-marker"},
             expected_domain="template",
-            keep_current_values=False,
         )
 
     assert caught.value.reason == "unsupported_fields"
@@ -144,12 +145,11 @@ async def test_unaborted_restore_logs_reconciliation_context_without_values(
         }
 
     with caplog.at_level(logging.WARNING), pytest.raises(error_type):
-        await update_config_entry_options(
+        await restore_config_entry_options(
             flow_client,
             "entry",
             {"state": "secret-marker-template"},
             expected_domain="template",
-            keep_current_values=False,
         )
 
     flow_client.abort_options_flow.assert_not_awaited()

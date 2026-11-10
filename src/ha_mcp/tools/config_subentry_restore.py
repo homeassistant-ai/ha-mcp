@@ -2,14 +2,13 @@
 
 An existing subentry goes through its reconfigure flow, a deleted one through
 its create flow; either is filled form by form as an options restore is
-(:class:`_OptionsFlowProgress`). Home Assistant ends a successful reconfigure
+(:func:`replay_snapshot`). Home Assistant ends a successful reconfigure
 with a ``reconfigure_successful`` abort instead of ``create_entry``.
 """
 
 from __future__ import annotations
 
 import asyncio
-from functools import partial
 from typing import Any
 
 from .config_entry_flow import (
@@ -19,13 +18,10 @@ from .config_entry_flow import (
     _OptionsFlowProgress,
     _reject_redaction_sentinels,
     _subentry_ids,
+    replay_snapshot,
 )
-from .config_entry_flow_introspect import abort_failed_flow
-from .config_entry_flow_walker import (
-    _RECONFIGURE_SUCCESS_REASONS,
-    _FlowType,
-    _handle_flow_steps,
-)
+from .config_entry_flow_introspect import _FlowType, abort_failed_flow
+from .config_entry_flow_submit import _RECONFIGURE_SUCCESS_REASONS
 
 
 class _SubentryFlowProgress(_OptionsFlowProgress):
@@ -86,17 +82,11 @@ async def _walk_snapshot(
         progress.flow_id = initial_step.get("flow_id")
         progress.start(initial_step)
         _feed_title_as_name(progress, initial_step, title)
-        await _handle_flow_steps(
-            client,
-            progress.flow_id or "",
-            initial_step,
-            dict(progress.config),
-            submit_fn=partial(progress.submit, client),
-            is_reconfigure=subentry_id is not None,
-            complete_snapshot=True,
-            flow=None,
-            refuse_progress=True,
-        )
+        result = await replay_snapshot(client, progress, initial_step)
+        # A reconfigure ends in its success abort, a creation in create_entry.
+        wanted = _FlowType.ABORT if subentry_id is not None else _FlowType.CREATE_ENTRY
+        if result.get("type") != wanted or progress.apply_status != "applied":
+            raise progress.failure()
     except (Exception, asyncio.CancelledError) as err:
         failure = err if isinstance(err, OptionsFlowError) else progress.failure()
         if failure.flow_id and failure.apply_status == "not_applied":

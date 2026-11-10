@@ -232,7 +232,7 @@ def _options_flow(monkeypatch: pytest.MonkeyPatch, sent: list) -> AsyncMock:
         return {"success": True}
 
     update = AsyncMock(side_effect=apply)
-    monkeypatch.setattr(config_entry_flow, "update_config_entry_options", update)
+    monkeypatch.setattr(config_entry_flow, "restore_config_entry_options", update)
     return update
 
 
@@ -481,7 +481,7 @@ async def test_a_failed_options_flow_says_whether_the_entry_was_enabled_first(
 ) -> None:
     sent = _ws(monkeypatch, [], [_read(_row({"int": 42}, disabled_by=row_disabled))])
     monkeypatch.setattr(
-        config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=error)
+        config_entry_flow, "restore_config_entry_options", AsyncMock(side_effect=error)
     )
 
     with pytest.raises(bm.BackupRestoreError) as exc_info:

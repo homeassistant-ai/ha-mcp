@@ -13,9 +13,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.config_entry_flow import update_config_entry_options
+from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    restore_config_entry_options,
+)
 from ha_mcp.tools.config_entry_identity import check_reconfigure_identity
 from ha_mcp.tools.ignored_entries import normalize_ignored_entry
+from ha_mcp.tools.integration_flow_steps import options_target
 
 _FLAGS = {"supports_options": True, "supports_reconfigure": True}
 
@@ -59,17 +63,31 @@ async def test_reconfigure_of_an_ignored_entry_is_refused() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["ignore", "user"])
-async def test_options_write_starts_a_flow_only_for_an_entry_that_is_not_ignored(
+async def test_options_flow_is_offered_only_for_an_entry_that_is_not_ignored(
     source: str,
 ) -> None:
     client = _client(source)
-    client.start_options_flow.return_value = {}
-
-    with pytest.raises(ToolError) as exc_info:
-        await update_config_entry_options(client, "e1", {"host": "h"})
 
     if source == "ignore":
+        with pytest.raises(ToolError) as exc_info:
+            await options_target(client, "e1")
         assert "ignored" in json.loads(str(exc_info.value))["error"]["message"]
-        client.start_options_flow.assert_not_called()
     else:
-        client.start_options_flow.assert_awaited_once_with("e1")
+        target = await options_target(client, "e1")
+        assert (target.kind, target.domain, target.entry_id) == (
+            "options",
+            "unifi",
+            "e1",
+        )
+    client.start_options_flow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_options_restore_of_an_ignored_entry_starts_no_flow() -> None:
+    client = _client("ignore")
+
+    with pytest.raises(OptionsFlowError) as exc_info:
+        await restore_config_entry_options(client, "e1", {"host": "h"})
+
+    assert exc_info.value.apply_status == "not_applied"
+    client.start_options_flow.assert_not_called()

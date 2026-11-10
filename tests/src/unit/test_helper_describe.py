@@ -6,15 +6,12 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock
 
-import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import read_only_request
 from ha_mcp.tools import config_entry_flow_introspect
 from ha_mcp.tools.config_helpers import describe as mod
-
-from .test_flow_progress import _abort_recorder
 
 _SCHEDULE_CORE = [
     {"type": "string", "lengthMin": 1, "name": "name", "required": True},
@@ -606,20 +603,6 @@ async def test_core_fields_follow_a_stable_order_with_hints_first(
     result = await mod.describe_helper(client, "schedule")
 
     assert [f["name"] for f in result["fields"]] == ["name", "monday", "sunday"]
-
-
-@pytest.mark.asyncio
-async def test_a_cancelled_error_context_read_still_closes_its_flow(
-    client: AsyncMock,
-) -> None:
-    client.start_config_flow.return_value = _form("user", [])
-    sent, client.abort_config_flow.side_effect = _abort_recorder()
-
-    with anyio.CancelScope() as scope:
-        scope.cancel()
-        await config_entry_flow_introspect.fetch_helper_flow_info(client, "group")
-
-    assert sent == ["f1"]
 
 
 @pytest.mark.asyncio

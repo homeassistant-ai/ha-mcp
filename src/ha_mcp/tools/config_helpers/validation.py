@@ -13,7 +13,6 @@ from ..helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .flow import _flow_helper_error_context
 from .schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
 
 
@@ -23,6 +22,13 @@ def _storage_helper_params() -> frozenset[str]:
     from ..tools_config_helpers import HelperConfigTools  # the tool imports this
 
     return frozenset(hidden_param_names(HelperConfigTools.ha_config_set_helper))
+
+
+def _helper_error_context(helper_type: str, **extra: Any) -> dict[str, Any]:
+    """A call-shape error's context: a storage helper's carries its fields."""
+    if helper_type in SIMPLE_HELPER_TYPES:
+        return _simple_helper_error_context(helper_type, **extra)
+    return {"helper_type": helper_type, **extra}
 
 
 def _reject_storage_params_on_flow_helper(
@@ -53,8 +59,27 @@ def _reject_storage_params_on_flow_helper(
     )
 
 
-async def _validate_set_helper_action(
-    client: Any,
+def _reject_flow_params_on_storage_helper(
+    helper_type: str, flow_args: dict[str, Any]
+) -> None:
+    """A storage helper is written in one call; it has no flow to continue."""
+    given = sorted(name for name, value in flow_args.items() if value is not None)
+    if not given:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"{', '.join(given)} apply only to flow helpers and config "
+            f"subentries; helper_type='{helper_type}' is written in one call.",
+            context=_simple_helper_error_context(
+                helper_type, inapplicable_params=given
+            ),
+            suggestions=[f"Drop {', '.join(given)}"],
+        )
+    )
+
+
+def _validate_set_helper_action(
     action: str | None,
     helper_id: str | None,
     helper_type: str,
@@ -68,14 +93,8 @@ async def _validate_set_helper_action(
                     f"action='create' was passed together with helper_id={helper_id!r}. "
                     "These are contradictory: create makes a new helper, while helper_id "
                     "targets an existing one.",
-                    context=(
-                        _simple_helper_error_context(
-                            helper_type, action=action, helper_id=helper_id
-                        )
-                        if helper_type in SIMPLE_HELPER_TYPES
-                        else await _flow_helper_error_context(
-                            client, helper_type, action=action, helper_id=helper_id
-                        )
+                    context=_helper_error_context(
+                        helper_type, action=action, helper_id=helper_id
                     ),
                     suggestions=[
                         "Omit helper_id to create a new helper",
@@ -88,13 +107,7 @@ async def _validate_set_helper_action(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "action='update' requires helper_id to identify which helper to modify.",
-                    context=(
-                        _simple_helper_error_context(helper_type, action=action)
-                        if helper_type in SIMPLE_HELPER_TYPES
-                        else await _flow_helper_error_context(
-                            client, helper_type, action=action
-                        )
-                    ),
+                    context=_helper_error_context(helper_type, action=action),
                     suggestions=[
                         'Pass "helper_id": "my_helper" to identify the helper',
                         "Or pass action='create' (or omit action) to create a new helper",

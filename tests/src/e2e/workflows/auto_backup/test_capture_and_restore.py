@@ -824,8 +824,8 @@ class TestTemplateHelperCaptureRestore:
                 {
                     "helper_type": "template",
                     "name": f"Backup Template {uuid.uuid4().hex[:8]}",
+                    "menu_choice": template_type,
                     "config": {
-                        "next_step_id": template_type,
                         "state": "{{ 12 }}"
                         if template_type == "sensor"
                         else "{{ true }}",

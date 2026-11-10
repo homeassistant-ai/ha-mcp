@@ -185,19 +185,18 @@ def _options_not_restored(
 async def _restore_options(
     client: Any, entity_id: str, config: Any, current_options: dict[str, Any]
 ) -> None:
-    from .tools.config_entry_flow import update_config_entry_options
+    from .tools.config_entry_flow import restore_config_entry_options
 
     bm = _manager()
     options = config["options"]
     await bm._apply_and_verify(
         f"{config.get('domain')} integration",
         partial(
-            update_config_entry_options,
+            restore_config_entry_options,
             client,
             entity_id,
             options,
             expected_domain=config.get("domain"),
-            keep_current_values=False,
             fixed_options=current_options,
         ),
         partial(

@@ -68,7 +68,7 @@ def _no_strings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Core's strings are not read: texts come back as the test sets them."""
 
     async def describe_form(_client, _domain, _path, step):
-        return {"fields": step.get("data_schema"), "note": "walker advice"}
+        return {"fields": step.get("data_schema")}
 
     async def flow_texts(_client, _flow, _step, _kind, keys):
         return {key: f"text of {value}" for key, value in keys.items()}
@@ -176,7 +176,6 @@ async def test_new_flow_without_config_stops_at_the_form_after_its_menu():
     )
     assert result["flow_id"] == "f1"
     assert result["step_id"] == "routing"
-    assert "note" not in result
 
 
 @pytest.mark.parametrize(
@@ -251,20 +250,25 @@ async def test_a_menu_answer_lists_its_options():
     assert "menu_choice" in result["message"]
 
 
-@pytest.mark.parametrize(
-    ("config", "note"),
-    [({"host": "h", "port": 1}, False), ({"host": "h", "next_step_id": "x"}, True)],
-)
-async def test_an_undeclared_key_is_refused_before_anything_is_sent(config, note):
-    client = _client()
+async def test_an_undeclared_key_is_left_to_home_assistant_to_refuse():
+    """Core's schema decides what a form takes: the key is sent, and Core's
+    refusal comes back with the form's schema and the flow still open."""
+    refusal = HomeAssistantAPIError("bad", status_code=400)
+    refusal.response_data = {
+        "errors": {"base": ["extra keys not allowed @ data['port']"]}
+    }
+    client = _client(submit_config_flow_step=AsyncMock(side_effect=refusal))
     with pytest.raises(ToolError) as exc_info:
-        await _drive(client, config=config)
+        await _drive(client, config={"host": "h", "port": 1})
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "f1", {"host": "h", "port": 1}
+    )
     error = _error(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "extra keys not allowed" in error["error"]["message"]
     assert error["flow_id"] == "f1"
-    assert error["fields"]
-    assert ("note" in error) is note
-    client.submit_config_flow_step.assert_not_awaited()
+    assert error["data_schema"] == [_field("host")]
+    assert "still open" in error["error"]["suggestion"]
     client.abort_config_flow.assert_not_awaited()
 
 
@@ -365,9 +369,7 @@ async def test_a_flow_of_the_calls_own_anchor_is_answered():
     client.submit_options_flow_step.assert_awaited_once_with("f1", {"host": "h"})
 
 
-async def test_a_rejected_answer_says_the_flow_is_still_open(monkeypatch):
-    introspect = AsyncMock(return_value={})
-    monkeypatch.setattr(config_entry_flow_errors, "fetch_helper_flow_info", introspect)
+async def test_a_rejected_answer_says_the_flow_is_still_open():
     client = _client(
         _request=AsyncMock(return_value=MENU),
         submit_config_flow_step=AsyncMock(
@@ -377,7 +379,6 @@ async def test_a_rejected_answer_says_the_flow_is_still_open(monkeypatch):
     with pytest.raises(ToolError) as exc_info:
         await _drive(client, flow_id="f1", menu_choice="routing")
     assert "still open" in _error(exc_info)["error"]["suggestion"]
-    introspect.assert_not_awaited()  # it would open a second flow
 
 
 async def test_a_flow_home_assistant_no_longer_has_is_not_found():
@@ -552,9 +553,17 @@ async def test_a_success_reason_outside_reconfigure_raises_as_applied(reason):
     assert "updated an existing config entry" in error["error"]["message"]
 
 
-async def test_a_reconfigure_flow_that_creates_an_entry_is_unverified():
+@pytest.mark.parametrize(
+    "target",
+    [
+        RECONFIGURE,
+        FlowTarget("subentry", "demo", "entry1", subentry_type="x", subentry_id="s1"),
+    ],
+    ids=["entry", "subentry"],
+)
+async def test_a_reconfigure_flow_that_creates_an_entry_is_unverified(target):
     with pytest.raises(ToolError) as exc_info:
-        await settle(_client(), RECONFIGURE, "f1", CREATED)
+        await settle(_client(), target, "f1", CREATED)
     assert _error(exc_info)["status"] == "applied_but_unverified"
 
 

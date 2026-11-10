@@ -410,9 +410,9 @@ class TestFlowHelperRouting:
     to the Config Entry Flow API, not to the WebSocket {type}/create path.
 
     Covers the unified-tool routing added in #967: helper flow types
-    (template, group, utility_meter, ...) are delegated to create_flow_helper /
-    update_flow_helper; entity resolution and registry updates then run against
-    all entities of the resulting config entry.
+    (template, group, utility_meter, ...) run their config or options flow;
+    entity resolution and registry updates then run against all entities of
+    the resulting config entry.
     """
 
     async def test_flow_helper_create_routes_via_config_flow(
@@ -455,11 +455,7 @@ class TestFlowHelperRouting:
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-1"
         assert result["entity_ids"] == ["sensor.avg_temp"]
-        # start_config_flow is awaited twice for create: once for schema
-        # introspection (to decide whether to inject `name`), once for the
-        # real flow. Both calls pass the same helper_type.
-        for call in mock_client.start_config_flow.await_args_list:
-            assert call.args == ("min_max",)
+        mock_client.start_config_flow.assert_awaited_once_with("min_max")
 
     async def test_flow_helper_update_routes_via_options_flow(
         self, register_tools, mock_client

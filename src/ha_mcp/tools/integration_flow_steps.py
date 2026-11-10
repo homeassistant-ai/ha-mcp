@@ -1,17 +1,19 @@
-"""One Home Assistant flow step per ``ha_set_integration`` call.
+"""One Home Assistant flow step per tool call.
 
-Adding an integration, changing an entry's options and reconfiguring an entry
-each run a Home Assistant flow. Instead of walking the whole flow from one
-``config``, the tool answers the step Home Assistant shows and returns the
-next one, with the ``flow_id`` that continues it, as the HA UI does. A flow
-stays open between calls until Home Assistant finishes or aborts it, or the
-caller aborts it.
+Adding an integration or a helper, changing an entry's options, reconfiguring
+an entry and setting a config subentry each run a Home Assistant flow. A call
+answers the step Home Assistant shows and returns the next one, with the
+``flow_id`` that continues it, as the HA UI does. A flow stays open between
+calls until Home Assistant finishes or aborts it, or the caller aborts it.
+``ha_set_integration`` and ``ha_config_set_helper`` both drive their flows
+through here.
 
 Which flow manager a ``flow_id`` belongs to follows from the anchors:
-``domain`` is the setup flow, ``entry_id`` the options flow, and
-``entry_id`` with ``reconfigure=True`` the entry's reconfigure flow (a config
-flow with the reconfigure source), whose identity anchors are checked by
-``check_reconfigure_identity`` before every call that may submit.
+``domain`` is the setup flow, ``entry_id`` the options flow, ``entry_id``
+with ``reconfigure=True`` the entry's reconfigure flow (a config flow with the
+reconfigure source), whose identity anchors are checked by
+``check_reconfigure_identity`` before every call that may submit, and
+``entry_id`` with a subentry type the subentry flow.
 """
 
 from __future__ import annotations
@@ -23,7 +25,11 @@ from typing import Any, NoReturn, cast
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
-from .config_entry_flow import _reject_redaction_sentinels, refuse_component_entry
+from .config_entry_flow import (
+    _reject_redaction_sentinels,
+    config_entry_of_domain,
+    refuse_component_entry,
+)
 from .config_entry_flow_errors import (
     FlowRef,
     ReconfigureStatus,
@@ -31,14 +37,10 @@ from .config_entry_flow_errors import (
     raise_flow_abort,
     raise_form_errors,
 )
-from .config_entry_flow_form import (
-    _RESERVED_CONFIG_KEYS,
-    _handle_form_step,
-    _ReuseState,
-)
+from .config_entry_flow_form import form_submission
 from .config_entry_flow_introspect import menu_choices, shielded_abort
-from .config_entry_flow_progress import PROGRESS_STEP_TYPES
-from .config_entry_flow_walker import (
+from .config_entry_flow_progress import _FLOW_RESOURCES, PROGRESS_STEP_TYPES
+from .config_entry_flow_submit import (
     _RECONFIGURE_SUCCESS_REASONS,
     EXTERNAL_STEP_TYPES,
     _rejected_on_submit,
@@ -48,7 +50,7 @@ from .config_entry_flow_walker import (
 )
 from .config_entry_identity import check_reconfigure_identity
 from .config_entry_reload_watch import watch_entry_reload
-from .config_helpers.describe import compact_schema, describe_form
+from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
 
@@ -64,42 +66,63 @@ _opened_flows: dict[str, tuple[str, str | None]] = {}
 
 @dataclass(frozen=True)
 class FlowTarget:
-    """The flow a call drives: ``kind`` is ``setup``, ``options`` or
-    ``reconfigure``; ``domain`` names the integration whose texts apply."""
+    """The flow a call drives: ``kind`` is ``setup``, ``options``,
+    ``reconfigure`` or ``subentry``; ``domain`` names the integration whose
+    texts apply. A subentry flow reconfigures when it names a ``subentry_id``
+    and creates one otherwise."""
 
     kind: str
     domain: str | None
     entry_id: str | None = None
+    subentry_type: str | None = None
+    subentry_id: str | None = None
 
     @property
     def ref(self) -> FlowRef:
-        return FlowRef(
-            self.domain,
-            "options" if self.kind == "options" else "config",
-            self.entry_id,
-        )
+        if self.kind == "subentry":
+            path = f"config_subentries.{self.subentry_type}"
+        else:
+            path = "options" if self.kind == "options" else "config"
+        return FlowRef(self.domain, path, self.entry_id)
 
     @property
     def anchor(self) -> tuple[str, str | None]:
+        if self.kind == "subentry":
+            return (
+                self.kind,
+                f"{self.entry_id}/{self.subentry_type}/{self.subentry_id or ''}",
+            )
         return (self.kind, self.entry_id or self.domain)
 
     @property
     def edits_existing(self) -> bool:
-        """Options and reconfigure steps arrive filled with the stored values."""
-        return self.kind != "setup"
+        """Options, reconfigure and subentry-reconfigure steps arrive filled
+        with the stored values."""
+        return self.kind != "setup" and (
+            self.kind != "subentry" or self.subentry_id is not None
+        )
+
+    @property
+    def reconfigures(self) -> bool:
+        """Whether the flow commits through Core's reconfigure success abort."""
+        return self.kind == "reconfigure" or self.subentry_id is not None
 
     def submit_fn(self, client: Any) -> Any:
         if self.kind == "options":
             return client.submit_options_flow_step
+        if self.kind == "subentry":
+            return client.submit_config_subentry_flow_step
         return client.submit_config_flow_step
 
     def abort_fn(self, client: Any) -> Any:
         if self.kind == "options":
             return client.abort_options_flow
+        if self.kind == "subentry":
+            return client.abort_config_subentry_flow
         return client.abort_config_flow
 
     def url(self, flow_id: str) -> str:
-        resource = "options/flow" if self.kind == "options" else "flow"
+        resource = _FLOW_RESOURCES[self.ref.path.split(".")[0]]
         return f"/config/config_entries/{resource}/{flow_id}"
 
 
@@ -146,12 +169,10 @@ async def read_step(client: Any, target: FlowTarget, flow_id: str) -> dict[str, 
             lambda _flow_id, _payload: client._request("GET", target.url(flow_id)),
             flow_id,
             {},
-            client=client,
-            helper_type=None,
+            domain=target.domain,
             last_menu_choice=None,
             current_step={},
-            is_reconfigure=target.kind == "reconfigure",
-            flow_stays_open=True,
+            is_reconfigure=target.reconfigures,
         )
     except HomeAssistantAPIError as err:
         if err.status_code == 404:
@@ -200,10 +221,9 @@ def _menu_payload(
 def _form_payload(
     target: FlowTarget, step: dict[str, Any], config: dict[str, Any], flow_id: str
 ) -> dict[str, Any]:
-    """The submit for one form: the caller's values, plus, on an options or
-    reconfigure form, every declared field the caller left out at the value
-    the form shows (#2254). A key the form does not declare is refused before
-    anything is sent."""
+    """The submit for one form: the caller's values, over the values an
+    options or reconfigure form shows, as the HA dialog posts it (#2254).
+    Core's schema checks the rest."""
     if step.get("type") != "form":
         _refuse(
             f"The flow is at a {step.get('type')} step, which takes no config"
@@ -212,31 +232,9 @@ def _form_payload(
             step_id=step.get("step_id"),
             menu_options=menu_choices(step) if step.get("type") == "menu" else None,
         )
-    remaining = dict(config)
-    undeclared: set[str] = set()
-    payload = _handle_form_step(
-        step,
-        remaining,
-        undeclared,
-        set(),
-        _ReuseState(),
-        keep_current_values=target.edits_existing,
+    return form_submission(
+        step.get("data_schema"), config, keep_shown=target.edits_existing
     )
-    undeclared |= set(remaining)
-    if undeclared:
-        _refuse(
-            f"Form {step.get('step_id')!r} does not declare: "
-            f"{', '.join(sorted(undeclared))}. Nothing was submitted",
-            flow_id=flow_id,
-            step_id=step.get("step_id"),
-            fields=compact_schema(step.get("data_schema") or []),
-            **(
-                {"note": "Menus are answered with menu_choice, one step per call."}
-                if undeclared & _RESERVED_CONFIG_KEYS
-                else {}
-            ),
-        )
-    return payload
 
 
 async def submit_step(
@@ -254,13 +252,11 @@ async def submit_step(
     otherwise it is read back. Input Core rejects (the form back with
     ``errors``, or a 400) raises; the flow stays open to correct it.
     """
-    if config is not None:
-        _reject_redaction_sentinels(config)
-        if menu_choice is not None:
-            _refuse(
-                "Pass menu_choice or config, not both: each answers one step",
-                flow_id=flow_id,
-            )
+    if config is not None and menu_choice is not None:
+        _refuse(
+            "Pass menu_choice or config, not both: each answers one step",
+            flow_id=flow_id,
+        )
     if current is None:
         current = await read_step(client, target, flow_id)
     if menu_choice is not None:
@@ -271,12 +267,10 @@ async def submit_step(
         target.submit_fn(client),
         flow_id,
         payload,
-        client=client,
-        helper_type=target.domain,
+        domain=target.domain,
         last_menu_choice=menu_choice,
         current_step=current,
-        is_reconfigure=target.kind == "reconfigure",
-        flow_stays_open=True,
+        is_reconfigure=target.reconfigures,
     )
     if _rejected_on_submit(answer, current if menu_choice is None else None):
         await raise_form_errors(
@@ -284,8 +278,7 @@ async def submit_step(
             target.ref,
             flow_id,
             answer,
-            is_reconfigure=target.kind == "reconfigure",
-            flow_stays_open=True,
+            is_reconfigure=target.reconfigures,
         )
     return answer
 
@@ -319,7 +312,7 @@ async def settle(
     flow's success abort. What is returned is a form, a menu,
     ``create_entry`` or that success abort.
     """
-    is_reconfigure = target.kind == "reconfigure"
+    is_reconfigure = target.reconfigures
     if step.get("type") in PROGRESS_STEP_TYPES:
         step = await _wait_for_progress(
             client, target.ref, flow_id, step, is_reconfigure=is_reconfigure
@@ -397,9 +390,7 @@ async def open_step_answer(
         body["menu_options"] = menu_choices(step)
         how = "menu_choice"
     else:
-        described = await describe_form(client, target.domain, target.ref.path, step)
-        described.pop("note", None)  # walker advice; here each call answers one form
-        body.update(described)
+        body.update(await describe_form(client, target.domain, target.ref.path, step))
         how = "config"
         errors = step.get("errors")
         if errors:
@@ -435,9 +426,8 @@ def _require_flow_id(step: dict[str, Any], target: FlowTarget) -> str:
 
 
 def _finished_response(target: FlowTarget, step: dict[str, Any]) -> dict[str, Any]:
-    """``create_entry`` of a setup or options flow, in the shape
-    ``create_config_entry`` and ``update_config_entry_options`` return, or a
-    reconfigure flow's success abort."""
+    """``create_entry`` of a setup or options flow, or a reconfigure flow's
+    success abort."""
     result = step.get("result")
     result = result if isinstance(result, dict) else {}
     if target.kind == "reconfigure":
@@ -466,30 +456,38 @@ def _finished_response(target: FlowTarget, step: dict[str, Any]) -> dict[str, An
     }
 
 
-async def drive_flow(
+async def abort_open_flow(
+    client: Any, target: FlowTarget, flow_id: str | None
+) -> dict[str, Any]:
+    """End a flow this server opened for the call's anchor."""
+    if flow_id is None:
+        _refuse("abort=True needs the flow_id to end", flow_id=None)
+    _require_opened(target, flow_id)
+    aborted = await abort_step_flow(client, target, flow_id)
+    _opened_flows.pop(flow_id, None)
+    return aborted
+
+
+async def advance_flow(
     client: Any,
     target: FlowTarget,
     *,
     flow_id: str | None,
     config: dict[str, Any] | None,
     menu_choice: str | None,
-    abort: bool,
     start: Any,
-) -> dict[str, Any]:
-    """One ``ha_set_integration`` call on a setup, options or reconfigure flow.
+) -> tuple[str, dict[str, Any]]:
+    """Answer one step of a flow; returns its ``flow_id`` and Core's answer.
 
     Without ``flow_id`` the flow is started with ``start()``; ``menu_choice``
     then answers its opening menu and ``config`` the form that follows, so a
     one-form flow (or menu then form) finishes in this call. With ``flow_id``
-    the step the flow is at is answered, or, with neither, read again.
+    the step the flow is at is answered, or, with neither, read again. The
+    answer is a form or menu (the flow is open) or the step that ended it.
     """
-    if abort:
-        if flow_id is None:
-            _refuse("abort=True needs the flow_id to end", flow_id=None)
-        _require_opened(target, flow_id)
-        aborted = await abort_step_flow(client, target, flow_id)
-        _opened_flows.pop(flow_id, None)
-        return aborted
+    if config is not None:
+        # Before a flow is opened for an answer that cannot be sent.
+        _reject_redaction_sentinels(config)
     if flow_id is None:
         step = await start()
         flow_id = _require_flow_id(step, target)
@@ -518,11 +516,36 @@ async def drive_flow(
         step = await settle(client, target, flow_id, answer)
     if step.get("type") not in ("form", "menu"):
         _opened_flows.pop(flow_id, None)
+    return flow_id, step
+
+
+async def drive_flow(
+    client: Any,
+    target: FlowTarget,
+    *,
+    flow_id: str | None,
+    config: dict[str, Any] | None,
+    menu_choice: str | None,
+    abort: bool,
+    start: Any,
+) -> dict[str, Any]:
+    """One ``ha_set_integration`` call on a setup, options or reconfigure flow."""
+    if abort:
+        return await abort_open_flow(client, target, flow_id)
+    flow_id, step = await advance_flow(
+        client,
+        target,
+        flow_id=flow_id,
+        config=config,
+        menu_choice=menu_choice,
+        start=start,
+    )
+    if step.get("type") not in ("form", "menu"):
         return _finished_response(target, step)
     return await open_step_answer(client, target, flow_id, step)
 
 
-async def _start_setup_flow(client: Any, domain: str) -> dict[str, Any]:
+async def start_setup_flow(client: Any, domain: str) -> dict[str, Any]:
     try:
         step = await client.start_config_flow(domain)
     except HomeAssistantAPIError as err:
@@ -551,9 +574,12 @@ async def _start_setup_flow(client: Any, domain: str) -> dict[str, Any]:
     return cast(dict[str, Any], step)
 
 
-async def _options_target(client: Any, entry_id: str) -> FlowTarget:
-    """The entry's options flow, refused for entries this tool must not edit."""
-    entry = await client.get_config_entry(entry_id)
+async def options_target(
+    client: Any, entry_id: str, expected_domain: str | None = None
+) -> FlowTarget:
+    """The entry's options flow, refused for entries this tool must not edit
+    and, with ``expected_domain``, for an entry of another domain."""
+    entry = await config_entry_of_domain(client, entry_id, expected_domain)
     domain = entry.get("domain")
     refuse_component_entry(domain, action="change the options of", entry_id=entry_id)
     refuse_ignored_entry(entry, action="change the options of", entry_id=entry_id)
@@ -617,11 +643,11 @@ async def run_integration_step(
         target = FlowTarget("setup", domain)
 
         async def start() -> dict[str, Any]:
-            return await _start_setup_flow(client, domain)
+            return await start_setup_flow(client, domain)
 
     else:
         entry_id = validate_identifier_not_empty(entry_id, "entry_id")
-        target = await _options_target(client, entry_id)
+        target = await options_target(client, entry_id)
 
         async def start() -> dict[str, Any]:
             return cast(dict[str, Any], await client.start_options_flow(entry_id))

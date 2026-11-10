@@ -97,7 +97,6 @@ class TestIntegrationManagement:
         """
         # Create a temporary light group helper
         config = {
-            "group_type": "light",
             "name": "test_delete_regression_e2e",
             "entities": [],
             "hide_members": False,
@@ -107,7 +106,7 @@ class TestIntegrationManagement:
             "ha_config_set_helper",
             {
                 "helper_type": "group",
-                "name": "test_delete_regression_e2e",
+                "menu_choice": "light",
                 "config": config,
             },
         )
@@ -272,7 +271,7 @@ class TestIntegrationManagement:
     async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
         """A one-field options patch must not reset the fields it omits (#2254).
 
-        The bug: the walker submitted ONLY caller-named keys, so every field
+        The bug: the tool submitted ONLY caller-named keys, so every field
         the caller left out went back to whatever voluptuous substitutes for an
         absent key — its static schema default — while the tool still reported
         success. The sibling test above never caught it because ``group``'s
@@ -291,9 +290,8 @@ class TestIntegrationManagement:
 
         The baseline is set through the OPTIONS flow, not at create time:
         ``ignore_non_numeric`` lives in group's ``SENSOR_OPTIONS`` and not in
-        its config schema, so passing it to the add call is dropped as an
-        undeclared key (the tool says so in ``warnings``) and never reaches
-        the entry. That full submit doubles as the control: it proves a
+        its config schema, so the add form does not take it. That full
+        submit doubles as the control: it proves a
         complete form still applies every field, so a failure below is the
         PARTIAL path specifically.
         """

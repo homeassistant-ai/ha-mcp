@@ -404,8 +404,8 @@ class TestSetHelperWhitespaceUpgrade:
         # simple-path whitespace twin inside ``elif action == "update":``
         # fires AFTER the FLOW dispatch returns. Without the new guard
         # between the explicit-action raise and the implicit-action
-        # ``else:`` branch, the value would reach ``update_flow_helper``
-        # and HA returns a misleading "entry not found".
+        # ``else:`` branch, the value would reach the options flow and HA
+        # returns a misleading "entry not found".
         set_helper = register_tools["ha_config_set_helper"]
         with pytest.raises(ToolError) as excinfo:
             await set_helper(

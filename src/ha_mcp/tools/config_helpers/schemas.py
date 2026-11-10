@@ -485,9 +485,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     """Return the simple-helper field schema, or None for non-simple types.
 
     Callers attach the result to validation-error context as ``data_schema``
-    so the LLM sees field shape inline with a 4xx response, matching the
-    auto-attach pattern already in use for flow helpers (see
-    ``fetch_helper_flow_info`` in ``config_entry_flow_introspect``).
+    so the LLM sees field shape inline with a 4xx response.
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """

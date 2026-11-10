@@ -179,8 +179,7 @@ async def describe_form(
 
 
 _LATER_FORM_TAIL = (
-    "Pass them in the same config; a missing one comes back in the error with "
-    "that form's fields."
+    "A later form is returned, with a flow_id, by the call that answers this one."
 )
 # ``last_step`` is False when a later form follows and None when the flow does
 # not say, which many flows do, single-form ones included.

@@ -10,7 +10,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow import OptionsFlowError, update_config_entry_options
+from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    restore_config_entry_options,
+)
 
 
 @pytest.fixture
@@ -84,12 +87,11 @@ async def test_restore_reason_never_echoes_values_or_unknown_keys(
         )
 
     with pytest.raises(OptionsFlowError) as caught:
-        await update_config_entry_options(
+        await restore_config_entry_options(
             flow_client,
             "entry",
             config,
             expected_domain="template",
-            keep_current_values=False,
         )
 
     error = caught.value
