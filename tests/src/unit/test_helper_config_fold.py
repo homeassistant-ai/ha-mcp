@@ -646,6 +646,22 @@ async def test_write_falls_back_to_websocket_when_component_unavailable() -> Non
     assert result["entity_id"] == "input_boolean.b"
 
 
+async def test_a_long_choice_list_is_counted_not_spelled_out_in_the_description() -> (
+    None
+):
+    """Core's device_class field has dozens of choices; spelled out, they
+    would sit in every tool listing. describe lists them."""
+    from ha_mcp.transforms.component_helpers import render_core_keys
+
+    choices = [[f"choice_{n}", f"Choice {n}"] for n in range(40)]
+    rendered = render_core_keys(
+        {"input_number": {"create": [{"name": "device_class", "options": choices}]}}
+    )
+
+    assert "choice_7" not in rendered
+    assert "40" in rendered
+
+
 class TestCatalogTransform:
     @pytest.fixture
     def available(self, monkeypatch: pytest.MonkeyPatch) -> None:

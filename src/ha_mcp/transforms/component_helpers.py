@@ -15,6 +15,7 @@ from ..tools.component_helper_collections import (
     HELPER_CAPABILITIES,
     fetch_helper_schemas,
 )
+from ..tools.config_helpers.describe import MAX_OPTIONS
 from ..tools.config_helpers.schemas import (
     _SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
@@ -31,11 +32,15 @@ _TOOL = "ha_config_set_helper"
 
 def _render_field(field: dict[str, Any]) -> str:
     options = field.get("options")
-    kind = (
-        "|".join(str(o[0] if isinstance(o, list | tuple) else o) for o in options)
-        if options
-        else field.get("type")
-    )
+    if not options:
+        kind = field.get("type")
+    elif len(options) > MAX_OPTIONS:
+        # A long choice list belongs in describe, not in every tool listing.
+        kind = f"one of {len(options)} choices"
+    else:
+        kind = "|".join(
+            str(o[0] if isinstance(o, list | tuple) else o) for o in options
+        )
     parts = [str(kind)] if kind else []
     if field.get("required"):
         parts.append("required")
