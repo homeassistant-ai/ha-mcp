@@ -103,10 +103,16 @@ class TestTraceContextLookup:
         assert result["context_id"] == "parent-1"
         assert result["context_match"] == "parent"
         assert result["context_scanned"] == 1
+        trace_gets = [
+            call.args[0]["type"]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "trace/get"
+        ]
+        assert len(trace_gets) == 1
 
     @pytest.mark.asyncio
-    async def test_evicted_trace_falls_back_to_the_scanned_detail(self):
-        """A trace evicted between the scan and refetch still returns its detail."""
+    async def test_scanned_detail_is_reused_without_refetch(self):
+        """The context scan's trace/get copy is used instead of reading again."""
         scanned = {
             "run_id": "r1",
             "state": "stopped",
@@ -135,6 +141,10 @@ class TestTraceContextLookup:
         assert result["run_id"] == "r1"
         assert result["context_match"] == "parent"
         assert result["context_scanned"] == 1
+        assert all(
+            call.args[0].get("type") != "trace/get"
+            for call in client.send_websocket_message.await_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_context_scan_truncated_is_reported(self):

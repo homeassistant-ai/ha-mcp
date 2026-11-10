@@ -73,16 +73,6 @@ not a substitute for recorder metadata. Use the result or readback of a
 mutation when computing hashes, because Core may coerce values, add defaults or
 generate fields.
 
-Some relationships have no native index even though the record contains the
-link. The trace tool's triggering-context lookup is the worked example: Core's
-`trace/contexts` maps a trace's own context, while an automation run's parent
-context exists only inside each stored trace's extended `context`. The public
-`trace/list` + `trace/get` scan is bounded, reports truncation, and reports
-unreadable rows; a component bridge would reach into private trace storage and
-add a versioned command merely to avoid that diagnostic scan. Use a bridge when
-it exposes a real Core schema, collection or flow, not to replace a bounded
-public read of records Core already serves.
-
 Preserve useful presentation behavior when removing copied schemas. Readable
 field names and local event timestamps can be retained without duplicate aliases
 or filtering out new Core fields. Decode compact omissions according to Core's

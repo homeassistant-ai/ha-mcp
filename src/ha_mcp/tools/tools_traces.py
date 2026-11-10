@@ -5,7 +5,6 @@ This module provides tools for retrieving execution traces from Home Assistant
 to help debug automation and script issues.
 """
 
-import json
 import logging
 from typing import Annotated, Any, Literal
 
@@ -87,19 +86,10 @@ class TraceTools:
                 le=50,
             ),
         ] = 10,
-        deduplicate: Annotated[
-            bool,
-            Field(
-                description="Deduplicate variables across action steps. Set to False to record the "
-                "variables at every step; steps whose variables carry 'trigger', and "
-                "null-valued entries, are omitted either way.",
-                default=True,
-            ),
-        ] = True,
         detailed: Annotated[
             bool,
             Field(
-                description="Include extra diagnostic data: logbook entries and context metadata.",
+                description="Include the run's logbook entries and context metadata.",
                 default=False,
             ),
         ] = False,
@@ -107,13 +97,11 @@ class TraceTools:
             str | None,
             Field(
                 description=(
-                    "Comma-separated list of trace sections to return. "
-                    "Valid values: trigger, conditions, actions, config, error, "
-                    "logbook, context. 'config' returns the full historical "
-                    "config; 'logbook' reads Core's logbook for the run. Omit "
-                    "to return all default sections; the full config still "
-                    "requires sections='config'. Example: 'actions' or "
-                    "'trigger,conditions'."
+                    "Comma-separated top-level keys from Core's extended trace "
+                    "dict to return, plus 'logbook' for the run's logbook. "
+                    "Valid keys depend on the run; examples: 'trace', 'config', "
+                    "'context', 'error', 'logbook'. Unknown names are rejected. "
+                    "Omit to return Core's full extended dict."
                 ),
                 default=None,
             ),
@@ -139,46 +127,38 @@ class TraceTools:
         """Get execution traces for automations and scripts to debug issues.
 
         Traces show what triggered a run, which conditions passed or failed,
-        which actions executed (for 'choose', which branch was taken), any
-        errors, and variable values during execution. Home Assistant keeps
-        only the most recent runs of each automation or script (its
-        stored_traces setting), so older runs are not available. The 'state'
-        field shows 'stopped' (completed), 'running', or an error state.
+        which actions executed, any errors, and variable values during
+        execution. Home Assistant keeps only the most recent runs of each
+        automation or script (its stored_traces setting), so older runs are
+        not available.
 
         USAGE MODES:
-        1. List recent traces (omit run_id and context_id): returns a summary
-           of recent runs with timestamps, triggers, and status. Use `offset`
-           to page deeper when `has_more` is true.
+        1. List recent traces (omit run_id and context_id): returns Core's
+           short dicts unchanged. Use `offset` to page deeper when `has_more`
+           is true.
            ha_get_automation_traces("automation.motion_light")
-        2. Get a detailed trace (provide run_id): full execution details
-           including trigger info, condition results, action trace with timing,
-           and context variables.
+        2. Get a detailed trace (provide run_id): returns Core's extended trace
+           dict unchanged, including config, raw step trace, context, errors
+           and variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
-        3. Resolve a trace by context (provide context_id); the field
-           description lists the accepted ids. The response reports
-           `context_match` as `trace` or `parent`.
+        3. Resolve a trace by context (provide context_id): the response
+           reports `context_match` as `trace` or `parent`.
            ha_get_automation_traces("automation.motion_light", context_id="01J...")
-        4. Add logbook entries and context metadata: detailed=True. Script-style
-           action paths (sequence/, numeric) are always matched regardless of
-           this flag.
-        5. Variables at every step (trigger sets and null entries are still
-           omitted): deduplicate=False.
+        4. Add the run's logbook: detailed=True or sections="logbook".
+
+        Do not use this tool for general log history or recorder statistics;
+        use `ha_get_logs` for logs and `ha_get_history` for history/statistics.
 
         RESPONSE FIELDS:
-        - `traces` carries Core's short dict fields unchanged, plus the
-          `execution` alias for `script_execution`.
-        - `entity_id`, `run_id`, `timestamp`, `state`, `last_step`, `domain`,
-          `item_id`, `not_triggered` identify the run. `timestamp` is Core's
-          `{start, finish}` object, not a single string.
-        - `context_match` is `trace` for the run's own context or `parent` for
-          a triggering context; `context_scanned` and
-          `context_scan_truncated` describe the bounded parent scan, and
-          `context_scan_errors` lists stored traces it could not read.
-        - `config_summary` is the compact alias/mode view; the full historical
-          `config` is opt-in.
+        - A detail response is Core's extended `trace/get` dict: `config`,
+          `trace`, `context`, `timestamp`, `state`, `error`,
+          `script_execution`, `blueprint_inputs` and any run-specific fields.
+        - `success`, `entity_id` and `run_id` identify the response.
+        - `context_match` is `trace` or `parent`; `context_scanned`,
+          `context_scan_truncated` and `context_scan_errors` describe the
+          public fallback scan.
         - `logbook_entries`, `logbook_transport`, `logbook_total` and
           `logbook_truncated` describe the run's logbook rows.
-          `logbook_transport` is `component`, `rest`, or `mixed`.
         """
         try:
             if run_id is not None and context_id is not None:
@@ -199,7 +179,7 @@ class TraceTools:
                     "context_id",
                     suggestions=[
                         "Pass the trace's own `context.id` or the triggering "
-                        "event/service context id",
+                        + "event/service context id",
                         "Omit context_id to list recent traces",
                     ],
                     context={"entity_id": entity_id},
@@ -267,7 +247,6 @@ class TraceTools:
                     item_id,
                     entity_id,
                     resolved_run_id,
-                    deduplicate=deduplicate,
                     detailed=detailed,
                     sections=sections,
                     ctx=ctx,
@@ -312,7 +291,6 @@ class TraceTools:
         entity_id: str,
         run_id: str,
         *,
-        deduplicate: bool,
         detailed: bool,
         sections: str | None,
         ctx: Context | None,
@@ -320,28 +298,26 @@ class TraceTools:
     ) -> dict[str, Any]:
         """Retrieve and format a single trace by run_id.
 
-        ``fallback_trace`` is the detail the context scan already read. A newer
-        run can evict it before this refetch, so an unsuccessful read falls
-        back to that copy instead of reporting a race as a missing trace.
+        ``fallback_trace`` is the exact ``trace/get`` result the context
+        resolution already read. Use it instead of issuing a second read.
         """
-        result = await self._client.send_websocket_message(
-            {
-                "type": "trace/get",
-                "domain": domain,
-                "item_id": item_id,
-                "run_id": run_id,
-            }
-        )
-
-        if result.get("success"):
-            trace_data = result.get("result", {})
-        elif fallback_trace is not None:
+        if fallback_trace is not None:
             trace_data = fallback_trace
         else:
-            _raise_trace_ws_failure(
-                result.get("error", "Failed to retrieve trace"),
-                {"entity_id": entity_id, "run_id": run_id},
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "trace/get",
+                    "domain": domain,
+                    "item_id": item_id,
+                    "run_id": run_id,
+                }
             )
+            if not result.get("success"):
+                _raise_trace_ws_failure(
+                    result.get("error", "Failed to retrieve trace"),
+                    {"entity_id": entity_id, "run_id": run_id},
+                )
+            trace_data = result.get("result", {})
 
         requested = _requested_sections(sections)
         logbook: TraceLogbook | None = None
@@ -354,8 +330,6 @@ class TraceTools:
             entity_id,
             run_id,
             trace_data,
-            deduplicate=deduplicate,
-            detailed=detailed,
             sections=sections,
             logbook=logbook,
         )
@@ -555,37 +529,24 @@ def _format_trace_list(
     return result
 
 
-def _add_core_summary_fields(result: dict[str, Any], trace: dict[str, Any]) -> None:
-    """Copy Core's extended-dict summary fields into the tool result."""
-    for key in ("last_step", "blueprint_inputs", "domain", "item_id"):
-        if key in trace:
-            result[key] = trace[key]
-    if trace.get("not_triggered"):
-        result["not_triggered"] = True
-
-
-def _add_optional_detail(
-    result: dict[str, Any],
-    trace: dict[str, Any],
-    *,
-    detailed: bool,
-    requested: set[str],
-    logbook: TraceLogbook | None = None,
-) -> None:
-    """Add logbook entries and context when detailed or explicitly requested."""
-    if detailed or "logbook" in requested:
-        entries = (
-            logbook.entries if logbook is not None else trace.get("logbook_entries")
-        )
-        if entries is not None:
-            result["logbook_entries"] = entries
-        if logbook is not None and logbook.transport is not None:
-            result["logbook_transport"] = logbook.transport
-        if logbook is not None:
-            result["logbook_total"] = logbook.total
-            result["logbook_truncated"] = logbook.truncated
-    if (detailed or "context" in requested) and trace.get("context"):
-        result["context"] = trace["context"]
+_TRACE_SECTION_KEYS = frozenset(
+    {
+        "config",
+        "trace",
+        "blueprint_inputs",
+        "context",
+        "error",
+        "state",
+        "script_execution",
+        "timestamp",
+        "unique_id",
+        "last_step",
+        "domain",
+        "item_id",
+        "not_triggered",
+        "logbook",
+    }
+)
 
 
 def _format_detailed_trace(
@@ -593,283 +554,48 @@ def _format_detailed_trace(
     run_id: str,
     trace: dict[str, Any],
     *,
-    deduplicate: bool = True,
-    detailed: bool = False,
     sections: str | None = None,
     logbook: TraceLogbook | None = None,
 ) -> dict[str, Any]:
-    """Format detailed trace for AI consumption."""
-    domain = "automation" if entity_id.startswith("automation.") else "script"
-    result: dict[str, Any] = {
-        "success": True,
-        "entity_id": entity_id,
-        "run_id": run_id,
-        "timestamp": trace.get("timestamp"),
-        "state": trace.get("state"),
-    }
-
-    raw_trace = trace.get("trace") or {}
-    triggers, conditions, actions = _classify_trace_steps(raw_trace, domain)
-
-    _populate_trigger_info(result, triggers, trace)
-    _populate_condition_results(result, conditions)
-    _populate_action_trace(result, actions, deduplicate)
-
-    # Pass Core's extended-dict summary fields through. They describe the run
-    # independently of the action trace and were previously dropped.
-    _add_core_summary_fields(result, trace)
-
-    # Add a compact summary of the run's raw config by default. The full
-    # historical config is opt-in through sections="config" because triggers,
-    # conditions and actions can be large.
-    requested = _requested_sections(sections)
-    config = trace.get("config")
-    if config is not None:
-        result["config_summary"] = {
-            "alias": config.get("alias"),
-            "mode": config.get("mode"),
-        }
-        if "config" in requested:
-            result["config"] = config
-
-    # Check for overall error
-    if trace.get("error"):
-        result["error"] = trace["error"]
-
-    # Add script execution info if present
-    if trace.get("script_execution"):
-        result["script_execution"] = trace["script_execution"]
-
-    # In detailed mode, include logbook entries that Home Assistant supplies
-    # and the run's context metadata. Either can be requested explicitly
-    # through `sections` without turning on detailed mode.
-    _add_optional_detail(
-        result,
-        trace,
-        detailed=detailed,
-        requested=requested,
-        logbook=logbook,
-    )
-
+    """Return Core's extended trace dict unchanged, with tool metadata."""
+    result = dict(trace)
+    result["success"] = True
+    result["entity_id"] = entity_id
+    result["run_id"] = run_id
+    if logbook is not None:
+        result["logbook_entries"] = logbook.entries
+        if logbook.transport is not None:
+            result["logbook_transport"] = logbook.transport
+        result["logbook_total"] = logbook.total
+        result["logbook_truncated"] = logbook.truncated
     if sections:
         result = _filter_trace_sections(result, sections)
-
     return result
 
 
-def _classify_trace_steps(
-    raw_trace: dict[str, Any], domain: str
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Group flat trace path entries into sorted trigger/condition/action lists."""
-    buckets: dict[str, list[dict[str, Any]]] = {
-        "trigger": [],
-        "condition": [],
-        "action": [],
-    }
-
-    # Home Assistant trace data is stored as a flat dict with path keys
-    # e.g. "trigger/0": [...], "action/0": [...], "action/0/1": [...]
-    for path, steps in raw_trace.items():
-        if not isinstance(steps, list):
-            continue
-
-        for step in steps:
-            category = _categorize_step_path(path, domain)
-            if category is None:
-                continue
-            # Create a copy to avoid modifying original
-            step_info = step.copy()
-            step_info["path"] = path
-            buckets[category].append(step_info)
-
-    # Sort by timestamp (if available) or path to maintain execution order
-    def sort_key(item: dict[str, Any]) -> tuple[str, str]:
-        return (item.get("timestamp", ""), item.get("path", ""))
-
-    for steps_list in buckets.values():
-        steps_list.sort(key=sort_key)
-
-    return buckets["trigger"], buckets["condition"], buckets["action"]
-
-
-def _categorize_step_path(path: str, domain: str) -> str | None:
-    """Map a trace path key to 'trigger', 'condition', 'action', or None."""
-    if path == "trigger" or path.startswith("trigger/"):
-        return "trigger"
-    if path == "condition" or path.startswith("condition/"):
-        return "condition"
-    if path == "action" or path.startswith(("action/", "sequence/")):
-        return "action"
-    if domain == "script" and path.split("/", maxsplit=1)[0].isdigit():
-        return "action"
-    return None
-
-
 def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, Any]:
-    """Filter a formatted trace down to the requested sections plus metadata."""
-    # Maps user-facing section names to result dict keys.
-    section_key_map = {
-        "trigger": "trigger",
-        "conditions": "condition_results",
-        "actions": "action_trace",
-        "config": "config",
-        "error": "error",
-        "logbook": "logbook_entries",
-        "context": "context",
-    }
+    """Keep requested top-level Core keys; reject names Core does not define."""
     requested = _requested_sections(sections)
-    keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
-    # Always keep metadata keys
-    keep_keys |= {
-        "success",
-        "entity_id",
-        "run_id",
-        "timestamp",
-        "state",
-        "script_execution",
-        "last_step",
-        "blueprint_inputs",
-        "domain",
-        "item_id",
-        "not_triggered",
-        "logbook_transport",
-        "logbook_total",
-        "logbook_truncated",
-    }
-    return {k: v for k, v in result.items() if k in keep_keys}
-
-
-def _trigger_info(trigger_step: dict[str, Any]) -> dict[str, Any]:
-    """Build the trigger summary from one trace step."""
-    trigger_vars = trigger_step.get("changed_variables", {}).get("trigger", {})
-    if not trigger_vars:
-        trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
-
-    info: dict[str, Any] = {}
-    if trigger_vars:
-        info = {
-            "platform": trigger_vars.get("platform"),
-            "description": trigger_vars.get("description"),
-        }
-        if "to_state" in trigger_vars:
-            info["to_state"] = (trigger_vars.get("to_state") or {}).get("state")
-        if "from_state" in trigger_vars:
-            info["from_state"] = (trigger_vars.get("from_state") or {}).get("state")
-        if "entity_id" in trigger_vars:
-            info["entity_id"] = trigger_vars["entity_id"]
-    if "error" in trigger_step:
-        info["error"] = trigger_step["error"]
-    # Core stores why a trigger did not fire under trigger/N[0].result.
-    # Keep it native instead of flattening the diagnostic to not_triggered.
-    if "result" in trigger_step:
-        info["result"] = trigger_step["result"]
-    return info
-
-
-def _populate_trigger_info(
-    result: dict[str, Any],
-    triggers: list[dict[str, Any]],
-    trace: dict[str, Any],
-) -> None:
-    """Extract trigger information and add to result dict."""
-    if triggers:
-        trigger_info = _trigger_info(triggers[0])
-        if trigger_info:
-            result["trigger"] = trigger_info
-
-    if "trigger" not in result and "trigger" in trace:
-        result["trigger"] = {"description": trace["trigger"]}
-
-
-def _populate_condition_results(
-    result: dict[str, Any],
-    conditions: list[dict[str, Any]],
-) -> None:
-    """Extract condition results and add to result dict."""
-    if conditions:
-        condition_results = []
-        for cond in conditions:
-            cond_result = {
-                "result": cond.get("result", {}).get("result"),
-                "path": cond.get("path"),
-            }
-            if "timestamp" in cond:
-                cond_result["timestamp"] = cond["timestamp"]
-            # HA 2026.7+ always records template errors on the failing step
-            # (core #172917) — dropping this field would hide the reason a
-            # condition evaluated to None.
-            if "error" in cond:
-                cond_result["error"] = cond["error"]
-            condition_results.append(cond_result)
-        result["condition_results"] = condition_results
-
-
-def _populate_action_trace(
-    result: dict[str, Any],
-    actions: list[dict[str, Any]],
-    deduplicate: bool,
-) -> None:
-    """Extract action trace with optional variable deduplication."""
-    if not actions:
-        return
-
-    action_results = []
-    last_vars_fingerprint: str | None = None
-    for action in actions:
-        action_info: dict[str, Any] = {
-            "path": action.get("path"),
-        }
-
-        if "timestamp" in action:
-            action_info["timestamp"] = action["timestamp"]
-
-        action_result = action.get("result", {})
-        if action_result:
-            action_info["result"] = action_result
-
-        if "error" in action:
-            action_info["error"] = action["error"]
-
-        variables = action.get("variables") or action.get("changed_variables", {})
-        useful_vars, last_vars_fingerprint = _select_action_variables(
-            variables, deduplicate, last_vars_fingerprint
+    known = _TRACE_SECTION_KEYS | set(result)
+    unknown = sorted(requested - known)
+    if unknown:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Unknown trace section(s): " + ", ".join(unknown),
+                context={"sections": sections, "unknown": unknown},
+                suggestions=[
+                    "Use top-level Core extended-dict keys such as trace, config, context, error",
+                    "Add 'logbook' to request the run's logbook",
+                ],
+            )
         )
-        if useful_vars is not None:
-            action_info["variables"] = useful_vars
-
-        if "child_id" in action:
-            action_info["child_id"] = action["child_id"]
-
-        action_results.append(action_info)
-
-    result["action_trace"] = action_results
-
-
-def _select_action_variables(
-    variables: dict[str, Any],
-    deduplicate: bool,
-    last_fingerprint: str | None,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Pick the variables to record for an action step, deduplicating if enabled.
-
-    Returns the variables to include (or None to omit) alongside the fingerprint
-    to carry into the next step.
-    """
-    if not variables or "trigger" in variables:
-        return None, last_fingerprint
-
-    useful_vars = {k: v for k, v in variables.items() if v is not None}
-    if not useful_vars:
-        return None, last_fingerprint
-
-    if not deduplicate:
-        return useful_vars, last_fingerprint
-
-    try:
-        fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
-    except (TypeError, ValueError):
-        fingerprint = str(useful_vars)
-
-    if fingerprint == last_fingerprint:
-        return None, last_fingerprint
-    return useful_vars, fingerprint
+    keep = requested | {"success", "entity_id", "run_id", "warnings"}
+    if "logbook" in requested:
+        keep |= {
+            "logbook_entries",
+            "logbook_transport",
+            "logbook_total",
+            "logbook_truncated",
+        }
+    return {key: value for key, value in result.items() if key in keep}

@@ -118,9 +118,12 @@ class TestAutomationTraces:
                     {"entity_id": automation_id, "run_id": run_id},
                 )
 
-            assert detailed_data["trigger"]["platform"] == "template"
-            assert detailed_data["trigger"]["from_state"] is None
-            assert detailed_data["trigger"]["to_state"] is None
+            trigger_vars = detailed_data["trace"]["trigger/0"][0][
+                "changed_variables"
+            ]["trigger"]
+            assert trigger_vars["platform"] == "template"
+            assert trigger_vars["from_state"] is None
+            assert trigger_vars["to_state"] is None
         finally:
             if automation_id is not None:
                 cleanup_data = await safe_call_tool(
@@ -250,27 +253,24 @@ class TestAutomationTraces:
             assert detailed_data.get("success") is True
             assert detailed_data.get("run_id") == run_id
 
-            # Verify detailed content structure (Deep verification)
-            # This ensures we correctly parsed the flat structure (trigger/0, action/0)
-            assert "trigger" in detailed_data, (
-                "Detailed trace should contain trigger info"
+            # Verify Core's raw step dict is passed through unchanged.
+            assert "trace" in detailed_data, (
+                "Detailed trace should contain Core's raw step trace"
             )
-            assert "action_trace" in detailed_data, (
-                "Detailed trace should contain action_trace"
-            )
-            assert isinstance(detailed_data["action_trace"], list), (
-                "action_trace should be a list"
-            )
-            assert len(detailed_data["action_trace"]) > 0, (
-                "action_trace should not be empty"
-            )
+            actions = [
+                step
+                for path, steps in detailed_data["trace"].items()
+                if path.startswith(("action/", "sequence/"))
+                for step in steps
+            ]
+            assert actions, "raw action steps should not be empty"
 
-            # Check for path property to ensure flat structure parsing worked
-            first_action = detailed_data["action_trace"][0]
-            assert "path" in first_action, "Action trace element should contain 'path'"
+            # Check for path property to prove the raw step dict was preserved.
+            first_action = actions[0]
+            assert "path" in first_action, "Action step should contain 'path'"
 
             logger.info(
-                f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions"
+                f"Detailed trace verified: Found {len(actions)} raw action steps"
             )
 
     async def test_blueprint_trace_preserves_inputs_and_config(
@@ -918,13 +918,17 @@ action:
 
             detail = await mcp.call_tool_success(
                 "ha_get_automation_traces",
-                {"entity_id": automation_id, "run_id": run_id, "sections": "trigger"},
+                {
+                    "entity_id": automation_id,
+                    "run_id": run_id,
+                    "sections": "trace,last_step,not_triggered,script_execution",
+                },
             )
 
             assert detail["not_triggered"] is True
             assert detail["script_execution"] == "not_triggered"
             assert detail["last_step"] == "trigger/0"
-            trigger_result = detail["trigger"]["result"]
+            trigger_result = detail["trace"]["trigger/0"][0]["result"]
             assert trigger_result["reason"]
             assert isinstance(trigger_result["data"], dict)
         finally:

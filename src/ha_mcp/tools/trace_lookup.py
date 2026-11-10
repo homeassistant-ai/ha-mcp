@@ -3,25 +3,11 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn
 
-from ..client.rest_client import (
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
 from ..errors import ErrorCode, create_error_response
-from .component_api import (
-    component_supports,
-    get_component_caps,
-    invalidate_caps,
-)
 from .helpers import raise_tool_error
-from .log_sources_logbook import (
-    LOGBOOK_EVENTS_CAPABILITY,
-    LOGBOOK_EVENTS_COMMAND,
-    _wrapped_timeout,
-)
+from .log_sources_logbook import LogbookLogSourceMixin
 from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
@@ -30,10 +16,6 @@ PARENT_CONTEXT_SCAN_LIMIT = 50
 LOGBOOK_ROW_LIMIT = 50
 # Returned by _read_candidate_context when a dropped connection ends the scan.
 _SCAN_ABORTED = object()
-# A state trigger with a ``for:`` duration fires long after the state change
-# that shares the triggering context, so the parent-context read reaches back
-# further than the run's own window.
-PARENT_CONTEXT_LOOKBACK = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -59,7 +41,7 @@ class TraceLogbook:
     truncated: bool = False
 
 
-def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> None:
+def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> NoReturn:
     """Raise the structured error for a failed trace WS command.
 
     Since #1947 a dead transport raises out of ``send_websocket_message``
@@ -107,13 +89,9 @@ async def resolve_context_trace(
     response says when the bound was hit or a row could not be read instead of
     pretending the trace does not exist.
 
-    This is intentionally a public-API scan. A component bridge could read
-    ``hass.data[DATA_TRACE]`` in process, but that couples a diagnostic
-    fallback to private Core storage and adds a versioned command for a path
-    with no public index. The bounded ``trace/list`` + ``trace/get`` read is
-    the native contract Core serves; a 50-trace scan measured about 50 ms on
-    a local HA, and the bound keeps the worst case and response explicit.
-    Revisiting it is a design change, not a missing field.
+    The public ``trace/contexts`` lookup is tried first. If it has no entry,
+    a bounded ``trace/list`` + ``trace/get`` scan matches the parent id as a
+    fallback; the response reports the scan bound and unreadable rows.
     """
     result = await client.send_websocket_message(
         {"type": "trace/contexts", "domain": domain, "item_id": item_id}
@@ -144,21 +122,21 @@ def _raise_context_not_found(
     """Raise the structured error for an unsuccessful parent-context scan."""
     suggestions = [
         "Pass the trace's own `context.id`, or the context id of the event "
-        "or service call that triggered it",
+        + "or service call that triggered it",
         "Use ha_get_automation_traces(entity_id=...) without context_id "
-        "to list recent traces",
+        + "to list recent traces",
     ]
     if truncated:
         suggestions.insert(
             0,
             f"Only the newest {PARENT_CONTEXT_SCAN_LIMIT} stored traces were "
-            "scanned; pass the trace's run_id",
+            + "scanned; pass the trace's run_id",
         )
     if scan_errors:
         suggestions.insert(
             0,
             "Some stored traces could not be read; retry after checking "
-            "the Home Assistant logs",
+            + "the Home Assistant logs",
         )
     raise_tool_error(
         create_error_response(
@@ -282,6 +260,7 @@ async def _resolve_parent_context(
     _raise_context_not_found(
         context_id, domain, item_id, scanned, truncated, scan_errors
     )
+    raise AssertionError("unreachable")
 
 
 async def _scan_for_context(
@@ -354,51 +333,23 @@ def _scan_result(
     )
 
 
-def _logbook_window_warnings(trace: dict[str, Any]) -> list[str]:
-    """Warn about each logbook bound the window had to synthesize."""
-    timestamp = trace.get("timestamp")
-    raw_start = timestamp.get("start") if isinstance(timestamp, dict) else None
-    raw_finish = timestamp.get("finish") if isinstance(timestamp, dict) else None
-    start = _trace_datetime(raw_start)
-    finish = _trace_datetime(raw_finish)
-    warnings: list[str] = []
-    if finish is None:
-        if raw_finish:
-            warnings.append(
-                "The trace's finish timestamp is unreadable, so the logbook "
-                "window ends at this server's clock and may exclude rows "
-                "recorded after it."
-            )
-        else:
-            warnings.append(
-                "The trace has no finish timestamp, so the logbook window ends "
-                "at this server's clock and may exclude rows recorded after it."
-            )
-    if start is None or (finish is not None and start >= finish):
-        warnings.append(
-            "The trace's start timestamp is unusable, so the logbook window "
-            "starts one minute before the finish bound and may omit earlier rows."
-        )
-    return warnings
+class _TraceLogbookReader(LogbookLogSourceMixin):
+    """Adapter so trace lookups use the shared component logbook helper."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
 
 
 async def fetch_trace_logbook(
     client: Any,
     trace: dict[str, Any],
 ) -> TraceLogbook:
-    """Fetch logbook rows for the run and its triggering context, component first.
+    """Fetch the run's logbook through Core's own start/context query.
 
-    Core's ``trace/get`` no longer carries logbook entries. The native source
-    is Core's logbook processor filtered by context. The run's own context
-    holds the automation/script rows; a triggering event or service call is in
-    the run's ``context.parent_id``, so both are queried. The component's
-    ``ha_mcp_tools/logbook_events`` command runs the processor in process;
-    Core's REST ``/api/logbook`` is the fallback. The trace window is widened
-    by two seconds on each side because recorder rows can land just outside
-    the action trace.
-
-    Rows are capped at ``LOGBOOK_ROW_LIMIT``; ``total`` and ``truncated`` tell
-    the caller what was left out.
+    The trace page asks Core for ``logbook/get_events`` with the trace's
+    start time and the run's context id, and no end time. The component's
+    ``ha_mcp_tools/logbook_events`` command runs the same processor in
+    process; REST is the explicit no-component fallback.
     """
     context = trace.get("context")
     if not isinstance(context, dict):
@@ -411,199 +362,50 @@ async def fetch_trace_logbook(
             ["No context id is available, so the trace logbook was not read."],
         )
 
-    start_time, end_time = _logbook_window(trace)
-    # Read the run's own context first: its rows describe the run itself and
-    # must survive the row cap even when the triggering context is busy.
-    contexts: list[tuple[str, str]] = [(str(context_id), start_time)]
-    parent_id = context.get("parent_id")
-    if isinstance(parent_id, str) and parent_id:
-        parent_start = (
-            datetime.fromisoformat(start_time) - PARENT_CONTEXT_LOOKBACK
-        ).isoformat()
-        contexts.append((parent_id, parent_start))
+    timestamp = trace.get("timestamp")
+    start_time = timestamp.get("start") if isinstance(timestamp, dict) else None
+    if not isinstance(start_time, str) or not start_time:
+        return TraceLogbook(
+            [],
+            None,
+            ["No trace start timestamp is available, so the logbook was not read."],
+        )
+
+    reader = _TraceLogbookReader(client)
+    entries = await reader._fetch_logbook_component(
+        {"start_time": start_time, "context_id": str(context_id)}
+    )
+    transport: Literal["component", "rest"] = "component"
+    if entries is None:
+        transport = "rest"
+        entries = await client.get_logbook(
+            start_time=start_time,
+            context_id=str(context_id),
+        )
+    if not isinstance(entries, list):
+        return TraceLogbook(
+            [],
+            transport,
+            ["The logbook reply was not a row list."],
+        )
 
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    warnings = _logbook_window_warnings(trace)
-    transports: set[str] = set()
-    for index, (lookup_id, lookup_start) in enumerate(contexts):
-        entries, transport, context_warnings, timed_out = await _fetch_logbook_context(
-            client, lookup_id, lookup_start, end_time
-        )
-        warnings.extend(context_warnings)
-        if transport:
-            transports.add(transport)
-        for row in entries:
-            # Compare the whole native row: two device events can share the
-            # projected fields and timestamp and still be distinct.
-            key = json.dumps(row, sort_keys=True, default=str)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(row)
-        if timed_out:
-            # The recorder is already past one deadline; a second query would
-            # double the wait, so stop and say which context went unread.
-            skipped = [skipped_id for skipped_id, _ in contexts[index + 1 :]]
-            if skipped:
-                warnings.append(
-                    "Skipped the logbook read for "
-                    + ", ".join(skipped)
-                    + " after the component read timed out."
-                )
-            break
-
+    for row in entries:
+        key = json.dumps(row, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
     total = len(merged)
-    entries = merged[:LOGBOOK_ROW_LIMIT]
-    transport = cast(
-        Literal["component", "rest", "mixed"] | None,
-        "mixed" if len(transports) > 1 else next(iter(transports), None),
-    )
+    capped = merged[:LOGBOOK_ROW_LIMIT]
     return TraceLogbook(
-        entries,
+        capped,
         transport,
-        warnings,
+        [],
         total,
         total > LOGBOOK_ROW_LIMIT,
     )
-
-
-async def _fetch_logbook_context(
-    client: Any,
-    context_id: str,
-    start_time: str,
-    end_time: str,
-) -> tuple[list[dict[str, Any]], str | None, list[str], bool]:
-    """Read one context's logbook, component first with a REST fallback."""
-    entries, warnings, retry_rest = await _fetch_component_logbook(
-        client, context_id, start_time, end_time
-    )
-    if entries is not None:
-        return entries, "component", warnings, False
-    if not retry_rest:
-        return [], None, warnings, True
-
-    try:
-        rest_entries = await client.get_logbook(
-            start_time=start_time,
-            end_time=end_time,
-            context_id=context_id,
-        )
-    except Exception as err:  # noqa: BLE001
-        warnings.append(f"Could not read the trace logbook: {err}")
-        return [], None, warnings, False
-
-    if not isinstance(rest_entries, list):
-        warnings.append("The REST logbook reply was not a row list.")
-        return [], None, warnings, False
-    return rest_entries, "rest", warnings, False
-
-
-def _component_logbook_error(err: Exception) -> tuple[str, bool]:
-    """Turn a component read failure into a warning and a REST-retry choice."""
-    if isinstance(err, HomeAssistantCommandTimeout) or (
-        isinstance(err, HomeAssistantConnectionError) and _wrapped_timeout(err)
-    ):
-        return f"The component logbook read timed out: {err}", False
-    return f"The component logbook read failed: {err}", True
-
-
-async def _fetch_component_logbook(
-    client: Any,
-    context_id: str,
-    start_time: str,
-    end_time: str,
-) -> tuple[list[dict[str, Any]] | None, list[str], bool]:
-    """Try the component's logbook processor.
-
-    The third value says whether the REST fallback may run. A timeout does
-    not retry: the recorder query can still be running, and re-issuing it
-    over REST adds a second slow scan instead of answering faster.
-    """
-    warnings: list[str] = []
-    try:
-        caps = await get_component_caps(client)
-    except Exception as err:  # noqa: BLE001
-        return None, [f"Could not probe the logbook component: {err}"], True
-
-    if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
-        return None, warnings, True
-
-    try:
-        response = await client.send_websocket_message(
-            {
-                "type": LOGBOOK_EVENTS_COMMAND,
-                "start_time": start_time,
-                "end_time": end_time,
-                "context_id": context_id,
-            }
-        )
-    except Exception as err:  # noqa: BLE001
-        warning, retry_rest = _component_logbook_error(err)
-        return None, [warning], retry_rest
-
-    if isinstance(response, dict) and response.get("success"):
-        result = response.get("result")
-        if isinstance(result, list):
-            return result, warnings, True
-        warnings.append("The component logbook reply did not contain a row list.")
-        return None, warnings, True
-
-    if isinstance(response, dict) and response.get("error_code") == "unknown_command":
-        invalidate_caps(client)
-    reason = response.get("error") if isinstance(response, dict) else None
-    warning = "The component logbook read was unavailable; used REST."
-    if reason:
-        warning = f"{warning} ({reason})"
-    warnings.append(warning)
-    return None, warnings, True
-
-
-def _logbook_window(
-    trace: dict[str, Any], now: datetime | None = None
-) -> tuple[str, str]:
-    """Return a bounded start/finish for the logbook query.
-
-    The trace's own timestamps bracket the action trace, while the recorder's
-    logbook row for the triggering event can land just outside that window.
-    Context filtering keeps the widened window scoped to this run. A malformed
-    timestamp is replaced from the other bound, and a running trace's window
-    reaches ``now`` (the wall clock unless a caller passes a fixed instant), so
-    both reads still receive an ordered window instead of failing.
-    """
-    timestamp = trace.get("timestamp")
-    start = _trace_datetime(
-        timestamp.get("start") if isinstance(timestamp, dict) else None
-    )
-    finish = _trace_datetime(
-        timestamp.get("finish") if isinstance(timestamp, dict) else None
-    )
-    if finish is None:
-        # A trace still running has no finish timestamp; its logbook keeps
-        # growing, so the read must reach the present instead of one minute
-        # past the start.
-        current = now or datetime.now(UTC)
-        finish = (
-            current
-            if start is None or current > start
-            else start + timedelta(minutes=1)
-        )
-    if start is None or start >= finish:
-        start = finish - timedelta(minutes=1)
-    start -= timedelta(seconds=2)
-    finish += timedelta(seconds=2)
-    return start.isoformat(), finish.isoformat()
-
-
-def _trace_datetime(value: Any) -> datetime | None:
-    """Parse a trace timestamp into an aware datetime, or None when unusable."""
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _trace_start(trace: dict[str, Any]) -> str:
