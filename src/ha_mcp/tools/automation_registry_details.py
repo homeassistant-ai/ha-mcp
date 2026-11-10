@@ -33,16 +33,25 @@ async def registry_details(
     lookup: dict[str, Any] | None,
     entity_id: str | None,
     warnings: list[str],
+    *,
+    component_lookup: bool = True,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
-    """The automation's registry row, Core's validation verdict and references.
+    """The item's registry row, Core's validation verdict and references.
 
     ``lookup`` is the component's reply, None when the component did not answer.
+    Set ``component_lookup`` false for a domain the component does not serve
+    (script): the registry read is still valid, and no missing-component
+    warning should be reported.
     """
     if lookup is not None:
         references = lookup.get("references")
         if references is None and lookup.get("loaded") is False:
             warnings.append(REFERENCES_NOT_LOADED)
         return lookup.get("entity"), lookup.get("validation"), references
+    if not component_lookup:
+        if entity_id is None:
+            return None, None, None
+        return await fetch_registry_entry(client, entity_id, warnings), None, None
     warnings.append(REFERENCES_NEED_COMPONENT)
     if entity_id is None:
         return None, None, None

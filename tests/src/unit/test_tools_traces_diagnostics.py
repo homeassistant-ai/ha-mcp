@@ -82,6 +82,21 @@ class TestGatherDiagnostics:
         assert "automation.trigger" in result["suggestion"]
 
     @pytest.mark.asyncio
+    async def test_disabled_but_loaded_automation_mentions_trigger(self) -> None:
+        """A turned-off automation is loaded; automation.trigger still runs it."""
+        client = _client({"state": "off", "attributes": {}})
+        result = await _diagnostics(
+            client,
+            entity={"unique_id": "uid_1", "disabled_by": "user"},
+            loaded=True,
+        )
+
+        assert result["entity_enabled"] is False
+        assert result["loaded"] is True
+        assert "enable it" not in result["suggestion"].lower()
+        assert "automation.trigger" in result["suggestion"]
+
+    @pytest.mark.asyncio
     async def test_typo_entity_is_not_found(self) -> None:
         client = _client(None)
         result = await _diagnostics(client, entity=None, loaded=None)
@@ -123,3 +138,29 @@ class TestGatherDiagnostics:
 
         assert result["entity_exists"] is True
         assert result["trace_key_available"] is True
+
+    @pytest.mark.asyncio
+    async def test_script_registry_fallback_does_not_claim_missing_component(
+        self,
+    ) -> None:
+        """The automation-only component is not reported missing for scripts."""
+        client = AsyncMock()
+        client.get_entity_state.return_value = {"state": "off", "attributes": {}}
+
+        def _dispatch(message: dict) -> dict:
+            message_type = message["type"]
+            if message_type == "config/entity_registry/get":
+                return {"success": True, "result": {"unique_id": "uid_script"}}
+            if message_type == "script/config":
+                return {
+                    "success": True,
+                    "result": {"config": {"trace": {"stored_traces": 5}}},
+                }
+            return {"success": False, "error": f"unexpected {message_type}"}
+
+        client.send_websocket_message = AsyncMock(side_effect=_dispatch)
+
+        result = await _gather_diagnostics(client, "script.test", "script")
+
+        assert result["trace_key_available"] is True
+        assert not any("component" in warning for warning in result.get("warnings", []))

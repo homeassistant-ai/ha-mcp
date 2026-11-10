@@ -59,7 +59,11 @@ async def _gather_diagnostics(
         else None
     )
     entity, validation, references = await registry_details(
-        client, lookup, entity_id, warnings
+        client,
+        lookup,
+        entity_id,
+        warnings,
+        component_lookup=domain == "automation",
     )
     diagnostics["validation"] = validation
     diagnostics["references"] = references
@@ -132,6 +136,11 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
         return (
             "This item has no registry unique_id, so Core has no key under "
             "which to store a trace (common for YAML automations without an id)."
+        )
+    if diagnostics.get("entity_enabled") is False and domain == "automation":
+        return (
+            "This automation is disabled (state off). automation.trigger can "
+            "still execute it and record a trace."
         )
     if diagnostics.get("loaded") is False:
         return (
