@@ -76,6 +76,7 @@ __all__ = [
     "WS_STATES",
     "WS_SYSTEM_SNAPSHOT",
     "WS_TEMPLATE_DIAGNOSE",
+    "WS_TRACE_CONTEXT",
     "_SPLIT_RE",
 ]
 
