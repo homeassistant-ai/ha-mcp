@@ -1,4 +1,4 @@
-"""Helper type constants, hints for untyped fields and the helper response shape."""
+"""Helper type constants and the helper response shape."""
 
 from contextvars import ContextVar
 from typing import Any, TypedDict
@@ -8,7 +8,6 @@ from ..config_write_helpers import attach_skill_content
 
 __all__ = [
     "SIMPLE_HELPER_TYPES",
-    "UNTYPED_FIELD_HINTS",
     "StorageHelperType",
     "_HELPER_SKILL_FILES",
     "_SIMPLE_CONFIG_KEYS_DESCRIPTION",
@@ -16,7 +15,6 @@ __all__ = [
     "_attach_helper_skill",
     "_helper_response",
     "_simple_helper_error_context",
-    "untyped_field_hint",
 ]
 
 # helper-selection.md guides which helper type fits the agent's use case
@@ -39,58 +37,6 @@ def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
         canonical_files=_HELPER_SKILL_FILES,
         referenced_files=None,
     )
-
-
-# The storage-helper fields Core's schema serializer cannot type: their
-# validators are plain functions (an icon, a duration, a list of time ranges).
-# Core describes every other field itself, so only these get the value shape
-# Home Assistant's own dialogs give them, and only where Core's field carries
-# none. Keyed by helper type; ``_ANY_TYPE`` applies to all of them.
-_ANY_TYPE = "*"
-_DAY_HINT: dict[str, Any] = {
-    "selector": {"object": {"multiple": True}},
-    "description": "List of {'from': 'HH:MM', 'to': 'HH:MM'} time ranges.",
-}
-UNTYPED_FIELD_HINTS: dict[str, dict[str, dict[str, Any]]] = {
-    _ANY_TYPE: {"icon": {"selector": {"text": {}}}},
-    "input_select": {
-        "options": {
-            "selector": {"text": {"multiple": True}},
-            "description": "Non-empty list of selectable options. Duplicates rejected.",
-        }
-    },
-    "timer": {
-        "duration": {
-            "selector": {"text": {}},
-            "description": "Default duration as 'HH:MM:SS' or seconds.",
-        }
-    },
-    "schedule": dict.fromkeys(
-        (
-            "monday",
-            "tuesday",
-            "wednesday",
-            "thursday",
-            "friday",
-            "saturday",
-            "sunday",
-        ),
-        _DAY_HINT,
-    ),
-    "person": {
-        "device_trackers": {
-            "selector": {"text": {"multiple": True}},
-            "description": "Entity IDs of device_tracker entities tracking this person.",
-        }
-    },
-}
-
-
-def untyped_field_hint(helper_type: str, name: str) -> dict[str, Any] | None:
-    """The value shape of a field Core's serializer leaves untyped, if known."""
-    return UNTYPED_FIELD_HINTS.get(helper_type, {}).get(name) or UNTYPED_FIELD_HINTS[
-        _ANY_TYPE
-    ].get(name)
 
 
 def _simple_helper_error_context(

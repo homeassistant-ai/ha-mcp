@@ -4,9 +4,9 @@ Flow-based helpers are described from the live config flow (or the options
 flow of an existing entry), which is what the HA UI renders. Storage helpers
 are described from Core's own create schema, served by the ``ha_mcp_tools``
 component (tools entry or embedded server entry). The few fields whose Core
-validator does not serialize (an icon, schedule days) get their value shape
-from ``UNTYPED_FIELD_HINTS``. Without the component Core offers no field list
-for a storage helper, and the response says so: Core validates the write.
+validator does not serialize (an icon, schedule days) are named as untyped,
+not typed by hand. Without the component Core offers no field list for a
+storage helper, and the response says so: Core validates the write.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from ..flow_translations import (
 )
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
-from .schemas import SIMPLE_HELPER_TYPES, untyped_field_hint
+from .schemas import SIMPLE_HELPER_TYPES
 
 # A select that also takes a custom value (units, device classes) lists
 # suggestions, so a long list is truncated: the first values show the format.
@@ -124,18 +124,22 @@ def compact_schema(schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [compact_field(f) for f in schema if isinstance(f, dict)]
 
 
-def _with_untyped_hints(
-    helper_type: str, core_fields: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Core's fields, in Core's order; one Core's serializer left without a
-    type gets the value shape from ``UNTYPED_FIELD_HINTS``."""
-    merged = []
-    for field in core_fields:
-        hint = None
-        if "type" not in field and "selector" not in field:
-            hint = untyped_field_hint(helper_type, field.get("name", ""))
-        merged.append({**field, **hint} if hint else field)
-    return merged
+def _untyped(core_fields: list[dict[str, Any]]) -> list[str]:
+    """The fields Core's serializer gave no type: their validator is a plain
+    function (an icon, a duration, a list of time ranges), which a schema
+    cannot describe. They are named as such, not typed by hand."""
+    return [
+        field["name"]
+        for field in core_fields
+        if "type" not in field and "selector" not in field and field.get("name")
+    ]
+
+
+_UNTYPED_NOTE = (
+    "Home Assistant's schema gives no type for untyped_fields: their "
+    "validator is a function, which cannot be described. Home Assistant "
+    "validates the value on write and its error says what it expects."
+)
 
 
 def _with_help(
@@ -494,10 +498,9 @@ async def _describe_simple(
         if item is not None:
             out["stored"] = item
         return out
-    out = {
-        "source": "core_schema",
-        "fields": compact_schema(_with_untyped_hints(helper_type, core_fields)),
-    }
+    out = {"source": "core_schema", "fields": compact_schema(core_fields)}
+    if untyped := _untyped(core_fields):
+        out.update(untyped_fields=untyped, note=_UNTYPED_NOTE)
     if item is not None:
         for field in out["fields"]:
             if field["name"] in item:

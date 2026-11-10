@@ -627,11 +627,9 @@ class HelperConfigTools:
                     "section's fields nested under the section's name). On an "
                     "update a field you omit is sent as the form shows it "
                     "(its `current` value); a field set to null is left "
-                    "empty. Home Assistant validates the answer. A flow with "
-                    "several forms can be answered in one call with a list: "
-                    "one object per form, in the order Home Assistant asks "
-                    "for them. Omit config to get the form without answering "
-                    "it."
+                    "empty. Home Assistant validates the answer. A list "
+                    "answers several forms: one object per form, in the "
+                    "order Home Assistant asks for them."
                 ),
                 default=None,
             ),
@@ -641,9 +639,7 @@ class HelperConfigTools:
             Field(
                 description=(
                     "FLOW types and config_subentry: the option to pick at a "
-                    "menu step (template and group open with one): with "
-                    "flow_id the menu the flow is at, without it the menu a "
-                    "new flow opens with."
+                    "menu step (template and group open with one)."
                 ),
                 default=None,
             ),
@@ -654,9 +650,7 @@ class HelperConfigTools:
                 description=(
                     "Continue an open flow: the flow_id a previous call "
                     "returned, with the same helper_type and helper_id (or "
-                    "entry_id, subentry_type and subentry_id). With config "
-                    "or menu_choice it answers the step; alone it returns "
-                    "the step again."
+                    "entry_id, subentry_type and subentry_id)."
                 ),
                 default=None,
             ),
@@ -701,9 +695,9 @@ class HelperConfigTools:
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
         ``helper-selection.md`` ships under ``skill_content`` by default.
 
-        SIMPLE types (pass `config` dict): input_boolean, input_button,
+        SIMPLE types, written in one call: input_boolean, input_button,
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
-        zone, person, tag. Create requires `name`; update requires `helper_id`.
+        zone, person, tag.
 
         FLOW types: every helper flow Home Assistant lists, read from it at
         call time — template, group, utility_meter, derivative, min_max,
@@ -728,11 +722,17 @@ class HelperConfigTools:
         menu and config the form after it, so a one-form helper is created or
         updated in one call; without config the call returns the form, and
         its later_forms when the helper has more than one (statistics,
-        history_stats, generic_thermostat, ...). A config list answers
-        several forms in one call, one object per form in order; the call
-        returns at the first form Home Assistant rejects or once the answers
-        run out. A rejected form is an error with Core's text, and the flow
-        stays open to correct it. Nothing is saved until the flow finishes.
+        history_stats, generic_thermostat, ...). With a config list the call
+        answers form after form and returns at the first one Home Assistant
+        rejects, or once the answers run out. A rejected form is an error
+        with Core's text, and the flow stays open to correct it. Nothing is
+        saved until the flow finishes.
+
+        WHEN NOT TO USE:
+        - An integration that is not a helper: ha_set_integration.
+        - Removing a helper: ha_remove_helpers_integrations.
+        - Renaming a flow helper's entity, or its registry settings alone:
+          ha_set_entity.
 
         Behavior:
         - A SIMPLE update preserves type-specific fields not re-passed (a rename

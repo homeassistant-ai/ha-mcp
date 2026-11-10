@@ -48,7 +48,8 @@ def no_component(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_storage_helper_fields_come_from_core_when_component_present(
     client: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With the component, the field list is Core's, typed where Core is opaque."""
+    """With the component, the field list is Core's; a field whose validator
+    Core cannot serialize is named as untyped, not typed by hand."""
     monkeypatch.setattr(
         mod,
         "fetch_helper_schemas",
@@ -60,8 +61,9 @@ async def test_storage_helper_fields_come_from_core_when_component_present(
     assert result["source"] == "core_schema"
     fields = _fields(result)
     assert fields["name"]["required"] is True
-    # Core's schedule-day validator does not serialize; its hint types it.
-    assert "type" in fields["monday"] and fields["monday"].get("description")
+    # Core's schedule-day validator does not serialize: named, not typed by hand.
+    assert "type" not in fields["monday"]
+    assert "monday" in result["untyped_fields"]
 
 
 @pytest.mark.asyncio
