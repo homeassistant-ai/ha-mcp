@@ -438,6 +438,21 @@ class TestComponent:
         assert tasks.moves[0][:2] == ("3", None)
         assert [i.uid for i in tasks.rows] == ["3", "1", "2"]
 
+    async def test_update_that_only_reorders(
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
+    ) -> None:
+        """Core's update_item refuses an update with no field, so a move
+        alone goes straight to the move."""
+        got = await _run(component_ws, "update", uid="3", previous_uid=None)
+
+        assert got["success"] is True
+        assert got["item"]["uid"] == "3"
+        assert [i.uid for i in tasks.rows] == ["3", "1", "2"]
+        assert _sent(calls) == []
+
     async def test_list_without_reordering_refuses_before_the_update(
         self,
         component_ws: MockHAClientWebSocket,
@@ -667,6 +682,10 @@ class TestClient:
         assert got is None
         assert len(tasks.rows) == 3
 
+    # Core closes a socket whose token it refused; the client's close reply
+    # then re-arms aiohttp's heartbeat timer on that closed server socket
+    # (web_ws.py _on_data_received -> _reset_heartbeat), which nothing cancels.
+    @pytest.mark.parametrize("expected_lingering_timers", [True])
     async def test_rejected_token_does_not_fall_back(
         self, component_core_client: HomeAssistantClient, tasks: _TaskList
     ) -> None:
@@ -683,6 +702,8 @@ class TestClient:
         assert isinstance(exc_info.value.__cause__, HomeAssistantAuthError)
         assert len(tasks.rows) == 3
 
+    # The same closed server socket as test_rejected_token_does_not_fall_back.
+    @pytest.mark.parametrize("expected_lingering_timers", [True])
     async def test_rejected_token_is_an_auth_error_not_an_unknown_outcome(
         self, component_core_client: HomeAssistantClient
     ) -> None:
