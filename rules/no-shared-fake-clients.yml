@@ -17,9 +17,10 @@ rule:
               regex: '^from\s+(\.+|tests(\.\w+)*)\s+import\s+[^#]*\btest_\w+'
             - kind: import_statement
               regex: '^import\s+tests\.([\w.]*\.)?test_\w+'
-        # tests/test_constants.py holds constants, not tests.
+        # tests/test_constants.py holds constants, not tests. An E2E test
+        # module runs on a live Home Assistant and has no fake client.
         - not:
-            regex: '\btest_constants\b'
+            regex: '\btest_constants\b|\be2e\b'
     - kind: import_from_statement
       regex: '^from\s+[\w.]*\b(_backup_snapshot_fakes|_component_routing_helpers|_error_log_test_helpers|_logbook_fallback)\s+import'
     - kind: identifier
@@ -175,6 +176,7 @@ ignores:
   - "tests/src/unit/test_list_services_fields_projection.py"
   - "tests/src/unit/test_list_tools_pagination.py"
   - "tests/src/unit/test_listen_sockets.py"
+  - "tests/src/unit/test_llm_api.py"
   - "tests/src/unit/test_mandatory_tool_warnings_js.py"
   - "tests/src/unit/test_mcp_webhook_cloudhook.py"
   - "tests/src/unit/test_mcp_webhook_relay_pool.py"

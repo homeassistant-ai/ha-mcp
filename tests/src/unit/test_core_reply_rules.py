@@ -137,8 +137,11 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             id="replaced-http-transport",
         ),
         pytest.param(
-            "transport = httpx.MockTransport(lambda request: httpx.Response(200))\n",
-            id="mock-transport",
+            "with patch.object(\n"
+            '    websocket_client.websocket_manager, "get_client", AsyncMock(return_value=ws)\n'
+            "):\n"
+            "    pass\n",
+            id="patched-websocket-manager",
         ),
         pytest.param(
             'ws.send_command = AsyncMock(return_value={"success": False, "error": "no"})\n',
@@ -270,6 +273,11 @@ def test_a_real_reply_or_no_answer_is_allowed(source: str, tmp_path: Path) -> No
         pytest.param(
             "from tests.test_constants import TEST_TOKEN\n", False, id="constants"
         ),
+        pytest.param(
+            "from tests.src.e2e.haos_only.test_manage_addon_modes import _wait\n",
+            False,
+            id="helper-under-test-from-an-e2e-module",
+        ),
     ],
 )
 def test_only_a_borrowed_fake_client_is_refused(
@@ -388,7 +396,7 @@ def test_every_client_method_is_covered_by_the_rule() -> None:
     public = (
         _public_coroutines(HomeAssistantClient)
         | _public_coroutines(HomeAssistantWebSocketClient)
-    ) - {"close", "connect", "disconnect"}
+    ) - {"close", "connect", "disconnect", "ping"}
 
     for covered in _method_lists():
         # A test class may name a test ``test_connection``.
