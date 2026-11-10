@@ -295,6 +295,11 @@ def test_only_a_borrowed_fake_client_is_refused(
         pytest.param("mock_hass = AsyncMock()\n", True, id="async-mock"),
         pytest.param("hass_mock = MagicMock()\n", True, id="suffixed-name"),
         pytest.param(
+            "@pytest.fixture\ndef hass(tmp_path):\n    h = MM()\n    return h\n",
+            True,
+            id="own-hass-fixture",
+        ),
+        pytest.param(
             "fake_hass: MagicMock = MagicMock()\n", True, id="annotated-assignment"
         ),
         pytest.param(

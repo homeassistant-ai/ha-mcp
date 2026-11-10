@@ -12,6 +12,9 @@ rule:
       regex: '^(self\.)?(\w+_hass|hass_(mock|fake|stub|double))\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|SimpleNamespace)\('
     - kind: assignment
       regex: '^self\.hass\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|SimpleNamespace)\('
+    # A test file's own `hass` fixture, whatever it builds the stand-in from.
+    - kind: function_definition
+      regex: '^(async\s+)?def\s+hass\s*\('
     # A placeholder where a Core object lives in hass.data.
     - kind: assignment
       regex: '^(self\.)?\w*hass\w*\.data(\[[^\]]+\])+\s*=\s*(object\(\)|(Async|Magic|NonCallable|NonCallableMagic)?Mock\(|SimpleNamespace\()'

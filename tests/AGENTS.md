@@ -155,7 +155,8 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   through a small function of its own that the test replaces.
 
 Eight ast-grep rules refuse these in the source: a hand-made `hass`, also as
-`mock_hass`, `hass_mock` or `self.hass`, or a placeholder put into `hass.data`
+`mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
+placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
 (`rules/no-fake-core-objects.yml`), an import of the old shared fakes
 (`rules/no-shared-core-fakes.yml`), `patch.dict(sys.modules, ...)` or an
