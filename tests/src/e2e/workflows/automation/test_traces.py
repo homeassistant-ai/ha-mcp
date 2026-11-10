@@ -298,6 +298,7 @@ class TestAutomationTraces:
         )
 
         assert detail["logbook_entries"], "the new run has no logbook rows"
+        assert detail["logbook_transport"] in {"component", "rest"}
 
     async def test_blueprint_trace_preserves_inputs_and_config(
         self, mcp_client, cleanup_tracker, test_data_factory
@@ -443,6 +444,38 @@ action:
         assert by_context_data["context_id"] == event_context_id
         assert by_context_data["run_id"] == traces_data["traces"][0]["run_id"]
         assert by_context_data["context_scanned"] >= 1
+
+        # A domain list gives Core's domain/item_id, which must address the
+        # same run without inventing an entity_id.
+        domain_list = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"domain": "automation", "limit": 50},
+        )
+        row = next(
+            trace
+            for trace in domain_list["traces"]
+            if trace["run_id"] == by_context_data["run_id"]
+        )
+        by_item = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {
+                "domain": "automation",
+                "item_id": row["item_id"],
+                "run_id": row["run_id"],
+            },
+        )
+        assert by_item["run_id"] == row["run_id"]
+        assert by_item["item_id"] == row["item_id"]
+        assert "entity_id" not in by_item
+
+        context_only = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"context_id": event_context_id},
+        )
+        assert context_only["context_match"] == "parent"
+        assert context_only["domain"] == "automation"
+        assert context_only["item_id"] == row["item_id"]
+        assert "entity_id" not in context_only
 
     async def test_trace_storage_disabled_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory

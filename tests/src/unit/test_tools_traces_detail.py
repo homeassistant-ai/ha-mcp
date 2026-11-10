@@ -3,7 +3,7 @@
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_traces import _filter_trace_sections, _format_detailed_trace
+from ha_mcp.tools.tools_traces import _format_detailed_trace
 from ha_mcp.tools.trace_lookup import TraceLogbook
 
 
@@ -112,15 +112,29 @@ class TestFormatDetailedTrace:
         assert result["logbook_total"] == 1
         assert result["logbook_truncated"] is False
 
-    def test_filter_keeps_metadata(self) -> None:
-        result = _filter_trace_sections(
-            {"success": True, "entity_id": "a", "run_id": "r", "trace": {}},
-            "trace",
+    def test_whitespace_sections_returns_the_full_dict(self) -> None:
+        trace = _trace()
+        result = _format_detailed_trace("automation.test", "r1", trace, sections="   ")
+
+        assert result["trace"] is trace["trace"]
+        assert result["config"] == trace["config"]
+        assert result["blueprint_inputs"] == trace["blueprint_inputs"]
+
+    def test_sections_keep_domain_and_item_metadata(self) -> None:
+        result = _format_detailed_trace(
+            None,
+            "r1",
+            _trace(),
+            domain="automation",
+            item_id="uid_1",
+            sections="trace",
         )
 
-        assert result == {
-            "success": True,
-            "entity_id": "a",
-            "run_id": "r",
-            "trace": {},
+        assert set(result) == {
+            "success",
+            "run_id",
+            "domain",
+            "item_id",
+            "trace",
         }
+        assert "entity_id" not in result

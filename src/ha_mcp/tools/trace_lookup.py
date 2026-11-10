@@ -92,9 +92,6 @@ async def resolve_context_trace(
     response says when the bound was hit or a row could not be read instead of
     pretending the trace does not exist.
 
-    The public ``trace/contexts`` lookup is tried first. If it has no entry,
-    a bounded ``trace/list`` + ``trace/get`` scan matches the parent id as a
-    fallback; the response reports the scan bound and unreadable rows.
     """
     result = await client.send_websocket_message(
         {"type": "trace/contexts", "domain": domain, "item_id": item_id}
@@ -115,13 +112,15 @@ async def resolve_context_trace(
 
 
 async def resolve_global_context(
-    client: Any, context_id: str
-) -> ContextTraceMatch | None:
+    client: Any,
+    context_id: str,
+    domain: Literal["automation", "script"] | None = None,
+) -> ContextTraceMatch:
     """Resolve a context against Core's global trace/contexts map.
 
     Core accepts ``trace/contexts`` without domain/item and returns every
-    stored run's own context. A parent-only context still needs an entity_id
-    for the bounded per-item scan.
+    stored run's own context. When that map has no entry, a bounded
+    ``trace/list`` + ``trace/get`` scan matches the run's parent context.
     """
     result = await client.send_websocket_message({"type": "trace/contexts"})
     if not result.get("success"):
@@ -132,7 +131,21 @@ async def resolve_global_context(
     contexts = result.get("result")
     entry = contexts.get(context_id) if isinstance(contexts, dict) else None
     if not isinstance(entry, dict) or not entry.get("run_id"):
-        return await _resolve_global_parent_context(client, context_id)
+        return await _resolve_global_parent_context(client, context_id, domain)
+    entry_domain = entry.get("domain")
+    if domain is not None and entry_domain != domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"The context belongs to a {entry_domain or 'different'} run, "
+                f"not a {domain} run",
+                context={"context_id": context_id, "domain": domain},
+                suggestions=[
+                    "Omit domain to resolve the context across both domains",
+                    "Pass the matching domain for this context",
+                ],
+            )
+        )
     return ContextTraceMatch(
         str(entry["run_id"]),
         "trace",
@@ -140,33 +153,35 @@ async def resolve_global_context(
         False,
         (),
         None,
-        entry.get("domain"),
+        entry_domain,
         entry.get("item_id"),
     )
 
 
 async def _global_trace_rows(
     client: Any,
+    domain: Literal["automation", "script"] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Collect trace/list rows across both trace domains."""
+    """Collect trace/list rows across the requested trace domains."""
     rows: list[dict[str, Any]] = []
     scan_errors: list[str] = []
-    for domain in ("automation", "script"):
+    domains = (domain,) if domain is not None else ("automation", "script")
+    for scan_domain in domains:
         try:
             result = await client.send_websocket_message(
-                {"type": "trace/list", "domain": domain}
+                {"type": "trace/list", "domain": scan_domain}
             )
         except HomeAssistantError as err:
-            scan_errors.append(f"{domain}: {err}")
+            scan_errors.append(f"{scan_domain}: {err}")
             continue
         if not result.get("success"):
             scan_errors.append(
-                f"{domain}: {result.get('error') or 'trace/list failed'}"
+                f"{scan_domain}: {result.get('error') or 'trace/list failed'}"
             )
             continue
         entries = result.get("result")
         if not isinstance(entries, list):
-            scan_errors.append(f"{domain}: trace/list returned no row list")
+            scan_errors.append(f"{scan_domain}: trace/list returned no row list")
             continue
         for entry in entries:
             if not isinstance(entry, dict) or not entry.get("run_id"):
@@ -175,7 +190,7 @@ async def _global_trace_rows(
             if not isinstance(item_id, str) or not item_id:
                 continue
             row = dict(entry)
-            row["_domain"] = domain
+            row["_domain"] = scan_domain
             rows.append(row)
     return rows, scan_errors
 
@@ -186,7 +201,7 @@ async def _scan_global_parent(
     rows: list[dict[str, Any]],
     truncated: bool,
     scan_errors: list[str],
-) -> ContextTraceMatch | None:
+) -> tuple[ContextTraceMatch | None, int]:
     """Walk the bounded global rows, preferring a real run over a diagnostic."""
     scanned = 0
     parent_match: tuple[str, dict[str, Any], str, str] | None = None
@@ -210,15 +225,18 @@ async def _scan_global_parent(
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
         if kind == "trace":
-            return ContextTraceMatch(
-                run_id,
-                "trace",
+            return (
+                ContextTraceMatch(
+                    run_id,
+                    "trace",
+                    scanned,
+                    truncated,
+                    tuple(scan_errors),
+                    trace_data,
+                    domain,
+                    item_id,
+                ),
                 scanned,
-                truncated,
-                tuple(scan_errors),
-                trace_data,
-                domain,
-                item_id,
             )
         if kind != "parent":
             continue
@@ -231,33 +249,80 @@ async def _scan_global_parent(
             parent_match = candidate
     selected = parent_match or fallback_match
     if selected is None:
-        return None
+        return None, scanned
     run_id, trace_data, domain, item_id = selected
-    return ContextTraceMatch(
-        run_id,
-        "parent",
+    return (
+        ContextTraceMatch(
+            run_id,
+            "parent",
+            scanned,
+            truncated,
+            tuple(scan_errors),
+            trace_data,
+            domain,
+            item_id,
+        ),
         scanned,
-        truncated,
-        tuple(scan_errors),
-        trace_data,
-        domain,
-        item_id,
     )
 
 
 async def _resolve_global_parent_context(
-    client: Any, context_id: str
-) -> ContextTraceMatch | None:
-    """Scan every stored item for a parent context, bounded like the per-item scan."""
-    rows, scan_errors = await _global_trace_rows(client)
+    client: Any,
+    context_id: str,
+    domain: Literal["automation", "script"] | None = None,
+) -> ContextTraceMatch:
+    """Scan stored runs for a parent context, bounded like the per-item scan."""
+    rows, scan_errors = await _global_trace_rows(client, domain)
     rows.sort(key=_trace_start, reverse=True)
     truncated = len(rows) > PARENT_CONTEXT_SCAN_LIMIT
-    return await _scan_global_parent(
+    match, scanned = await _scan_global_parent(
         client,
         context_id,
         rows[:PARENT_CONTEXT_SCAN_LIMIT],
         truncated,
         scan_errors,
+    )
+    if match is None:
+        _raise_global_context_not_found(context_id, scanned, truncated, scan_errors)
+    return match
+
+
+def _raise_global_context_not_found(
+    context_id: str,
+    scanned: int,
+    truncated: bool,
+    scan_errors: list[str],
+) -> NoReturn:
+    """Raise a not-found that keeps the global scan's bound and errors."""
+    suggestions = [
+        "Omit domain to scan both automations and scripts",
+        "Use ha_get_automation_traces(domain=...) to list recent runs",
+    ]
+    if truncated:
+        suggestions.insert(
+            0,
+            f"Only the newest {PARENT_CONTEXT_SCAN_LIMIT} stored runs across "
+            + "automations and scripts were scanned; pass run_id with domain "
+            + "and item_id",
+        )
+    if scan_errors:
+        suggestions.insert(
+            0,
+            "Some stored traces could not be read; retry after checking "
+            + "the Home Assistant logs",
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"No trace found for context: {context_id}",
+            context={
+                "context_id": context_id,
+                "scanned": scanned,
+                "scan_truncated": truncated,
+                "scan_errors": scan_errors,
+            },
+            suggestions=suggestions,
+        )
     )
 
 

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 def _validate_trace_request(
     entity_id: str | None,
     domain: Literal["automation", "script"] | None,
+    item_id: str | None,
     context_id: str | None,
     run_id: str | None,
 ) -> None:
@@ -55,6 +56,38 @@ def _validate_trace_request(
                 "Omit entity_id with domain to list across a domain",
             ],
         )
+    if item_id is not None:
+        validate_identifier_not_empty(
+            item_id,
+            "item_id",
+            suggestions=[
+                "Use Core's item_id from a trace/list row or context resolution",
+                "Pass an entity_id instead when you have one",
+            ],
+        )
+        if entity_id is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "entity_id and item_id are mutually exclusive",
+                    context={"entity_id": entity_id, "item_id": item_id},
+                    suggestions=[
+                        "Pass entity_id for a normal automation/script lookup",
+                        "Pass domain and item_id for a Core trace key",
+                    ],
+                )
+            )
+        if domain is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "domain is required with item_id",
+                    context={"item_id": item_id},
+                    suggestions=[
+                        "Pass domain='automation' or 'script' with item_id",
+                    ],
+                )
+            )
     if context_id is not None:
         validate_identifier_not_empty(
             context_id,
@@ -66,14 +99,19 @@ def _validate_trace_request(
             ],
             context={"entity_id": entity_id},
         )
-    if entity_id is None and run_id is not None:
+    if (
+        run_id is not None
+        and entity_id is None
+        and not (domain is not None and item_id is not None)
+    ):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "entity_id is required with run_id",
+                "run_id needs entity_id, or domain with item_id",
                 context={"run_id": run_id},
                 suggestions=[
                     "Pass the automation/script entity_id with run_id",
+                    "Pass domain and Core's item_id from a list row",
                     "Use context_id alone to resolve a run",
                 ],
             )
@@ -112,14 +150,15 @@ async def _resolve_trace_target(
     client: Any,
     entity_id: str | None,
     domain: Literal["automation", "script"] | None,
+    item_id: str | None,
     context_id: str | None,
     run_id: str | None,
 ) -> tuple[str | None, str, str | None, str | None, ContextTraceMatch | None]:
     """Resolve selectors to entity/domain/item/run and optional context match."""
-    _validate_trace_request(entity_id, domain, context_id, run_id)
+    _validate_trace_request(entity_id, domain, item_id, context_id, run_id)
     context_match: ContextTraceMatch | None = None
     resolved_run_id = run_id
-    item_id: str | None = None
+    resolved_item_id: str | None = item_id
     domain_name: str = domain or "automation"
     if entity_id is not None:
         entity_domain = _entity_domain(entity_id)
@@ -133,26 +172,19 @@ async def _resolve_trace_target(
             )
         domain_name = entity_domain
         object_id = entity_id.split(".", 1)[1]
-        item_id = await _resolve_trace_item_id(client, entity_id, object_id)
+        resolved_item_id = await _resolve_trace_item_id(client, entity_id, object_id)
         if context_id is not None:
             context_match = await resolve_context_trace(
-                client, domain_name, item_id, context_id
+                client, domain_name, resolved_item_id, context_id
             )
             resolved_run_id = context_match.run_id
+    elif context_id is not None and resolved_item_id is not None:
+        context_match = await resolve_context_trace(
+            client, domain_name, resolved_item_id, context_id
+        )
+        resolved_run_id = context_match.run_id
     elif context_id is not None:
-        context_match = await resolve_global_context(client, context_id)
-        if context_match is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"No trace found for context: {context_id}",
-                    context={"context_id": context_id},
-                    suggestions=[
-                        "Pass entity_id to scan a specific item's parent context",
-                        "Use the run's own context id, or pass entity_id",
-                    ],
-                )
-            )
+        context_match = await resolve_global_context(client, context_id, domain)
         if not context_match.domain or not context_match.item_id:
             raise_tool_error(
                 create_error_response(
@@ -162,10 +194,9 @@ async def _resolve_trace_target(
                 )
             )
         domain_name = context_match.domain
-        item_id = context_match.item_id
-        entity_id = f"{domain_name}.{item_id}"
+        resolved_item_id = context_match.item_id
         resolved_run_id = context_match.run_id
-    return entity_id, domain_name, item_id, resolved_run_id, context_match
+    return entity_id, domain_name, resolved_item_id, resolved_run_id, context_match
 
 
 class TraceTools:
@@ -197,7 +228,18 @@ class TraceTools:
             Field(
                 description=(
                     "List recent traces across every automation or script when "
-                    "entity_id is omitted."
+                    "entity_id is omitted. Required with item_id."
+                ),
+                default=None,
+            ),
+        ] = None,
+        item_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Core's trace item id from a list row or context "
+                    "resolution. Use with domain and run_id when no entity_id "
+                    "is available."
                 ),
                 default=None,
             ),
@@ -230,6 +272,16 @@ class TraceTools:
                 le=50,
             ),
         ] = 10,
+        deduplicate: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Deprecated; omit. Core's raw step variables are returned "
+                    "unchanged, so no deduplication is applied."
+                ),
+                default=None,
+            ),
+        ] = None,
         detailed: Annotated[
             bool,
             Field(
@@ -284,8 +336,10 @@ class TraceTools:
            ha_get_automation_traces(domain="automation")
         2. Get a detailed trace (provide run_id): returns Core's extended trace
            dict unchanged, including config, raw step trace, context, errors
-           and variables.
+           and variables. Use entity_id, or the domain and item_id from a list
+           row when no entity_id is available.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
+           ha_get_automation_traces(domain="automation", item_id="uid", run_id="...")
         3. Resolve a trace by context (provide context_id): the response
            reports `context_match` as `trace` or `parent`. With entity_id, a
            parent context can be scanned. Without entity_id, Core's global
@@ -300,8 +354,9 @@ class TraceTools:
         - A detail response is Core's extended `trace/get` dict: `config`,
           `trace`, `context`, `timestamp`, `state`, `error`,
           `script_execution`, `blueprint_inputs` and any run-specific fields.
-        - `success`, `entity_id` (or `domain` for a domain list) and `run_id`
-          identify the response.
+        - `success`, `run_id`, `domain` and `item_id` identify the run.
+          `entity_id` is present when the caller supplied it; a context-only
+          lookup returns Core's `domain`/`item_id` instead of inventing one.
         - `context_match` is `trace` or `parent`; `context_scanned`,
           `context_scan_truncated` and `context_scan_errors` describe the
           public fallback scan.
@@ -328,7 +383,7 @@ class TraceTools:
                 resolved_run_id,
                 context_match,
             ) = await _resolve_trace_target(
-                self._client, entity_id, domain, context_id, run_id
+                self._client, entity_id, domain, item_id, context_id, run_id
             )
 
             logger.debug(
@@ -358,7 +413,7 @@ class TraceTools:
                 detail = await self._fetch_trace_detail(
                     domain_name,
                     item_id or "",
-                    entity_id or "",
+                    entity_id,
                     resolved_run_id,
                     detailed=detailed,
                     sections=sections,
@@ -369,6 +424,11 @@ class TraceTools:
                 )
                 if context_match is not None:
                     _add_context_match(detail, context_id, context_match)
+                if deduplicate is not None:
+                    detail.setdefault("warnings", []).append(
+                        "`deduplicate` is deprecated and has no effect; Core's "
+                        "raw step variables are returned unchanged."
+                    )
                 return detail
             return await self._fetch_trace_list(
                 domain_name,
@@ -401,7 +461,7 @@ class TraceTools:
         self,
         domain: str,
         item_id: str,
-        entity_id: str,
+        entity_id: str | None,
         run_id: str,
         *,
         detailed: bool,
@@ -443,6 +503,8 @@ class TraceTools:
             entity_id,
             run_id,
             trace_data,
+            domain=domain,
+            item_id=item_id or None,
             sections=sections,
             logbook=logbook,
         )
@@ -632,7 +694,10 @@ def _format_trace_list(
         "order": order,
         "has_more": offset + len(formatted_traces) < len(traces),
         "traces": formatted_traces,
-        "hint": "Use run_id with this tool to get detailed trace information",
+        "hint": (
+            "Use run_id with domain and item_id (or entity_id) to get "
+            "detailed trace information"
+        ),
     }
     if entity_id is not None:
         result["entity_id"] = entity_id
@@ -667,18 +732,25 @@ _TRACE_SECTION_KEYS = frozenset(
 
 
 def _format_detailed_trace(
-    entity_id: str,
+    entity_id: str | None,
     run_id: str,
     trace: dict[str, Any],
     *,
+    domain: str | None = None,
+    item_id: str | None = None,
     sections: str | None = None,
     logbook: TraceLogbook | None = None,
 ) -> dict[str, Any]:
     """Return Core's extended trace dict unchanged, with tool metadata."""
     result = dict(trace)
     result["success"] = True
-    result["entity_id"] = entity_id
     result["run_id"] = run_id
+    if domain is not None:
+        result["domain"] = domain
+    if item_id is not None:
+        result["item_id"] = item_id
+    if entity_id is not None:
+        result["entity_id"] = entity_id
     if logbook is not None:
         result["logbook_entries"] = logbook.entries
         if logbook.transport is not None:
@@ -693,6 +765,8 @@ def _format_detailed_trace(
 def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, Any]:
     """Keep requested top-level Core keys; reject names Core does not define."""
     requested = _requested_sections(sections)
+    if not requested:
+        return result
     known = _TRACE_SECTION_KEYS | set(result)
     unknown = sorted(requested - known)
     if unknown:
@@ -707,7 +781,14 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
                 ],
             )
         )
-    keep = requested | {"success", "entity_id", "run_id", "warnings"}
+    keep = requested | {
+        "success",
+        "entity_id",
+        "domain",
+        "item_id",
+        "run_id",
+        "warnings",
+    }
     if "logbook" in requested:
         keep |= {
             "logbook_entries",

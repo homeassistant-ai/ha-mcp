@@ -267,9 +267,14 @@ class TestTraceContextLookup:
             _dispatch(detail_result=detail_result, context_result=context_result)
         )
 
-        result = await TraceTools(client).ha_get_automation_traces(context_id="ctx-1")
+        result = await TraceTools(client).ha_get_automation_traces(
+            context_id="ctx-1", deduplicate=False
+        )
 
-        assert result["entity_id"] == "automation.uid_1"
+        assert "entity_id" not in result
+        assert any("deduplicate" in warning for warning in result["warnings"])
+        assert result["domain"] == "automation"
+        assert result["item_id"] == "uid_1"
         assert result["run_id"] == "r1"
         assert result["context_match"] == "trace"
         contexts_message = next(
@@ -315,7 +320,9 @@ class TestTraceContextLookup:
             context_id="parent-1"
         )
 
-        assert result["entity_id"] == "automation.uid_1"
+        assert "entity_id" not in result
+        assert result["domain"] == "automation"
+        assert result["item_id"] == "uid_1"
         assert result["run_id"] == "r1"
         assert result["context_match"] == "parent"
         assert result["context_scanned"] == 1
@@ -353,6 +360,114 @@ class TestTraceContextLookup:
             if call.args[0].get("type") == "trace/list"
         )
         assert list_message == {"type": "trace/list", "domain": "automation"}
+
+    @pytest.mark.asyncio
+    async def test_domain_list_row_fetches_detail_by_item_id(self):
+        """A list row's domain/item_id/run_id fetches its detail."""
+        detail_result = {
+            "success": True,
+            "result": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {"action/0": [{"path": "action/0"}]},
+                "context": {"id": "ctx-1"},
+            },
+        }
+        client = _make_pooled_client(_dispatch(detail_result=detail_result))
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            domain="automation", item_id="uid_1", run_id="r1"
+        )
+
+        assert result["domain"] == "automation"
+        assert result["item_id"] == "uid_1"
+        assert result["run_id"] == "r1"
+        assert "entity_id" not in result
+        trace_get = next(
+            call.args[0]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "trace/get"
+        )
+        assert trace_get == {
+            "type": "trace/get",
+            "domain": "automation",
+            "item_id": "uid_1",
+            "run_id": "r1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_item_id_without_domain_is_rejected(self):
+        client = _make_pooled_client(_dispatch())
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(
+                item_id="uid_1", run_id="r1"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_entity_id_and_item_id_are_mutually_exclusive(self):
+        client = _make_pooled_client(_dispatch())
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test", domain="automation", item_id="uid_1"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_global_scan_not_found_keeps_the_scan_details(self):
+        """A failed domain read is reported instead of looking like no run."""
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                if message["domain"] == "script":
+                    return {"success": False, "error": "script list denied"}
+                return {"success": True, "result": []}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(context_id="parent-1")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error["scan_truncated"] is False
+        assert any("script list denied" in item for item in error["scan_errors"])
+
+    @pytest.mark.asyncio
+    async def test_context_domain_mismatch_is_rejected(self):
+        client = _make_pooled_client(
+            _dispatch(
+                context_result={
+                    "success": True,
+                    "result": {
+                        "ctx-1": {
+                            "run_id": "r1",
+                            "domain": "automation",
+                            "item_id": "uid_1",
+                        }
+                    },
+                }
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(
+                context_id="ctx-1", domain="script"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
     async def test_run_id_without_entity_id_is_rejected(self):
