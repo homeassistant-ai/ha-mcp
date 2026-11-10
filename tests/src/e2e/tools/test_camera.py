@@ -60,8 +60,50 @@ class TestCameraToolsE2E:
             await mcp.call_tool_failure(
                 "ha_get_camera_image",
                 {"entity_id": "light.kitchen"},
-                expected_error="not a camera entity",
+                expected_error="not a camera or image entity",
             )
+
+    @pytest.mark.asyncio
+    async def test_image_entity_rejects_dimensions(self, mcp_client):
+        """width/height are refused for image.* entities before any request."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_get_camera_image",
+                {"entity_id": "image.anything", "width": 320, "height": 240},
+                expected_error="apply only to camera entities",
+            )
+
+    @pytest.mark.asyncio
+    async def test_unknown_image_entity_reports_not_found(self, mcp_client):
+        """An image.* entity Home Assistant does not know maps to a not-found error."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_get_camera_image",
+                {"entity_id": "image.does_not_exist_e2e"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_image_entity_returns_image_when_available(self, mcp_client):
+        """A live image.* entity returns the text and image blocks.
+
+        The default E2E configuration does not guarantee an image entity, so
+        the test skips when none exists rather than fabricating one.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            search_data = await mcp.call_tool_success(
+                "ha_search", {"domain_filter": "image"}
+            )
+            entities = search_data.get("entities") or []
+            if not entities:
+                pytest.skip("No image.* entity in the E2E Home Assistant instance")
+            image_entity = entities[0]["entity_id"]
+            result = await mcp_client.call_tool(
+                "ha_get_camera_image", {"entity_id": image_entity}
+            )
+
+        assert [block.type for block in result.content] == ["text", "image"]
+        assert result.content[0].text.startswith("Image (")
+        assert result.content[1].data
 
     @pytest.mark.asyncio
     async def test_get_camera_image_returns_image_and_info(self, mcp_client):
