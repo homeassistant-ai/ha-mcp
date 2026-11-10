@@ -7,6 +7,12 @@ rule:
     - pattern: hass = SimpleNamespace($$$)
     - pattern: MagicMock($$$, name="hass", $$$)
     - pattern: Mock($$$, name="hass", $$$)
+    # The same stand-in under another name (mock_hass, fake_hass).
+    - kind: assignment
+      regex: '^\w+_hass\s*=\s*(Magic|NonCallable)?Mock\('
+    # A placeholder where a Core object lives in hass.data.
+    - kind: assignment
+      regex: '^hass\.data\[[^\]]+\]\s*=\s*(object\(\)|(Magic|NonCallable|Async)?Mock\(|SimpleNamespace\()'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
@@ -22,6 +28,7 @@ ignores:
   - "tests/src/unit/test_card_review_regressions.py"
   - "tests/src/unit/test_card_review_round6.py"
   - "tests/src/unit/test_component_repairs.py"
+  - "tests/src/unit/test_component_store_records.py"
   - "tests/src/unit/test_component_ws_logbook.py"
   - "tests/src/unit/test_config_flow.py"
   - "tests/src/unit/test_custom_card_lifecycle.py"

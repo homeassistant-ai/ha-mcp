@@ -410,6 +410,8 @@ jobs:
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
+        # The unit and app tests, against Core's real types (tests/AGENTS.md).
+        uv run mypy tests/src/unit/ tests/addon/ || status=1
         exit "$status"
 
     # The ratchet scripts only lower their baselines, but the baselines are

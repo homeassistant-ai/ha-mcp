@@ -132,27 +132,59 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   loads this repository's `custom_components/ha_mcp_tools` like any custom
   integration; `src/unit/_server_entry.py` adds a server entry whose server is
   replaced.
-- What may be replaced: this repository's own collaborators (the in-process
-  server, the REST/WebSocket client, an upstream), another integration through
-  Core's `mock_integration`, and one function or constant on a real Core module
-  when the test needs an answer Core cannot be made to give in a unit test (a
-  failure, a URL, another Core version's shape). Raise Core's real exceptions.
+- No hand-written reply. What Core answers over REST or WebSocket (a state, a
+  registry row, a command result, an error reply) comes from Core in the test,
+  never from a dict typed into the test, a mocked client method or a fake
+  client class. A tool test takes `core_client` (`src/unit/conftest.py`): the
+  server's own client connected to the real `hass`. The test sets Core up
+  (`hass.states.async_set`, `async_setup_component`, a registry fixture, a
+  WebSocket command) and asserts on the tool's result.
+  `component_core_client` also registers the `ha_mcp_tools/*` commands. Data
+  handed straight to a pure helper follows the same rule: get it from Core.
+- What may be replaced: this repository's own collaborators that do not speak
+  for Home Assistant (the in-process server, an upstream), another integration
+  through Core's `mock_integration`, and one function or constant on a real
+  Core module when the test needs an answer Core cannot be made to give in a
+  unit test (a failure, a URL, another Core version's shape). The client is
+  replaced only to raise such a failure, as one of its own exceptions
+  (`AsyncMock(side_effect=HomeAssistantConnectionError(...))`). Raise Core's
+  real exceptions.
 - An integration whose requirements are not installed with Core (`cloud`,
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Four ast-grep rules refuse these in the source: a hand-made `hass`
-(`rules/no-hand-made-hass.yml`), a fake Core object class
-(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
-(`rules/no-shared-core-fakes.yml`), and `patch.dict(sys.modules, ...)` or an
-assignment of a Core module name in `sys.modules`
-(`rules/no-core-module-stand-ins.yml`). `tests/core_stand_in_guard.py` checks
+Six ast-grep rules refuse these in the source: a hand-made `hass` under any
+name, or a placeholder in `hass.data` (`rules/no-hand-made-hass.yml`), a fake
+Core object class (`rules/no-fake-core-objects.yml`), an import of the old
+shared fakes (`rules/no-shared-core-fakes.yml`), `patch.dict(sys.modules, ...)`
+or an assignment of a Core module name in `sys.modules`
+(`rules/no-core-module-stand-ins.yml`), a client method that returns a typed-in
+reply or a hand-written client class (`rules/no-hand-made-core-replies.yml`),
+and an import from another test module, from the old fake-client helpers, or
+the `mock_client` fixture, each of which hands a file someone else's fake
+client (`rules/no-shared-fake-clients.yml`).
+`src/unit/test_core_reply_rules.py` keeps the last two rules' lists exact: a
+listed file that no longer violates fails it. `tests/core_stand_in_guard.py` checks
 `sys.modules` after every test body and fails a test whose stand-in module is
 still there, which covers `monkeypatch` swaps and computed names; it cannot see
 a swap the test has already undone, which is why the fourth rule exists. Test
 files written before the unit tests ran on real Core are listed in the rules'
 `ignores` and in the guard. Converting such a file removes it from the lists;
 no file is ever added to them.
+
+Two more checks run on these trees, with the same kind of list and the same
+rule for it:
+
+- Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private
+  member access. Setting a private attribute on a Core object forces a state
+  Core never produces, and calling a private function skips the entry point a
+  user reaches: go through the public command or tool.
+  `test_core_reply_rules.py` keeps these lists exact too.
+- mypy checks both trees against Core's real types
+  (`uv run mypy tests/src/unit/ tests/addon/`), so a `None` or a placeholder
+  where Core declares a type is an error. Tests need no annotations. The files
+  written before the check are the `ignore_errors` modules under `tests.*` in
+  `pyproject.toml`.
 
 The plugin enforces, for every test:
 
