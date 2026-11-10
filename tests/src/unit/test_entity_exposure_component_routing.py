@@ -1,20 +1,19 @@
-"""Routing tests for ``ha_get_entity_exposure`` over the ``ha_mcp_tools`` gate.
+"""Routing tests for ``ha_get_entity``'s exposure listing over the ``ha_mcp_tools`` gate.
 
-The legacy tool returns a bare ``{entity_id: {assistant: bool}}`` map with no
-names/areas, forcing a second ha_search to identify an exposed entity. When the
-component advertises ``exposure`` one ``ha_mcp_tools/exposure`` frame returns the
-same ``expose_entity/list`` map PLUS an additive ``entity_info``
-enrichment (friendly_name/domain/area/floor/labels). These tests pin: the
-component-served single + list shapes (legacy keys unchanged, enrichment
-additive), and the error-taxonomy fallbacks — capability miss, ``unknown_command``
-(invalidate caps + legacy), and a command error/timeout — all serving the legacy
+Core's ``expose_entity/list`` returns a bare ``{entity_id: {assistant: bool}}``
+map with no names/areas, forcing a second ha_search to identify an exposed
+entity. When the component advertises ``exposure`` one ``ha_mcp_tools/exposure``
+frame returns the same map PLUS an additive ``entity_info`` enrichment
+(friendly_name/domain/area/floor/labels). These tests pin: the component-served
+list shape (Core's map unchanged, enrichment additive), and the error-taxonomy
+fallbacks — capability miss, ``unknown_command`` (invalidate caps + Core's
+list), and a command error/timeout — all serving Core's
 ``homeassistant/expose_entity/list`` result unchanged.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,14 +22,14 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_voice_assistant
-from ha_mcp.tools.tools_voice_assistant import register_voice_assistant_tools
+from ha_mcp.tools import component_api, entity_exposure
 
 from ._component_routing_helpers import (
     make_ws,
     patch_ws,
     patch_ws_establish_failure,
 )
+from .test_ha_get_entity_component_routing import _build_get_entity
 
 _CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
@@ -74,6 +73,8 @@ class RoutingClient:
     ) -> dict[str, Any]:
         if msg.get("type") == "homeassistant/expose_new_entities/get":
             return {"success": True, "result": {"expose_new": False}}
+        if msg.get("type") == "config/entity_registry/settings/get":
+            return {"success": True, "result": {"entity_id_parts": None}}
         if msg.get("type") == "homeassistant/expose_entity/list":
             self.legacy_calls += 1
             return {
@@ -81,23 +82,6 @@ class RoutingClient:
                 "result": {"exposed_entities": dict(self._legacy_map)},
             }
         raise AssertionError(f"unexpected ws message {msg.get('type')!r}")
-
-
-def _build_exposure(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_voice_assistant_tools(mcp, client)
-    return registered["ha_get_entity_exposure"]
 
 
 @pytest.fixture(autouse=True)
@@ -118,39 +102,6 @@ def _exposure_calls(ws: Any) -> list[Any]:
 
 
 @pytest.mark.asyncio
-async def test_single_entity_served_and_enriched() -> None:
-    """Single mode: legacy keys + additive name/area enrichment."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_result={
-            "exposed_entities": {"light.a": {"conversation": True}},
-            "entity_info": {"light.a": _INFO_A},
-        },
-    )
-    client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
-
-    with patch_ws(ws, tools_voice_assistant):
-        resp = await exposure(entity_id="light.a")
-
-    # Legacy keys: the entity's row of Core's map.
-    assert resp["exposed_to"] == {"conversation": True}
-    assert resp["is_exposed_anywhere"] is True
-    # Additive enrichment merged on top.
-    assert resp["friendly_name"] == "Lamp A"
-    assert resp["domain"] == "light"
-    assert resp["area"] == "Kitchen"
-    assert resp["floor"] == "Main"
-    assert resp["labels"] == ["Favorites"]
-    assert resp["state"] == "on"
-    # The legacy WS list was never touched.
-    assert client.legacy_calls == 0
-    assert len(_exposure_calls(ws)) == 1
-    assert _exposure_calls(ws)[0].kwargs["entity_id"] == "light.a"
-
-
-@pytest.mark.asyncio
 async def test_list_mode_served_with_entity_info() -> None:
     """List mode: legacy shape plus an entity_info map keyed by entity_id."""
     ws = make_ws(
@@ -162,9 +113,9 @@ async def test_list_mode_served_with_entity_info() -> None:
         },
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
-    with patch_ws(ws, tools_voice_assistant):
+    with patch_ws(ws, entity_exposure):
         resp = await exposure()
 
     assert resp["exposed_entities"] == _LEGACY_MAP
@@ -188,10 +139,10 @@ async def test_list_mode_entity_info_follows_assistant_filter() -> None:
         },
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
-    with patch_ws(ws, tools_voice_assistant):
-        resp = await exposure(assistant="cloud.alexa")
+    with patch_ws(ws, entity_exposure):
+        resp = await exposure(exposed_to="cloud.alexa")
 
     # Only light.b is exposed to cloud.alexa.
     assert set(resp["exposed_entities"]) == {"light.b"}
@@ -203,9 +154,9 @@ async def test_no_capability_uses_legacy_list() -> None:
     """Component without exposure → legacy expose_entity/list, no entity_info."""
     ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_NONE)
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
-    with patch_ws(ws, tools_voice_assistant):
+    with patch_ws(ws, entity_exposure):
         resp = await exposure()
 
     assert resp["exposed_entities"] == _LEGACY_MAP
@@ -226,9 +177,9 @@ async def test_pre_child_semantics_exposure_capability_uses_legacy_list() -> Non
         },
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
-    with patch_ws(ws, tools_voice_assistant):
+    with patch_ws(ws, entity_exposure):
         resp = await exposure()
 
     assert resp["exposed_entities"] == _LEGACY_MAP
@@ -246,13 +197,13 @@ async def test_unknown_command_invalidates_and_falls_back() -> None:
         cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
-    with patch_ws(ws, tools_voice_assistant):
-        resp = await exposure(entity_id="light.a")
+    with patch_ws(ws, entity_exposure):
+        resp = await exposure()
 
-    assert resp["exposed_to"]["conversation"] is True
-    assert "friendly_name" not in resp
+    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert "entity_info" not in resp
     assert client.legacy_calls == 1
     assert client not in component_api._CAPS_CACHE
 
@@ -266,9 +217,9 @@ async def test_command_error_falls_back_to_legacy() -> None:
         cmd_exc=HomeAssistantCommandTimeout("timeout"),
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
-    with patch_ws(ws, tools_voice_assistant):
+    with patch_ws(ws, entity_exposure):
         resp = await exposure()
 
     assert resp["exposed_entities"] == _LEGACY_MAP
@@ -284,11 +235,11 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
     identically on a pooled-WS drop."""
     caps_ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_EXPOSURE)
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
+    exposure = _build_get_entity(client)
 
     with patch_ws_establish_failure(
         caps_ws,
-        tools_voice_assistant,
+        entity_exposure,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await exposure()
@@ -296,65 +247,3 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp
     assert client.legacy_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_single_mode_missing_entity_info_omits_enrichment() -> None:
-    """Single mode where the component's ``entity_info`` has no entry for the queried
-    id (``None`` info) merges nothing: the exposure keys are
-    returned and no enrichment key is invented, no crash (issue #1813 T6)."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_result={
-            "exposed_entities": {"light.a": {"conversation": True}},
-            "entity_info": {},  # no entry for light.a
-        },
-    )
-    client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
-
-    with patch_ws(ws, tools_voice_assistant):
-        resp = await exposure(entity_id="light.a")
-
-    assert resp["exposed_to"]["conversation"] is True
-    for key in ("friendly_name", "domain", "area", "floor", "labels", "state"):
-        assert key not in resp
-    # The component answered authoritatively; the legacy WS list was never touched.
-    assert client.legacy_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_single_mode_stateless_entity_omits_live_state_keys() -> None:
-    """A component ``entity_info`` carrying only registry keys (a disabled /
-    legacy-only entity with no live state, so the component omits friendly_name /
-    state) merges just those keys — the live-state keys stay absent rather than
-    being emitted as null (issue #1813 T6)."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_result={
-            "exposed_entities": {"light.a": {"conversation": True}},
-            "entity_info": {
-                "light.a": {
-                    "domain": "light",
-                    "area": "Kitchen",
-                    "floor": "Main",
-                    "labels": [],
-                }
-            },
-        },
-    )
-    client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_exposure(client)
-
-    with patch_ws(ws, tools_voice_assistant):
-        resp = await exposure(entity_id="light.a")
-
-    # Registry-derived keys merged...
-    assert resp["domain"] == "light"
-    assert resp["area"] == "Kitchen"
-    assert resp["floor"] == "Main"
-    # ...but the live-state keys the component omitted are NOT present.
-    assert "friendly_name" not in resp
-    assert "state" not in resp

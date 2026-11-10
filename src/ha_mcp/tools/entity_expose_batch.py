@@ -18,30 +18,37 @@ def changed_entity_ids(reply: dict[str, Any]) -> set[str] | None:
     return None
 
 
+async def read_expose_new(client: Any, assistant: str) -> bool:
+    """The assistant's "expose new entities" flag, as Core stores it.
+
+    ``homeassistant/expose_new_entities/get`` validates its ``assistant``
+    against Core's own list, so an unknown name fails here with Core's
+    refusal instead of after a write already applied or as an empty filter
+    result.
+    """
+    reply = await client.send_websocket_message(
+        {"type": "homeassistant/expose_new_entities/get", "assistant": assistant},
+        expected_error_codes=frozenset({"invalid_format"}),
+    )
+    if not reply.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ws_failure_code(reply),
+                f"Checking assistant {assistant!r} failed: {reply.get('error')}",
+                context={"assistant": assistant},
+                suggestions=reply.get("suggestions"),
+            )
+        )
+    return bool((reply.get("result") or {}).get("expose_new"))
+
+
 async def reject_unknown_assistants(
     client: Any,
     assistants: Iterable[str] | None,
 ) -> None:
-    """Have Core judge each assistant name before it is used.
-
-    ``homeassistant/expose_new_entities/get`` validates its ``assistant``
-    against Core's own list, so an unknown name fails here instead of after
-    a write already applied or as an empty filter result.
-    """
+    """Have Core judge each assistant name before it is used."""
     for assistant in assistants or ():
-        reply = await client.send_websocket_message(
-            {"type": "homeassistant/expose_new_entities/get", "assistant": assistant},
-            expected_error_codes=frozenset({"invalid_format"}),
-        )
-        if not reply.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ws_failure_code(reply),
-                    f"Checking assistant {assistant!r} failed: {reply.get('error')}",
-                    context={"assistant": assistant},
-                    suggestions=reply.get("suggestions"),
-                )
-            )
+        await read_expose_new(client, assistant)
 
 
 async def apply_bulk_expose(

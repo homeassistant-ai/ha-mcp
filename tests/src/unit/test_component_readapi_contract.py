@@ -27,9 +27,9 @@ from ha_mcp.tools import (
     blueprint_sources,
     component_api,
     component_devices,
+    entity_exposure,
     tools_config_helpers,
     tools_entities,
-    tools_voice_assistant,
 )
 from ha_mcp.tools.radio.zigbee import _resolve_ieee
 from ha_mcp.tools.search import component as search_component
@@ -58,6 +58,9 @@ from .test_component_ws_search import (
     wsapi,
 )
 from .test_config_get_component_routing import RoutingClient as GetRoutingClient
+from .test_entity_exposure_component_routing import (
+    RoutingClient as ExposureRoutingClient,
+)
 from .test_ha_config_list_helpers_component_routing import (
     RoutingClient as HelpersRoutingClient,
 )
@@ -76,12 +79,6 @@ from .test_ha_get_entity_component_routing import (
 from .test_ha_get_entity_component_routing import (
     _build_get_entity,
     _raw_entry,
-)
-from .test_ha_get_entity_exposure_component_routing import (
-    RoutingClient as ExposureRoutingClient,
-)
-from .test_ha_get_entity_exposure_component_routing import (
-    _build_exposure,
 )
 from .test_ha_get_state_component_routing import (
     RoutingClient as StateRoutingClient,
@@ -895,12 +892,12 @@ class TestEntityEnrichSeam:
 
 # --- exposure -------------------------------------------------------------------
 class TestExposureSeam:
-    """``ha_get_entity_exposure`` served + enriched by the REAL ``_do_exposure``.
+    """``ha_get_entity``'s exposure listing served + enriched by the REAL ``_do_exposure``.
 
-    Drives the real list/single exposure command (its should_expose filter and
+    Drives the real list exposure command (its should_expose filter and
     registry-join enrichment) through the real server shaper, pinning that the
-    ``exposed_to`` row stays Core's while the ``entity_info`` /
-    single-entity enrichment is additive.
+    ``exposed_entities`` map stays Core's while the ``entity_info`` enrichment
+    is additive.
     """
 
     def _view(self):
@@ -926,32 +923,6 @@ class TestExposureSeam:
         )
 
     @pytest.mark.asyncio
-    async def test_single_exposure_enriched_from_real_component(
-        self, monkeypatch
-    ) -> None:
-        self._patch(
-            monkeypatch,
-            {"light.lamp": {"conversation": {"should_expose": True}}},
-        )
-        client = ExposureRoutingClient({"light.lamp": {"conversation": True}})
-        hass = FakeHass(states=[FakeState("light.lamp", "on", friendly_name="Lamp")])
-        ws = _real_component_ws(hass)
-        tool = _build_exposure(client)
-        with patch_ws(ws, tools_voice_assistant):
-            resp = await tool(entity_id="light.lamp")
-
-        # Legacy keys: the entity's row of Core's map.
-        assert resp["exposed_to"] == {"conversation": True}
-        assert resp["is_exposed_anywhere"] is True
-        # Additive enrichment from the real join.
-        assert resp["friendly_name"] == "Lamp"
-        assert resp["domain"] == "light"
-        assert resp["area"] == "Office"
-        assert resp["floor"] == "Upstairs"
-        # The legacy expose_entity/list was never touched.
-        assert client.legacy_calls == 0
-
-    @pytest.mark.asyncio
     async def test_list_exposure_enriched_from_real_component(
         self, monkeypatch
     ) -> None:
@@ -966,8 +937,8 @@ class TestExposureSeam:
         client = ExposureRoutingClient({})
         hass = FakeHass(states=[FakeState("light.lamp", "on", friendly_name="Lamp")])
         ws = _real_component_ws(hass)
-        tool = _build_exposure(client)
-        with patch_ws(ws, tools_voice_assistant):
+        tool = _build_get_entity(client)
+        with patch_ws(ws, entity_exposure):
             resp = await tool()
 
         assert resp["exposed_entities"] == {"light.lamp": {"conversation": True}}
@@ -992,14 +963,20 @@ class TestExposureSeam:
             "_async_get_entity_settings",
             lambda h, entity_id: {"conversation": {"should_expose": True}},
         )
-        client = ExposureRoutingClient({"sensor.child": {"conversation": True}})
+        monkeypatch.setattr(
+            wsapi,
+            "_async_get_assistant_settings",
+            lambda h: {"conversation": {"sensor.child": {}}},
+        )
+        client = ExposureRoutingClient({})
         hass = FakeHass(
             states=[FakeState("sensor.child", "21", friendly_name="Child Sensor")]
         )
-        tool = _build_exposure(client)
-        with patch_ws(_real_component_ws(hass), tools_voice_assistant):
-            resp = await tool(entity_id="sensor.child")
+        tool = _build_get_entity(client)
+        with patch_ws(_real_component_ws(hass), entity_exposure):
+            resp = await tool()
 
-        assert resp["area"] == "Office"
-        assert resp["floor"] == "Upstairs"
+        info = resp["entity_info"]["sensor.child"]
+        assert info["area"] == "Office"
+        assert info["floor"] == "Upstairs"
         assert client.legacy_calls == 0

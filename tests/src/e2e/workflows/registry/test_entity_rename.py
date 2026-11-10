@@ -403,11 +403,11 @@ class TestEntityRenameVoiceExposure:
         # 4. VERIFY: New entity still has exposure settings (preserved by HA Core)
         check_data = await safe_call_tool(
             mcp_client,
-            "ha_get_entity_exposure",
+            "ha_get_entity",
             {"entity_id": new_entity_id},
         )
         assert check_data.get("success"), f"Failed to check exposure: {check_data}"
-        logger.info(f"New entity exposure: {check_data.get('exposed_to')}")
+        logger.info(f"New entity options: {check_data['entity_entry']['options']}")
 
         # 5. CLEANUP
         delete_data = await safe_call_tool(

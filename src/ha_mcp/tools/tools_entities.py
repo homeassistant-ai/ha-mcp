@@ -36,12 +36,25 @@ from .entity_expose_batch import (
     changed_entity_ids,
     reject_unknown_assistants,
 )
+from .entity_exposure import unregistered_exposure
 from .entity_param_parsing import (
     _parse_aliases_param,
     _parse_categories_param,
     _parse_expose_to_param,
     _parse_options_param,
     _parse_string_list_field,
+)
+from .entity_registry_reads import (
+    _GET_ENTRIES_CHUNK_SIZE,
+    _NOT_IN_REGISTRY,
+    _extract_ws_error,
+    get_entries_raw,
+    resolve_by_unique_id,
+)
+from .entity_registry_wide import (
+    get_registry_wide,
+    is_registry_wide_call,
+    set_registry_wide,
 )
 from .entity_removal import remove_registry_entries, remove_registry_entry
 from .entity_update_fields import (
@@ -70,11 +83,6 @@ logger = logging.getLogger(__name__)
 # once so the routing helper and its tests stay in lockstep.
 WS_ENTITY_ENRICH = "ha_mcp_tools/entity_enrich"
 
-# Bounds the per-frame size of a bulk config/entity_registry/get_entries call
-# (extended entries, ~1KB each) so a large id list can't produce an over-cap
-# WebSocket frame. Matches the chunk size smart_search uses for the same
-# command. Typical bulk calls fit in a single chunk (one WS message).
-_GET_ENTRIES_CHUNK_SIZE = 500
 
 # Max entity IDs accepted by the bulk-removal path of ha_remove_entity. Mirrors
 # the cap the other bulk tools use (ha_get_state's _get_bulk_entity_states).
@@ -195,26 +203,8 @@ def _expose_update(parsed_expose_to: dict[str, bool], unchanged: bool) -> str:
     return f"expose_to={parsed_expose_to}"
 
 
-def _extract_ws_error(result: dict[str, Any]) -> str:
-    """Pull a user-readable message out of a failed WebSocket response.
-
-    Falls back to a static placeholder + warning log when HA returns an
-    empty or malformed error envelope, so the user-facing message never
-    degrades to literal "{}".
-    """
-    error = result.get("error")
-    if isinstance(error, dict):
-        msg = error.get("message")
-        if isinstance(msg, str) and msg:
-            return msg
-    elif isinstance(error, str) and error:
-        return error
-    logger.warning("HA WS response had no usable error detail: %r", result)
-    return "no error detail returned by Home Assistant"
-
-
 def _parse_set_entity_ids(
-    entity_id: str | list[str],
+    entity_id: str | list[str] | None,
 ) -> tuple[list[str], bool]:
     """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input."""
     if isinstance(entity_id, str):
@@ -337,6 +327,10 @@ def _validate_enabled_constraint(
                     suggestions=suggestions,
                 )
             )
+
+
+class _NotInRegistry(ValueError):
+    """Core's entity registry holds no entry for the entity (``not_found``)."""
 
 
 class EntityTools:
@@ -1126,7 +1120,9 @@ class EntityTools:
         for eid in eligible_ids:
             unchanged = changed is not None and eid not in changed
             updates_by_id[eid].append(_expose_update(parsed_expose_to, unchanged))
-        refetched_raw, refetch_errors = await self._get_entries_raw(eligible_ids)
+        refetched_raw, refetch_errors = await get_entries_raw(
+            self._client, eligible_ids
+        )
         for eid in eligible_ids:
             if eid in refetched_raw:
                 entry_by_id[eid] = refetched_raw[eid]
@@ -1236,147 +1232,11 @@ class EntityTools:
         result = await self._client.send_websocket_message(message)
 
         if not result.get("success"):
+            if result.get("error_code") == "not_found":
+                raise _NotInRegistry(_extract_ws_error(result))
             raise ValueError(_extract_ws_error(result))
 
         return result.get("result") or {}
-
-    async def _get_entries_raw(
-        self, entity_ids: list[str]
-    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-        """Bulk-fetch registry entries via chunked config/entity_registry/get_entries.
-
-        Returns ``(raw_entries, errors)``: ``raw_entries`` maps a found
-        entity_id to HA's raw extended registry dict; ``errors`` maps a failed
-        entity_id to a message. A ``null`` in HA's entries map (id not in the
-        registry) and a chunk-level WS failure both land in ``errors`` — this
-        reproduces the per-id not-found contract of the old one-get-per-id
-        fan-out, where every id got its own error.
-        """
-        raw: dict[str, dict[str, Any]] = {}
-        errors: dict[str, str] = {}
-        if not entity_ids:
-            return raw, errors
-
-        chunks = [
-            entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
-            for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE)
-        ]
-        responses = await asyncio.gather(
-            *(
-                self._client.send_websocket_message(
-                    {
-                        "type": "config/entity_registry/get_entries",
-                        "entity_ids": chunk,
-                    }
-                )
-                for chunk in chunks
-            ),
-            return_exceptions=True,
-        )
-        for chunk, resp in zip(chunks, responses, strict=True):
-            if isinstance(resp, BaseException) and not isinstance(resp, Exception):
-                # Never swallow cancellation/shutdown into per-entity errors.
-                raise resp
-            if isinstance(resp, dict) and resp.get("success"):
-                result_map = resp.get("result") or {}
-                for eid in chunk:
-                    entry = result_map.get(eid)
-                    if entry is None:
-                        errors[eid] = "Entity not found"
-                    else:
-                        raw[eid] = entry
-                continue
-            # Whole-chunk failure (WS raised, or success=False): every id in
-            # the chunk failed, mirroring the old per-id fan-out behaviour.
-            msg = _extract_ws_error(resp) if isinstance(resp, dict) else str(resp)
-            for eid in chunk:
-                errors[eid] = msg
-        return raw, errors
-
-    async def _resolve_by_unique_id(
-        self,
-        unique_id: str,
-        domain: str | None,
-        platform: str | None,
-    ) -> dict[str, Any]:
-        """Resolve a stable unique_id to its entity_id(s) and their full entries.
-
-        The registry's unique key is (domain, platform, unique_id), so the same
-        unique_id can appear under multiple platforms — every match is returned
-        with a ``matches`` count so callers can disambiguate. ``domain`` /
-        ``platform`` narrow the match set when provided.
-        """
-        list_resp = await self._client.send_websocket_message(
-            {"type": "config/entity_registry/list"}
-        )
-        if not list_resp.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to list entity registry: {_extract_ws_error(list_resp)}",
-                    context={"unique_id": unique_id},
-                    suggestions=["Check Home Assistant connection and retry"],
-                )
-            )
-
-        matches = [
-            entry.get("entity_id") or ""
-            for entry in list_resp.get("result") or []
-            if entry.get("unique_id") == unique_id
-            and (
-                domain is None or (entry.get("entity_id") or "").split(".")[0] == domain
-            )
-            and (platform is None or entry.get("platform") == platform)
-        ]
-
-        if not matches:
-            filters = {"unique_id": unique_id}
-            if domain is not None:
-                filters["domain"] = domain
-            if platform is not None:
-                filters["platform"] = platform
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"No entity found with unique_id '{unique_id}'"
-                    + (
-                        f" (domain={domain}, platform={platform})"
-                        if domain is not None or platform is not None
-                        else ""
-                    ),
-                    context=filters,
-                    suggestions=[
-                        "unique_id must match exactly — it is the integration's "
-                        + "internal id, not the entity_id",
-                        "Drop the domain/platform filters if you set them",
-                        "Use ha_search() to browse entities and their platforms",
-                    ],
-                )
-            )
-
-        # The list rows lack the extended fields (e.g. aliases, capabilities).
-        raw_map, errors = await self._get_entries_raw(matches)
-        if errors:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to read the entries matching unique_id '{unique_id}'",
-                    context={"unique_id": unique_id, "errors": errors},
-                    suggestions=["Check Home Assistant connection and retry"],
-                )
-            )
-        entries = [raw_map[eid] for eid in matches]
-        response: dict[str, Any] = {
-            "success": True,
-            "unique_id": unique_id,
-            "matches": len(entries),
-            "entity_entries": entries,
-        }
-        if domain is not None:
-            response["domain"] = domain
-        if platform is not None:
-            response["platform"] = platform
-        return response
 
     @tool(
         name="ha_set_entity",
@@ -1390,10 +1250,16 @@ class EntityTools:
     async def ha_set_entity(
         self,
         entity_id: Annotated[
-            str | list[str],
+            str | list[str] | None,
             JSON_STRING_COERCION,
-            Field(description="Entity ID or list of entity IDs to update."),
-        ],
+            Field(
+                description=(
+                    "Entity ID or list of entity IDs to update. Omit only for the "
+                    "registry-wide expose_new_entities and entity_id_parts."
+                ),
+                default=None,
+            ),
+        ] = None,
         area_id: Annotated[
             str | None,
             Field(
@@ -1564,6 +1430,33 @@ class EntityTools:
                 default=None,
             ),
         ] = None,
+        expose_new_entities: Annotated[
+            dict[str, bool] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Registry-wide, no entity_id: each assistant's 'Expose new "
+                    "entities' switch, as a dict mapping assistant IDs to booleans "
+                    '(e.g. {"cloud.alexa": false}). Home Assistant refuses an '
+                    "assistant it does not know before any change is sent."
+                ),
+                default=None,
+            ),
+        ] = None,
+        entity_id_parts: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Registry-wide, no entity_id: the name parts new entity IDs "
+                    "are built from, in order, from 'area', 'floor', "
+                    "'parent_device', 'device', 'entity'; 'device' and 'entity' "
+                    "are required. [] restores Home Assistant's default. Home "
+                    "Assistant validates the list."
+                ),
+                default=None,
+            ),
+        ] = None,
         new_entity_id: Annotated[
             str | None,
             Field(
@@ -1623,6 +1516,11 @@ class EntityTools:
         new_device_name can be combined with new_entity_id to rename both in one
         call. The device is looked up automatically.
 
+        REGISTRY-WIDE SETTINGS (no entity_id): expose_new_entities and
+        entity_id_parts change no entity; the reply carries Home Assistant's
+        new values and the previous ones (`previous_expose_new_entities`,
+        `previous_settings`) to restore them. ha_get_entity() reads them.
+
         Use ha_search() or ha_get_device() to find entity IDs.
         Use ha_config_get_label() to find available label IDs.
 
@@ -1649,16 +1547,6 @@ class EntityTools:
         Home Assistant has no script runtime enable/disable service.
         """
         try:
-            entity_ids, is_bulk = _parse_set_entity_ids(entity_id)
-
-            # Per-element empty/whitespace check — the list-empty check above
-            # rejects ``[]`` but not ``[""]``; without this guard, an empty
-            # entity_id would propagate to the entity-registry update WS call
-            # and surface as a misleading HA "entity not found".
-            for eid in entity_ids:
-                validate_identifier_not_empty(eid, "entity_id")
-
-            # Validate: bulk operations only support categories, labels, and expose_to
             single_entity_params = {
                 "area_id": area_id,
                 "name": name,
@@ -1673,6 +1561,32 @@ class EntityTools:
                 "new_entity_id": new_entity_id,
                 "new_device_name": new_device_name,
             }
+            if is_registry_wide_call(
+                entity_id,
+                {
+                    "expose_new_entities": expose_new_entities,
+                    "entity_id_parts": entity_id_parts,
+                },
+                {
+                    **single_entity_params,
+                    "categories": categories,
+                    "labels": labels,
+                    "expose_to": expose_to,
+                },
+            ):
+                return await set_registry_wide(
+                    self._client, expose_new_entities, entity_id_parts
+                )
+            entity_ids, is_bulk = _parse_set_entity_ids(entity_id)
+
+            # Per-element empty/whitespace check — the list-empty check above
+            # rejects ``[]`` but not ``[""]``; without this guard, an empty
+            # entity_id would propagate to the entity-registry update WS call
+            # and surface as a misleading HA "entity not found".
+            for eid in entity_ids:
+                validate_identifier_not_empty(eid, "entity_id")
+
+            # Validate: bulk operations only support categories, labels, and expose_to
             non_null_single_params = [
                 k for k, v in single_entity_params.items() if v is not None
             ]
@@ -1788,6 +1702,18 @@ class EntityTools:
                 default=None,
             ),
         ] = None,
+        exposed_to: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Without entity_id and unique_id: list only the entities "
+                    "exposed to this voice assistant, an ID Home Assistant knows "
+                    "(today 'conversation', 'cloud.alexa', 'cloud.google_assistant'), "
+                    "and return its 'expose new entities' flag."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get entity registry information for one or more entities.
 
@@ -1820,8 +1746,31 @@ class EntityTools:
         advertises it; otherwise these keys are absent): `area` (assigned area
         NAME, device-inherited when the entity has none), `floor`, and
         `label_names`. This tool's base `labels` carries the label ids;
-        ha_search result_fields and ha_get_entity_exposure instead emit the
-        resolved names under `labels`.
+        ha_search result_fields and the exposure listing's `entity_info`
+        instead emit the resolved names under `labels`.
+
+        VOICE ASSISTANT EXPOSURE:
+        An entity with a registry entry keeps its exposure in the entry's
+        `options` (`options.<assistant>.should_expose`). An entity without a
+        registry entry but with a state returns `entity_entry: null` with
+        `exposed_to` (the assistants Home Assistant has stored as exposed) and
+        `is_exposed_anywhere`; a list call returns such entities under
+        `unregistered_entities`.
+
+        WITHOUT entity_id AND unique_id: returns the registry-wide state:
+        `settings` (Home Assistant's `config/entity_registry/settings/get`:
+        `entity_id_parts`, the name parts new entity IDs are built from, null
+        for Home Assistant's default) and `exposed_entities`, the entities
+        exposed to at least one voice assistant as Home Assistant's
+        `expose_entity/list` map, with `count` and a per-assistant `summary`
+        (an assistant with no exposed entity is left out). An entity missing
+        from that map is not stored as exposed: either it is stored as not
+        exposed, or nothing is stored yet and Home Assistant applies its
+        expose-new-entities default when an assistant first asks. When the
+        ha_mcp_tools component advertises it, `entity_info` names each listed
+        entity: friendly_name, domain, area, floor and labels (plus state when
+        it has one). With exposed_to, only the entities exposed to that
+        assistant, plus its `expose_new_entities` flag.
 
         RELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()
         for current state/attributes; ha_search() to find entities.
@@ -1830,8 +1779,24 @@ class EntityTools:
         - Single entity: ha_get_entity("sensor.temperature")
         - Multiple entities: ha_get_entity(["light.living_room", "switch.porch"])
         - Resolve a unique_id: ha_get_entity(unique_id="00:11:22:33", domain="sensor")
+        - Entities exposed to Alexa: ha_get_entity(exposed_to="cloud.alexa")
+        - Registry settings and all exposed entities: ha_get_entity()
         """
         try:
+            if exposed_to is not None and (
+                entity_id is not None or unique_id is not None
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "exposed_to lists the exposed entities; it takes no "
+                        "entity_id or unique_id.",
+                        suggestions=[
+                            "Drop exposed_to: an entry's exposure is in its options",
+                            "Drop entity_id/unique_id to list the exposed entities",
+                        ],
+                    )
+                )
             # Resolver mode (unique_id) is mutually exclusive with entity_id.
             if unique_id is not None:
                 if entity_id is not None:
@@ -1846,19 +1811,10 @@ class EntityTools:
                         )
                     )
                 logger.info(f"Resolving unique_id '{unique_id}' to entity_id(s)")
-                return await self._resolve_by_unique_id(unique_id, domain, platform)
-
-            if entity_id is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "Provide entity_id (an id or list) or unique_id.",
-                        suggestions=[
-                            "ha_get_entity('sensor.temperature')",
-                            "ha_get_entity(unique_id='abc123') to resolve a unique_id",
-                        ],
-                    )
+                return await resolve_by_unique_id(
+                    self._client, unique_id, domain, platform
                 )
+
             # domain/platform are resolver-only filters (unique_id is None here).
             if domain is not None or platform is not None:
                 raise_tool_error(
@@ -1872,6 +1828,8 @@ class EntityTools:
                     )
                 )
 
+            if entity_id is None:
+                return await get_registry_wide(self._client, exposed_to)
             return await self._get_by_entity_id(entity_id)
 
         except ToolError:
@@ -1890,6 +1848,12 @@ class EntityTools:
         try:
             result = await self._fetch_entity(eid)
         except ValueError as e:
+            # An entity without a registry entry still has exposure settings,
+            # kept in Core's separate exposed-entities store.
+            if isinstance(e, _NotInRegistry):
+                rows = await unregistered_exposure(self._client, [eid])
+                if eid in rows:
+                    return {"success": True, **rows[eid]}
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -1925,27 +1889,51 @@ class EntityTools:
         # Bulk case - fetch all entities in one chunked get_entries call
         # (native HA bulk command) instead of one registry get per id.
         logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
-        raw_map, error_map = await self._get_entries_raw(entity_ids)
+        raw_map, error_map = await get_entries_raw(self._client, entity_ids)
+        unregistered = await unregistered_exposure(
+            self._client,
+            [eid for eid, err in error_map.items() if err == _NOT_IN_REGISTRY],
+        )
 
         # Iterate the requested ids (not the map) to preserve request order and
         # duplicate handling; each id is classified found/error exactly as the
         # old per-id fan-out did.
         entity_entries: list[dict[str, Any]] = []
+        unregistered_entities: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for eid in entity_ids:
             raw = raw_map.get(eid)
             if raw is not None:
                 entity_entries.append(raw)
+            elif eid in unregistered:
+                unregistered_entities.append(unregistered[eid])
             else:
                 errors.append(
                     {
                         "entity_id": eid,
-                        "error": error_map.get(eid, "Entity not found"),
+                        "error": error_map.get(eid, _NOT_IN_REGISTRY),
                     }
                 )
 
-        # Additive area/floor/label-name enrichment for the found entities via the
-        # component's entity_enrich capability; missing ⇒ fields simply absent.
+        await self._enrich_entries(entity_entries)
+
+        response: dict[str, Any] = {
+            "success": True,
+            "count": len(entity_entries),
+            "entity_entries": entity_entries,
+        }
+        if unregistered_entities:
+            response["unregistered_entities"] = unregistered_entities
+        if errors:
+            response["errors"] = errors
+            response["suggestions"] = [
+                "Use ha_search() to find valid entity IDs for failed lookups"
+            ]
+        return response
+
+    async def _enrich_entries(self, entity_entries: list[dict[str, Any]]) -> None:
+        """Additive area/floor/label-name enrichment for the found entities via the
+        component's entity_enrich capability; missing ⇒ fields simply absent."""
         found_ids: list[str] = [
             e["entity_id"]
             for e in entity_entries
@@ -1957,18 +1945,6 @@ class EntityTools:
                 entry_id = entry.get("entity_id")
                 if isinstance(entry_id, str):
                     _merge_entity_enrichment(entry, enriched.get(entry_id))
-
-        response: dict[str, Any] = {
-            "success": True,
-            "count": len(entity_entries),
-            "entity_entries": entity_entries,
-        }
-        if errors:
-            response["errors"] = errors
-            response["suggestions"] = [
-                "Use ha_search() to find valid entity IDs for failed lookups"
-            ]
-        return response
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
         """Validate the id list, then remove the ids one at a time; registry

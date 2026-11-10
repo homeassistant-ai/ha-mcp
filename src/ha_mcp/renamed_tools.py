@@ -2,7 +2,8 @@
 
 Home Assistant 2026.2 renamed add-ons to apps, and this server's two add-on
 tools moved with it. Issue #2329 then folded the two blueprint tools into one
-``ha_manage_blueprints``. Neither is a breaking change for callers — clients
+``ha_manage_blueprints``, and #2632 folded ``ha_get_entity_exposure`` into
+``ha_get_entity``. None is a breaking change for callers — clients
 resolve by name at runtime, and ``RenamedToolAliasMiddleware`` keeps the old
 name callable for one that has not re-listed yet.
 
@@ -40,6 +41,9 @@ RENAMED_TOOLS: dict[str, str] = {
     # disagree (see ``rename_retired_keys``).
     "ha_get_blueprint": "ha_manage_blueprints",
     "ha_import_blueprint": "ha_manage_blueprints",
+    # #2632: folded into ha_get_entity, which lists the exposed entities
+    # (``exposed_to``) and answers for entities without a registry entry.
+    "ha_get_entity_exposure": "ha_get_entity",
 }
 
 # Current tool name -> retired parameter name -> the name that serves it today.
@@ -103,11 +107,20 @@ def _adapt_import_blueprint(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"action": "import", **arguments}
 
 
+def _adapt_get_entity_exposure(arguments: dict[str, Any]) -> dict[str, Any]:
+    # The assistant filter applied only to the listing, without an entity_id.
+    assistant = arguments.pop("assistant", None)
+    if assistant is not None and arguments.get("entity_id") is None:
+        arguments["exposed_to"] = assistant
+    return arguments
+
+
 # Retired name -> how its call arguments map onto the current tool's. Only a
 # consolidation needs one; a plain rename forwards the arguments unchanged.
 _RETIRED_ARGUMENT_ADAPTERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "ha_get_blueprint": _adapt_get_blueprint,
     "ha_import_blueprint": _adapt_import_blueprint,
+    "ha_get_entity_exposure": _adapt_get_entity_exposure,
 }
 
 

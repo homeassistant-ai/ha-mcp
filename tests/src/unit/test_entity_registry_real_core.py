@@ -1,4 +1,4 @@
-"""ha_set_entity / ha_get_entity_exposure on a real ``hass``.
+"""ha_get_entity / ha_set_entity on a real ``hass``.
 
 Every check and every refusal below is Core's own: the tools do not judge
 entity ids or assistant names themselves. The main-entity tests check that the
@@ -11,6 +11,10 @@ import json
 from typing import Any
 
 import pytest
+from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
+from homeassistant.components.homeassistant.exposed_entities import (
+    async_expose_entity,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -21,7 +25,6 @@ from pytest_homeassistant.common import MockConfigEntry
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
-from ha_mcp.tools.tools_voice_assistant import VoiceAssistantTools
 
 from .test_zone_icons_real_core import core_client  # noqa: F401 - fixture
 
@@ -226,19 +229,82 @@ async def test_an_unknown_assistant_is_refused_before_any_write(
 
 
 async def test_exposure_is_cores_map(
+    hass: HomeAssistant,
     core_client: HomeAssistantClient,  # noqa: F811
     lamp: str,
 ) -> None:
-    await EntityTools(core_client).ha_set_entity(
-        entity_id=lamp, expose_to={"conversation": True}
-    )
-    tools = VoiceAssistantTools(core_client)
+    tools = EntityTools(core_client)
+    await tools.ha_set_entity(entity_id=lamp, expose_to={"conversation": True})
 
-    single = await tools.ha_get_entity_exposure(entity_id=lamp)
-    listed = await tools.ha_get_entity_exposure(assistant="conversation")
+    single = await tools.ha_get_entity(entity_id=lamp)
+    listed = await tools.ha_get_entity(exposed_to="conversation")
     with pytest.raises(ToolError) as exc_info:
-        await tools.ha_get_entity_exposure(assistant="bogus")
+        await tools.ha_get_entity(exposed_to="bogus")
 
-    assert single["exposed_to"] == {"conversation": True}
+    options = single["entity_entry"]["options"]
+    assert options["conversation"]["should_expose"] is True
     assert listed["exposed_entities"][lamp] == {"conversation": True}
+    store = hass.data[DATA_EXPOSED_ENTITIES]
+    assert listed["expose_new_entities"] is store.async_get_expose_new_entities(
+        "conversation"
+    )
+    assert listed["settings"] == {"entity_id_parts": None}
     assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+async def test_an_entity_without_registry_entry_reads_cores_store(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    hass.states.async_set("light.loose", "on")
+    hass.states.async_set("light.quiet", "off")
+    async_expose_entity(hass, "conversation", "light.loose", True)
+    tools = EntityTools(core_client)
+
+    loose = await tools.ha_get_entity(entity_id="light.loose")
+    quiet = await tools.ha_get_entity(entity_id="light.quiet")
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_get_entity(entity_id="light.nowhere")
+
+    assert loose["entity_entry"] is None
+    assert loose["exposed_to"] == {"conversation": True}
+    assert quiet["exposed_to"] == {}
+    assert "not found" in _error(exc_info)["message"].lower()
+
+
+async def test_expose_new_entities_writes_cores_flag(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    store = hass.data[DATA_EXPOSED_ENTITIES]
+    before = store.async_get_expose_new_entities("conversation")
+
+    result = await EntityTools(core_client).ha_set_entity(
+        expose_new_entities={"conversation": not before}
+    )
+
+    assert store.async_get_expose_new_entities("conversation") is (not before)
+    assert result["previous_expose_new_entities"] == {"conversation": before}
+
+
+async def test_entity_id_parts_are_cores_settings(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    tools = EntityTools(core_client)
+    registry = er.async_get(hass)
+
+    written = await tools.ha_set_entity(entity_id_parts=["device", "entity"])
+    assert registry.settings.entity_id_parts == ("device", "entity")
+    assert written["previous_settings"] == {"entity_id_parts": None}
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_set_entity(entity_id_parts=["entity"])
+    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert registry.settings.entity_id_parts == ("device", "entity")
+
+    await tools.ha_set_entity(entity_id_parts=[])
+    assert registry.settings.entity_id_parts is None

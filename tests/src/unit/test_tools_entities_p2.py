@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import tools_entities
 from ha_mcp.tools.tools_entities import register_entity_tools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
@@ -110,7 +111,8 @@ class TestBulkGetViaGetEntries:
 
     @pytest.mark.asyncio
     async def test_bulk_get_missing_id_maps_to_error(self):
-        """A null in the entries map reproduces the per-id not-found contract."""
+        """A null in the entries map, with no state and no stored exposure,
+        reproduces the per-id not-found contract."""
         client = _make_client()
         client.send_websocket_message = AsyncMock(
             return_value={
@@ -120,6 +122,9 @@ class TestBulkGetViaGetEntries:
                     "light.missing": None,
                 },
             }
+        )
+        client.get_entity_state = AsyncMock(
+            side_effect=HomeAssistantAPIError("Entity not found", status_code=404)
         )
         tool = _register(client)["ha_get_entity"]
 
@@ -132,6 +137,42 @@ class TestBulkGetViaGetEntries:
             {"entity_id": "light.missing", "error": "Entity not found"}
         ]
         assert "suggestions" in result
+
+    @pytest.mark.asyncio
+    async def test_bulk_get_answers_an_entity_without_registry_entry(self):
+        """An id without a registry entry but with a state gets its exposure
+        from Core's exposed-entities store, under unregistered_entities."""
+        client = _make_client()
+
+        async def ws(message, **_kwargs):
+            if message["type"] == "homeassistant/expose_entity/list":
+                return {
+                    "success": True,
+                    "result": {
+                        "exposed_entities": {"light.yaml": {"cloud.alexa": True}}
+                    },
+                }
+            return {
+                "success": True,
+                "result": {"light.a": self._entry("light.a"), "light.yaml": None},
+            }
+
+        client.send_websocket_message = AsyncMock(side_effect=ws)
+        client.get_entity_state = AsyncMock(return_value={"state": "on"})
+        tool = _register(client)["ha_get_entity"]
+
+        result = await tool(entity_id=["light.a", "light.yaml"])
+
+        assert result["count"] == 1
+        assert result["unregistered_entities"] == [
+            {
+                "entity_id": "light.yaml",
+                "entity_entry": None,
+                "exposed_to": {"cloud.alexa": True},
+                "is_exposed_anywhere": True,
+            }
+        ]
+        assert "errors" not in result
 
     @pytest.mark.asyncio
     async def test_bulk_get_preserves_request_order(self):
@@ -593,15 +634,46 @@ class TestUniqueIdResolver:
         client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_neither_entity_id_nor_unique_id(self):
+    async def test_neither_entity_id_nor_unique_id_reads_the_registry_wide_state(
+        self,
+    ):
+        """No entity: Core's registry settings and its exposed-entity map."""
+        client = _make_client()
+
+        async def ws(message, **_kwargs):
+            if message["type"] == "config/entity_registry/settings/get":
+                return {"success": True, "result": {"entity_id_parts": None}}
+            return {
+                "success": True,
+                "result": {"exposed_entities": {"light.a": {"conversation": True}}},
+            }
+
+        client.send_websocket_message = AsyncMock(side_effect=ws)
+        tool = _register(client)["ha_get_entity"]
+
+        result = await tool()
+
+        assert result["settings"] == {"entity_id_parts": None}
+        assert result["exposed_entities"] == {"light.a": {"conversation": True}}
+        assert result["summary"] == {"conversation": 1}
+        sent = [
+            c.args[0]["type"] for c in client.send_websocket_message.await_args_list
+        ]
+        assert sent == [
+            "config/entity_registry/settings/get",
+            "homeassistant/expose_entity/list",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_exposed_to_with_entity_id_rejected(self):
         client = _make_client()
         tool = _register(client)["ha_get_entity"]
 
         with pytest.raises(ToolError) as exc_info:
-            await tool()
+            await tool(entity_id="light.a", exposed_to="conversation")
 
         body = _error_body(exc_info)
-        assert body["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio

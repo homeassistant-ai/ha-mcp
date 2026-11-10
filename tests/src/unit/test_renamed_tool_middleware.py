@@ -49,6 +49,16 @@ def _make_mcp() -> FastMCP:
         }
 
     @mcp.tool()
+    async def ha_get_entity(
+        entity_id: str | None = None, exposed_to: str | None = None
+    ) -> dict:
+        return {
+            "tool": "ha_get_entity",
+            "entity_id": entity_id,
+            "exposed_to": exposed_to,
+        }
+
+    @mcp.tool()
     async def ha_config_get_automation(entity_id: str) -> dict:
         return {"tool": "ha_config_get_automation", "entity_id": entity_id}
 
@@ -65,6 +75,7 @@ _RETIRED_CALLS = {
     "ha_manage_addon": {"slug": "core_ssh"},
     "ha_get_blueprint": {"path": "user/motion.yaml"},
     "ha_import_blueprint": {"url": "https://example.com/bp.yaml"},
+    "ha_get_entity_exposure": {"assistant": "cloud.alexa"},
 }
 
 
@@ -103,6 +114,7 @@ async def test_the_old_names_stay_out_of_the_catalog():
         "ha_get_app",
         "ha_manage_app",
         "ha_manage_blueprints",
+        "ha_get_entity",
         "ha_config_get_automation",
         "ha_config_remove_automation",
     }
