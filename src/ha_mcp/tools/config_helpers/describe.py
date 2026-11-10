@@ -202,8 +202,9 @@ _LATER_FORMS_NOTE = (
     "A config list answers this form and later ones in one call, one object "
     "per form. A form marked fields_depend_on_answers is built from the "
     "earlier answers and is returned by the call that answers the form "
-    "before it; one marked may_follow is one Home Assistant can pick next from "
-    "the answers, and is not certain to be shown."
+    "before it; one marked may_follow is an unverified candidate: Home "
+    "Assistant picks the next step from the answers, and the declaration does "
+    "not say which of these it can pick."
 )
 _LATER_FORMS_EDIT_NOTE = (
     " A later form's current values are shown when the flow reaches it."

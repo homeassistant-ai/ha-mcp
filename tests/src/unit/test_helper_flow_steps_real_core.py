@@ -271,6 +271,23 @@ async def test_describe_shows_the_later_forms_core_declares(
     assert "sampling_size" in {field["name"] for field in options["fields"]}
 
 
+async def test_steps_core_picks_from_the_answers_are_listed_as_candidates(
+    recorder_mock: Any,  # filter depends on recorder; requested before hass
+    component_tools: HelperConfigTools,
+) -> None:
+    """filter's second form depends on the filter chosen on the first. Core's
+    declaration does not say which form an answer leads to, so each is a
+    candidate and none is presented as certain."""
+    described = await component_tools.ha_config_list_helpers(
+        helper_type="filter", describe=True
+    )
+
+    later = described["later_forms"]
+    assert {"lowpass", "outlier"} <= {form["step_id"] for form in later}
+    assert all(form.get("may_follow") for form in later)
+    assert "unverified candidate" in described["note"]
+
+
 async def test_an_open_form_names_the_later_forms_and_the_last_one_none(
     component_tools: HelperConfigTools,
 ) -> None:
