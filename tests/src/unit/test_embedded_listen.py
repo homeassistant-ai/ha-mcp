@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import logging
+import os
 import socket
 import sys
 from contextlib import asynccontextmanager
@@ -133,7 +135,7 @@ def test_busy_port_reads_as_a_startup_exit(
         mgr, _seen = _serve_worker(tmp_path, monkeypatch, taken.getsockname()[1], serve)
     message = str(mgr._thread_exc)
     assert "exited during startup" in message
-    assert "Address already in use" in message
+    assert os.strerror(errno.EADDRINUSE) in message
 
 
 async def test_readiness_ignores_another_process_on_the_port(tmp_path: Path) -> None:
