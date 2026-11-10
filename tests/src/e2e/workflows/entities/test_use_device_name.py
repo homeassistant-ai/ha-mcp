@@ -1,8 +1,10 @@
-"""Home Assistant 2026.10 "Use device name" through ha_set_entity (issue #2611).
+"""The entity dialog's main-entity switch through ha_set_entity (issue #2611).
 
-HA stores the switch as an entity-registry ``name`` of ``""`` and then shows the
-device name as the entity's friendly name. ``ha_set_entity(name="")`` keeps its
-revert-to-default meaning; ``use_device_name`` carries the new state. Cores
+"Use device name" in 2026.10, "Main entity of the device" in 2026.11. On an
+entity with an integration name, HA stores the switch as an entity-registry
+``name`` of ``""`` and then shows the device name as its friendly name.
+``ha_set_entity(name="")`` keeps its revert-to-default meaning;
+``use_device_name`` carries the new state. Cores
 before 2026.10 store ``""`` but render the default name, so the tool refuses the
 switch there instead of silently doing the opposite of what was asked.
 """

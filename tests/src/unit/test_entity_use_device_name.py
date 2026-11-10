@@ -1,8 +1,9 @@
-"""Issue #2611: Home Assistant 2026.10's "Use device name" entity switch.
+"""Issue #2611: the entity dialog's "Main entity of the device" switch.
 
-HA stores the switch as an entity-registry ``name`` of ``""``; ``ha_set_entity``
-maps ``name=""`` to ``null`` (revert to default), so an agent could not turn
-the switch on. ``use_device_name`` carries the new state explicitly.
+The dialog ("Use device name" in 2026.10) writes ``name`` ``""`` when the entity
+has an integration name and ``null`` otherwise, and moves an entity with an area
+of its own to its device's area. ``ha_set_entity`` maps ``name=""`` to ``null``
+(revert to default), so ``use_device_name`` carries the switch.
 """
 
 import json
@@ -13,12 +14,14 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.entity_update_fields import build_name_visibility_fields
 from ha_mcp.tools.tools_entities import register_entity_tools
+from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 ENTRY = {
     "entity_id": "sensor.sun_next_dawn",
-    "name": "",
+    "name": None,
     "original_name": "Next dawn",
     "device_id": "dev1",
+    "area_id": None,
 }
 
 
@@ -31,14 +34,64 @@ def _ws_get(entry: dict | None = None) -> dict:
 
 
 class TestBuildNameField:
-    def test_true_sends_empty_name(self) -> None:
+    @pytest.mark.parametrize(
+        ("entry", "expected", "notes"),
+        [
+            (ENTRY, {"name": ""}, ["main entity of the device"]),
+            # Like the entity dialog: "" only overrides an integration name.
+            (
+                dict(ENTRY, original_name=None, name="Dawn"),
+                {"name": None},
+                ["main entity of the device"],
+            ),
+            # It gives up the entity's own area for the device's.
+            (
+                dict(ENTRY, area_id="kitchen"),
+                {"name": "", "area_id": None},
+                [
+                    "main entity of the device",
+                    "area cleared: follows the device's area",
+                ],
+            ),
+            # No name of its own: already the main entity, the unchanged name
+            # goes back so Core returns the entry, and the area stays.
+            (
+                dict(ENTRY, name="", area_id="kitchen"),
+                {"name": ""},
+                ["already the main entity"],
+            ),
+            (
+                dict(ENTRY, original_name=None),
+                {"name": None},
+                ["already the main entity"],
+            ),
+        ],
+    )
+    def test_true_writes_what_the_dialog_writes(
+        self, entry: dict, expected: dict, notes: list[str]
+    ) -> None:
         message: dict = {}
         updates: list[str] = []
         build_name_visibility_fields(
-            message, updates, None, None, None, None, use_device_name=True
+            message, updates, None, None, None, None, True, entry
         )
-        assert message["name"] == ""
-        assert updates
+        assert message == expected
+        assert updates == notes
+
+    def test_explicit_area_is_left_for_core_to_judge(self) -> None:
+        """Core refuses an area of its own on a main entity; it is sent, not dropped."""
+        message: dict = {}
+        build_name_visibility_fields(
+            message,
+            [],
+            "office",
+            None,
+            None,
+            None,
+            True,
+            dict(ENTRY, area_id="kitchen"),
+        )
+        assert message == {"area_id": "office", "name": ""}
 
     def test_false_sends_null_name(self) -> None:
         message: dict = {}
@@ -86,6 +139,24 @@ class TestSetEntityUseDeviceName:
         assert sent["type"] == "config/entity_registry/update"
         assert sent["name"] == ""
         assert result["success"] is True
+
+    async def test_entry_is_read_under_the_update_lock(self, tools) -> None:
+        """The write is built from the entry, so no update may land between."""
+        registered, client = tools
+        lock = registry_update_lock("entity", "sensor.sun_next_dawn")
+        held: list[bool] = []
+
+        async def ws(message: dict) -> dict:
+            if message["type"] == "config/entity_registry/get":
+                held.append(lock.locked())
+                return _ws_get()
+            return _ws_ok()
+
+        client.send_websocket_message = AsyncMock(side_effect=ws)
+        await registered["ha_set_entity"](
+            entity_id="sensor.sun_next_dawn", use_device_name=True
+        )
+        assert held == [True]
 
     async def test_false_writes_null_name(self, tools) -> None:
         registered, client = tools

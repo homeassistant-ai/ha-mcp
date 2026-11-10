@@ -1,7 +1,8 @@
 """ha_set_entity / ha_get_entity_exposure on a real ``hass``.
 
 Every check and every refusal below is Core's own: the tools do not judge
-entity ids or assistant names themselves.
+entity ids or assistant names themselves. The main-entity tests check that the
+fields ha_set_entity takes from the entity dialog land in a real registry.
 """
 
 from __future__ import annotations
@@ -11,8 +12,11 @@ from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -34,6 +38,18 @@ async def lamp(hass: HomeAssistant, core_client: HomeAssistantClient) -> str:  #
 
 def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))["error"]
+
+
+def _device_entity(hass: HomeAssistant, original_name: str | None) -> er.RegistryEntry:
+    """A sensor on a device, the shape the main-entity switch applies to."""
+    config_entry = MockConfigEntry(domain="demo")
+    config_entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers={("demo", "sun")}
+    )
+    return er.async_get(hass).async_get_or_create(
+        "sensor", "demo", "dawn", device_id=device.id, original_name=original_name
+    )
 
 
 async def test_auto_takes_the_id_core_generates(
@@ -81,6 +97,70 @@ async def test_auto_on_an_unknown_entity_is_not_found(
         )
 
     assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    ("original_name", "expected_name"), [("Dawn", ""), (None, None)]
+)
+async def test_main_entity_writes_what_the_dialog_writes(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    original_name: str | None,
+    expected_name: str | None,
+) -> None:
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    registry = er.async_get(hass)
+    entry = _device_entity(hass, original_name)
+    registry.async_update_entity(entry.entity_id, name="Mine", area_id=kitchen.id)
+
+    await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id, use_device_name=True
+    )
+
+    written = registry.async_get(entry.entity_id)
+    assert written is not None
+    assert (written.name, written.area_id) == (expected_name, None)
+
+
+async def test_main_entity_is_returned_unchanged(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+) -> None:
+    registry = er.async_get(hass)
+    entry = _device_entity(hass, "Dawn")
+    registry.async_update_entity(entry.entity_id, name="")
+    before = registry.async_get(entry.entity_id)
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id, use_device_name=True
+    )
+
+    assert registry.async_get(entry.entity_id) == before
+    assert result["entity_entry"]["name"] == ""
+    assert result["entity_entry"]["entity_id"] == entry.entity_id
+
+
+async def test_main_entity_with_own_area_is_cores_refusal(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+) -> None:
+    areas = ar.async_get(hass)
+    kitchen = areas.async_create("Kitchen")
+    office = areas.async_create("Office")
+    registry = er.async_get(hass)
+    entry = _device_entity(hass, "Dawn")
+    registry.async_update_entity(entry.entity_id, name="Mine", area_id=office.id)
+    before = registry.async_get(entry.entity_id)
+
+    with pytest.raises(ToolError) as exc_info:
+        await EntityTools(core_client).ha_set_entity(
+            entity_id=entry.entity_id, use_device_name=True, area_id=kitchen.id
+        )
+
+    error = _error(exc_info)
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "cannot have an area of its own" in error["message"]
+    assert registry.async_get(entry.entity_id) == before
 
 
 async def test_get_entity_serves_cores_full_entry(

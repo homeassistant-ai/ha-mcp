@@ -873,9 +873,6 @@ class EntityTools:
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         reject_name_with_use_device_name(name, use_device_name)
-        await ensure_use_device_name_allowed(
-            use_device_name, self._client, entity_id, self._fetch_entity
-        )
         if new_entity_id == "auto":
             new_entity_id = await self._automatic_entity_id(entity_id)
         # Normalized before Phase 3: a quote-only value must be rejected before the
@@ -885,6 +882,10 @@ class EntityTools:
             new_device_name, "new_device_name", hint=_CLEAR_DEVICE_NAME_HINT
         )
         async with registry_update_locks("entity", entity_id, new_entity_id):
+            # Read under the lock: the main-entity write is built from this entry
+            current_entry = await ensure_use_device_name_allowed(
+                use_device_name, self._client, entity_id, self._fetch_entity
+            )
             # Phase 1: For add/remove label operations, fetch current labels first
             final_labels = await self._resolve_final_labels(
                 entity_id, parsed_labels, label_operation
@@ -907,6 +908,7 @@ class EntityTools:
                 icon,
                 device_class,
                 use_device_name,
+                current_entry,
             )
             build_state_tag_fields(
                 message,
@@ -1403,8 +1405,14 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "Display name for the entity. Use empty string '' to remove custom "
-                    "name and revert to default. " + WHITESPACE_CLEARS_NOTE
+                    "The entity's own name part, not the full name: from Home "
+                    "Assistant 2026.10 the UI puts the device name (and, where "
+                    "linked, a parent device's) in front of it while the entry's "
+                    "next_name_part is 'device', that is while the entity has a "
+                    "device and no area of its own; the state's friendly_name puts "
+                    "the device name in front regardless. Use empty string '' to "
+                    "remove the custom name and revert to default. "
+                    + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
@@ -1413,10 +1421,18 @@ class EntityTools:
             bool | None,
             Field(
                 description=(
-                    "HA 2026.10's 'Use device name' switch. True names the entity "
-                    "after its device and follows device renames; False restores "
-                    "the integration's default name. Omit to leave it as is; not "
-                    "combinable with name."
+                    "The entity dialog's 'Main entity of the device' switch "
+                    "(HA 2026.11; 'Use device name' in 2026.10). True names the "
+                    "entity after its device, following device renames, and like "
+                    "the dialog moves it from its own area to the device's; Home "
+                    "Assistant refuses an area_id of its own on a main entity, so "
+                    "set the area on the device with ha_set_device. An entity "
+                    "without a name of its own already is the main entity and is "
+                    "left as is. False restores the integration's default name; an "
+                    "entity the integration gives no name then is the main entity, "
+                    "which Home Assistant refuses while it has an area of its own, "
+                    "so pass name instead. Omit to leave it as is; not combinable with "
+                    "name."
                 ),
                 default=None,
             ),
@@ -1778,8 +1794,10 @@ class EntityTools:
         entity's own name), labels, categories, device_class, capabilities,
         entity_category, per-domain options, platform, device_id,
         config_entry_id, unique_id and, on Home Assistant 2026.10+,
-        `next_name_part`. From 2026.10, `name: ""` on an entity with a device_id
-        is the UI's "Use device name" setting. Plus the enrichment keys below.
+        `next_name_part`. From 2026.10, an entity with a device_id and no name
+        of its own (`name: ""`, or `name: null` with no `original_name`) is the
+        main entity of its device (the dialog's "Main entity of the device"
+        switch; "Use device name" in 2026.10). Plus the enrichment keys below.
 
         RESOLVER MODE:
         Pass unique_id (instead of entity_id) to resolve a stable integration
