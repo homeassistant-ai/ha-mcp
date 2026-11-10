@@ -146,8 +146,10 @@ def helpers_named(
 ) -> dict[str, Any]:
     """The helpers of ``domain`` a new one named ``name`` would be numbered
     after: those whose id, or whose name, Core's ``slugify`` turns into the
-    same id. Ids are storage ids, or config entry ids for a flow helper;
-    ``not_stored`` are the ones no storage write reaches.
+    same id. ``ids`` are storage ids, or config entry ids for a flow helper.
+    ``not_stored`` repeats the ones among ``ids`` that are neither: the object
+    id of an entity that is not a stored helper, which no storage write
+    reaches.
     """
     from homeassistant.util import slugify
 
