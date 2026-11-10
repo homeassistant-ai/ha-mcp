@@ -367,6 +367,45 @@ async def test_a_flow_not_opened_for_the_calls_anchor_is_refused(
     client.abort_options_flow.assert_not_awaited()
 
 
+_RECONFIGURE_RECORD = {
+    "found": True,
+    "handler": "filesize",
+    "source": "reconfigure",
+    "entry_id": "entry2",
+    "subentry_id": None,
+}
+
+
+@pytest.mark.parametrize(
+    ("target", "record", "continued"),
+    [
+        (RECONFIGURE, _RECONFIGURE_RECORD, True),
+        (RECONFIGURE, {**_RECONFIGURE_RECORD, "entry_id": "entry9"}, False),
+        (SETUP, {**_RECONFIGURE_RECORD, "handler": "knx", "source": "user"}, True),
+        (SETUP, {**_RECONFIGURE_RECORD, "handler": "knx", "source": "reauth"}, False),
+    ],
+    ids=["its-entry", "another-entry", "user-setup", "reauth-as-setup"],
+)
+async def test_a_flow_the_server_forgot_is_bound_by_cores_record(
+    monkeypatch: pytest.MonkeyPatch, target, record, continued
+):
+    """After an ha-mcp restart the flow's target is the one Core recorded: a
+    reconfigure flow continues only for its own entry, and a reauth flow Core
+    started for the domain is not a setup flow to answer."""
+    monkeypatch.setattr(
+        integration_flow_steps, "flow_record", AsyncMock(return_value=record)
+    )
+    client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
+
+    if continued:
+        result = await _drive(client, target, opened=False, flow_id="f1")
+        assert result["flow_id"] == "f1"
+    else:
+        with pytest.raises(ToolError):
+            await _drive(client, target, opened=False, flow_id="f1")
+        client._request.assert_not_awaited()
+
+
 async def test_a_flow_of_the_calls_own_anchor_is_answered():
     client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
     await _drive(client, OPTIONS, flow_id="f1", config={"host": "h"})
