@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -35,7 +36,7 @@ def _ast_grep() -> str:
     return found
 
 
-def _scan(rule_file: Path, cwd: Path, target: str) -> list[dict]:
+def _scan(rule_file: Path, cwd: Path, target: str) -> list[dict[str, Any]]:
     proc = subprocess.run(
         [_ast_grep(), "scan", "--rule", str(rule_file), "--json=compact", target],
         cwd=cwd,
@@ -44,7 +45,7 @@ def _scan(rule_file: Path, cwd: Path, target: str) -> list[dict]:
         check=False,
     )
     assert proc.stdout.strip(), proc.stderr
-    rows: list[dict] = json.loads(proc.stdout)
+    rows: list[dict[str, Any]] = json.loads(proc.stdout)
     return rows
 
 
@@ -101,6 +102,20 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             '    side_effect=[{"success": True}, HomeAssistantConnectionError("x")]\n'
             ")\n",
             id="reply-list-ending-in-an-error",
+        ),
+        pytest.param(
+            "client.get_states = AsyncMock(\n"
+            '    return_value=HomeAssistantConnectionError("x")\n'
+            ")\n",
+            id="error-object-returned-not-raised",
+        ),
+        pytest.param(
+            "client.get_states.return_value = HomeAssistantPayload()\n",
+            id="return-value-named-like-the-client",
+        ),
+        pytest.param(
+            "client.get_states.side_effect = HomeAssistantPayloadFactory()\n",
+            id="side-effect-that-is-not-an-error",
         ),
     ],
 )
@@ -186,10 +201,19 @@ def test_a_stand_in_under_another_name_is_refused(
 
 def _method_lists() -> list[set[str]]:
     rule = yaml.safe_load((_RULES / f"{_REPLIES}.yml").read_text(encoding="utf-8"))
+    alternatives = rule["rule"]["all"][0]["any"][:4]
+    assert [alternative["kind"] for alternative in alternatives] == [
+        "assignment",
+        "keyword_argument",
+        "function_definition",
+        "call",
+    ]
     lists = []
-    for alternative in rule["rule"]["all"][0]["any"][:4]:
-        longest = max(re.findall(r"\(([a-z_|]+)\)", alternative["regex"]), key=len)
-        lists.append(set(longest.split("|")))
+    for alternative in alternatives:
+        groups = re.findall(r"\(([a-z_|]+)\)", alternative["regex"])
+        method_groups = [group for group in groups if "send_websocket_message" in group]
+        assert len(method_groups) == 1, alternative["regex"]
+        lists.append(set(method_groups[0].split("|")))
     return lists
 
 

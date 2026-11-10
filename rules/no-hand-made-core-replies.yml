@@ -25,9 +25,10 @@ rule:
         - kind: call
           regex: '^(mock\.)?patch\(\s*["''][^"'']*(get_websocket_client|websocket_manager)["'']'
     # A failure Core cannot be made to give in a unit test stays replaceable:
-    # the statement raises one of the client's own errors and nothing else.
+    # the statement sets a side_effect that raises one of the client's own
+    # errors, and nothing else. A return_value never qualifies.
     - not:
-        regex: '=\s*(AsyncMock\(\s*side_effect\s*=\s*)?(HomeAssistant\w+|TimeoutError|asyncio\.TimeoutError|ConnectionError|ConnectionResetError|OSError)\b[^\[\]{}]*$'
+        regex: 'side_effect\s*=\s*(HomeAssistant\w*(Error|Timeout|NotSent)|TimeoutError|asyncio\.TimeoutError|ConnectionError|ConnectionResetError|OSError)\b[^\[\]{}]*$'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
