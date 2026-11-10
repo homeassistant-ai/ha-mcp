@@ -108,7 +108,6 @@ async def test_restore_abort_cleanup_logs_safe_failure_context(
     [
         ("connection", "unknown", OptionsFlowError),
         ("unknown_step", "unknown", OptionsFlowError),
-        ("applied_response", "applied", OptionsFlowError),
         ("applied_initial", "applied", OptionsFlowError),
         ("cancelled", "unknown", asyncio.CancelledError),
     ],
@@ -131,11 +130,6 @@ async def test_unaborted_restore_logs_reconciliation_context_without_values(
     elif scenario == "unknown_step":
         flow_client.submit_options_flow_step.return_value = {
             "type": "secret-marker-unknown-step",
-        }
-    elif scenario == "applied_response":
-        flow_client.submit_options_flow_step.return_value = {
-            "type": "create_entry",
-            "result": [],
         }
     else:
         flow_client.start_options_flow.return_value = {

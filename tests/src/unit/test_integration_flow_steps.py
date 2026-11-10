@@ -268,7 +268,7 @@ async def test_an_undeclared_key_is_left_to_home_assistant_to_refuse():
     assert "extra keys not allowed" in error["error"]["message"]
     assert error["flow_id"] == "f1"
     assert error["data_schema"] == [_field("host")]
-    assert "still open" in error["error"]["suggestion"]
+    assert any("still open" in hint for hint in error["error"]["suggestions"])
     client.abort_config_flow.assert_not_awaited()
 
 

@@ -773,6 +773,7 @@ class TestWriteEntryPointsRejectSentinels:
         from ha_mcp.tools.config_helpers.flow import _handle_set_config_subentry
 
         client = AsyncMock()
+        client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
         with pytest.raises(ToolError):
             await _handle_set_config_subentry(
                 client, None, "e1", "device", None, {"token": REDACTED_EMPTY}, False

@@ -253,11 +253,13 @@ async def submit_step(
     otherwise it is read back. Input Core rejects (the form back with
     ``errors``, or a 400) raises; the flow stays open to correct it.
     """
-    if config is not None and menu_choice is not None:
-        _refuse(
-            "Pass menu_choice or config, not both: each answers one step",
-            flow_id=flow_id,
-        )
+    if config is not None:
+        _reject_redaction_sentinels(config)
+        if menu_choice is not None:
+            _refuse(
+                "Pass menu_choice or config, not both: each answers one step",
+                flow_id=flow_id,
+            )
     if current is None:
         current = await read_step(client, target, flow_id)
     if menu_choice is not None:
