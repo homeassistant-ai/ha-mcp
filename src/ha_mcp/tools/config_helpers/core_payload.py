@@ -9,7 +9,6 @@ module only adds what Core does not do itself.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
@@ -45,13 +44,12 @@ def core_fields(
 
 
 def with_create_defaults(helper_type: str, fields: dict[str, Any]) -> dict[str, Any]:
-    """Defaults this tool documents that Core does not apply on create."""
+    """What Home Assistant's own dialog posts on create beyond the fields set."""
     fields = dict(fields)
-    if helper_type == "input_datetime" and not {"has_date", "has_time"} & set(fields):
-        # Core rejects an input_datetime with neither component.
-        fields.update(has_date=True, has_time=True)
     if helper_type == "tag":
-        fields.setdefault("tag_id", uuid.uuid4().hex)
+        # Core's create reads tag_id unconditionally and generates the id of
+        # an empty one; the tag dialog posts "" unless a custom id is typed.
+        fields.setdefault("tag_id", "")
     return fields
 
 

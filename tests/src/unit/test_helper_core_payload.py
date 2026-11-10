@@ -63,20 +63,7 @@ def test_tag_update_does_not_echo_the_listed_name() -> None:
 # --- create defaults ---------------------------------------------------------
 
 
-def test_input_datetime_without_components_gets_date_and_time() -> None:
-    """Core rejects an input_datetime with neither; the tool defaults to both."""
-    assert with_create_defaults("input_datetime", {}) == {
-        "has_date": True,
-        "has_time": True,
-    }
-    only_date = with_create_defaults("input_datetime", {"has_date": True})
-    assert only_date == {"has_date": True}
-
-
-def test_tag_create_gets_a_tag_id_unless_given() -> None:
-    """Core's tag create requires tag_id; the tool documents it as optional."""
-    generated = with_create_defaults("tag", {})["tag_id"]
-    assert generated and generated != with_create_defaults("tag", {})["tag_id"]
+def test_a_given_tag_id_is_kept() -> None:
     assert with_create_defaults("tag", {"tag_id": "abc"})["tag_id"] == "abc"
 
 

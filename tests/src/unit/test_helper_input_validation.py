@@ -143,7 +143,7 @@ def _find_msg(client: Any, msg_type: str) -> dict | None:
 
 
 class TestTagAutoGeneratesTagId:
-    """tag/create requires tag_id; tool fills it in when caller omits."""
+    """tag/create reads tag_id; Core generates the id of an empty one."""
 
     async def test_create_without_tag_id_auto_generates(
         self, register_tools, mock_client
@@ -160,10 +160,8 @@ class TestTagAutoGeneratesTagId:
             )
         msg = _find_msg(mock_client, "tag/create")
         assert msg is not None, "tag/create message must be sent"
-        assert "tag_id" in msg, "auto-generated tag_id must be in the payload"
-        assert isinstance(msg["tag_id"], str) and len(msg["tag_id"]) == 32, (
-            f"expected uuid4 hex (32 chars), got {msg['tag_id']!r}"
-        )
+        # Posted empty, as the HA tag dialog posts it: Core generates the id.
+        assert msg["tag_id"] == ""
 
     async def test_create_with_explicit_tag_id_preserved(
         self, register_tools, mock_client

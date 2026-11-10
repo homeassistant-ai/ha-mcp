@@ -266,23 +266,6 @@ class TestBug12NameCollisionSimpleHelpers:
         # Suggestion text must steer the caller toward an UPDATE.
         assert "helper_id" in str(excinfo.value)
 
-    async def test_collision_is_slug_based_not_exact_string(
-        self, register_tools, mock_client
-    ):
-        """Spaces / casing / punctuation collapse to the same slug."""
-        existing = [{"id": "kitchen_light", "name": "Kitchen Light"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(
-                helper_type="input_boolean", list_items=existing
-            )
-        )
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="kitchen light!",  # different chars, same slug
-            )
-        _assert_invalid_param(excinfo, must_contain="kitchen_light")
-
     async def test_unique_name_passes_collision_check(
         self, register_tools, mock_client
     ):

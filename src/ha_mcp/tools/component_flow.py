@@ -12,35 +12,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..client.rest_client import HomeAssistantCommandNotSent
-from .component_api import component_supports, get_component_caps, invalidate_caps
-
-_PREFIX = "ha_mcp_tools/"
-
-
-async def _ask(client: Any, command: str, **params: Any) -> dict[str, Any] | None:
-    """The component's reply to ``command``, whose capability has its name."""
-    if not component_supports(await get_component_caps(client), command):
-        return None
-    try:
-        reply = await client.send_websocket_message(
-            {"type": _PREFIX + command, **params}
-        )
-    except HomeAssistantCommandNotSent:
-        return None
-    if not reply.get("success"):
-        if reply.get("error_code") == "unknown_command":
-            invalidate_caps(client)
-        return None
-    result = reply.get("result")
-    return result if isinstance(result, dict) else None
+from .component_api import ask_component
 
 
 async def flow_record(client: Any, manager: str, flow_id: str) -> dict[str, Any] | None:
     """Core's record of ``flow_id`` in its ``config``, ``options`` or
     ``subentries`` flow manager: ``found``, and when found the flow's
     ``handler``, ``source``, ``entry_id`` and ``subentry_id``."""
-    return await _ask(client, "flow_record", manager=manager, flow_id=flow_id)
+    return await ask_component(client, "flow_record", manager=manager, flow_id=flow_id)
 
 
 async def flow_outline(
@@ -49,7 +28,7 @@ async def flow_outline(
     """The steps Core declares for ``domain``'s ``config`` or ``options``
     flow, in Core's order; ``None`` for a flow that is not declared as a
     mapping of steps."""
-    result = await _ask(client, "flow_outline", domain=domain, flow=flow)
+    result = await ask_component(client, "flow_outline", domain=domain, flow=flow)
     steps = result.get("steps") if result and result.get("supported") else None
     if not isinstance(steps, list):
         return None

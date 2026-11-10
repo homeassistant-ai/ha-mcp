@@ -41,6 +41,7 @@ from ..client.rest_client import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -612,3 +613,26 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     """
     auth = info.get("webhook_auth") if info else None
     return auth if isinstance(auth, str) else None
+
+
+async def ask_component(
+    client: Any, command: str, **params: Any
+) -> dict[str, Any] | None:
+    """The component's reply to ``ha_mcp_tools/<command>``, a command whose
+    capability has its name. ``None`` when the component does not advertise
+    it, the command was not sent, or it was refused: the caller then works
+    from Core's own commands."""
+    if not component_supports(await get_component_caps(client), command):
+        return None
+    try:
+        reply = await client.send_websocket_message(
+            {"type": f"ha_mcp_tools/{command}", **params}
+        )
+    except HomeAssistantCommandNotSent:
+        return None
+    if not reply.get("success"):
+        if reply.get("error_code") == UNKNOWN_COMMAND_CODE:
+            invalidate_caps(client)
+        return None
+    result = reply.get("result")
+    return result if isinstance(result, dict) else None

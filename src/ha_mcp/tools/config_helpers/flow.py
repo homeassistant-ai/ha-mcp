@@ -27,7 +27,6 @@ from ..integration_flow_steps import (
     start_setup_flow,
     unsent_answers_warning,
 )
-from .describe import with_list_hint
 from .registry import (
     _apply_registry_updates_to_entity,
     _check_name_collision,
@@ -260,7 +259,7 @@ async def _handle_flow_helper(
         if value is not None
     ]
     if step.get("type") in _OPEN_STEP_TYPES:
-        response = with_list_hint(await open_step_answer(client, target, flow_id, step))
+        response = await open_step_answer(client, target, flow_id, step)
         response.update(action=action, helper_type=helper_type)
         if registry_given:
             response.setdefault("warnings", []).append(

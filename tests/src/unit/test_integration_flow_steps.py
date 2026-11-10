@@ -147,6 +147,27 @@ async def test_new_flow_submits_config_to_its_first_form_and_finishes():
     }
 
 
+async def test_a_config_list_answers_the_flows_forms_in_order():
+    """Each object goes to the form the flow is then at, and an integration
+    whose flow ends early reports the answers it never asked for."""
+    client = _client(
+        start_config_flow=AsyncMock(return_value=_form("user", _field("host"))),
+        submit_config_flow_step=AsyncMock(
+            side_effect=[_form("routing", _field("individual_address")), CREATED]
+        ),
+    )
+    answers = [{"host": "10.0.0.2"}, {"individual_address": "0.0.240"}, {"x": 1}]
+
+    result = await _run(client, config=answers)
+
+    assert [call.args for call in client.submit_config_flow_step.await_args_list] == [
+        ("f1", answers[0]),
+        ("f1", answers[1]),
+    ]
+    assert result["entry_id"] == "new1"
+    assert "before the last 1" in result["warnings"][0]
+
+
 async def test_new_flow_answers_its_menu_then_the_form_in_one_call():
     client = _client(
         submit_config_flow_step=AsyncMock(
