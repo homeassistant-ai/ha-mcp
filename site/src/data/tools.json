@@ -2520,11 +2520,6 @@
             "le": 50
           }
         },
-        "deduplicate": {
-          "type": "bool | None",
-          "description": "Deprecated; omit. Core's raw step variables are returned unchanged, so no deduplication is applied.",
-          "default": null
-        },
         "detailed": {
           "type": "bool",
           "description": "Include the run's logbook entries and context metadata.",

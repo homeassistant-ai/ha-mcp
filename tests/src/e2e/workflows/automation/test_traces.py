@@ -66,9 +66,13 @@ class TestAutomationTraces:
             )
         )
         cleanup_tracker.track("automation", automation_id)
-        assert await wait_for_entity_registration(mcp_client, automation_id), (
-            f"{automation_id} never became queryable"
-        )
+        if not await wait_for_entity_registration(mcp_client, automation_id):
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_automation",
+                {"entity_id": automation_id},
+            )
+            raise AssertionError(f"{automation_id} never became queryable")
         return automation_id
 
     async def test_template_trace_with_null_trigger_states(
@@ -387,16 +391,24 @@ action:
             assert "triggers" in detail_data["config"]
             assert "actions" in detail_data["config"]
         finally:
-            await safe_call_tool(
-                mcp_client,
-                "ha_manage_blueprints",
-                {
-                    "action": "delete",
-                    "domain": "automation",
-                    "path": blueprint_path,
-                    "confirm": True,
-                },
-            )
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    if automation_id is not None:
+                        await MCPAssertions(mcp_client).call_tool_success(
+                            "ha_config_remove_automation",
+                            {"entity_id": automation_id},
+                        )
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_manage_blueprints",
+                        {
+                            "action": "delete",
+                            "domain": "automation",
+                            "path": blueprint_path,
+                            "confirm": True,
+                        },
+                    )
 
     async def test_event_context_resolves_to_triggered_run(
         self, mcp_client, cleanup_tracker, test_data_factory
@@ -882,25 +894,25 @@ action:
             assert trigger_result["reason"]
             assert isinstance(trigger_result["data"], dict)
         finally:
-            cleanup = CleanupSteps()
-            with cleanup.step():
-                if automation_id is not None:
-                    await MCPAssertions(mcp_client).call_tool_success(
-                        "ha_config_remove_automation",
-                        {"entity_id": automation_id},
-                    )
-            with cleanup.step():
-                if light_was_on:
-                    # The test turned the light off to force the state trigger;
-                    # put the instance back the way it was for later tests.
-                    await MCPAssertions(mcp_client).call_tool_success(
-                        "ha_call_service",
-                        {
-                            "domain": "light",
-                            "service": "turn_on",
-                            "entity_id": light_id,
-                        },
-                    )
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    if automation_id is not None:
+                        await MCPAssertions(mcp_client).call_tool_success(
+                            "ha_config_remove_automation",
+                            {"entity_id": automation_id},
+                        )
+                with cleanup.step():
+                    if light_was_on:
+                        # The test turned the light off to force the state
+                        # trigger; put the instance back the way it was.
+                        await MCPAssertions(mcp_client).call_tool_success(
+                            "ha_call_service",
+                            {
+                                "domain": "light",
+                                "service": "turn_on",
+                                "entity_id": light_id,
+                            },
+                        )
 
 
 @pytest.mark.automation

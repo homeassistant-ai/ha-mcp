@@ -3,10 +3,11 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, cast
 
-from ..client.rest_client import HomeAssistantError
+from ..client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
+from .component_api import component_supports, get_component_caps, invalidate_caps
 from .helpers import raise_tool_error
 from .log_sources_logbook import LogbookLogSourceMixin
 from .util_helpers import is_connection_error_message
@@ -14,6 +15,8 @@ from .util_helpers import is_connection_error_message
 logger = logging.getLogger(__name__)
 
 PARENT_CONTEXT_SCAN_LIMIT = 50
+TRACE_CONTEXT_COMMAND = "ha_mcp_tools/trace_context"
+TRACE_CONTEXT_CAPABILITY = "trace_context"
 LOGBOOK_ROW_LIMIT = 50
 # Returned by _read_candidate_context when a dropped connection ends the scan.
 _SCAN_ABORTED = object()
@@ -31,6 +34,92 @@ class ContextTraceMatch:
     trace_data: dict[str, Any] | None = None
     domain: str | None = None
     item_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _ComponentContext:
+    """A component scan outcome; ``match`` is None for an authoritative miss."""
+
+    match: ContextTraceMatch | None
+    scanned: int
+
+
+async def _component_context(
+    client: Any,
+    context_id: str,
+    domain: str | None = None,
+    item_id: str | None = None,
+) -> _ComponentContext | None:
+    """Match a context in Core's live trace store through the component.
+
+    Returns None when the component is absent or did not answer, so the caller
+    keeps its public API fallback. A reply with no match is authoritative: the
+    component scanned every stored trace in process.
+    """
+    if not component_supports(
+        await get_component_caps(client), TRACE_CONTEXT_CAPABILITY
+    ):
+        return None
+    message: dict[str, Any] = {
+        "type": TRACE_CONTEXT_COMMAND,
+        "context_id": context_id,
+    }
+    if domain is not None:
+        message["domain"] = domain
+    if item_id is not None:
+        message["item_id"] = item_id
+    try:
+        result = await client.send_websocket_message(message)
+    except HomeAssistantConnectionError as err:
+        logger.warning("%s got no answer: %s", TRACE_CONTEXT_COMMAND, err)
+        return None
+    if not result.get("success"):
+        if result.get("error_code") == "unknown_command":
+            logger.debug("%s is not registered", TRACE_CONTEXT_COMMAND)
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed: %s", TRACE_CONTEXT_COMMAND, result.get("error"))
+        return None
+    return _component_payload(result.get("result"))
+
+
+def _component_payload(payload: Any) -> _ComponentContext | None:
+    """Parse one component trace-context reply; None means keep the fallback."""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("available") is False:
+        # The component is loaded but Core's trace store is not set up; keep
+        # the public fallback available.
+        return None
+    scanned = payload.get("scanned")
+    scanned_count = scanned if isinstance(scanned, int) and scanned >= 0 else 0
+    kind = payload.get("match")
+    if kind not in ("trace", "parent"):
+        return _ComponentContext(None, scanned_count)
+    run_id = payload.get("run_id")
+    item_domain = payload.get("domain")
+    item_id_value = payload.get("item_id")
+    trace_data = payload.get("trace")
+    if not (
+        isinstance(run_id, str)
+        and isinstance(item_domain, str)
+        and isinstance(item_id_value, str)
+        and isinstance(trace_data, dict)
+    ):
+        return None
+    return _ComponentContext(
+        ContextTraceMatch(
+            run_id,
+            cast(Literal["trace", "parent"], kind),
+            scanned_count,
+            False,
+            (),
+            trace_data,
+            item_domain,
+            item_id_value,
+        ),
+        scanned_count,
+    )
 
 
 @dataclass(frozen=True)
@@ -108,6 +197,13 @@ async def resolve_context_trace(
     if run_id:
         return ContextTraceMatch(str(run_id), "trace", 0, False)
 
+    component = await _component_context(client, context_id, domain, item_id)
+    if component is not None:
+        if component.match is None:
+            _raise_context_not_found(
+                context_id, domain, item_id, component.scanned, False, []
+            )
+        return component.match
     return await _resolve_parent_context(client, domain, item_id, context_id)
 
 
@@ -131,6 +227,13 @@ async def resolve_global_context(
     contexts = result.get("result")
     entry = contexts.get(context_id) if isinstance(contexts, dict) else None
     if not isinstance(entry, dict) or not entry.get("run_id"):
+        component = await _component_context(client, context_id, domain)
+        if component is not None:
+            if component.match is None:
+                _raise_global_context_not_found(
+                    context_id, component.scanned, False, []
+                )
+            return component.match
         return await _resolve_global_parent_context(client, context_id, domain)
     entry_domain = entry.get("domain")
     if domain is not None and entry_domain != domain:

@@ -100,6 +100,16 @@ component-absent fallbacks — a `device_id` request needs the WebSocket path
 there because REST has no device filter, and a bridge timeout surfaces rather
 than re-running the recorder query on another transport.
 
+`websocket_api/trace_context.py` is the trace-store equivalent. Core's public
+`trace/contexts` maps a run's own context, but an automation run's parent
+context exists only inside each stored trace. The component scans Core's live
+`DATA_TRACE` store in process for either context, prefers a real run over a
+not-triggered diagnostic, and returns the trace's `as_extended_dict()` — the
+same shape the frontend's trace view and Download action use. The server
+prefers the bridge and keeps Core's public `trace/contexts` plus a bounded
+`trace/list` + `trace/get` scan as the component-absent fallback, which reports
+its bound and unreadable rows in the response.
+
 `ha_restart` forwards Core's restart schema (`safe_mode`) and leaves the
 refusals to Core. The embedded server is the exception: it replies before the
 restart fires, so a Core refusal would reach nobody. There it reads what Core

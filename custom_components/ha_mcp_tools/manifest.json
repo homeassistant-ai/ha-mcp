@@ -11,7 +11,8 @@
         "logbook",
         "lovelace",
         "network",
-        "recorder"
+        "recorder",
+        "trace"
     ],
     "categories": [
         "ai_voice",

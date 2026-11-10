@@ -41,11 +41,21 @@ from .constants import (
     WS_STATES,
     WS_SYSTEM_SNAPSHOT,
     WS_TEMPLATE_DIAGNOSE,
+    WS_TRACE_CONTEXT,
 )
 
 
 def _info_schema() -> dict[Any, Any]:
     return {vol.Required("type"): WS_INFO}
+
+
+def _trace_context_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_TRACE_CONTEXT,
+        vol.Required("context_id"): str,
+        vol.Optional("domain"): vol.In(("automation", "script")),
+        vol.Optional("item_id"): str,
+    }
 
 
 # The same bound as ha_eval_template's timeout parameter; it keeps one diagnosis

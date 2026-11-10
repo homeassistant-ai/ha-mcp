@@ -1856,6 +1856,7 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/entity_lookup",
     "ha_mcp_tools/registries",
     "ha_mcp_tools/call_event",
+    "ha_mcp_tools/trace_context",
 ]
 
 # Required fields per command, so the admin gate and wrappers reach the handler.
@@ -1871,6 +1872,7 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     # a neither-present request raises HomeAssistantError (issue #1813 M2).
     "ha_mcp_tools/registry_lookup": {"entity_ids": ["light.x"]},
     "ha_mcp_tools/call_event": {"event_type": "probe_event"},
+    "ha_mcp_tools/trace_context": {"context_id": "probe_context"},
     # config_entries / system_snapshot need no required params.
 }
 
@@ -1910,6 +1912,7 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_BULK_CALL_SERVICE,
             wsapi.WS_TEMPLATE_DIAGNOSE,
             wsapi.WS_LOGBOOK_EVENTS,
+            wsapi.WS_TRACE_CONTEXT,
             wsapi.WS_OAUTH_CALLBACKS,
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS + wsapi.entity_restore.COMMANDS,

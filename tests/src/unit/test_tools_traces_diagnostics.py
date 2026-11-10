@@ -26,17 +26,27 @@ async def _diagnostics(
     domain: str = "automation",
 ) -> dict:
     lookup = {"found": entity is not None, "loaded": loaded}
+    lookup_mock = AsyncMock(return_value=lookup)
+    details_mock = AsyncMock(return_value=(entity, validation, None))
     with (
-        patch(
-            "ha_mcp.tools.trace_diagnostics.automation_lookup",
-            AsyncMock(return_value=lookup if domain == "automation" else None),
-        ),
-        patch(
-            "ha_mcp.tools.trace_diagnostics.registry_details",
-            AsyncMock(return_value=(entity, validation, None)),
-        ),
+        patch("ha_mcp.tools.trace_diagnostics.automation_lookup", lookup_mock),
+        patch("ha_mcp.tools.trace_diagnostics.registry_details", details_mock),
     ):
-        return await _gather_diagnostics(client, f"{domain}.test", domain)
+        result = await _gather_diagnostics(client, f"{domain}.test", domain)
+
+    if domain == "automation":
+        lookup_mock.assert_awaited_once_with(client, entity_id=f"{domain}.test")
+    else:
+        lookup_mock.assert_not_awaited()
+    details_mock.assert_awaited_once()
+    details_args, details_kwargs = details_mock.await_args
+    assert details_args[1] == (lookup if domain == "automation" else None)
+    assert details_args[2] == f"{domain}.test"
+    assert details_kwargs["component_lookup"] is (domain == "automation")
+    client.send_websocket_message.assert_awaited_once_with(
+        {"type": f"{domain}/config", "entity_id": f"{domain}.test"}
+    )
+    return result
 
 
 class TestGatherDiagnostics:

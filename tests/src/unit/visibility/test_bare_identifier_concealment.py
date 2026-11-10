@@ -121,6 +121,12 @@ class TestBareIdentifierConcealment:
                 id="trace-by-script-storage-key",
             ),
             pytest.param(
+                "ha_get_automation_traces",
+                {"domain": "script", "item_id": "come_home"},
+                _RENAMED_HIDDEN_SCRIPT,
+                id="trace-by-script-item-id",
+            ),
+            pytest.param(
                 "ha_call_service",
                 {
                     "ws_command": "trace/get",
@@ -199,6 +205,16 @@ class TestBareIdentifierConcealment:
                 {"domain": "script", "service": "front_door"},
                 id="visible-script-service-named-like-hidden-object-id",
             ),
+            pytest.param(
+                "script.front_door",
+                [
+                    _entry("script.front_door", "come_home", "script"),
+                    _entry("script.visible", "front_door", "script"),
+                ],
+                "ha_get_automation_traces",
+                {"domain": "script", "item_id": "front_door"},
+                id="trace-item-id-like-hidden-object-id",
+            ),
             # The automation tools read a bare entity_id only as a config id.
             pytest.param(
                 "automation.door_auto",
@@ -262,6 +278,26 @@ class TestHiddenScriptStorageKeyInContent:
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(make_context(tool, args), _unreached_call_next)
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_raw_trace_listing_with_a_visible_item_id_is_allowed(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A trace item_id matching a hidden object id is not a hidden storage key."""
+        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
+        listing = {
+            "success": True,
+            "result": [{"domain": "script", "item_id": "front_door", "run_id": "1"}],
+        }
+        context = make_context(
+            "ha_call_service",
+            {"ws_command": "trace/list", "data": {"domain": "script"}},
+        )
+
+        result = await mw.on_call_tool(
+            context, _returns(text_result(json.dumps(listing), listing))
+        )
+
+        assert result.structured_content == listing
 
     async def test_raw_trace_listing_naming_a_hidden_script_is_refused(
         self, set_config: Callable[..., Any]
@@ -345,6 +381,8 @@ async def test_genuine_not_found_lists_only_visible_ids(
 def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     if param_name in ("script_id", "scene_id", "automation_id"):
         return True
+    if param_name == "item_id" and tool_name == "ha_get_automation_traces":
+        return True
     if param_name == "entity_id" and tool_name == "ha_get_automation_traces":
         return True
     # The automation config tools also take a bare config id as ``entity_id``.
@@ -367,6 +405,7 @@ def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:
     }
     covered = {(tool, arg) for tool, (arg, _domain) in BARE_IDENTIFIER_ARGS.items()}
     covered |= set(PREFIXED_IDENTIFIER_ARGS.items())
+    covered |= {("ha_get_automation_traces", "item_id")}
 
     assert discovered == covered, (
         "BARE_IDENTIFIER_ARGS is out of sync with the registered tools.\n"

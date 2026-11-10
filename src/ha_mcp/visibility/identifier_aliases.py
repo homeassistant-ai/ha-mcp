@@ -80,6 +80,16 @@ class IdentifierAliases:
         folded = key.casefold().removeprefix(f"{domain}.")
         return folded in self.object_ids.get(domain, frozenset())
 
+    def addresses_hidden_trace_item(self, domain: str, value: str) -> bool:
+        """Whether a trace's ``item_id`` is a hidden entity's storage key.
+
+        Traces are keyed by the registry ``unique_id``; an object ID is not a
+        trace key, so a visible script whose object ID matches a hidden
+        script's old name must not be concealed.
+        """
+        key = value.strip().removeprefix(f"{domain}.")
+        return key in self.storage_keys.get(domain, frozenset())
+
 
 def build_identifier_aliases(
     hidden: Collection[str], registry_result: Any
@@ -130,6 +140,10 @@ def hidden_identifier_argument(
         return _hidden_script_service(args, aliases) or _hidden_trace_item(
             _json_mapping(args.get("data")), aliases
         )
+    if tool_name == "ha_get_automation_traces":
+        trace_hit = _hidden_trace_item(args, aliases)
+        if trace_hit is not None:
+            return trace_hit
     prefixed_arg = PREFIXED_IDENTIFIER_ARGS.get(tool_name)
     if prefixed_arg is not None:
         value = args.get(prefixed_arg)
@@ -182,7 +196,9 @@ def _hidden_trace_item(
     if not (isinstance(domain, str) and isinstance(item_id, str | int)):
         return None
     domain = domain.strip().casefold()
-    if domain in _TRACE_DOMAINS and aliases.addresses_hidden(domain, str(item_id)):
+    if domain in _TRACE_DOMAINS and aliases.addresses_hidden_trace_item(
+        domain, str(item_id)
+    ):
         return str(item_id)
     return None
 
