@@ -485,6 +485,14 @@ class TestTraceContextLookup:
             "scanned": 7,
             "truncated": False,
             "errors": [],
+            "other_matches": [
+                {
+                    "domain": "script",
+                    "item_id": "uid_2",
+                    "run_id": "r2",
+                    "match": "parent",
+                }
+            ],
         }
 
         def _d(mtype, message):
@@ -508,6 +516,14 @@ class TestTraceContextLookup:
         assert result["context_scanned"] == 7
         assert result["domain"] == "automation"
         assert result["item_id"] == "uid_1"
+        assert result["context_other_matches"] == [
+            {
+                "domain": "script",
+                "item_id": "uid_2",
+                "run_id": "r2",
+                "match": "parent",
+            }
+        ]
         types = [
             call.args[0].get("type")
             for call in client.send_websocket_message.await_args_list
@@ -515,6 +531,66 @@ class TestTraceContextLookup:
         assert "ha_mcp_tools/trace_context" in types
         assert "trace/list" not in types
         assert "trace/get" not in types
+
+    @pytest.mark.asyncio
+    async def test_public_fallback_lists_other_matching_runs(self):
+        """The public parent scan selects one run and reports the other matches."""
+        older = {
+            "run_id": "older",
+            "state": "stopped",
+            "trace": {},
+            "context": {"id": "own-older", "parent_id": "parent-1"},
+            "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+        }
+        newer = {
+            "run_id": "newer",
+            "state": "stopped",
+            "trace": {},
+            "context": {"id": "own-newer", "parent_id": "parent-1"},
+            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+        }
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "run_id": "newer",
+                            "item_id": "uid_1",
+                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                        },
+                        {
+                            "run_id": "older",
+                            "item_id": "uid_1",
+                            "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+                        },
+                    ],
+                }
+            if mtype == "trace/get":
+                if message["run_id"] == "newer":
+                    return {"success": True, "result": newer}
+                if message["run_id"] == "older":
+                    return {"success": True, "result": older}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await TraceTools(client).ha_get_automation_traces(
+            domain="automation", item_id="uid_1", context_id="parent-1"
+        )
+
+        assert result["run_id"] == "newer"
+        assert result["context_match"] == "parent"
+        assert result["context_other_matches"] == [
+            {
+                "domain": "automation",
+                "item_id": "uid_1",
+                "run_id": "older",
+                "match": "parent",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_component_without_a_trace_store_uses_the_public_scan(self):

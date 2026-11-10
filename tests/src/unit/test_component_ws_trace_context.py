@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import voluptuous as vol
 from homeassistant.components.automation.trace import AutomationTrace
+from homeassistant.components.script.trace import ScriptTrace
 from homeassistant.components.trace.const import DATA_TRACE, DATA_TRACE_STORE
 from homeassistant.components.trace.models import TraceBuckets
 from homeassistant.core import Context, HomeAssistant
@@ -38,8 +39,9 @@ def _trace(
     not_triggered: bool = False,
     start: datetime = _START,
     trigger_variables: dict[str, Any] | None = None,
+    cls: type[AutomationTrace] = AutomationTrace,
 ) -> AutomationTrace:
-    trace = AutomationTrace(
+    trace = cls(
         "uid", {}, None, Context(id=context_id, parent_id=parent_id)
     )
     trace.run_id = run_id
@@ -78,7 +80,7 @@ async def test_own_context_match_returns_core_extended_trace(
 
 
 @pytest.mark.asyncio
-async def test_parent_match_prefers_the_newest_real_run(
+async def test_parent_match_selects_newest_across_real_and_diagnostic(
     hass: HomeAssistant,
 ) -> None:
     older = _trace(
@@ -107,8 +109,12 @@ async def test_parent_match_prefers_the_newest_real_run(
     )
 
     assert result["match"] == "parent"
-    assert result["run_id"] == "newer"
+    assert result["run_id"] == "diag"
     assert result["scanned"] == 3
+    assert result["other_matches"] == [
+        {"domain": "script", "item_id": "uid_1", "run_id": "older", "match": "parent"},
+        {"domain": "script", "item_id": "uid_1", "run_id": "newer", "match": "parent"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -247,3 +253,138 @@ def test_schema_accepts_the_documented_selectors() -> None:
                 "domain": "scene",
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_multiple_matches_selects_newest_and_lists_others(
+    hass: HomeAssistant,
+) -> None:
+    """One context can match several runs; the newest is selected and rest listed."""
+    shared = "shared-context"
+    older_auto = _trace(
+        run_id="older-auto",
+        context_id="own-older-auto",
+        parent_id=shared,
+        start=_START,
+    )
+    newer_script = _trace(
+        run_id="newer-script",
+        context_id="own-newer-script",
+        parent_id=shared,
+        start=_START + timedelta(minutes=1),
+        cls=ScriptTrace,
+    )
+    _store(hass, "automation.uid_a", older_auto)
+    _store(hass, "script.uid_b", newer_script)
+
+    result = trace_context._trace_context_payload(
+        hass, {"id": 1, "context_id": shared}, available=True
+    )
+
+    assert result["match"] == "parent"
+    assert result["run_id"] == "newer-script"
+    assert result["domain"] == "script"
+    assert result["item_id"] == "uid_b"
+    assert result["scanned"] == 2
+    assert result["other_matches"] == [
+        {
+            "domain": "automation",
+            "item_id": "uid_a",
+            "run_id": "older-auto",
+            "match": "parent",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_own_and_parent_matches_use_the_same_selection_rule(
+    hass: HomeAssistant,
+) -> None:
+    """The selected run is the newest across own-context and parent matches."""
+    shared = "shared-context"
+    own_match = _trace(
+        run_id="own-match",
+        context_id=shared,
+        start=_START,
+    )
+    parent_match = _trace(
+        run_id="parent-match",
+        context_id="own-parent",
+        parent_id=shared,
+        start=_START + timedelta(minutes=1),
+        cls=ScriptTrace,
+    )
+    _store(hass, "automation.uid_a", own_match)
+    _store(hass, "script.uid_b", parent_match)
+
+    result = trace_context._trace_context_payload(
+        hass, {"id": 1, "context_id": shared}, available=True
+    )
+
+    assert result["match"] == "parent"
+    assert result["run_id"] == "parent-match"
+    assert result["other_matches"] == [
+        {
+            "domain": "automation",
+            "item_id": "uid_a",
+            "run_id": "own-match",
+            "match": "trace",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_other_matches_omits_the_list(hass: HomeAssistant) -> None:
+    """A single match has no other_matches field."""
+    _store(hass, "automation.uid_1", _trace(run_id="r1", context_id="ctx-1"))
+
+    result = trace_context._trace_context_payload(
+        hass, {"id": 1, "context_id": "ctx-1"}, available=True
+    )
+
+    assert result["run_id"] == "r1"
+    assert "other_matches" not in result
+
+
+@pytest.mark.asyncio
+async def test_tie_break_prefers_own_then_automation_then_item_id(
+    hass: HomeAssistant,
+) -> None:
+    """The selection tie-break is own > parent, automation > script, item_id asc."""
+    shared = "shared-context"
+    parent_auto = _trace(
+        run_id="parent-auto",
+        context_id="own-parent-auto",
+        parent_id=shared,
+        start=_START,
+    )
+    own_script = _trace(
+        run_id="own-script",
+        context_id=shared,
+        start=_START,
+        cls=ScriptTrace,
+    )
+    own_auto_b = _trace(
+        run_id="own-auto-b",
+        context_id=shared,
+        start=_START,
+    )
+    own_auto_a = _trace(
+        run_id="own-auto-a",
+        context_id=shared,
+        start=_START,
+    )
+    _store(hass, "automation.uid_b", parent_auto, own_auto_b)
+    _store(hass, "script.uid_1", own_script)
+    _store(hass, "automation.uid_a", own_auto_a)
+
+    result = trace_context._trace_context_payload(
+        hass, {"id": 1, "context_id": shared}, available=True
+    )
+
+    assert result["match"] == "trace"
+    assert result["domain"] == "automation"
+    assert result["item_id"] == "uid_a"
+    assert result["run_id"] == "own-auto-a"
+    assert result["scanned"] == 4
+    assert len(result["other_matches"]) == 3

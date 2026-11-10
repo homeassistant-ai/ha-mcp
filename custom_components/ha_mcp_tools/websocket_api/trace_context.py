@@ -67,20 +67,36 @@ def _trace_start(trace: Any) -> str:
     return "" if start is None else str(start)
 
 
+def _tie_break_key(
+    candidate: tuple[Any, str, str, str],
+) -> tuple[int, int, str]:
+    """Tie-break within the newest-start group: own before parent, auto before script."""
+    _trace, domain, item_id, match = candidate
+    match_order = 0 if match == "trace" else 1
+    domain_order = 0 if domain == "automation" else 1
+    return (match_order, domain_order, item_id)
+
+
 def _trace_context_payload(
     hass: HomeAssistant,
     msg: dict[str, Any],
     *,
     available: bool,
 ) -> dict[str, Any]:
-    """Find the trace whose own or parent context matches ``context_id``."""
+    """Find the trace whose own or parent context matches ``context_id``.
+
+    One context id can match several runs (for example, an automation and the
+    script it calls share ``context.id``/``parent_id``). All matches are
+    collected, then the newest ``timestamp.start`` is selected. Ties break
+    toward own-context matches, then automations, then ascending ``item_id``.
+    The unselected matches are returned as ``other_matches``.
+    """
     if not available:
         return _empty_result(scanned=0, available=False)
 
     context_id = msg["context_id"]
     scanned = 0
-    parent_runs: list[tuple[Any, str, str]] = []
-    parent_not_triggered: list[tuple[Any, str, str]] = []
+    matches: list[tuple[Any, str, str, str]] = []
 
     for domain, item_id, bucket in _trace_buckets(
         hass, msg.get("domain"), msg.get("item_id")
@@ -89,26 +105,27 @@ def _trace_context_payload(
             scanned += 1
             context = trace.context
             if context.id == context_id:
-                return _match_result(trace, domain, item_id, "trace", scanned)
-            if context.parent_id != context_id:
+                matches.append((trace, domain, item_id, "trace"))
                 continue
-            candidate = (trace, domain, item_id)
-            if trace.not_triggered:
-                parent_not_triggered.append(candidate)
-            else:
-                parent_runs.append(candidate)
+            if context.parent_id == context_id:
+                matches.append((trace, domain, item_id, "parent"))
 
-    if parent_runs:
-        trace, domain, item_id = max(
-            parent_runs, key=lambda item: _trace_start(item[0])
-        )
-        return _match_result(trace, domain, item_id, "parent", scanned)
-    if parent_not_triggered:
-        trace, domain, item_id = max(
-            parent_not_triggered, key=lambda item: _trace_start(item[0])
-        )
-        return _match_result(trace, domain, item_id, "parent", scanned)
-    return _empty_result(scanned=scanned)
+    if not matches:
+        return _empty_result(scanned=scanned)
+
+    newest_start = max(_trace_start(t) for t, _, _, _ in matches)
+    candidates = [m for m in matches if _trace_start(m[0]) == newest_start]
+    selected = min(candidates, key=_tie_break_key)
+    trace, domain, item_id, match = selected
+    other_matches = [
+        {"domain": d, "item_id": i, "run_id": t.run_id, "match": m}
+        for t, d, i, m in matches
+        if t is not trace
+    ]
+    result = _match_result(trace, domain, item_id, match, scanned)
+    if other_matches:
+        result["other_matches"] = other_matches
+    return result
 
 
 def _do_trace_context(

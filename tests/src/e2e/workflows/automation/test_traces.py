@@ -493,6 +493,79 @@ action:
         assert context_only["item_id"] == row["item_id"]
         assert "entity_id" not in context_only
 
+    async def test_shared_context_lists_automation_and_script_matches(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """An automation that calls a script shares the event context id."""
+        suffix = uuid.uuid4().hex[:8]
+        event_type = f"trace_shared_context_e2e_{suffix}"
+        script_id = f"trace_shared_context_script_{suffix}"
+        script_config = test_data_factory.script_config(
+            "Trace Shared Context Script E2E",
+            sequence=[{"delay": {"seconds": 0}}],
+        )
+
+        mcp = MCPAssertions(mcp_client)
+        script_create = await mcp.call_tool_success(
+            "ha_config_set_script", {"script_id": script_id, "config": script_config}
+        )
+        script_entity_id = script_create.get("entity_id") or f"script.{script_id}"
+        cleanup_tracker.track("script", script_entity_id)
+        assert await wait_for_entity_registration(mcp_client, script_entity_id), (
+            f"{script_entity_id} never became queryable"
+        )
+
+        create_config = test_data_factory.automation_config(
+            "Trace Shared Context E2E",
+            trigger=[{"platform": "event", "event_type": event_type}],
+            action=[
+                {"service": "script.turn_on", "target": {"entity_id": script_entity_id}}
+            ],
+            initial_state=True,
+        )
+        automation_id = await self._create_trace_automation(
+            mcp_client, cleanup_tracker, create_config
+        )
+
+        event_data = await mcp.call_tool_success(
+            "ha_call_event", {"event_type": event_type}
+        )
+        event_context_id = event_data["context_id"]
+        assert event_context_id is not None
+
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"entity_id": automation_id},
+            predicate=lambda data: data.get("trace_count", 0) > 0,
+            timeout=15,
+            poll_interval=0.5,
+            description="automation trace after shared context event",
+        )
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"entity_id": script_entity_id},
+            predicate=lambda data: data.get("trace_count", 0) > 0,
+            timeout=15,
+            poll_interval=0.5,
+            description="script trace after shared context event",
+        )
+
+        by_context_data = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"context_id": event_context_id},
+        )
+
+        assert by_context_data["context_match"] in ("trace", "parent")
+        assert "context_other_matches" in by_context_data
+        other = by_context_data["context_other_matches"]
+        assert len(other) == 1
+        assert other[0]["domain"] in ("automation", "script")
+        assert other[0]["run_id"]
+        assert other[0]["item_id"]
+        assert other[0]["match"] in ("trace", "parent")
+
     async def test_trace_storage_disabled_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory
     ):

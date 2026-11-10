@@ -35,6 +35,7 @@ class ContextTraceMatch:
     trace_data: dict[str, Any] | None = None
     domain: str | None = None
     item_id: str | None = None
+    other_matches: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ def _component_payload(payload: Any) -> _ComponentContext | None:
         and isinstance(trace_data, dict)
     ):
         return None
+    other_matches = _normalize_other_matches(payload.get("other_matches"))
     return _ComponentContext(
         ContextTraceMatch(
             run_id,
@@ -118,9 +120,36 @@ def _component_payload(payload: Any) -> _ComponentContext | None:
             trace_data,
             item_domain,
             item_id_value,
+            other_matches,
         ),
         scanned_count,
     )
+
+
+def _normalize_other_matches(value: Any) -> tuple[dict[str, str], ...]:
+    """Return a tuple of validated other-match dicts from the component reply."""
+    if not isinstance(value, list):
+        return ()
+    result: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        if not all(
+            isinstance(item.get(key), str)
+            for key in ("domain", "item_id", "run_id", "match")
+        ):
+            continue
+        if item.get("match") not in ("trace", "parent"):
+            continue
+        result.append(
+            {
+                "domain": str(item["domain"]),
+                "item_id": str(item["item_id"]),
+                "run_id": str(item["run_id"]),
+                "match": str(item["match"]),
+            }
+        )
+    return tuple(result)
 
 
 @dataclass(frozen=True)
@@ -306,10 +335,9 @@ async def _scan_global_parent(
     truncated: bool,
     scan_errors: list[str],
 ) -> tuple[ContextTraceMatch | None, int]:
-    """Walk the bounded global rows, preferring a real run over a diagnostic."""
+    """Walk the bounded global rows and settle on one stored trace."""
     scanned = 0
-    parent_match: tuple[str, dict[str, Any], str, str] | None = None
-    fallback_match: tuple[str, dict[str, Any], str, str] | None = None
+    matches: list[tuple[str, dict[str, Any], str, str, str]] = []
     for trace in rows:
         scanned += 1
         domain = str(trace["_domain"])
@@ -321,53 +349,17 @@ async def _scan_global_parent(
             item_id,
             run_id,
             scan_errors,
-            have_match=parent_match is not None or fallback_match is not None,
+            have_match=len(matches) > 0,
         )
         if trace_data is _SCAN_ABORTED:
             break
         if trace_data is None:
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
-        if kind == "trace":
-            return (
-                ContextTraceMatch(
-                    run_id,
-                    "trace",
-                    scanned,
-                    truncated,
-                    tuple(scan_errors),
-                    trace_data,
-                    domain,
-                    item_id,
-                ),
-                scanned,
-            )
-        if kind != "parent":
-            continue
-        candidate = (run_id, trace_data, domain, item_id)
-        if trace.get("not_triggered"):
-            if fallback_match is None:
-                fallback_match = candidate
-            continue
-        if parent_match is None:
-            parent_match = candidate
-    selected = parent_match or fallback_match
-    if selected is None:
-        return None, scanned
-    run_id, trace_data, domain, item_id = selected
-    return (
-        ContextTraceMatch(
-            run_id,
-            "parent",
-            scanned,
-            truncated,
-            tuple(scan_errors),
-            trace_data,
-            domain,
-            item_id,
-        ),
-        scanned,
-    )
+        if kind in ("trace", "parent"):
+            matches.append((run_id, trace_data, domain, item_id, kind))
+
+    return _select_trace_match(matches, scanned, truncated, scan_errors), scanned
 
 
 async def _resolve_global_parent_context(
@@ -599,8 +591,7 @@ async def _scan_for_context(
 ) -> tuple[ContextTraceMatch | None, int]:
     """Walk the bounded candidate list and settle on one stored trace."""
     scanned = 0
-    parent_match: tuple[str, dict[str, Any]] | None = None
-    fallback_match: tuple[str, dict[str, Any]] | None = None
+    matches: list[tuple[str, dict[str, Any], str, str, str]] = []
     for trace in candidates:
         scanned += 1
         run_id = str(trace["run_id"])
@@ -610,51 +601,65 @@ async def _scan_for_context(
             item_id,
             run_id,
             scan_errors,
-            have_match=parent_match is not None or fallback_match is not None,
+            have_match=len(matches) > 0,
         )
         if trace_data is _SCAN_ABORTED:
             break
         if trace_data is None:
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
-        if kind == "trace":
-            # The run that owns the requested context id is authoritative. It
-            # can appear after a newer run that merely names it as a parent, so
-            # the bounded scan checks every candidate before settling.
-            return (
-                ContextTraceMatch(
-                    run_id, "trace", scanned, truncated, tuple(scan_errors), trace_data
-                ),
-                scanned,
-            )
-        if kind == "parent":
-            if trace.get("not_triggered"):
-                # A not-triggered diagnostic is useful, but a real run for the
-                # same triggering context is the better match.
-                if fallback_match is None:
-                    fallback_match = (run_id, trace_data)
-                continue
-            if parent_match is None:
-                parent_match = (run_id, trace_data)
+        if kind in ("trace", "parent"):
+            matches.append((run_id, trace_data, domain, item_id, kind))
 
-    match = _scan_result(scanned, truncated, scan_errors, parent_match, fallback_match)
-    return match, scanned
+    return _select_trace_match(matches, scanned, truncated, scan_errors), scanned
 
 
-def _scan_result(
+def _select_trace_match(
+    matches: list[tuple[str, dict[str, Any], str, str, str]],
     scanned: int,
     truncated: bool,
     scan_errors: list[str],
-    parent_match: tuple[str, dict[str, Any]] | None,
-    fallback_match: tuple[str, dict[str, Any]] | None,
 ) -> ContextTraceMatch | None:
-    """Choose the stored trace the bounded scan settled on, if any."""
-    match = parent_match or fallback_match
-    if match is None:
+    """Select the newest match and list the rest with the component rule."""
+    if not matches:
         return None
-    run_id, trace_data = match
+
+    def _start_key(match: tuple[str, dict[str, Any], str, str, str]) -> str:
+        run_id, trace_data, domain, item_id, kind = match
+        return _trace_start(trace_data)
+
+    def _tie_break_key(
+        match: tuple[str, dict[str, Any], str, str, str],
+    ) -> tuple[int, int, str]:
+        _run_id, _trace_data, domain, item_id, kind = match
+        match_order = 0 if kind == "trace" else 1
+        domain_order = 0 if domain == "automation" else 1
+        return (match_order, domain_order, item_id)
+
+    newest_start = max(_start_key(m) for m in matches)
+    candidates = [m for m in matches if _start_key(m) == newest_start]
+    selected = min(candidates, key=_tie_break_key)
+    run_id, trace_data, domain, item_id, kind = selected
+    other_matches = tuple(
+        {
+            "domain": d,
+            "item_id": i,
+            "run_id": r,
+            "match": k,
+        }
+        for r, _td, d, i, k in matches
+        if r != run_id or d != domain or i != item_id
+    )
     return ContextTraceMatch(
-        run_id, "parent", scanned, truncated, tuple(scan_errors), trace_data
+        run_id,
+        cast(Literal["trace", "parent"], kind),
+        scanned,
+        truncated,
+        tuple(scan_errors),
+        trace_data,
+        domain,
+        item_id,
+        other_matches,
     )
 
 

@@ -333,8 +333,10 @@ class TraceTools:
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
            ha_get_automation_traces(domain="automation", item_id="uid", run_id="...")
         3. Resolve a trace by context (provide context_id): the response
-           reports `context_match` as `trace` or `parent`. With entity_id, a
-           parent context can be scanned. Without entity_id, Core's global
+           selects the newest matching run and reports `context_match` as
+           `trace` or `parent`. Additional runs that share the same context
+           id are listed in `context_other_matches`. With entity_id, a parent
+           context can be scanned. Without entity_id, Core's global
            trace/contexts map resolves the run's own context.
            ha_get_automation_traces(context_id="01J...")
         4. Add the run's logbook: detailed=True or sections="logbook".
@@ -595,6 +597,8 @@ def _add_context_match(
         detail["context_scan_truncated"] = True
     if match.scan_errors:
         detail["context_scan_errors"] = list(match.scan_errors)
+    if match.other_matches:
+        detail["context_other_matches"] = list(match.other_matches)
 
 
 async def _resolve_trace_item_id(
