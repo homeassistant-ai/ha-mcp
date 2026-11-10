@@ -161,16 +161,8 @@ def add_stale_list_warning(result: Any, renames: Sequence[tuple[str, str]]) -> N
         f"refresh it ({CLIENT_TOOL_LIST_REFRESH_STEPS}), then start a new "
         "conversation."
     )
-    retired_trace_id = ("automation_id", "entity_id") in renames
-
-    def add_compat_fields(data: dict[str, Any]) -> None:
-        if retired_trace_id and "entity_id" in data:
-            data["automation_id"] = data["entity_id"]
-
     structured = getattr(result, "structured_content", None)
     if isinstance(structured, dict):
-        structured = {**structured}
-        add_compat_fields(structured)
         result.structured_content = {
             **structured,
             "warnings": [*(structured.get("warnings") or []), warning],
@@ -184,6 +176,5 @@ def add_stale_list_warning(result: Any, renames: Sequence[tuple[str, str]]) -> N
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):
-            add_compat_fields(parsed)
             parsed["warnings"] = [*(parsed.get("warnings") or []), warning]
             block.text = json.dumps(parsed)
