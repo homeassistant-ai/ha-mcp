@@ -410,6 +410,50 @@ async def test_a_null_empties_an_option(
     assert options["state"] == "{{ 1 }}"
 
 
+async def test_a_null_for_a_key_the_edit_form_lacks_is_cores_to_refuse(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """A null empties a field the form declares. For any other key it is sent
+    as written, so a mistyped field name is refused instead of ignored."""
+    entry_id = await _template_sensor(tools, unit_of_measurement="W")
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(
+            helper_type="template",
+            helper_id=entry_id,
+            config={"unit_of_measurment": None},
+        )
+
+    assert "unit_of_measurment" in json.loads(str(exc_info.value))["error"]["message"]
+    assert _options(hass, entry_id)["unit_of_measurement"] == "W"
+
+
+def _says_duplicates_unchecked(response: dict[str, Any]) -> bool:
+    return any("ha_mcp_tools component" in w for w in response.get("warnings", []))
+
+
+async def test_without_the_component_a_flow_create_says_what_went_unchecked(
+    tools: HelperConfigTools,
+) -> None:
+    """Near-duplicate names are found with Core's slugify, through the
+    component. Without it only an exact name is refused."""
+    created = await tools.ha_config_set_helper(
+        helper_type="min_max", config=dict(_MIN_MAX)
+    )
+
+    assert _says_duplicates_unchecked(created)
+
+
+async def test_with_the_component_a_flow_create_carries_no_duplicate_warning(
+    component_tools: HelperConfigTools,
+) -> None:
+    created = await component_tools.ha_config_set_helper(
+        helper_type="min_max", config=dict(_MIN_MAX)
+    )
+
+    assert not _says_duplicates_unchecked(created)
+
+
 async def test_a_key_the_form_lacks_is_refused_by_core_and_the_flow_stays_open(
     hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:

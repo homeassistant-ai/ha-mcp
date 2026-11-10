@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
@@ -124,3 +125,65 @@ async def test_a_name_core_would_number_after_an_existing_helper_is_refused(
     assert "already exists" in error["error"]["message"]
     domain = "sensor" if first["helper_type"] == "template" else "input_boolean"
     assert len(hass.states.async_entity_ids(domain)) == 1
+
+
+@pytest.mark.parametrize(
+    ("domain", "yaml", "name"),
+    [
+        ("person", [{"id": "pat1", "name": "Yaml Pat"}], "yaml pat"),
+        ("input_boolean", {"yaml_flag": None}, "Yaml Flag"),
+    ],
+    ids=["name of a YAML person", "id of a YAML input_boolean"],
+)
+async def test_a_helper_defined_in_yaml_is_found_as_a_duplicate(
+    hass: HomeAssistant,
+    hass_ws_client: Any,
+    hass_client: Any,
+    domain: str,
+    yaml: Any,
+    name: str,
+) -> None:
+    """Core numbers a new helper after one defined in YAML too, and a YAML
+    helper is not among the stored ones."""
+    assert await async_setup_component(hass, domain, {domain: yaml})
+    before = hass.states.async_entity_ids(domain)
+
+    async with core_backed_client(
+        hass, hass_ws_client, hass_client, component=True
+    ) as client:
+        with pytest.raises(ToolError) as exc_info:
+            await HelperConfigTools(client).ha_config_set_helper(
+                helper_type=domain, name=name
+            )
+
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "already exists" in message and "YAML" in message
+    assert hass.states.async_entity_ids(domain) == before
+
+
+async def test_without_the_component_a_create_says_what_went_unchecked(
+    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+) -> None:
+    """Which names Core numbers is Core's slugify, read through the component.
+    Without it only an exact name is refused, and the response says so."""
+    async with core_backed_client(
+        hass, hass_ws_client, hass_client, domains=("input_boolean",)
+    ) as client:
+        created = await HelperConfigTools(client).ha_config_set_helper(
+            helper_type="input_boolean", name="Night Mode"
+        )
+        await hass.async_block_till_done()
+
+    (warning,) = created["warnings"]
+    assert "differs only in case or punctuation" in warning
+    assert "ha_mcp_tools component" in warning
+
+
+async def test_with_the_component_a_create_carries_no_duplicate_warning(
+    tools: HelperConfigTools,
+) -> None:
+    created = await tools.ha_config_set_helper(
+        helper_type="input_boolean", name="Night Mode"
+    )
+
+    assert not any("ha_mcp_tools" in w for w in created.get("warnings", []))
