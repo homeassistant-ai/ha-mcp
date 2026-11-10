@@ -9,7 +9,12 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_traces import TraceTools
-from ha_mcp.tools.trace_lookup import ContextTraceMatch, TraceLogbook
+from ha_mcp.tools.trace_lookup import (
+    ContextTraceMatch,
+    TraceLogbook,
+    resolve_context_trace,
+    resolve_global_context,
+)
 
 from .test_tools_traces import _dispatch, _make_pooled_client
 
@@ -1132,3 +1137,132 @@ class TestTraceContextLookup:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+
+
+class TestTraceResolverDirectMatches:
+    """Direct tests of ``resolve_context_trace`` and ``resolve_global_context``."""
+
+    @pytest.mark.asyncio
+    async def test_per_item_direct_hit_survives_trace_list_failure(self):
+        """A trace/contexts hit is returned even when trace/list fails."""
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {"ctx-1": {"run_id": "own-run"}}}
+            if mtype == "trace/list":
+                return {"success": False, "error": "trace/list denied"}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await resolve_context_trace(
+            client, "automation", "uid_1", "ctx-1"
+        )
+
+        assert result.run_id == "own-run"
+        assert result.match == "trace"
+        assert result.domain == "automation"
+        assert result.item_id == "uid_1"
+        assert any("trace/list denied" in error for error in result.scan_errors)
+
+    @pytest.mark.asyncio
+    async def test_global_direct_hit_survives_trace_list_failure(self):
+        """A global trace/contexts hit is returned even when trace/list fails."""
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {
+                    "success": True,
+                    "result": {
+                        "ctx-1": {
+                            "run_id": "own-run",
+                            "domain": "automation",
+                            "item_id": "uid_a",
+                        }
+                    },
+                }
+            if mtype == "trace/list":
+                return {"success": False, "error": "trace/list denied"}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await resolve_global_context(client, "ctx-1")
+
+        assert result.run_id == "own-run"
+        assert result.match == "trace"
+        assert result.domain == "automation"
+        assert result.item_id == "uid_a"
+        assert any("trace/list denied" in error for error in result.scan_errors)
+
+    @pytest.mark.asyncio
+    async def test_direct_match_wins_when_trace_data_unavailable(self):
+        """A direct hit is kept selected when its trace/get read fails."""
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {"ctx-1": {"run_id": "own-run"}}}
+            if mtype == "trace/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "run_id": "newer-parent",
+                            "item_id": "uid_1",
+                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                        }
+                    ],
+                }
+            if mtype == "trace/get":
+                if message["run_id"] == "own-run":
+                    return {"success": False, "error": "direct trace unavailable"}
+                if message["run_id"] == "newer-parent":
+                    return {
+                        "success": True,
+                        "result": {
+                            "run_id": "newer-parent",
+                            "context": {
+                                "id": "own-parent",
+                                "parent_id": "ctx-1",
+                            },
+                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                        },
+                    }
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await resolve_context_trace(
+            client, "automation", "uid_1", "ctx-1"
+        )
+
+        assert result.run_id == "own-run"
+        assert result.match == "trace"
+        assert result.other_matches == (
+            {
+                "domain": "automation",
+                "item_id": "uid_1",
+                "run_id": "newer-parent",
+                "match": "parent",
+            },
+        )
+        assert any("direct trace unavailable" in error for error in result.scan_errors)
+
+    @pytest.mark.asyncio
+    async def test_global_entry_missing_domain_item_id_is_reported(self):
+        """A global direct entry without domain/item_id reaches the tool error."""
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {
+                    "success": True,
+                    "result": {"ctx-1": {"run_id": "own-run"}},
+                }
+            if mtype == "trace/list":
+                return {"success": True, "result": []}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await resolve_global_context(client, "ctx-1")
+
+        assert result.run_id == "own-run"
+        assert result.match == "trace"
+        assert result.domain is None
+        assert result.item_id is None

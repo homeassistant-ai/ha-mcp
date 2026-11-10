@@ -496,7 +496,7 @@ action:
     async def test_shared_context_lists_automation_and_script_matches(
         self, mcp_client, cleanup_tracker, test_data_factory
     ):
-        """An automation that calls a script shares the event context id."""
+        """An automation that calls a script shares its own context with the script."""
         suffix = uuid.uuid4().hex[:8]
         event_type = f"trace_shared_context_e2e_{suffix}"
         script_id = f"trace_shared_context_script_{suffix}"
@@ -527,11 +527,7 @@ action:
             mcp_client, cleanup_tracker, create_config
         )
 
-        event_data = await mcp.call_tool_success(
-            "ha_call_event", {"event_type": event_type}
-        )
-        event_context_id = event_data["context_id"]
-        assert event_context_id is not None
+        await mcp.call_tool_success("ha_call_event", {"event_type": event_type})
 
         auto_traces = await wait_for_tool_result(
             mcp_client,
@@ -551,16 +547,37 @@ action:
             poll_interval=0.5,
             description="script trace after shared context event",
         )
-        auto_run_id = auto_traces["traces"][0]["run_id"]
-        script_run_id = script_traces["traces"][0]["run_id"]
+        auto_row = auto_traces["traces"][0]
+        script_row = script_traces["traces"][0]
+        auto_run_id = auto_row["run_id"]
+        script_run_id = script_row["run_id"]
+
+        auto_detail = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"entity_id": automation_id, "run_id": auto_run_id},
+        )
+        automation_context_id = auto_detail["context"]["id"]
 
         by_context_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
-            {"context_id": event_context_id},
+            {"context_id": automation_context_id},
         )
 
         selected_run_id = by_context_data["run_id"]
         assert selected_run_id in {auto_run_id, script_run_id}
+        expected_runs = {
+            auto_run_id: {
+                "domain": auto_row["domain"],
+                "item_id": auto_row["item_id"],
+            },
+            script_run_id: {
+                "domain": script_row["domain"],
+                "item_id": script_row["item_id"],
+            },
+        }
+        assert expected_runs[selected_run_id]["domain"] == by_context_data["domain"]
+        assert expected_runs[selected_run_id]["item_id"] == by_context_data["item_id"]
+
         assert "context_other_matches" in by_context_data
         other = by_context_data["context_other_matches"]
         other_run_ids = {m["run_id"] for m in other}
@@ -569,6 +586,10 @@ action:
             f"expected other matches {expected_other}, got {other_run_ids}; "
             f"selected={selected_run_id}, automation={auto_run_id}, script={script_run_id}"
         )
+        for match in other:
+            expected = expected_runs[match["run_id"]]
+            assert match["domain"] == expected["domain"]
+            assert match["item_id"] == expected["item_id"]
 
     async def test_trace_storage_disabled_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory
