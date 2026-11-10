@@ -12,13 +12,13 @@ import asyncio
 from typing import Any
 
 from .config_entry_flow import (
-    SUBENTRY_CREATE_LOCKS,
     OptionsFlowError,
     _created_subentry_id,
     _OptionsFlowProgress,
     _reject_redaction_sentinels,
     _subentry_ids,
     replay_snapshot,
+    subentry_create_lock,
 )
 from .config_entry_flow_introspect import _FlowType, abort_failed_flow
 from .config_entry_flow_submit import RECONFIGURE_SUCCESS_REASONS
@@ -132,7 +132,7 @@ async def recreate_config_subentry(
     """Create a deleted subentry again from its data; a field no form takes is
     refused before a form Home Assistant marks as last."""
     progress = _SubentryFlowProgress(entry_id, config=dict(data), fixed={})
-    async with SUBENTRY_CREATE_LOCKS[entry_id]:
+    async with subentry_create_lock(entry_id):
         before = await _subentry_ids(client, entry_id)
         if before is None:
             # Without the listing the new subentry could not be identified.
