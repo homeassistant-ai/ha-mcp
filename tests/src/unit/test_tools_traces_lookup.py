@@ -8,6 +8,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.trace_lookup import (
     PARENT_CONTEXT_SCAN_LIMIT,
     resolve_context_trace,
+    resolve_global_context,
 )
 
 from .test_tools_traces import _make_pooled_client
@@ -446,3 +447,114 @@ class TestResolveContextTrace:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "CONNECTION_FAILED"
+
+
+class TestResolveGlobalContext:
+    """Global context resolution mirrors the per-item selection rule."""
+
+    @pytest.mark.asyncio
+    async def test_global_path_prefers_real_run_over_newer_diagnostic(self):
+        """A newer not-triggered diagnostic does not beat a real run globally."""
+        traces = [
+            {
+                "run_id": "diagnostic",
+                "item_id": "uid",
+                "not_triggered": True,
+                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
+            },
+            {
+                "run_id": "run",
+                "item_id": "uid",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            },
+        ]
+        details = {
+            "diagnostic": {
+                "run_id": "diagnostic",
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            },
+            "run": {
+                "run_id": "run",
+                "context": {"id": "own-2", "parent_id": "parent-1"},
+            },
+        }
+        client = _context_client(contexts={}, traces=traces, details=details)
+
+        match = await resolve_global_context(client, "parent-1", domain="automation")
+
+        assert match.run_id == "run"
+        assert match.match == "parent"
+        assert match.scanned == 2
+        assert any(
+            other["run_id"] == "diagnostic" for other in match.other_matches
+        )
+
+
+class TestNotTriggeredPreference:
+    """Shared selection rule: real runs win over not-triggered diagnostics."""
+
+    @pytest.mark.asyncio
+    async def test_public_path_prefers_real_run_over_newer_diagnostic(self):
+        """A newer not-triggered diagnostic does not beat a real run on the public path."""
+        traces = [
+            {
+                "run_id": "diagnostic",
+                "not_triggered": True,
+                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
+            },
+            {
+                "run_id": "run",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            },
+        ]
+        details = {
+            "diagnostic": {
+                "run_id": "diagnostic",
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            },
+            "run": {
+                "run_id": "run",
+                "context": {"id": "own-2", "parent_id": "parent-1"},
+            },
+        }
+        client = _context_client(contexts={}, traces=traces, details=details)
+
+        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        assert match.run_id == "run"
+        assert match.match == "parent"
+        assert match.scanned == 2
+        assert any(
+            other["run_id"] == "diagnostic" for other in match.other_matches
+        )
+
+    @pytest.mark.asyncio
+    async def test_preference_comes_from_trace_list_row(self):
+        """The real-run preference is driven by ``not_triggered`` in the trace/list row."""
+        # The detail payloads do not mark not_triggered; only the list rows do.
+        traces = [
+            {
+                "run_id": "diagnostic",
+                "not_triggered": True,
+                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
+            },
+            {
+                "run_id": "run",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            },
+        ]
+        details = {
+            "diagnostic": {
+                "run_id": "diagnostic",
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            },
+            "run": {
+                "run_id": "run",
+                "context": {"id": "own-2", "parent_id": "parent-1"},
+            },
+        }
+        client = _context_client(contexts={}, traces=traces, details=details)
+
+        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
+
+        assert match.run_id == "run"

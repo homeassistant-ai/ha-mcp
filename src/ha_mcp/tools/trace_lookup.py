@@ -511,7 +511,16 @@ async def _scan_global_parent(
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
         if kind in ("trace", "parent"):
-            matches.append((run_id, trace_data, domain, item_id, kind, bool(trace.get("not_triggered"))))
+            matches.append(
+                (
+                    run_id,
+                    trace_data,
+                    domain,
+                    item_id,
+                    kind,
+                    bool(trace.get("not_triggered")),
+                )
+            )
 
     return matches, scanned
 
@@ -788,7 +797,16 @@ async def _scan_for_context(
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
         if kind in ("trace", "parent"):
-            matches.append((run_id, trace_data, domain, item_id, kind, bool(trace.get("not_triggered"))))
+            matches.append(
+                (
+                    run_id,
+                    trace_data,
+                    domain,
+                    item_id,
+                    kind,
+                    bool(trace.get("not_triggered")),
+                )
+            )
 
     return matches, scanned
 
