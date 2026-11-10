@@ -19,6 +19,7 @@ from ...utilities.assertions import (
 )
 from ...utilities.cleanup import CleanupSteps
 from ...utilities.entity_finders import find_test_light_entity
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import (
     wait_for_condition,
     wait_for_entity_registration,
@@ -26,6 +27,36 @@ from ...utilities.wait_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(scope="module")
+async def trace_entity_cleanup(mcp_client):
+    """Yield a list that tracks automations/scripts created by trace tests.
+
+    Every entry is a ``(domain, entity_id)`` tuple. At teardown each tracked
+    automation/script is removed with the config tools so tests do not leak
+    entities on the shared HA instance.
+    """
+    created: list[tuple[str, str]] = []
+    yield created
+
+    logger.info(f"🧹 Cleaning up {len(created)} trace test entities")
+    for domain, entity_id in created:
+        if domain == "automation":
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_automation",
+                {"entity_id": entity_id},
+            )
+        elif domain == "script":
+            script_id = entity_id.split(".", 1)[-1]
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_script",
+                {"script_id": script_id},
+            )
+        else:
+            logger.warning(f"⚠️ Unknown trace entity domain: {domain} {entity_id}")
 
 
 @pytest.mark.automation
@@ -38,7 +69,7 @@ class TestAutomationTraces:
         return await find_test_light_entity(mcp_client)
 
     async def _create_trace_automation(
-        self, mcp_client, cleanup_tracker, config: dict[str, Any]
+        self, mcp_client, cleanup: list[tuple[str, str]], config: dict[str, Any]
     ) -> str:
         """Create an automation and wait until its entity is queryable."""
         create_data = await MCPAssertions(mcp_client).call_tool_success(
@@ -51,12 +82,12 @@ class TestAutomationTraces:
             # it before failing so it cannot pollute later tests on this HA.
             config_id = create_data.get("automation_id")
             if config_id:
-                cleanup = await safe_call_tool(
+                remove_result = await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
                     {"entity_id": config_id},
                 )
-                leftover_error = cleanup.get("error")
+                leftover_error = remove_result.get("error")
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
             + (
@@ -65,8 +96,9 @@ class TestAutomationTraces:
                 else ""
             )
         )
-        cleanup_tracker.track("automation", automation_id)
+        cleanup.append(("automation", automation_id))
         if not await wait_for_entity_registration(mcp_client, automation_id):
+            cleanup.pop()
             await safe_call_tool(
                 mcp_client,
                 "ha_config_remove_automation",
@@ -78,13 +110,14 @@ class TestAutomationTraces:
     async def test_template_trace_with_null_trigger_states(
         self,
         mcp_client: Any,
-        cleanup_tracker: Any,
+        trace_entity_cleanup: list[tuple[str, str]],
         test_data_factory: Any,
     ) -> None:
         """Return time-driven template traces whose HA states are null."""
+        suffix = uuid.uuid4().hex[:8]
         trigger_after = int(time.time()) + 45
         create_config = test_data_factory.automation_config(
-            "Template Null State Trace",
+            f"Template Null State Trace {suffix}",
             trigger=[
                 {
                     "platform": "template",
@@ -98,7 +131,7 @@ class TestAutomationTraces:
         )
 
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
         async with MCPAssertions(mcp_client) as mcp:
             traces_data = await wait_for_tool_result(
@@ -124,7 +157,7 @@ class TestAutomationTraces:
         assert trigger_vars["to_state"] is None
 
     async def test_automation_trace_after_trigger(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """
         Test: Create automation → Trigger → Get traces → Verify non-empty
@@ -135,22 +168,23 @@ class TestAutomationTraces:
         3. Traces are recorded and retrievable
         4. Traces contain expected fields (run_id, timestamp, state)
         """
+        suffix = uuid.uuid4().hex[:8]
 
         # 1. Find a test light entity
         test_light = await self._find_test_light_entity(mcp_client)
         logger.info(f"Using test light entity: {test_light}")
 
         # 2. Create an automation that can be manually triggered
-        automation_name = "Trace Test Automation E2E"
+        automation_name = f"Trace Test Automation E2E {suffix}"
         create_config = test_data_factory.automation_config(
             automation_name,
             # Use event trigger so we can manually trigger it
-            trigger=[{"platform": "event", "event_type": "test_trace_event"}],
+            trigger=[{"platform": "event", "event_type": f"test_trace_event_{suffix}"}],
             action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
 
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
         logger.info(f"Created automation: {automation_id}")
 
@@ -257,18 +291,30 @@ class TestAutomationTraces:
             )
 
     async def test_logbook_rows_for_a_new_run(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """A new run's logbook rows arrive through the component, not a script."""
+        suffix = uuid.uuid4().hex[:8]
         create_config = test_data_factory.automation_config(
-            "Trace Logbook E2E",
-            trigger=[{"platform": "event", "event_type": "test_trace_logbook_event"}],
+            f"Trace Logbook E2E {suffix}",
+            trigger=[
+                {
+                    "platform": "event",
+                    "event_type": f"test_trace_logbook_event_{suffix}",
+                }
+            ],
             action=[{"delay": {"seconds": 0.1}}],
         )
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
         mcp = MCPAssertions(mcp_client)
+
+        before = await mcp.call_tool_success(
+            "ha_get_automation_traces", {"entity_id": automation_id}
+        )
+        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
+
         await mcp.call_tool_success(
             "ha_call_service",
             {
@@ -285,7 +331,11 @@ class TestAutomationTraces:
             timeout=30,
             description="logbook test trace",
         )
-        run_id = traces["traces"][0]["run_id"]
+        run_id = next(
+            trace["run_id"]
+            for trace in traces["traces"]
+            if trace["run_id"] not in runs_before
+        )
 
         detail = await wait_for_tool_result(
             mcp_client,
@@ -302,15 +352,17 @@ class TestAutomationTraces:
         )
 
         assert detail["logbook_entries"], "the new run has no logbook rows"
-        assert detail["logbook_transport"] in {"component", "rest"}
+        expected_transport = "component" if component_surface_available() else "rest"
+        assert detail["logbook_transport"] == expected_transport
 
     async def test_blueprint_trace_preserves_inputs_and_config(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """A real blueprint trace keeps blueprint_inputs, last_step and config."""
         test_light = await self._find_test_light_entity(mcp_client)
         suffix = uuid.uuid4().hex[:8]
         blueprint_path = f"e2e/trace_fields_{suffix}.yaml"
+        event_type = f"trace_fields_{suffix}"
         blueprint_yaml = f"""blueprint:
   name: Trace Fields E2E {suffix}
   description: Temporary blueprint for trace field verification.
@@ -322,7 +374,7 @@ class TestAutomationTraces:
         entity: {{}}
 trigger:
   - platform: event
-    event_type: trace_fields_{suffix}
+    event_type: {event_type}
 action:
   - delay:
       seconds: 0
@@ -353,8 +405,13 @@ action:
             }
             mcp = MCPAssertions(mcp_client)
             automation_id = await self._create_trace_automation(
-                mcp_client, cleanup_tracker, create_config
+                mcp_client, trace_entity_cleanup, create_config
             )
+
+            before = await mcp.call_tool_success(
+                "ha_get_automation_traces", {"entity_id": automation_id}
+            )
+            runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
 
             await mcp.call_tool_success(
                 "ha_call_service",
@@ -375,11 +432,17 @@ action:
                 description="blueprint automation trace",
             )
 
+            run_id = next(
+                trace["run_id"]
+                for trace in traces_data["traces"]
+                if trace["run_id"] not in runs_before
+            )
+
             detail_data = await mcp.call_tool_success(
                 "ha_get_automation_traces",
                 {
                     "entity_id": automation_id,
-                    "run_id": traces_data["traces"][0]["run_id"],
+                    "run_id": run_id,
                     "sections": "config,last_step,blueprint_inputs",
                 },
             )
@@ -391,33 +454,26 @@ action:
             assert "triggers" in detail_data["config"]
             assert "actions" in detail_data["config"]
         finally:
-            with CleanupSteps() as cleanup:
-                with cleanup.step():
-                    if automation_id is not None:
-                        await MCPAssertions(mcp_client).call_tool_success(
-                            "ha_config_remove_automation",
-                            {"entity_id": automation_id},
-                        )
-                with cleanup.step():
-                    await safe_call_tool(
-                        mcp_client,
-                        "ha_manage_blueprints",
-                        {
-                            "action": "delete",
-                            "domain": "automation",
-                            "path": blueprint_path,
-                            "confirm": True,
-                        },
-                    )
+            with CleanupSteps() as cleanup, cleanup.step():
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_manage_blueprints",
+                    {
+                        "action": "delete",
+                        "domain": "automation",
+                        "path": blueprint_path,
+                        "confirm": True,
+                    },
+                )
 
     async def test_event_context_resolves_to_triggered_run(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """The context_id from ha_call_event resolves to the child run."""
         suffix = uuid.uuid4().hex[:8]
         event_type = f"trace_parent_context_e2e_{suffix}"
         create_config = test_data_factory.automation_config(
-            "Trace Parent Context E2E",
+            f"Trace Parent Context E2E {suffix}",
             trigger=[{"platform": "event", "event_type": event_type}],
             action=[{"delay": {"seconds": 0}}],
             initial_state=True,
@@ -425,8 +481,13 @@ action:
 
         mcp = MCPAssertions(mcp_client)
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
+
+        before = await mcp.call_tool_success(
+            "ha_get_automation_traces", {"entity_id": automation_id}
+        )
+        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
 
         event_data = await mcp.call_tool_success(
             "ha_call_event", {"event_type": event_type}
@@ -438,10 +499,18 @@ action:
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": automation_id},
-            predicate=lambda data: data.get("trace_count", 0) > 0,
+            predicate=lambda data: any(
+                trace["run_id"] not in runs_before for trace in data.get("traces", [])
+            ),
             timeout=15,
             poll_interval=0.5,
             description="automation trace after event context",
+        )
+
+        run_id = next(
+            trace["run_id"]
+            for trace in traces_data["traces"]
+            if trace["run_id"] not in runs_before
         )
 
         by_context_data = await mcp.call_tool_success(
@@ -454,7 +523,7 @@ action:
 
         assert by_context_data["context_match"] == "parent"
         assert by_context_data["context_id"] == event_context_id
-        assert by_context_data["run_id"] == traces_data["traces"][0]["run_id"]
+        assert by_context_data["run_id"] == run_id
         assert by_context_data["context_scanned"] >= 1
 
         # A domain list gives Core's domain/item_id, which must address the
@@ -494,14 +563,14 @@ action:
         assert "entity_id" not in context_only
 
     async def test_shared_context_lists_automation_and_script_matches(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """An automation that calls a script shares its own context with the script."""
         suffix = uuid.uuid4().hex[:8]
         event_type = f"trace_shared_context_e2e_{suffix}"
         script_id = f"trace_shared_context_script_{suffix}"
         script_config = test_data_factory.script_config(
-            "Trace Shared Context Script E2E",
+            f"Trace Shared Context Script E2E {suffix}",
             sequence=[{"delay": {"seconds": 0}}],
         )
 
@@ -510,13 +579,13 @@ action:
             "ha_config_set_script", {"script_id": script_id, "config": script_config}
         )
         script_entity_id = script_create.get("entity_id") or f"script.{script_id}"
-        cleanup_tracker.track("script", script_entity_id)
+        trace_entity_cleanup.append(("script", script_entity_id))
         assert await wait_for_entity_registration(mcp_client, script_entity_id), (
             f"{script_entity_id} never became queryable"
         )
 
         create_config = test_data_factory.automation_config(
-            "Trace Shared Context E2E",
+            f"Trace Shared Context E2E {suffix}",
             trigger=[{"platform": "event", "event_type": event_type}],
             action=[
                 {"service": "script.turn_on", "target": {"entity_id": script_entity_id}}
@@ -524,8 +593,21 @@ action:
             initial_state=True,
         )
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
+
+        auto_before = await mcp.call_tool_success(
+            "ha_get_automation_traces", {"entity_id": automation_id}
+        )
+        auto_runs_before = {
+            trace.get("run_id") for trace in auto_before.get("traces", [])
+        }
+        script_before = await mcp.call_tool_success(
+            "ha_get_automation_traces", {"entity_id": script_entity_id}
+        )
+        script_runs_before = {
+            trace.get("run_id") for trace in script_before.get("traces", [])
+        }
 
         await mcp.call_tool_success("ha_call_event", {"event_type": event_type})
 
@@ -533,7 +615,10 @@ action:
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": automation_id},
-            predicate=lambda data: data.get("trace_count", 0) > 0,
+            predicate=lambda data: any(
+                trace["run_id"] not in auto_runs_before
+                for trace in data.get("traces", [])
+            ),
             timeout=15,
             poll_interval=0.5,
             description="automation trace after shared context event",
@@ -542,13 +627,24 @@ action:
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": script_entity_id},
-            predicate=lambda data: data.get("trace_count", 0) > 0,
+            predicate=lambda data: any(
+                trace["run_id"] not in script_runs_before
+                for trace in data.get("traces", [])
+            ),
             timeout=15,
             poll_interval=0.5,
             description="script trace after shared context event",
         )
-        auto_row = auto_traces["traces"][0]
-        script_row = script_traces["traces"][0]
+        auto_row = next(
+            trace
+            for trace in auto_traces["traces"]
+            if trace["run_id"] not in auto_runs_before
+        )
+        script_row = next(
+            trace
+            for trace in script_traces["traces"]
+            if trace["run_id"] not in script_runs_before
+        )
         auto_run_id = auto_row["run_id"]
         script_run_id = script_row["run_id"]
 
@@ -592,16 +688,17 @@ action:
             assert match["item_id"] == expected["item_id"]
 
     async def test_trace_storage_disabled_diagnostics(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """stored_traces=0 reports disabled storage, not a generic empty result."""
-        automation_name = "Trace Storage Disabled E2E"
+        suffix = uuid.uuid4().hex[:8]
+        automation_name = f"Trace Storage Disabled E2E {suffix}"
         create_config = test_data_factory.automation_config(
             automation_name,
             trigger=[
                 {
                     "platform": "event",
-                    "event_type": "trace_storage_disabled_e2e",
+                    "event_type": f"trace_storage_disabled_e2e_{suffix}",
                 }
             ],
             action=[{"delay": {"seconds": 0}}],
@@ -611,7 +708,7 @@ action:
 
         mcp = MCPAssertions(mcp_client)
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
 
         await mcp.call_tool_success(
@@ -642,16 +739,17 @@ action:
         )
 
     async def test_context_lookup_returns_same_run(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """A context id resolves to the run that owns it."""
-        automation_name = "Trace Context Lookup E2E"
+        suffix = uuid.uuid4().hex[:8]
+        automation_name = f"Trace Context Lookup E2E {suffix}"
         create_config = test_data_factory.automation_config(
             automation_name,
             trigger=[
                 {
                     "platform": "event",
-                    "event_type": "trace_context_lookup_e2e",
+                    "event_type": f"trace_context_lookup_e2e_{suffix}",
                 }
             ],
             action=[{"delay": {"seconds": 0}}],
@@ -660,8 +758,13 @@ action:
 
         mcp = MCPAssertions(mcp_client)
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
+
+        before = await mcp.call_tool_success(
+            "ha_get_automation_traces", {"entity_id": automation_id}
+        )
+        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
 
         await mcp.call_tool_success(
             "ha_call_service",
@@ -676,12 +779,18 @@ action:
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": automation_id},
-            predicate=lambda data: data.get("trace_count", 0) > 0,
+            predicate=lambda data: any(
+                trace["run_id"] not in runs_before for trace in data.get("traces", [])
+            ),
             timeout=15,
             poll_interval=0.5,
             description="automation trace for context lookup",
         )
-        run_id = traces_data["traces"][0]["run_id"]
+        run_id = next(
+            trace["run_id"]
+            for trace in traces_data["traces"]
+            if trace["run_id"] not in runs_before
+        )
 
         detail_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
@@ -702,7 +811,7 @@ action:
         assert by_context_data["context_id"] == context_id
 
     async def test_empty_traces_with_diagnostics(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """
         Test: Create automation (no trigger) → Get traces → Verify diagnostics
@@ -712,12 +821,13 @@ action:
         2. Diagnostics are included
         3. Diagnostics contain helpful information
         """
+        suffix = uuid.uuid4().hex[:8]
 
         # 1. Find a test light entity
         test_light = await self._find_test_light_entity(mcp_client)
 
         # 2. Create an automation that won't be triggered
-        automation_name = "Empty Trace Test E2E"
+        automation_name = f"Empty Trace Test E2E {suffix}"
         create_config = test_data_factory.automation_config(
             automation_name,
             # Use a trigger that won't fire
@@ -727,10 +837,8 @@ action:
 
         mcp = MCPAssertions(mcp_client)
         automation_id = await self._create_trace_automation(
-            mcp_client, cleanup_tracker, create_config
+            mcp_client, trace_entity_cleanup, create_config
         )
-
-        # Wait for automation registration
 
         # 3. Get traces (should be empty with diagnostics)
         traces_data = await mcp.call_tool_success(
@@ -742,36 +850,36 @@ action:
 
         # Traces should be empty for a never-triggered automation
         trace_count = traces_data.get("trace_count", 0)
+        assert trace_count == 0, (
+            f"Expected 0 traces for never-triggered automation, got {trace_count}"
+        )
 
-        if trace_count == 0:
-            # Verify diagnostics are present
-            diagnostics = traces_data.get("diagnostics")
-            assert diagnostics is not None, (
-                "Diagnostics should be included when traces are empty"
-            )
-            assert "entity_exists" in diagnostics
-            assert "suggestion" in diagnostics
+        # Verify diagnostics are present
+        diagnostics = traces_data.get("diagnostics")
+        assert diagnostics is not None, (
+            "Diagnostics should be included when traces are empty"
+        )
+        assert "entity_exists" in diagnostics
+        assert "suggestion" in diagnostics
 
-            logger.info(f"Diagnostics received: {diagnostics.get('suggestion')}")
-        else:
-            # If traces exist (from previous test runs), that's also acceptable
-            logger.info(
-                f"Automation already has {trace_count} traces from previous runs"
-            )
+        logger.info(f"Diagnostics received: {diagnostics.get('suggestion')}")
 
-    async def test_script_traces(self, mcp_client, cleanup_tracker, test_data_factory):
+    async def test_script_traces(
+        self, mcp_client, trace_entity_cleanup, test_data_factory
+    ):
         """
         Test: Create script → Run → Get traces → Verify non-empty
 
         This test validates that trace retrieval also works for scripts.
         """
+        suffix = uuid.uuid4().hex[:8]
 
         # 1. Find a test light entity
         test_light = await self._find_test_light_entity(mcp_client)
 
         # 2. Create a simple script
-        script_name = "Trace Test Script E2E"
-        script_id_base = "trace_test_script_e2e"
+        script_name = f"Trace Test Script E2E {suffix}"
+        script_id_base = f"trace_test_script_e2e_{suffix}"
         script_config = test_data_factory.script_config(
             script_name,
             sequence=[
@@ -787,13 +895,16 @@ action:
 
         # Get the entity_id form (script.trace_test_script_e2e)
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
-        cleanup_tracker.track("script", script_entity_id)
+        trace_entity_cleanup.append(("script", script_entity_id))
         assert await wait_for_entity_registration(mcp_client, script_entity_id), (
             f"{script_entity_id} never became queryable"
         )
         logger.info(f"Created script: {script_entity_id}")
 
-        # Wait for script registration
+        before = await mcp.call_tool_success(
+            "ha_get_automation_traces", {"entity_id": script_entity_id}
+        )
+        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
 
         # 3. Run the script
         await mcp.call_tool_success(
@@ -813,7 +924,9 @@ action:
                 {"entity_id": script_entity_id},
             )
             data = parse_mcp_result(result)
-            return data.get("trace_count", 0) > 0
+            return any(
+                trace["run_id"] not in runs_before for trace in data.get("traces", [])
+            )
 
         logger.info("Waiting for script trace to be recorded...")
         trace_appeared = await wait_for_condition(
@@ -826,7 +939,7 @@ action:
         assert trace_appeared, "Script trace did not appear within timeout"
 
         # 4. Get traces for the script
-        traces_data = await mcp.call_tool_success(
+        traces_data = await MCPAssertions(mcp_client).call_tool_success(
             "ha_get_automation_traces",
             {"entity_id": script_entity_id},
         )
@@ -841,13 +954,14 @@ action:
         )
 
     async def test_script_trace_storage_disabled_diagnostics(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
         """A script with stored_traces=0 reports disabled storage, not idle."""
+        suffix = uuid.uuid4().hex[:8]
         test_light = await self._find_test_light_entity(mcp_client)
-        script_id_base = "trace_storage_disabled_script_e2e"
+        script_id_base = f"trace_storage_disabled_script_e2e_{suffix}"
         script_config = test_data_factory.script_config(
-            "Trace Storage Disabled Script E2E",
+            f"Trace Storage Disabled Script E2E {suffix}",
             sequence=[
                 {"service": "light.turn_on", "target": {"entity_id": test_light}}
             ],
@@ -860,7 +974,7 @@ action:
             {"script_id": script_id_base, "config": script_config},
         )
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
-        cleanup_tracker.track("script", script_entity_id)
+        trace_entity_cleanup.append(("script", script_entity_id))
         assert await wait_for_entity_registration(mcp_client, script_entity_id), (
             f"{script_entity_id} never became queryable"
         )
@@ -894,7 +1008,7 @@ action:
         )
 
     async def test_not_triggered_trace_keeps_core_diagnostics(
-        self, mcp_client, cleanup_tracker
+        self, mcp_client, trace_entity_cleanup
     ):
         """A non-firing purpose-specific trigger keeps Core's reason."""
         suffix = uuid.uuid4().hex[:8]
@@ -918,7 +1032,7 @@ action:
             }
             mcp = MCPAssertions(mcp_client)
             automation_id = await self._create_trace_automation(
-                mcp_client, cleanup_tracker, create_config
+                mcp_client, trace_entity_cleanup, create_config
             )
 
             prior_light = await mcp.call_tool_success(
@@ -992,29 +1106,22 @@ action:
             assert trigger_result["reason"]
             assert isinstance(trigger_result["data"], dict)
         finally:
-            with CleanupSteps() as cleanup:
-                with cleanup.step():
-                    if automation_id is not None:
-                        await MCPAssertions(mcp_client).call_tool_success(
-                            "ha_config_remove_automation",
-                            {"entity_id": automation_id},
-                        )
-                with cleanup.step():
-                    if light_prior_state in {"on", "off"}:
-                        # The test toggled the light to force the state
-                        # trigger; put the instance back the way it was.
-                        await MCPAssertions(mcp_client).call_tool_success(
-                            "ha_call_service",
-                            {
-                                "domain": "light",
-                                "service": (
-                                    "turn_on"
-                                    if light_prior_state == "on"
-                                    else "turn_off"
-                                ),
-                                "entity_id": light_id,
-                            },
-                        )
+            with CleanupSteps() as cleanup, cleanup.step():
+                if light_prior_state in {"on", "off"}:
+                    # The test toggled the light to force the state
+                    # trigger; put the instance back the way it was.
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_call_service",
+                        {
+                            "domain": "light",
+                            "service": (
+                                "turn_on"
+                                if light_prior_state == "on"
+                                else "turn_off"
+                            ),
+                            "entity_id": light_id,
+                        },
+                    )
 
 
 @pytest.mark.automation
@@ -1052,9 +1159,7 @@ class TestGetAutomationTracesNegativeInputs:
         )
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
-    async def test_item_only_empty_list_returns_warning(
-        self, mcp_client: Any
-    ) -> None:
+    async def test_item_only_empty_list_returns_warning(self, mcp_client: Any) -> None:
         """A domain+item_id list with no traces returns a top-level warning."""
         mcp = MCPAssertions(mcp_client)
         result = await mcp.call_tool_success(
@@ -1065,6 +1170,4 @@ class TestGetAutomationTracesNegativeInputs:
         assert result["success"] is True
         assert result["trace_count"] == 0
         assert "warnings" in result
-        assert any(
-            "No traces found" in warning for warning in result["warnings"]
-        )
+        assert any("No traces found" in warning for warning in result["warnings"])
