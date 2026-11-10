@@ -102,7 +102,9 @@ def test_heartbeat_fresh_only_for_recent_mtime(oauth, monkeypatch, tmp_path, fre
     assert oauth._heartbeat_fresh() is False
 
 
-async def test_addon_alive_caches_only_the_negative_verdict(oauth, monkeypatch, hass):
+async def test_addon_alive_caches_only_the_negative_verdict(
+    oauth, monkeypatch, hass, freezer
+):
     """A positive verdict re-stats every request so a clean shutdown's file
     deletion takes effect immediately (#2218 review); only the down verdict
     caches, bounding stat traffic from anonymous requests to a stopped
