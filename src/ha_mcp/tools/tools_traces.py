@@ -573,7 +573,10 @@ class TraceTools:
                 total=3,
                 message="no traces; gathering diagnostics",
             )
-            diagnostics = await _gather_diagnostics(self._client, entity_id, domain)
+            diagnostics, diagnostics_warnings = await _gather_diagnostics(
+                self._client, entity_id, domain
+            )
+            list_warnings.extend(diagnostics_warnings)
             await safe_progress(
                 ctx, progress=3, total=3, message="diagnostics complete"
             )
@@ -625,6 +628,12 @@ def _add_context_match(
         detail["context_scan_errors"] = list(match.scan_errors)
     if match.other_matches:
         detail["context_other_matches"] = list(match.other_matches)
+    if match.fallback_scan and match.domain and match.item_id:
+        detail.setdefault("warnings", []).append(
+            f"Context matched through the public fallback scan for "
+            f"{match.domain}/{match.item_id}; install the ha_mcp_tools component "
+            "to use the in-process trace context lookup."
+        )
 
 
 async def _resolve_trace_item_id(

@@ -19,8 +19,7 @@ from .config_write_helpers import fetch_registry_entry
 
 REFERENCES_NEED_COMPONENT = (
     "references need the ha_mcp_tools component's automation_config bridge, "
-    "which is not available; related holds Core's broader Related set instead "
-    "(also the devices, areas and integrations of what the automation uses)"
+    "which is not available; references are omitted when the component is absent"
 )
 REFERENCES_NOT_LOADED = (
     "references unavailable: Home Assistant has not loaded this automation "
@@ -45,7 +44,11 @@ async def registry_details(
     """
     if lookup is not None:
         references = lookup.get("references")
-        if references is None and lookup.get("loaded") is False:
+        if (
+            references is None
+            and lookup.get("loaded") is False
+            and lookup.get("found") is not False
+        ):
             warnings.append(REFERENCES_NOT_LOADED)
         return lookup.get("entity"), lookup.get("validation"), references
     if not component_lookup:

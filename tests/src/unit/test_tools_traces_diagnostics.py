@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_diagnostics import _gather_diagnostics
+
+from .test_tools_traces import _dispatch, _make_pooled_client
 
 
 def _client(state: dict | None, config: dict | None = None) -> AsyncMock:
@@ -24,7 +27,7 @@ async def _diagnostics(
     loaded: bool | None = True,
     validation: dict | None = None,
     domain: str = "automation",
-) -> dict:
+) -> tuple[dict, list[str]]:
     lookup = {"found": entity is not None, "loaded": loaded}
     lookup_mock = AsyncMock(return_value=lookup)
     details_mock = AsyncMock(return_value=(entity, validation, None))
@@ -32,7 +35,7 @@ async def _diagnostics(
         patch("ha_mcp.tools.trace_diagnostics.automation_lookup", lookup_mock),
         patch("ha_mcp.tools.trace_diagnostics.registry_details", details_mock),
     ):
-        result = await _gather_diagnostics(client, f"{domain}.test", domain)
+        result, warnings = await _gather_diagnostics(client, f"{domain}.test", domain)
 
     if domain == "automation":
         lookup_mock.assert_awaited_once_with(client, entity_id=f"{domain}.test")
@@ -46,7 +49,7 @@ async def _diagnostics(
     client.send_websocket_message.assert_awaited_once_with(
         {"type": f"{domain}/config", "entity_id": f"{domain}.test"}
     )
-    return result
+    return result, warnings
 
 
 class TestGatherDiagnostics:
@@ -58,7 +61,7 @@ class TestGatherDiagnostics:
                 "attributes": {"last_triggered": "2025-11-30T15:00:00Z"},
             }
         )
-        result = await _diagnostics(
+        result, _warnings = await _diagnostics(
             client, entity={"unique_id": "uid_1", "disabled_by": None}
         )
 
@@ -72,7 +75,7 @@ class TestGatherDiagnostics:
     @pytest.mark.asyncio
     async def test_no_unique_id_does_not_claim_a_trace_key(self) -> None:
         client = _client({"state": "on", "attributes": {}})
-        result = await _diagnostics(client, entity={"disabled_by": None})
+        result, _warnings = await _diagnostics(client, entity={"disabled_by": None})
 
         assert result["trace_key_available"] is False
         assert "unique_id" in result["suggestion"]
@@ -80,7 +83,7 @@ class TestGatherDiagnostics:
     @pytest.mark.asyncio
     async def test_disabled_automation_does_not_say_enable_it(self) -> None:
         client = _client({"state": "off", "attributes": {}})
-        result = await _diagnostics(
+        result, _warnings = await _diagnostics(
             client,
             entity={"unique_id": "uid_1", "disabled_by": "user"},
             loaded=False,
@@ -95,7 +98,7 @@ class TestGatherDiagnostics:
     async def test_disabled_but_loaded_automation_mentions_trigger(self) -> None:
         """A turned-off automation is loaded; automation.trigger still runs it."""
         client = _client({"state": "off", "attributes": {}})
-        result = await _diagnostics(
+        result, _warnings = await _diagnostics(
             client,
             entity={"unique_id": "uid_1", "disabled_by": "user"},
             loaded=True,
@@ -110,7 +113,7 @@ class TestGatherDiagnostics:
     async def test_unavailable_automation_is_not_called_disabled(self) -> None:
         """An unavailable entity cannot be triggered, so say that instead."""
         client = _client({"state": "unavailable", "attributes": {}})
-        result = await _diagnostics(
+        result, _warnings = await _diagnostics(
             client,
             entity={"unique_id": "uid_1"},
             loaded=True,
@@ -124,7 +127,7 @@ class TestGatherDiagnostics:
     @pytest.mark.asyncio
     async def test_typo_entity_is_not_found(self) -> None:
         client = _client(None)
-        result = await _diagnostics(client, entity=None, loaded=None)
+        result, _warnings = await _diagnostics(client, entity=None, loaded=None)
 
         assert result["entity_exists"] is False
         assert result["trace_key_available"] is False
@@ -139,7 +142,7 @@ class TestGatherDiagnostics:
                 "result": {"config": {"trace": {"stored_traces": 0}}},
             },
         )
-        result = await _diagnostics(client, entity={"unique_id": "uid_1"})
+        result, _warnings = await _diagnostics(client, entity={"unique_id": "uid_1"})
 
         assert result["trace_storage_enabled"] is False
         assert "stored_traces: 0" in result["suggestion"]
@@ -150,14 +153,14 @@ class TestGatherDiagnostics:
             {"state": "on", "attributes": {}},
             config={"success": False, "error": "unknown_command"},
         )
-        result = await _diagnostics(client, entity={"unique_id": "uid_1"})
+        result, _warnings = await _diagnostics(client, entity={"unique_id": "uid_1"})
 
         assert result["trace_storage_enabled"] is None
 
     @pytest.mark.asyncio
     async def test_script_uses_registry_fallback(self) -> None:
         client = _client({"state": "off", "attributes": {}})
-        result = await _diagnostics(
+        result, _warnings = await _diagnostics(
             client, entity={"unique_id": "uid_script"}, domain="script"
         )
 
@@ -185,7 +188,61 @@ class TestGatherDiagnostics:
 
         client.send_websocket_message = AsyncMock(side_effect=_dispatch)
 
-        result = await _gather_diagnostics(client, "script.test", "script")
+        result, warnings = await _gather_diagnostics(client, "script.test", "script")
 
         assert result["trace_key_available"] is True
-        assert not any("component" in warning for warning in result.get("warnings", []))
+        assert not any("component" in warning for warning in warnings)
+
+
+class TestDiagnosticsResponseWarnings:
+    """Diagnostics warnings surface at the tool response level."""
+
+    @pytest.mark.asyncio
+    async def test_typo_entity_warns_without_not_loaded(self) -> None:
+        """A missing entity emits a response warning and never 'not loaded'."""
+        client = _make_pooled_client(_dispatch())
+        client.get_entity_state.return_value = None
+        with patch(
+            "ha_mcp.tools.trace_diagnostics.automation_lookup",
+            AsyncMock(return_value=None),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.typo"
+            )
+
+        assert "warnings" in result
+        assert any("component" in warning for warning in result["warnings"])
+        assert not any(
+            "not loaded" in warning.lower() for warning in result["warnings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_validation_failure_warns_at_response_level(self) -> None:
+        """A non-ok validation status emits a response-level warning."""
+        client = _make_pooled_client(_dispatch())
+        client.get_entity_state.return_value = {"state": "on", "attributes": {}}
+        lookup = {
+            "found": True,
+            "loaded": False,
+            "entity": {"unique_id": "uid_1"},
+            "validation": {"status": "failed", "error": "bad template"},
+            "references": None,
+        }
+        with (
+            patch(
+                "ha_mcp.tools.trace_diagnostics.automation_lookup",
+                AsyncMock(return_value=lookup),
+            ),
+            patch(
+                "ha_mcp.tools.trace_diagnostics.registry_details",
+                AsyncMock(return_value=(lookup["entity"], lookup["validation"], None)),
+            ),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test"
+            )
+
+        assert "warnings" in result
+        assert any(
+            "validation failed" in warning.lower() for warning in result["warnings"]
+        )

@@ -14,8 +14,13 @@ async def _gather_diagnostics(
     client: Any,
     entity_id: str,
     domain: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[str]]:
     """Explain why Core has no stored traces for an automation or script.
+
+    Returns the diagnostics dict and the warnings that should be surfaced at
+    the response level, separately so the list response can merge them with
+    its other warnings instead of nesting them under ``diagnostics``.
+
 
     The registry row, Core's loaded flag, its validation/repair issue and the
     references come from the component's ``automation_config`` lookup when it
@@ -67,6 +72,14 @@ async def _gather_diagnostics(
     )
     diagnostics["validation"] = validation
     diagnostics["references"] = references
+    if isinstance(validation, dict) and validation.get("status") not in {
+        None,
+        "ok",
+    }:
+        warnings.append(
+            f"automation validation failed ({validation['status']}): "
+            f"{validation.get('error') or 'see the repair issue'}"
+        )
     if lookup is not None:
         diagnostics["loaded"] = lookup.get("loaded")
     if isinstance(entity, dict):
@@ -77,9 +90,7 @@ async def _gather_diagnostics(
         client, entity_id, domain
     )
     diagnostics["suggestion"] = _diagnostic_suggestion(diagnostics, domain)
-    if warnings:
-        diagnostics["warnings"] = warnings
-    return diagnostics
+    return diagnostics, warnings
 
 
 async def _is_trace_storage_enabled(

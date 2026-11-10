@@ -19,6 +19,25 @@ from ha_mcp.tools.trace_lookup import (
 from .test_tools_traces import _dispatch, _make_pooled_client
 
 
+class TestTraceListWarnings:
+    """Warnings attached to trace list responses."""
+
+    @pytest.mark.asyncio
+    async def test_item_only_empty_list_warns(self) -> None:
+        """domain+item_id with no traces carries an item-only warning."""
+        client = _make_pooled_client(_dispatch())
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            domain="automation", item_id="uid_1"
+        )
+
+        assert result["trace_count"] == 0
+        assert result["warnings"] == [
+            "No traces found for automation/uid_1; "
+            "the item_id may be incorrect or the automation/script has not run."
+        ]
+
+
 class TestTraceContextLookup:
     """``ha_get_automation_traces`` resolves a context id through Core."""
 
@@ -472,6 +491,48 @@ class TestTraceContextLookup:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_component_absent_context_lookup_warns_about_fallback_scan(self):
+        """A public fallback context match warns that the component is absent."""
+        detail = {
+            "run_id": "r1",
+            "state": "stopped",
+            "trace": {},
+            "context": {"id": "own-1", "parent_id": "parent-1"},
+        }
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                if message.get("domain") == "script":
+                    return {"success": True, "result": []}
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "run_id": "r1",
+                            "domain": "automation",
+                            "item_id": "uid_1",
+                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                        }
+                    ],
+                }
+            if mtype == "trace/get":
+                return {"success": True, "result": detail}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await TraceTools(client).ha_get_automation_traces(
+            context_id="parent-1"
+        )
+
+        assert result["context_match"] == "parent"
+        assert result["context_scanned"] == 1
+        assert any(
+            "public fallback scan" in warning for warning in result["warnings"]
+        )
 
     @pytest.mark.asyncio
     async def test_component_context_matches_without_a_public_scan(self):

@@ -634,7 +634,7 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
         ),
         patch(
             "ha_mcp.tools.tools_traces._gather_diagnostics",
-            new=AsyncMock(return_value={"diagnostic": "info"}),
+            new=AsyncMock(return_value=({"diagnostic": "info"}, [])),
         ),
     ):
         result = await trace_tool(entity_id="automation.demo", ctx=ctx)

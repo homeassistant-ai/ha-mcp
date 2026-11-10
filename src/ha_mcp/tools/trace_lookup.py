@@ -37,6 +37,7 @@ class ContextTraceMatch:
     domain: str | None = None
     item_id: str | None = None
     other_matches: tuple[dict[str, str], ...] = ()
+    fallback_scan: bool = False
 
 
 @dataclass(frozen=True)
@@ -439,6 +440,7 @@ async def _resolve_with_direct_match(
         direct_domain,
         direct_item_id,
         other_matches,
+        fallback_scan=True,
     )
 
 
@@ -892,6 +894,7 @@ def _select_trace_match(
         domain,
         item_id,
         other_matches,
+        fallback_scan=True,
     )
 
 
