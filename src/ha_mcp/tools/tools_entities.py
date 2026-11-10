@@ -219,29 +219,28 @@ def _parse_set_entity_ids(
     """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input."""
     if isinstance(entity_id, str):
         return [entity_id], False
-    elif isinstance(entity_id, list):
-        if not entity_id:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "entity_id list cannot be empty",
-                )
-            )
-        if not all(isinstance(e, str) for e in entity_id):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "All entity_id values must be strings",
-                )
-            )
-        return entity_id, len(entity_id) > 1
-    else:
+    if not isinstance(entity_id, list):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
             )
         )
+    if not entity_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "entity_id list cannot be empty",
+            )
+        )
+    if not all(isinstance(e, str) for e in entity_id):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "All entity_id values must be strings",
+            )
+        )
+    return entity_id, len(entity_id) > 1
 
 
 def _parse_get_entity_ids(
@@ -438,20 +437,24 @@ class EntityTools:
                 "entity_ids": [entity_id],
             }
         )
-        if not result.get("success"):
-            code, detail = ws_failure_code(result), _extract_ws_error(result)
-        elif automatic := (result.get("result") or {}).get(entity_id):
-            return str(automatic)
-        else:
-            code, detail = ErrorCode.ENTITY_NOT_FOUND, "not in the entity registry"
-        raise_tool_error(
-            create_error_response(
-                code,
-                f"No automatic entity_id for {entity_id}: {detail}",
-                context={"entity_id": entity_id},
-                suggestions=["Use ha_search() to find valid entity IDs"],
-            )
+        automatic = result.get("success") and (result.get("result") or {}).get(
+            entity_id
         )
+        if not automatic:
+            if result.get("success"):
+                code = ErrorCode.ENTITY_NOT_FOUND
+                detail = "not in the entity registry"
+            else:
+                code, detail = ws_failure_code(result), _extract_ws_error(result)
+            raise_tool_error(
+                create_error_response(
+                    code,
+                    f"No automatic entity_id for {entity_id}: {detail}",
+                    context={"entity_id": entity_id},
+                    suggestions=["Use ha_search() to find valid entity IDs"],
+                )
+            )
+        return str(automatic)
 
     async def _execute_registry_update(
         self,

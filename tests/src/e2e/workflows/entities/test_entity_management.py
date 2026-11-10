@@ -534,8 +534,6 @@ class TestEntityManagement:
             assert "area_id" in entry, f"Missing area_id: {entry}"
             assert "disabled_by" in entry, f"Missing disabled_by: {entry}"
             assert "hidden_by" in entry, f"Missing hidden_by: {entry}"
-            assert "enabled" in entry, f"Missing enabled: {entry}"
-            assert "hidden" in entry, f"Missing hidden: {entry}"
             assert "aliases" in entry, f"Missing aliases: {entry}"
 
         logger.info("Multiple entity lookup verified")

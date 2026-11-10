@@ -677,3 +677,28 @@ class TestSingleSetHoldsEntityLock:
         assert before.count("config/entity_registry/update") == 2, order
         assert "config/device_registry/update" in before, order
         assert "homeassistant/expose_entity" in before, order
+
+
+class TestAutomaticEntityId:
+    @pytest.mark.asyncio
+    async def test_a_refused_read_keeps_cores_error_kind(self):
+        """new_entity_id='auto' reports Core's refusal of the ID read as such."""
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Invalid entity ID",
+                "error_code": "invalid_format",
+                # Only success decides: a result next to a failure is not used.
+                "result": {"light.a": "light.b"},
+            }
+        )
+        tool = _register(client)["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.a", new_entity_id="auto")
+
+        error = _error_body(exc_info)["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "Invalid entity ID" in error["message"]
+        client.send_websocket_message.assert_awaited_once()
