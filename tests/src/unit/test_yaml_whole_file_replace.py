@@ -69,7 +69,7 @@ class TestReplaceFileAction:
         return asyncio.run(coro)
 
     def test_replaces_whole_configuration_yaml_verbatim(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         """The entire file is overwritten with the supplied content byte-for-byte,
         comments preserved — keys absent from the new content are gone."""
@@ -101,7 +101,7 @@ class TestReplaceFileAction:
         assert cfg.read_text() == new_content
         assert "old_key" not in cfg.read_text()
 
-    def test_writes_packages_file(self, tmp_path, hass, call_factory):
+    def test_writes_packages_file(self, tmp_path, hass: MM, call_factory):
         """packages/*.yaml is in the write allowlist and restorable."""
         pkg = Path(tmp_path) / "packages" / "lights.yaml"
         pkg.parent.mkdir(parents=True)
@@ -124,7 +124,9 @@ class TestReplaceFileAction:
         assert result["success"] is True, result
         assert pkg.read_text() == "switch: []\n"
 
-    def test_accepts_include_dir_merge_named_tag(self, tmp_path, hass, call_factory):
+    def test_accepts_include_dir_merge_named_tag(
+        self, tmp_path, hass: MM, call_factory
+    ):
         """The documented ``!include_dir_merge_named`` tag must validate and
         restore through replace_file. Regression guard for the tag missing
         from the YAML loader registry, which made ``make_yaml().load()`` raise
@@ -153,7 +155,7 @@ class TestReplaceFileAction:
         # The tag survived verbatim in the restored file.
         assert "!include_dir_merge_named themes/" in cfg.read_text()
 
-    def test_requires_content(self, hass, call_factory):
+    def test_requires_content(self, hass: MM, call_factory):
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
             handler(
@@ -169,7 +171,7 @@ class TestReplaceFileAction:
         assert result["success"] is False
         assert "content" in result["error"]
 
-    def test_rejects_non_mapping_root(self, hass, call_factory):
+    def test_rejects_non_mapping_root(self, hass: MM, call_factory):
         """A list/scalar root is not a valid config file."""
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
@@ -187,7 +189,7 @@ class TestReplaceFileAction:
         assert result["success"] is False
         assert "mapping" in result["error"]
 
-    def test_rejects_invalid_yaml(self, hass, call_factory):
+    def test_rejects_invalid_yaml(self, hass: MM, call_factory):
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
             handler(
@@ -204,7 +206,7 @@ class TestReplaceFileAction:
         assert result["success"] is False
         assert "Invalid YAML" in result["error"]
 
-    def test_rejects_disallowed_path(self, hass, call_factory):
+    def test_rejects_disallowed_path(self, hass: MM, call_factory):
         """Whole-file replace is confined to the same allowlist as a normal edit
         (configuration.yaml / packages/*.yaml / themes/*.yaml) — www/ is out."""
         handler = _build_edit_yaml_config_handler(hass)
@@ -223,7 +225,7 @@ class TestReplaceFileAction:
         assert result["success"] is False
         assert "not allowed" in result["error"]
 
-    def test_rejects_path_traversal(self, hass, call_factory):
+    def test_rejects_path_traversal(self, hass: MM, call_factory):
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
             handler(
@@ -240,7 +242,7 @@ class TestReplaceFileAction:
         assert result["success"] is False
         assert "traversal" in result["error"].lower()
 
-    def test_unauthorized_without_token(self, tmp_path, hass):
+    def test_unauthorized_without_token(self, tmp_path, hass: MM):
         """No caller token → structured unauthorized, no write."""
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text("default_config:\n")
@@ -261,7 +263,7 @@ class TestReplaceFileAction:
         assert cfg.read_text() == "default_config:\n"
 
     def test_surfaces_config_check_errors(
-        self, tmp_path, hass, call_factory, monkeypatch
+        self, tmp_path, hass: MM, call_factory, monkeypatch
     ):
         """A failing config check is reported but the (already atomic) write stands."""
         monkeypatch.setattr(
@@ -290,7 +292,7 @@ class TestReplaceFileAction:
         assert result["config_check_errors"] == "boom: bad config"
 
     def test_surfaces_config_check_unavailable_on_failure(
-        self, tmp_path, hass, call_factory, monkeypatch
+        self, tmp_path, hass: MM, call_factory, monkeypatch
     ):
         """A config check that cannot run surfaces as "unavailable" while the
         (already atomic) write still stands. Behavioral guard for the #1660

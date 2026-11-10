@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.typing import WebSocketGenerator
 
 if TYPE_CHECKING:
     from ha_mcp.tools.component_api import ComponentCaps
@@ -377,7 +379,7 @@ def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def component_ws(hass: Any, hass_ws_client: Any) -> Any:
+async def component_ws(hass: HomeAssistant, hass_ws_client: WebSocketGenerator) -> Any:
     """A WebSocket client of a real ``hass`` with the ``ha_mcp_tools/*`` commands.
 
     The caller is an admin; ``component_ws_read_only`` is the same for a
@@ -392,7 +394,9 @@ async def component_ws(hass: Any, hass_ws_client: Any) -> Any:
 
 @pytest.fixture
 async def component_ws_read_only(
-    hass: Any, hass_ws_client: Any, hass_read_only_access_token: str
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    hass_read_only_access_token: str,
 ) -> Any:
     """``component_ws`` for a user who is not an admin."""
     from custom_components.ha_mcp_tools import websocket_api

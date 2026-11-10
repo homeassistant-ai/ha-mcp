@@ -26,6 +26,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import TextSelector, TextSelectorType
 
 from custom_components.ha_mcp_tools import config_flow as cf
@@ -166,11 +167,11 @@ class TestToolsInfoOptionsFlow:
 
         applied: dict[str, list[str]] = {}
 
-        async def _apply_dirs(hass, raw):
+        async def _apply_dirs(hass: HomeAssistant, raw):
             applied["dirs"] = raw
             return raw, []
 
-        async def _apply_keys(hass, raw):
+        async def _apply_keys(hass: HomeAssistant, raw):
             applied["keys"] = raw
             return raw, []
 
@@ -824,7 +825,9 @@ class TestServerOptionsFlow:
         """
         calls: list[dict] = []
 
-        def fake_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
+        def fake_builder(
+            hass: HomeAssistant, entry, *, webhook_enabled=True, extra_hosts=None
+        ):
             calls.append(
                 {
                     "hass": hass,
@@ -837,7 +840,7 @@ class TestServerOptionsFlow:
                 "http://192.168.1.150:9584/private_x (direct access)",
             ]
 
-        async def fake_lan_hosts(hass):
+        async def fake_lan_hosts(hass: HomeAssistant):
             return ["10.0.1.3"]
 
         stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
@@ -874,7 +877,7 @@ class TestServerOptionsFlow:
         without importing the real module (which needs a full HA install).
         """
 
-        async def fake_lan_hosts(hass):
+        async def fake_lan_hosts(hass: HomeAssistant):
             return []
 
         stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
@@ -895,7 +898,9 @@ class TestServerOptionsFlow:
     def test_connect_url_hint_falls_back_when_builder_raises(self):
         # A resolution bug in build_connect_urls must not escape and take down
         # the whole options form: the hint degrades to the placeholder form.
-        def boom_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
+        def boom_builder(
+            hass: HomeAssistant, entry, *, webhook_enabled=True, extra_hosts=None
+        ):
             raise RuntimeError("resolution boom")
 
         hint = self._hint_with_stub_builder(
@@ -907,7 +912,9 @@ class TestServerOptionsFlow:
     def test_connect_url_hint_falls_back_when_builder_returns_empty(self):
         # An empty resolver result (nothing resolvable yet) also degrades to the
         # placeholder form rather than an empty "Connect URL(s):" header.
-        def empty_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
+        def empty_builder(
+            hass: HomeAssistant, entry, *, webhook_enabled=True, extra_hosts=None
+        ):
             return []
 
         hint = self._hint_with_stub_builder(
@@ -924,7 +931,9 @@ class TestServerOptionsFlow:
         loopback direct URL instead of rendering a webhook URL that 404s.
         """
 
-        def empty_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
+        def empty_builder(
+            hass: HomeAssistant, entry, *, webhook_enabled=True, extra_hosts=None
+        ):
             return []
 
         hint = self._hint_with_stub_builder(
@@ -944,7 +953,9 @@ class TestServerOptionsFlow:
         — a resolution error must not resurrect a webhook URL that 404s.
         """
 
-        def boom_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
+        def boom_builder(
+            hass: HomeAssistant, entry, *, webhook_enabled=True, extra_hosts=None
+        ):
             raise RuntimeError("resolution boom")
 
         hint = self._hint_with_stub_builder(

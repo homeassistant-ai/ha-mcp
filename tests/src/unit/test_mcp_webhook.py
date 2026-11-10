@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 import custom_components.ha_mcp_tools.mcp_webhook as mw
 from custom_components.ha_mcp_tools import oauth_legacy
@@ -341,7 +342,7 @@ class TestRelayClientTimeout:
 
 
 class TestHaAuthGate:
-    def _provider(self, hass):
+    def _provider(self, hass: HomeAssistant):
         return mw.ResourceServer(hass, WEBHOOK_ID)
 
     async def test_valid_bearer_passes_through(self):

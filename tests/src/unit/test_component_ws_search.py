@@ -36,6 +36,7 @@ from typing import Any
 
 import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.ha_mcp_tools.websocket_api import (
@@ -550,7 +551,7 @@ class FakeStorageCollectionWs:
         self.update_schema = {}
 
     async def ws_create_item(  # pragma: no cover
-        self, hass: Any, connection: Any, msg: dict[str, Any]
+        self, hass: HomeAssistant, connection: Any, msg: dict[str, Any]
     ) -> None:
         raise AssertionError("never invoked")
 
@@ -750,7 +751,7 @@ class FakeIssueRegModule:
     def __init__(self, registry):
         self._registry = registry
 
-    def async_get(self, hass):
+    def async_get(self, hass: HomeAssistant):
         return self._registry
 
 
@@ -1584,7 +1585,7 @@ class TestSearchPrep:
     executor ONLY when a config/helper surface is requested; an entity-only
     search skips the file read entirely (perf gate)."""
 
-    def _run(self, hass, msg):
+    def _run(self, hass: HomeAssistant, msg):
         return asyncio.run(wsapi._search_prep(hass, msg))
 
     def test_entity_only_skips_executor(self, monkeypatch, tmp_path):
@@ -3184,7 +3185,7 @@ class TestExposure:
     def _patch(self, monkeypatch, settings_map, legacy_ids=()):
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
 
-        def fake_settings(hass, entity_id):
+        def fake_settings(hass: HomeAssistant, entity_id):
             if entity_id not in settings_map:
                 raise HomeAssistantError("Unknown entity")
             return settings_map[entity_id]
@@ -3247,7 +3248,7 @@ class TestExposure:
         reported as not-exposed (issue #1813 F4)."""
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
 
-        def boom(hass, entity_id):
+        def boom(hass: HomeAssistant, entity_id):
             raise HomeAssistantError("settings store read failed")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", boom)

@@ -31,6 +31,7 @@ _REPLIES = "no-hand-made-core-replies"
 _SHARED = "no-shared-fake-clients"
 _HASS = "no-hand-made-hass"
 _SUPPRESSIONS = "no-stand-in-suppressions"
+_TYPED = "no-untyped-core-fixtures"
 
 
 def _ast_grep() -> str:
@@ -352,6 +353,38 @@ def test_only_a_suppressed_real_core_check_is_refused(
     assert _flagged(_SUPPRESSIONS, source, tmp_path) is refused
 
 
+@pytest.mark.parametrize(
+    ("source", "refused"),
+    [
+        pytest.param("async def test_it(hass):\n    pass\n", True, id="no-annotation"),
+        pytest.param(
+            "async def test_it(hass: Any):\n    pass\n", True, id="annotated-any"
+        ),
+        pytest.param(
+            "def helper(core_client=None):\n    pass\n", True, id="default-value"
+        ),
+        pytest.param(
+            "async def test_it(entity_registry, hass: HomeAssistant):\n    pass\n",
+            True,
+            id="one-of-two-fixtures",
+        ),
+        pytest.param(
+            "async def test_it(hass: HomeAssistant, core_client: HomeAssistantClient):\n"
+            "    pass\n",
+            False,
+            id="real-types",
+        ),
+        pytest.param("async def test_it(tmp_path):\n    pass\n", False, id="other"),
+        pytest.param("lookup = lambda hass: None\n", False, id="lambda"),
+    ],
+)
+def test_only_an_untyped_core_fixture_is_refused(
+    source: str, refused: bool, tmp_path: Path
+) -> None:
+    """mypy checks nothing done to a Core fixture without a real annotation."""
+    assert _flagged(_TYPED, source, tmp_path) is refused
+
+
 def _regexes(node: Any) -> Iterator[str]:
     if isinstance(node, dict):
         for key, value in node.items():
@@ -404,7 +437,7 @@ def test_every_client_method_is_covered_by_the_rule() -> None:
         assert not missing, sorted(missing)
 
 
-@pytest.mark.parametrize("rule", [_REPLIES, _SHARED, _HASS, _SUPPRESSIONS])
+@pytest.mark.parametrize("rule", [_REPLIES, _SHARED, _HASS, _SUPPRESSIONS, _TYPED])
 def test_the_grandfather_list_is_exactly_the_files_that_still_violate(
     rule: str, tmp_path: Path
 ) -> None:

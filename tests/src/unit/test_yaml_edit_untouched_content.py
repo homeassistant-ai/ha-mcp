@@ -141,7 +141,7 @@ class TestUntouchedContentPreserved:
         return asyncio.run(coro)
 
     def test_unrelated_add_preserves_folded_scalar_values(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
@@ -156,7 +156,7 @@ class TestUntouchedContentPreserved:
         assert _template_attributes(written) == before
 
     def test_long_folded_scalar_line_not_split_on_disk(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
@@ -178,7 +178,7 @@ class TestRoundTripGuard:
         return asyncio.run(coro)
 
     def test_write_aborted_when_serialization_would_alter_content(
-        self, tmp_path, hass, call_factory, monkeypatch
+        self, tmp_path, hass: MM, call_factory, monkeypatch
     ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
@@ -207,7 +207,7 @@ class TestDiffInResponse:
         return asyncio.run(coro)
 
     def test_success_response_includes_diff_and_written(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
@@ -220,7 +220,7 @@ class TestDiffInResponse:
         assert "+utility_meter:" in result["diff"]
         assert "(before)" in result["diff"] and "(after)" in result["diff"]
 
-    def test_pure_add_diff_has_no_removals(self, tmp_path, hass, call_factory):
+    def test_pure_add_diff_has_no_removals(self, tmp_path, hass: MM, call_factory):
         """With width + indent-style preservation, adding a new key to an
         HA-docs-style file must not touch any existing line."""
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -236,7 +236,7 @@ class TestDiffInResponse:
         ]
         assert removals == [], result["diff"]
 
-    def test_diff_is_truncated_for_huge_changes(self, tmp_path, hass, call_factory):
+    def test_diff_is_truncated_for_huge_changes(self, tmp_path, hass: MM, call_factory):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text("default_config:\n")
         big = "\n".join(f"meter_{i}:\n  source: sensor.s{i}" for i in range(300))
@@ -279,7 +279,9 @@ class TestConfirmFlow:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_first_call_previews_without_writing(self, tmp_path, hass, call_factory):
+    def test_first_call_previews_without_writing(
+        self, tmp_path, hass: MM, call_factory
+    ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
 
@@ -293,7 +295,7 @@ class TestConfirmFlow:
         assert result["confirm_token"]
         assert cfg.read_text() == ISSUE_1720_CONFIG  # nothing written
 
-    def test_confirm_with_token_writes(self, tmp_path, hass, call_factory):
+    def test_confirm_with_token_writes(self, tmp_path, hass: MM, call_factory):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
         handler = _build_edit_yaml_config_handler(hass)
@@ -307,7 +309,7 @@ class TestConfirmFlow:
         assert result["written"] is True
         assert "monthly_bill_ac" in cfg.read_text()
 
-    def test_stale_token_re_previews(self, tmp_path, hass, call_factory):
+    def test_stale_token_re_previews(self, tmp_path, hass: MM, call_factory):
         """File changed between preview and confirm → token mismatch, no
         write, fresh token issued."""
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -326,7 +328,9 @@ class TestConfirmFlow:
         assert result["confirm_token"] != preview["confirm_token"]
         assert "monthly_bill_ac" not in cfg.read_text()
 
-    def test_absent_flag_keeps_single_call_behavior(self, tmp_path, hass, call_factory):
+    def test_absent_flag_keeps_single_call_behavior(
+        self, tmp_path, hass: MM, call_factory
+    ):
         """Old servers never send require_confirm — writes stay one-call."""
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
@@ -356,7 +360,7 @@ class TestConfirmFlowRemove:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_remove_previews_without_writing(self, tmp_path, hass, call_factory):
+    def test_remove_previews_without_writing(self, tmp_path, hass: MM, call_factory):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
 
@@ -368,7 +372,7 @@ class TestConfirmFlowRemove:
         assert "-template:" in preview["diff"]
         assert cfg.read_text() == ISSUE_1720_CONFIG  # nothing removed
 
-    def test_remove_confirm_applies(self, tmp_path, hass, call_factory):
+    def test_remove_confirm_applies(self, tmp_path, hass: MM, call_factory):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
         handler = _build_edit_yaml_config_handler(hass)
@@ -399,7 +403,9 @@ class TestMixedStyleReindent:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_mixed_style_add_warns_about_reindent(self, tmp_path, hass, call_factory):
+    def test_mixed_style_add_warns_about_reindent(
+        self, tmp_path, hass: MM, call_factory
+    ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(MIXED_STYLE_CONFIG)
 
@@ -414,7 +420,7 @@ class TestMixedStyleReindent:
         assert any("re-indented" in w for w in result.get("warnings", []))
 
     def test_uniform_style_add_has_no_reindent_warning(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text(ISSUE_1720_CONFIG)
@@ -425,7 +431,7 @@ class TestMixedStyleReindent:
         assert result["success"] is True, result
         assert not any("re-indented" in w for w in result.get("warnings", []))
 
-    def test_style_does_not_leak_across_calls(self, tmp_path, hass, call_factory):
+    def test_style_does_not_leak_across_calls(self, tmp_path, hass: MM, call_factory):
         """Two edits on one (thread-cached) instance: the second file keeps
         ITS OWN style, not the first file's."""
         cfg = Path(tmp_path) / "configuration.yaml"

@@ -51,7 +51,7 @@ uv run lefthook install --reset-hooks-path
 
 ## 📋 Guidelines
 
-- **Code**: Follow existing patterns, add type hints (not required under `tests/`), test new features
+- **Code**: Follow existing patterns, add type hints (under `tests/` only the Home Assistant fixtures a unit test takes need them), test new features
 - **Docs**: Update README.md for user-facing changes
 - **PRs**: Use the template, ensure tests pass
 - **Bot reviews**: Address every CodeRabbit finding, inline and top-level.

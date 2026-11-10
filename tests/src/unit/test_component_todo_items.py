@@ -163,24 +163,26 @@ def hass(entity: _ListEntity, monkeypatch: pytest.MonkeyPatch) -> Any:
     )
 
 
-async def _run(hass: Any, action: str, **fields: Any) -> dict[str, Any]:
+async def _run(hass: SimpleNamespace, action: str, **fields: Any) -> dict[str, Any]:
     msg = {"entity_id": LIST, "action": action, "ha_mcp_context": "ctx", **fields}
     result: dict[str, Any] = await todo_items.async_todo_item(hass, msg)
     return result
 
 
 class TestComponent:
-    async def test_resolve_takes_cores_first_match(self, hass: Any) -> None:
+    async def test_resolve_takes_cores_first_match(self, hass: SimpleNamespace) -> None:
         got = await _run(hass, "resolve", refs=["Milk", "2", "Nope"])
         assert [row and row["uid"] for row in got["items"]] == ["1", "2", None]
         assert hass.services.calls == []
 
-    async def test_add_returns_the_row_core_stored(self, hass: Any) -> None:
+    async def test_add_returns_the_row_core_stored(self, hass: SimpleNamespace) -> None:
         got = await _run(hass, "add", data={"item": "  Eggs "})
         assert got["item"] == {"uid": "n3", "summary": "Eggs", "status": "needs_action"}
         assert hass.services.calls == [("add_item", {"item": "  Eggs "}, "ctx")]
 
-    async def test_update_goes_to_the_row_with_that_uid(self, hass: Any) -> None:
+    async def test_update_goes_to_the_row_with_that_uid(
+        self, hass: SimpleNamespace
+    ) -> None:
         got = await _run(hass, "update", uid="3", data={"status": "completed"})
         assert got["item"]["uid"] == "3"
         assert got["item"]["status"] == "completed"
@@ -189,23 +191,25 @@ class TestComponent:
         ]
 
     async def test_uid_another_item_is_named_after_is_refused(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.todo_items.insert(0, _Item("x", "3"))
         got = await _run(hass, "update", uid="3", data={"status": "completed"})
         assert got["error"]["code"] == "namesake"
         assert hass.services.calls == []
 
-    async def test_unknown_uid_is_not_found(self, hass: Any) -> None:
+    async def test_unknown_uid_is_not_found(self, hass: SimpleNamespace) -> None:
         got = await _run(hass, "update", uid="Milk", data={"status": "completed"})
         assert got["error"]["code"] == "item_not_found"
 
-    async def test_remove_reports_the_rows_it_removed(self, hass: Any) -> None:
+    async def test_remove_reports_the_rows_it_removed(
+        self, hass: SimpleNamespace
+    ) -> None:
         got = await _run(hass, "remove", refs=["Milk"])
         assert [row["uid"] for row in got["removed"]] == ["1"]
 
     async def test_unavailable_list_is_refused_before_the_call(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         # Core's services skip an unavailable list and still answer success.
         entity.available = False
@@ -213,7 +217,7 @@ class TestComponent:
         assert got["error"]["code"] == "list_unavailable"
         assert hass.services.calls == []
 
-    async def test_list_not_loaded(self, hass: Any) -> None:
+    async def test_list_not_loaded(self, hass: SimpleNamespace) -> None:
         msg = {"entity_id": "todo.gone", "action": "resolve", "refs": ["Milk"]}
         got = await todo_items.async_todo_item(hass, msg)
         assert got["error"]["code"] == "not_loaded"
@@ -222,7 +226,7 @@ class TestComponent:
         "error", [_ServiceValidationError("no due date"), _Invalid("bad status")]
     )
     async def test_core_refusal_that_changed_nothing(
-        self, hass: Any, error: Exception
+        self, hass: SimpleNamespace, error: Exception
     ) -> None:
         hass.services.raise_ = error
         got = await _run(hass, "update", uid="2", data={"status": "completed"})
@@ -230,7 +234,7 @@ class TestComponent:
 
     @pytest.mark.parametrize("error", [_CoreError("timeout"), ValueError("bad json")])
     async def test_integration_error_is_raised_though_the_rows_are_unchanged(
-        self, hass: Any, error: Exception
+        self, hass: SimpleNamespace, error: Exception
     ) -> None:
         # The integration may have reached its backend before it failed.
         hass.services.raise_ = error
@@ -238,14 +242,14 @@ class TestComponent:
             await _run(hass, "update", uid="2", data={"status": "completed"})
 
     async def test_a_row_without_uid_does_not_break_the_reply(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.todo_items.append(_Item(None, "No uid"))  # type: ignore[arg-type]
         got = await _run(hass, "remove", refs=["Milk"])
         assert [row["uid"] for row in got["removed"]] == ["1"]
 
     async def test_add_and_update_read_back_past_a_row_without_uid(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.todo_items.insert(0, _Item(None, "No uid"))  # type: ignore[arg-type]
         added = await _run(hass, "add", data={"item": "Eggs"})
@@ -253,11 +257,15 @@ class TestComponent:
         updated = await _run(hass, "update", uid="2", data={"status": "completed"})
         assert updated["item"]["uid"] == "2"
 
-    async def test_data_shaped_like_a_refusal_goes_to_core(self, hass: Any) -> None:
+    async def test_data_shaped_like_a_refusal_goes_to_core(
+        self, hass: SimpleNamespace
+    ) -> None:
         await _run(hass, "add", data={"item": "Eggs", "success": False})
         assert hass.services.calls[0][1] == {"item": "Eggs", "success": False}
 
-    async def test_error_after_the_list_changed_is_raised(self, hass: Any) -> None:
+    async def test_error_after_the_list_changed_is_raised(
+        self, hass: SimpleNamespace
+    ) -> None:
         hass.services.raise_ = _ServiceValidationError("listener failed")
         hass.services.change_then_raise = True
         with pytest.raises(_ServiceValidationError):
@@ -276,28 +284,32 @@ class TestComponent:
         ],
     )
     async def test_due_takes_the_field_core_validates_it_as(
-        self, hass: Any, due: str | None, sent: dict[str, Any]
+        self, hass: SimpleNamespace, due: str | None, sent: dict[str, Any]
     ) -> None:
         await _run(hass, "update", uid="2", data={}, due=due)
         assert hass.services.calls[0][1] == {"item": "2", **sent}
 
     async def test_clear_of_a_due_date_names_due_date(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.todo_items.append(_Item("4", "D", due=date(2026, 11, 1)))
         await _run(hass, "update", uid="4", data={}, due=None)
         assert hass.services.calls[0][1] == {"item": "4", "due_date": None}
 
-    async def test_clear_of_an_item_without_due_sends_no_field(self, hass: Any) -> None:
+    async def test_clear_of_an_item_without_due_sends_no_field(
+        self, hass: SimpleNamespace
+    ) -> None:
         await _run(hass, "update", uid="1", data={"status": "completed"}, due=None)
         assert hass.services.calls[0][1] == {"status": "completed", "item": "1"}
 
-    async def test_missing_field_for_the_action_is_invalid(self, hass: Any) -> None:
+    async def test_missing_field_for_the_action_is_invalid(
+        self, hass: SimpleNamespace
+    ) -> None:
         got = await _run(hass, "update", data={})
         assert got["error"]["code"] == "invalid"
 
     async def test_update_then_move_by_uid(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         # Below x, the row named "2" comes first; the update goes before the
         # move, on the order Core resolves "2" in, so it changes Pay.
@@ -310,13 +322,15 @@ class TestComponent:
         assert [i.uid for i in entity.todo_items] == ["1", "3", "x", "2"]
         assert entity.todo_items[2].status == "needs_action"
 
-    async def test_move_to_the_top(self, hass: Any, entity: _ListEntity) -> None:
+    async def test_move_to_the_top(
+        self, hass: SimpleNamespace, entity: _ListEntity
+    ) -> None:
         await _run(hass, "update", uid="3", data={}, previous_uid=None)
         assert entity.moves[0][:2] == ("3", None)
         assert [i.uid for i in entity.todo_items] == ["3", "1", "2"]
 
     async def test_list_without_reordering_refuses_before_the_update(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.supported_features = 0
         got = await _run(hass, "update", uid="2", data={}, previous_uid=None)
@@ -325,7 +339,7 @@ class TestComponent:
         assert entity.moves == []
 
     async def test_failed_move_after_the_update_says_it_was_applied(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.move_error = _CoreError("backend gone")
         got = await _run(
@@ -338,7 +352,7 @@ class TestComponent:
         assert entity.todo_items[1].status == "completed"
 
     async def test_unexpected_move_error_is_raised(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.move_error = RuntimeError("bug")
         with pytest.raises(RuntimeError):
@@ -346,7 +360,7 @@ class TestComponent:
 
     @pytest.mark.parametrize("features", [0, None])
     async def test_list_without_reordering_still_takes_an_update(
-        self, hass: Any, entity: _ListEntity, features: Any
+        self, hass: SimpleNamespace, entity: _ListEntity, features: Any
     ) -> None:
         entity.supported_features = features
         got = await _run(hass, "update", uid="2", data={"status": "completed"})
@@ -354,7 +368,7 @@ class TestComponent:
         assert entity.moves == []
 
     async def test_list_without_features_refuses_a_move(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         entity.supported_features = None
         got = await _run(hass, "update", uid="2", data={}, previous_uid=None)
@@ -362,7 +376,7 @@ class TestComponent:
         assert hass.services.calls == []
 
     async def test_previous_uid_moves_only_on_update(
-        self, hass: Any, entity: _ListEntity
+        self, hass: SimpleNamespace, entity: _ListEntity
     ) -> None:
         await _run(hass, "remove", refs=["Pay"], previous_uid="1")
         assert entity.moves == []

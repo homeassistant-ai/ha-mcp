@@ -95,13 +95,13 @@ class TestThemeEditHandler:
         return _make
 
     @pytest.fixture
-    def handler(self, hass):
+    def handler(self, hass: MagicMock):
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         return _build_edit_yaml_config_handler(hass)
 
     async def test_theme_add_creates_file_with_theme_key(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "dark-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -132,7 +132,7 @@ class TestThemeEditHandler:
         assert hass.reload_calls[0] == ("frontend", "reload_themes", {})
 
     async def test_theme_edit_waits_for_the_file_lock(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         """edit_file can write the same theme; an overlapping read-modify-write
         would undo its change while both report success."""
@@ -158,7 +158,7 @@ class TestThemeEditHandler:
         assert (await edit)["success"] is True
 
     async def test_cancelled_theme_edit_keeps_the_lock_until_its_write_ends(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         """Its thread keeps writing; a later edit_file must not report success
         before that write overwrites it."""
@@ -202,7 +202,7 @@ class TestThemeEditHandler:
         assert (tmp_path / "themes" / "dark.yaml").exists()
 
     async def test_theme_add_merges_into_existing_theme(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "dark-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -230,7 +230,7 @@ class TestThemeEditHandler:
         assert "accent-color: '#FFC107'" in written
 
     async def test_theme_add_type_mismatch_error(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "bad-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -252,7 +252,7 @@ class TestThemeEditHandler:
         assert "Type mismatch" in result["error"]
 
     async def test_theme_replace_overwrites_content(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "light-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -280,7 +280,7 @@ class TestThemeEditHandler:
         assert "old-key" not in written
 
     async def test_theme_remove_deletes_theme_key(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "multi-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -306,7 +306,7 @@ class TestThemeEditHandler:
         assert "theme2" in written
 
     async def test_theme_remove_last_theme_leaves_empty_mapping(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "single-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -329,7 +329,7 @@ class TestThemeEditHandler:
         assert theme_file.read_text().strip() in ("", "{}")
 
     async def test_theme_add_second_theme_to_existing_file(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "pair.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -355,7 +355,7 @@ class TestThemeEditHandler:
         assert "primary-color: '#222222'" in written
 
     async def test_theme_remove_not_found_error(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "empty-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -376,7 +376,7 @@ class TestThemeEditHandler:
         assert "not found" in result["error"]
 
     async def test_theme_content_must_be_mapping(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         call = call_factory(
             {
@@ -394,7 +394,7 @@ class TestThemeEditHandler:
         assert "must be a YAML mapping" in result["error"]
 
     async def test_theme_dotted_name_rejected(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         call = call_factory(
             {
@@ -412,7 +412,7 @@ class TestThemeEditHandler:
         assert "cannot contain dots" in result["error"]
 
     async def test_theme_path_traversal_blocked(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         call = call_factory(
             {
@@ -430,7 +430,7 @@ class TestThemeEditHandler:
         assert "not allowed" in result["error"]
 
     async def test_theme_dotfile_basename_rejected(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         """A dotfile theme basename is rejected before write.
 
@@ -455,7 +455,7 @@ class TestThemeEditHandler:
         assert "dot-prefixed" in result["error"]
 
     async def test_theme_dot_prefixed_directory_rejected(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         """A theme file under a dot-prefixed subdirectory is rejected.
 
@@ -481,7 +481,7 @@ class TestThemeEditHandler:
         assert "dot-prefixed" in result["error"]
 
     async def test_theme_mid_name_dot_allowed(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         """A dot mid-name (not segment-prefix) is allowed.
 
@@ -558,7 +558,7 @@ class TestThemeEditHandler:
         assert "primary-color: '#000000'" in theme_file.read_text()
 
     async def test_theme_nested_directory_supported(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         theme_file = tmp_path / "themes" / "custom" / "nested-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
@@ -579,7 +579,7 @@ class TestThemeEditHandler:
         assert theme_file.exists()
 
     async def test_configuration_yaml_still_works(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         config_file = tmp_path / "configuration.yaml"
         config_file.write_text("homeassistant:\n  name: Home")
@@ -599,7 +599,7 @@ class TestThemeEditHandler:
         assert result["success"] is True
 
     async def test_packages_yaml_still_works(
-        self, handler, hass, call_factory, tmp_path
+        self, handler, hass: MagicMock, call_factory, tmp_path
     ):
         package_file = tmp_path / "packages" / "test.yaml"
         package_file.parent.mkdir(parents=True, exist_ok=True)

@@ -477,7 +477,7 @@ class TestHandleEditYamlConfigDashboards:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_register_yaml_mode_dashboard(self, tmp_path, hass, call_factory):
+    def test_register_yaml_mode_dashboard(self, tmp_path, hass: MM, call_factory):
         """A new lovelace.dashboards.<url_path> entry is added under that key only."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
@@ -518,7 +518,7 @@ class TestHandleEditYamlConfigDashboards:
         parsed = yaml.safe_load(text)
         assert set(parsed["lovelace"].keys()) == {"dashboards"}
 
-    def test_rejects_filename_traversal(self, tmp_path, hass, call_factory):
+    def test_rejects_filename_traversal(self, tmp_path, hass: MM, call_factory):
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -543,7 +543,7 @@ class TestHandleEditYamlConfigDashboards:
         assert result["success"] is False
         assert "filename" in result["error"]
 
-    def test_rejects_reserved_url_path(self, tmp_path, hass, call_factory):
+    def test_rejects_reserved_url_path(self, tmp_path, hass: MM, call_factory):
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -566,7 +566,7 @@ class TestHandleEditYamlConfigDashboards:
         assert result["success"] is False
         assert "reserved" in result["error"].lower()
 
-    def test_remove_dashboard_entry_only(self, tmp_path, hass, call_factory):
+    def test_remove_dashboard_entry_only(self, tmp_path, hass: MM, call_factory):
         """`remove` only deletes the targeted dashboard, not the whole lovelace key."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
@@ -604,7 +604,7 @@ class TestHandleEditYamlConfigDashboards:
         assert "energy-dash" not in parsed["lovelace"]["dashboards"]
         assert "weather-dash" in parsed["lovelace"]["dashboards"]
 
-    def test_rejects_missing_filename_key(self, tmp_path, hass, call_factory):
+    def test_rejects_missing_filename_key(self, tmp_path, hass: MM, call_factory):
         """add/replace without `filename:` should be rejected by the validator."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
@@ -629,7 +629,7 @@ class TestHandleEditYamlConfigDashboards:
         assert "filename" in result["error"]
 
     def test_add_merges_into_existing_dashboard_entry(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         """add into an existing url_path merges (dict.update) rather than replaces."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
@@ -705,7 +705,7 @@ class TestHandleEditYamlConfigSingleKey:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_single_key_add_creates_new_key(self, tmp_path, hass, call_factory):
+    def test_single_key_add_creates_new_key(self, tmp_path, hass: MM, call_factory):
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -732,7 +732,7 @@ class TestHandleEditYamlConfigSingleKey:
         assert "command_line" in parsed
         assert parsed["default_config"] is None
 
-    def test_single_key_replace_overwrites(self, tmp_path, hass, call_factory):
+    def test_single_key_replace_overwrites(self, tmp_path, hass: MM, call_factory):
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -758,7 +758,7 @@ class TestHandleEditYamlConfigSingleKey:
         parsed = yaml.safe_load(cfg.read_text())
         assert parsed["shell_command"] == {"new_cmd": "echo new"}
 
-    def test_single_key_remove_missing_errors(self, tmp_path, hass, call_factory):
+    def test_single_key_remove_missing_errors(self, tmp_path, hass: MM, call_factory):
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
@@ -780,7 +780,9 @@ class TestHandleEditYamlConfigSingleKey:
         assert result["success"] is False
         assert "command_line" in result["error"]
 
-    def test_single_key_post_action_for_template(self, tmp_path, hass, call_factory):
+    def test_single_key_post_action_for_template(
+        self, tmp_path, hass: MM, call_factory
+    ):
         """template -> reload_available; covers post-action lookup for single-key kind."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
@@ -806,7 +808,7 @@ class TestHandleEditYamlConfigSingleKey:
         assert result["reload_service"] == "homeassistant.reload_custom_templates"
 
     def test_single_key_post_action_for_shell_command(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         """shell_command falls through to default 'restart_required'."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
@@ -865,7 +867,7 @@ class TestHandleEditYamlConfigPathTraversal:
         return asyncio.run(coro)
 
     def test_packages_dotdot_normalizes_to_configuration_yaml_and_rejects(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         """``packages/../configuration.yaml`` → ``configuration.yaml`` after
         normpath, so the ``packages/*.yaml`` fnmatch does not match and
@@ -941,7 +943,7 @@ class TestHandleEditYamlConfigPackagesGate:
     }
 
     @pytest.mark.parametrize("key", ["automation", "script", "scene"])
-    def test_disabled_key_rejected_server_side(self, hass, call_factory, key):
+    def test_disabled_key_rejected_server_side(self, hass: MM, call_factory, key):
         """A disabled key targeting packages/*.yaml is refused by the
         component itself — independently of the wrapper — with a message
         pointing back at the caller's runtime configuration."""
@@ -966,7 +968,7 @@ class TestHandleEditYamlConfigPackagesGate:
         assert key in result["error"]
         assert "disabled by the caller's runtime configuration" in result["error"]
 
-    def test_other_packages_key_not_blocked(self, hass, call_factory):
+    def test_other_packages_key_not_blocked(self, hass: MM, call_factory):
         """The gate is per-key: disabling ``automation`` must not block a
         ``script`` write to the same packages surface."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
@@ -989,7 +991,7 @@ class TestHandleEditYamlConfigPackagesGate:
         assert result["success"] is True, result
 
     def test_configuration_yaml_disabled_key_falls_through(
-        self, tmp_path, hass, call_factory
+        self, tmp_path, hass: MM, call_factory
     ):
         """A disabled PACKAGES_ONLY key written to configuration.yaml must
         fall through to the storage-mode advisory (``_parse_and_validate_yaml_path``),
@@ -1018,7 +1020,7 @@ class TestHandleEditYamlConfigPackagesGate:
         assert "disabled by the caller's runtime configuration" not in result["error"]
         assert "ha_config_set_automation" in result["error"]
 
-    def test_unknown_disabled_key_is_noop(self, hass, call_factory):
+    def test_unknown_disabled_key_is_noop(self, hass: MM, call_factory):
         """An unrecognized key in ``disabled_packages_keys`` is filtered out
         (typo guard), so it cannot accidentally block a real, enabled key."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
@@ -1040,7 +1042,7 @@ class TestHandleEditYamlConfigPackagesGate:
         )
         assert result["success"] is True, result
 
-    def test_default_empty_disabled_allows(self, hass, call_factory):
+    def test_default_empty_disabled_allows(self, hass: MM, call_factory):
         """Omitting ``disabled_packages_keys`` entirely (older wrapper, or the
         schema default) imposes no per-key restriction on a packages write."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler

@@ -154,7 +154,7 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Seven ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Eight ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock` or `self.hass`, or a placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
 (`rules/no-fake-core-objects.yml`), an import of the old shared fakes
@@ -168,7 +168,9 @@ hands a file someone else's fake client (`rules/no-shared-fake-clients.yml`),
 and a comment that switches one of these checks off for a line or a file
 (`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
 bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
-`assignment`, `attr-defined` or `misc`).
+`assignment`, `attr-defined` or `misc`). The eighth
+(`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture parameter with no
+annotation or typed `Any`; see the mypy check below.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
@@ -177,7 +179,7 @@ which is why the fourth rule exists.
 Test files written before a check are listed with it: in the rule's `ignores`
 and in the guard. Converting a file removes it from the lists.
 `src/unit/test_core_reply_rules.py` keeps the lists of the hass, reply,
-shared-client and suppression rules exact: a listed file that no longer
+shared-client, suppression and fixture-annotation rules exact: a listed file that no longer
 violates fails it, as does a violating file that is not listed.
 
 A new test is never listed. Fast Checks compares every list with the pull
@@ -200,8 +202,9 @@ Two more checks run on these trees, each with a list under the same rules:
   assigned where Core declares a type is an error wherever mypy knows the
   object's type: an object the test builds, or a fixture the test annotates.
   An unannotated fixture parameter is `Any` and mypy checks nothing done to
-  it, so annotate the Core fixtures a test takes (`hass: HomeAssistant`,
-  `core_client: HomeAssistantClient`). The files written before the check are
+  it, so a test annotates the Core fixtures it takes with their real types
+  (`hass: HomeAssistant`, `core_client: HomeAssistantClient`); this is the one
+  exception to tests needing no type hints. The files written before the check are
   the `ignore_errors` modules under `tests.` in `pyproject.toml`; the script
   runs mypy without that list and fails on an error in an unlisted module and
   on a listed module that has none left.
