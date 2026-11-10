@@ -237,6 +237,7 @@ class TestWsCommandBlockedWriteCommands:
             "lovelace/config/save",
             "lovelace/dashboards/delete",
             "config/entity_registry/remove",
+            "config/device_registry/remove",
             "config/core/update",
             "LOVELACE/CONFIG/SAVE",
             # Resource writes carry the same wrapping-tool guards (#2060):
@@ -250,6 +251,7 @@ class TestWsCommandBlockedWriteCommands:
             "lovelace_config_save",
             "lovelace_dashboards_delete",
             "config_entity_registry_remove",
+            "config_device_registry_remove",
             "config_core_update",
             "case_variant",
             "lovelace_resources_create",

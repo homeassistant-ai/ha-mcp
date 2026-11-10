@@ -473,7 +473,7 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
         assert single.get("success") is True, single
         assert single["device"]["device_id"] == child_id
         assert single["device"]["area_id"] == "living_room"
-        assert single["device"]["config_entries"]
+        assert single["device"]["config_entry_id"]
 
         area_list = parse_mcp_result(
             await mcp_client.call_tool(

@@ -109,3 +109,46 @@ class TestSetDeviceRegistryReferences:
 
         assert result["success"] is True
         assert _sent_types(tools) == ["config/device_registry/update"]
+
+
+class TestSetDeviceCoreAnswers:
+    """Core's answer to the update passes through: its row, or its refusal code."""
+
+    async def test_core_row_passes_through(self, tools):
+        row = {
+            "id": "dev1",
+            "name": "Hub",
+            "name_by_user": "Den",
+            "config_entry_id": "e1",
+            "parent_device_id": "p1",
+        }
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": row,
+        }
+
+        result = await tools.ha_set_device(device_id="dev1", name="Den")
+
+        assert result["device_entry"] == row
+
+    @pytest.mark.parametrize(
+        ("code", "message", "expected"),
+        [
+            ("not_found", "Device not found", "RESOURCE_NOT_FOUND"),
+            ("not_allowed", "Cannot update a composite device", "SERVICE_CALL_FAILED"),
+        ],
+    )
+    async def test_core_refusal_keeps_its_code(self, tools, code, message, expected):
+        tools._client.send_websocket_message.return_value = {
+            "success": False,
+            "error": f"Command failed: {message}",
+            "error_code": code,
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_device(device_id="dev1", name="Den")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == expected
+        assert message in error_data["error"]["message"]
+        assert error_data["ha_error_code"] == code

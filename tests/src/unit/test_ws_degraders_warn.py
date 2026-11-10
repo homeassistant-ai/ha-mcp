@@ -359,7 +359,7 @@ class TestDeviceEnrichmentReportsSkips:
             },
         ):
             result = await _get_single_device_result(
-                client, "dev-1", None, [self._zha_device()], {}
+                client, "dev-1", None, [self._zha_device()], {}, {}
             )
 
         assert result["success"] is True
@@ -384,7 +384,7 @@ class TestDeviceEnrichmentReportsSkips:
             },
         ):
             result = await _get_single_device_result(
-                client, "dev-1", None, [self._zha_device()], {}
+                client, "dev-1", None, [self._zha_device()], {}, {}
             )
 
         assert "warnings" not in result
@@ -560,7 +560,7 @@ class TestReviewRoundTwoGaps:
             },
         ):
             result = await _get_single_device_result(
-                client, "dev-1", None, [device], {}
+                client, "dev-1", None, [device], {}, {}
             )
 
         assert any(f"{field} unavailable" in w for w in result["warnings"])

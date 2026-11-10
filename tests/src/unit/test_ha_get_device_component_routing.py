@@ -33,6 +33,7 @@ from ha_mcp.tools.tools_registry import (
     _resolve_device_id_for_entity,
     register_registry_tools,
 )
+from ha_mcp.utils.device_registry_semantics import EFFECTIVE_AREA_MARKER
 
 from ._component_routing_helpers import (
     make_ws,
@@ -72,6 +73,7 @@ def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
         "via_device_id": None,
         "disabled_by": None,
         "config_entries": ["cfg-1"],
+        "config_entry_id": "cfg-1",
         "connections": [],
         # A non-radio integration so the single-device enrichers (zha/zwave/matter)
         # do not fire — those dedicated paths are out of the device_get seam.
@@ -98,11 +100,16 @@ class RoutingClient:
         self,
         devices: list[dict[str, Any]] | None = None,
         entities: list[dict[str, Any]] | None = None,
+        entries: list[dict[str, Any]] | None = None,
     ) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
         self.verify_ssl = False
         self._devices = list(devices or [])
+        self._entries = (
+            [{"entry_id": "cfg-1", "domain": "hue"}] if entries is None else entries
+        )
+        self._entries_reply: dict[str, Any] | None = None
         self._entities = list(entities or [])
         self.device_list_calls = 0
         self.entity_list_calls = 0
@@ -113,6 +120,8 @@ class RoutingClient:
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         msg_type = msg.get("type")
+        if msg_type == "config_entries/get":
+            return self._entries_reply or {"success": True, "result": self._entries}
         if msg_type == "config/device_registry/list":
             self.device_list_calls += 1
             return {"success": True, "result": list(self._devices)}
@@ -191,7 +200,9 @@ async def test_single_lookup_served_by_component() -> None:
 
     assert resp["success"] is True
     assert resp["device"]["device_id"] == "dev-1"
-    assert resp["device"]["name"] == "Kitchen"
+    # Core's row passes through: the user's name next to the integration's.
+    assert resp["device"]["name_by_user"] == "Kitchen"
+    assert resp["device"]["name"] == "Device dev-1"
     # The device came from the component; the legacy device dump never ran.
     assert client.device_list_calls == 0
     assert len(_device_get_calls(ws)) == 1
@@ -231,7 +242,10 @@ async def test_child_component_result_preserves_effective_area_and_ownership() -
         resp = await get_device(device_id="child-1")
 
     assert resp["device"]["area_id"] == "office"
-    assert resp["device"]["config_entries"] == ["cfg-child"]
+    assert resp["device"]["config_entry_id"] == "cfg-child"
+    assert resp["device"]["parent_device_id"] == "parent-1"
+    assert "config_entries" not in resp["device"]
+    assert EFFECTIVE_AREA_MARKER not in resp["device"]
     assert client.device_list_calls == 0
 
 
@@ -412,6 +426,123 @@ async def test_capsless_component_uses_legacy_registries() -> None:
     # Both registries came from the legacy WS path.
     assert client.device_list_calls == 1
     assert not _device_get_calls(ws)
+
+
+@pytest.mark.asyncio
+async def test_integration_comes_from_owning_config_entry() -> None:
+    """The owning integration is the config entry's domain, not an identifier guess.
+
+    An ESPHome node's main device carries no identifiers and a BTHome device only
+    ``("bluetooth", MAC)``, so a guess from the identifiers misses both (#2761).
+    """
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+    )
+    client = RoutingClient(
+        devices=[
+            _raw_device(
+                "esp", identifiers=[], config_entries=["e-esp"], config_entry_id="e-esp"
+            ),
+            _raw_device(
+                "bt",
+                identifiers=[["bluetooth", "AA:BB:CC:DD:EE:FF"]],
+                config_entries=["e-bt"],
+                config_entry_id="e-bt",
+            ),
+            # Core before 2026.8: the primary entry, else the first entry.
+            _raw_device(
+                "prim",
+                config_entries=["e-x", "e-p"],
+                config_entry_id=None,
+                primary_config_entry="e-p",
+            ),
+            _raw_device(
+                "old",
+                config_entries=["e-old"],
+                config_entry_id=None,
+                primary_config_entry=None,
+            ),
+        ],
+        entries=[
+            {"entry_id": "e-esp", "domain": "esphome"},
+            {"entry_id": "e-bt", "domain": "bthome"},
+            {"entry_id": "e-x", "domain": "unifi"},
+            {"entry_id": "e-p", "domain": "shelly"},
+            {"entry_id": "e-old", "domain": "deconz"},
+        ],
+    )
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices):
+        esp = await get_device(integration="esphome")
+        bt = await get_device(integration="bthome")
+        by_identifier = await get_device(integration="bluetooth")
+        shelly = await get_device(integration="shelly")
+        deconz = await get_device(integration="deconz")
+        unifi = await get_device(integration="unifi")
+
+    assert [d["device_id"] for d in esp["devices"]] == ["esp"]
+    assert esp["devices"][0]["integration_type"] == "esphome"
+    assert [d["device_id"] for d in bt["devices"]] == ["bt"]
+    assert by_identifier["devices"] == []
+    assert [d["device_id"] for d in shelly["devices"]] == ["prim"]
+    assert [d["device_id"] for d in deconz["devices"]] == ["old"]
+    assert unifi["devices"] == []
+
+
+@pytest.mark.asyncio
+async def test_z2m_bridge_found_by_identifier_and_mqtt_filter_keeps_z2m() -> None:
+    """The Z2M bridge is the row with Z2M's bridge identifier, whatever its name,
+    and ``integration="mqtt"`` still lists Zigbee2MQTT devices (MQTT's entry)."""
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+    )
+    z2m = {"config_entries": ["e-mqtt"], "config_entry_id": "e-mqtt"}
+    client = RoutingClient(
+        devices=[
+            _raw_device("bulb", identifiers=[["mqtt", "zigbee2mqtt_0x0001"]], **z2m),
+            _raw_device(
+                "coord",
+                name="Coordinator",
+                identifiers=[["mqtt", "zigbee2mqtt_bridge_0x00ff"]],
+                **z2m,
+            ),
+        ],
+        entries=[{"entry_id": "e-mqtt", "domain": "mqtt"}],
+    )
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices):
+        z2m_list = await get_device(integration="zigbee2mqtt")
+        mqtt_list = await get_device(integration="mqtt")
+
+    assert z2m_list["bridge"] == {
+        "device_id": "coord",
+        "name": "Coordinator",
+        "ieee_address": "0x00ff",
+    }
+    assert z2m_list["devices"][0]["integration_type"] == "zigbee2mqtt"
+    assert {d["device_id"] for d in mqtt_list["devices"]} == {"bulb", "coord"}
+
+
+@pytest.mark.asyncio
+async def test_unreadable_config_entries_fail_the_call() -> None:
+    """A refused ``config_entries/get`` fails the call rather than reporting every
+    device's integration as unknown."""
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+    )
+    client = RoutingClient(devices=[_raw_device("dev-1")])
+    client._entries_reply = {"success": False, "error": "Command failed: boom"}
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
+        await get_device(integration="hue")
+
+    assert "Failed to read config entries: boom" in str(excinfo.value)
 
 
 class _ResolveStubClient:

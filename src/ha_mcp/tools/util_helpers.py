@@ -112,8 +112,9 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
 # (`config/core/update` rewrites the installation's location/timezone/currency/
 # lat-long). Both raw WebSocket surfaces enforce it through `raw_ws_refusal()`
 # below, so they stay in lockstep. Registry deletion command names differ on
-# HA Core: device deletion is `remove_config_entry` and entity deletion is
-# `remove` (not `delete`) -- ha_remove_device / ha_remove_entity emit those.
+# HA Core: device deletion is `remove` (`remove_config_entry` before Core
+# 2026.9) and entity deletion is `remove` (not `delete`) -- ha_remove_device /
+# ha_remove_entity emit those.
 BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",
@@ -135,6 +136,7 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
         "config/device_registry/delete",
         "config/device_registry/disable",
         "config/device_registry/update",
+        "config/device_registry/remove",
         "config/device_registry/remove_config_entry",
         "config/entity_registry/delete",
         "config/entity_registry/disable",

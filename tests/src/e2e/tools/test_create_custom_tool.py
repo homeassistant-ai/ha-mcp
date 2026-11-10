@@ -1442,15 +1442,20 @@ class TestCodeModeWsSendBlocklist:
             # row in CI rather than passing silently.
             "config/core/update",
             "lovelace/config/save",
+            "ha_mcp_tools/dashboard_edit",
             "lovelace/dashboards/create",
             "lovelace/dashboards/delete",
             "lovelace/dashboards/update",
+            "lovelace/resources/create",
+            "lovelace/resources/delete",
+            "lovelace/resources/update",
             "config/area_registry/delete",
             "config/area_registry/disable",
             "config/area_registry/update",
             "config/device_registry/delete",
             "config/device_registry/disable",
             "config/device_registry/update",
+            "config/device_registry/remove",
             "config/device_registry/remove_config_entry",
             "config/entity_registry/delete",
             "config/entity_registry/disable",
@@ -1468,15 +1473,8 @@ class TestCodeModeWsSendBlocklist:
         ],
     )
     async def test_ws_send_blocks_command(self, mcp_client_with_code_mode, ws_type):
-        """Every entry in _BLOCKED_WS_COMMANDS must be rejected by ws_send.
-
-        Parametrizing over the full set catches the "blocklist names a
-        command HA Core doesn't actually accept" class of bug — if a
-        future refactor drops an entry, the corresponding row fails;
-        if HA Core renames a command and we forget to update the
-        blocklist, the test fails with the old name still in the
-        parametrize list.
-        """
+        """Every entry in _BLOCKED_WS_COMMANDS must be rejected by ws_send; the
+        refusal happens before dispatch, so Core never sees the command."""
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, f"ws_send blocks {ws_type}")
 

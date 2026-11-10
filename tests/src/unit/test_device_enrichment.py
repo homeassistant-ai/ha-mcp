@@ -49,9 +49,22 @@ def _make_device(
         "disabled_by": None,
         "labels": [],
         "config_entries": config_entries or ["entry_1"],
+        "config_entry_id": (config_entries or ["entry_1"])[0],
         "connections": connections or [],
         "identifiers": identifiers or [],
         **kwargs,
+    }
+
+
+def _entries_reply(device: dict) -> dict:
+    """A ``config_entries/get`` reply with the entry that owns ``device``; its
+    domain is the device's first identifier domain (``test`` without one)."""
+    identifiers = device.get("identifiers") or [["test", ""]]
+    return {
+        "success": True,
+        "result": [
+            {"entry_id": device["config_entry_id"], "domain": identifiers[0][0]}
+        ],
     }
 
 
@@ -61,6 +74,9 @@ def _mock_client_with_device(device: dict, ws_responses: dict | None = None):
 
     async def mock_ws(msg, **kwargs):
         msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
+
+        if msg_type == "config_entries/get":
+            return _entries_reply(device)
 
         # Device registry list
         if msg_type == "config/device_registry/list":
@@ -210,6 +226,8 @@ class TestEnrichmentGracefulDegradation:
         async def mock_ws(msg, **kwargs):
             nonlocal call_count
             msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
+            if msg_type == "config_entries/get":
+                return _entries_reply(device)
             if msg_type == "config/device_registry/list":
                 return {"success": True, "result": [device]}
             if msg_type == "config/entity_registry/list":
@@ -238,6 +256,8 @@ class TestEnrichmentGracefulDegradation:
 
         async def mock_ws(msg, **kwargs):
             msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
+            if msg_type == "config_entries/get":
+                return _entries_reply(device)
             if msg_type == "config/device_registry/list":
                 return {"success": True, "result": [device]}
             if msg_type == "config/entity_registry/list":

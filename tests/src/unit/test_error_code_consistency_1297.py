@@ -190,10 +190,9 @@ class TestDeviceLookupMissingReturnsResourceNotFound:
     async def test_get_device_missing_id_surfaces_resource_not_found(
         self, mock_ws_client
     ):
-        # Two list-registry calls: device_registry/list + entity_registry/list.
-        # First call returns a small device set so the test can also pin the
-        # ``available_device_ids`` parity with the sibling labels/categories
-        # sites (KP13 review #2 — first-10 truncation must surface as context).
+        # device_registry/list (a small set, so the first-10 ``available_device_ids``
+        # parity with the labels/categories sites is pinned, KP13 review #2),
+        # entity_registry/list, then config_entries/get.
         mock_ws_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {
@@ -201,6 +200,7 @@ class TestDeviceLookupMissingReturnsResourceNotFound:
                     "result": [{"id": "dev-existing-1"}, {"id": "dev-existing-2"}],
                 },
                 {"success": True, "result": []},  # entity_registry/list
+                {"success": True, "result": []},  # config_entries/get
             ]
         )
         captured = _register_registry_tools_and_capture(mock_ws_client)

@@ -637,8 +637,8 @@ class TestDeviceSeam:
 
     One REAL ``_do_device_get`` output drives consumer sites through their real
     server code: ``ha_get_device`` (its device transform AND its per-device entity
-    join via ``include_entities``), ``ha_remove_device`` (its ``config_entries``
-    read), and ``_resolve_ieee`` (its ``identifiers`` read). A drift on either side
+    join via ``include_entities``), ``ha_remove_device`` (its device lookup), and
+    ``_resolve_ieee`` (its ``identifiers`` read). A drift on either side
     of a seam — the component emitting a different key set, or a consumer reading a
     field the raw shape does not carry — fails here. Each consumer is served the
     device in one in-process ``device_get`` frame, never the whole-registry dump;
@@ -681,7 +681,9 @@ class TestDeviceSeam:
         # er.async_entries_for_device index — stubbed MagicMock at import, so pin the
         # faithful fake here.
         monkeypatch.setattr(wsapi, "er", FakeErModule())
-        client = GetDeviceRoutingClient()
+        client = GetDeviceRoutingClient(
+            entries=[{"entry_id": "cfg-1", "domain": "zha"}]
+        )
         # A zha device triggers the ZHA metrics enricher (a dedicated path outside
         # the device_get seam); serve it an empty result so it is a graceful no-op.
         base_send = client.send_websocket_message
@@ -701,10 +703,10 @@ class TestDeviceSeam:
         info = resp["device"]
         # Every field the transform surfaces was read out of the raw dict_repr.
         assert info["device_id"] == "dev-1"
-        assert info["name"] == "Kitchen"  # name_by_user preferred over name
+        assert (info["name"], info["name_by_user"]) == ("Kitchen Sensor", "Kitchen")
         assert info["area_id"] == "a1"
         assert info["labels"] == ["important"]
-        assert info["config_entries"] == ["cfg-1"]
+        assert info["config_entry_id"] == "cfg-1"
         assert info["integration_type"] == "zha"
         assert info["ieee_address"] == "00:11:22:33:44:55:66:77"
         # The device's entity list came from the include_entities join over the REAL
@@ -761,9 +763,7 @@ class TestDeviceSeam:
         assert raw_child["area_id"] is None
 
     @pytest.mark.asyncio
-    async def test_remove_device_config_entries_from_real_component(
-        self, monkeypatch
-    ) -> None:
+    async def test_remove_device_from_real_component(self, monkeypatch) -> None:
         dev = self._device()
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
@@ -780,8 +780,8 @@ class TestDeviceSeam:
             resp = await remove_device(device_id="dev-1")
 
         assert resp["success"] is True
-        # ha_remove_device read config_entries straight out of the raw shape.
-        assert client.remove_calls == ["cfg-1"]
+        # The device was looked up through device_get and removed by id.
+        assert client.remove_calls == ["dev-1"]
         assert client.device_list_calls == 0
 
     @pytest.mark.asyncio

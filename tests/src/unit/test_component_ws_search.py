@@ -362,15 +362,15 @@ class FakeDevice:
 
     @property
     def dict_repr(self):
-        # Mirrors core ``DeviceEntry.dict_repr`` (one ``config/device_registry/
-        # list`` element): the key set + order the device_get/device_list commands
-        # return VERBATIM. Sets are rendered to lists here as core does; timestamps
-        # are fixed floats (their exact value is irrelevant to the consumers).
+        # The keys of Core 2026.8's ``DeviceEntry.dict_repr`` (device_get and
+        # device_list return it verbatim); sets render as lists, fixed floats.
         return {
             "area_id": self.area_id,
             "configuration_url": self.configuration_url,
             "config_entries": list(self.config_entries),
             "config_entries_subentries": {},
+            "config_entry_id": next(iter(sorted(self.config_entries)), None),
+            "config_subentry_id": None,
             "connections": list(self.connections),
             "created_at": 0.0,
             "disabled_by": self.disabled_by,
