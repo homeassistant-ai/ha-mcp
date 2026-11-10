@@ -2,11 +2,12 @@
 
 Core keeps exposure in two places: an entity with a registry entry stores it in
 the entry's ``options`` (which ``ha_get_entity`` already returns), and an entity
-without one in Core's separate exposed-entities store. Both are served here:
-the listing of exposed entities and the rows for entities without a registry
-entry. Writes go through ``ha_set_entity`` (``expose_to``).
+without one in Core's separate exposed-entities store. This module serves the
+listing of exposed entities and the rows for entities without a registry entry.
+Writes go through ``ha_set_entity`` (``expose_to``).
 """
 
+import asyncio
 import logging
 from collections import Counter
 from typing import Any
@@ -15,6 +16,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import create_error_response
@@ -25,11 +27,12 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .helpers import raise_tool_error, ws_failure_code
+from .entity_registry_reads import _NOT_IN_REGISTRY, _extract_ws_error, get_entries_raw
+from .helpers import get_entity_state_or_none, raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
 
-# The ha_mcp_tools/exposure WS command: the legacy expose_entity/list map PLUS a
+# The ha_mcp_tools/exposure WS command: Core's expose_entity/list map PLUS a
 # sibling entity_info enrichment (names/areas). Named once so the routing helper
 # and its tests agree on the wire string.
 WS_EXPOSURE = "ha_mcp_tools/exposure"
@@ -42,8 +45,9 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
     True}}, entity_info: {id: {...}}}`` — where ``exposed_entities`` holds the
     same entries as Core's ``homeassistant/expose_entity/list`` map. ``None`` on
     capability miss, downgrade (``unknown_command`` → invalidate the cached
-    caps), command error/timeout (logged), or a connection-establishment failure
-    (logged) — the caller falls back to Core's list. A
+    caps), command error/timeout (logged), a connection-establishment failure
+    (logged), or a reply without an ``exposed_entities`` map (logged) — the
+    caller falls back to Core's list. A
     ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed (re)connect
     — is caught here and mapped to ``None``: Core's list read rides the
     ``send_websocket_message`` bridge, which answers a component-side fault with
@@ -69,17 +73,20 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
-            logger.warning("%s failed; fell back to legacy: %r", WS_EXPOSURE, exc)
+            logger.warning("%s failed; reading Core's list: %r", WS_EXPOSURE, exc)
         return None
     except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError or any other error → Core's list (it
         # rides the bridge).
-        logger.warning(
-            "%s connection error; falling back to legacy: %r", WS_EXPOSURE, exc
-        )
+        logger.warning("%s connection error; reading Core's list: %r", WS_EXPOSURE, exc)
         return None
     result = raw.get("result")
-    if not isinstance(result, dict) or "exposed_entities" not in result:
+    if not isinstance(result, dict) or not isinstance(
+        result.get("exposed_entities"), dict
+    ):
+        logger.warning(
+            "%s returned no exposed_entities map; reading Core's list", WS_EXPOSURE
+        )
         return None
     return result
 
@@ -95,10 +102,7 @@ async def read_exposure(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     component = await _fetch_exposure_via_component(client)
     if component is not None:
-        return (
-            component.get("exposed_entities") or {},
-            component.get("entity_info") or {},
-        )
+        return component["exposed_entities"], component.get("entity_info") or {}
     result = await client.send_websocket_message(
         {"type": "homeassistant/expose_entity/list"}
     )
@@ -119,7 +123,7 @@ def list_exposures(
 ) -> dict[str, Any]:
     """The exposed entities, all or those exposed to one assistant."""
     filtered = exposed_entities
-    if assistant:
+    if assistant is not None:
         filtered = {
             eid: settings
             for eid, settings in exposed_entities.items()
@@ -130,7 +134,7 @@ def list_exposures(
         "exposed_entities": filtered,
         "count": len(filtered),
     }
-    if not assistant:
+    if assistant is None:
         response["summary"] = dict(
             Counter(asst for settings in filtered.values() for asst in settings)
         )
@@ -141,38 +145,89 @@ def list_exposures(
     return response
 
 
-async def unregistered_exposure(
+async def unregistered_lookup(
     client: Any, entity_ids: list[str]
-) -> dict[str, dict[str, Any]]:
-    """``exposed_to`` for each id without a registry entry that Home Assistant knows.
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """Each id without a registry entry that Home Assistant knows, with its key
+    in Core's exposed-entities store and its ``exposed_to`` map.
 
-    Such an entity's exposure lives in Core's exposed-entities store. An id
-    counts as known when that store lists it as exposed or it has a state; any
-    other id is left out, so the caller reports it as not found.
+    Core reads the exposure of an entity with a state under the state's id;
+    an id without a state is known when Core's ``expose_entity/list`` lists it
+    as sent, which it does while some assistant has it stored as exposed. Any
+    other id is left out, so the caller reports it as not found. Only the map
+    is needed, so Core's list is read directly rather than the component's.
+
+    Raises HomeAssistantError when the store or a state cannot be read, since
+    whether Home Assistant knows the ids is then still open.
     """
     if not entity_ids:
         return {}
-    exposed_entities, _ = await read_exposure(client)
-    rows: dict[str, dict[str, Any]] = {}
-    for eid in entity_ids:
-        if eid not in exposed_entities and not await _has_state(client, eid):
-            continue
-        exposed_to = exposed_entities.get(eid) or {}
-        rows[eid] = {
-            "entity_id": eid,
-            "entity_entry": None,
-            "exposed_to": exposed_to,
-            "is_exposed_anywhere": bool(exposed_to),
-        }
-    return rows
+    reply, *state_ids = await asyncio.gather(
+        client.send_websocket_message({"type": "homeassistant/expose_entity/list"}),
+        *(_state_entity_id(client, eid) for eid in entity_ids),
+    )
+    if not reply.get("success"):
+        # The "Command failed:" prefix is what the shared classifier reads as
+        # a refused command (SERVICE_CALL_FAILED) when nothing more specific
+        # matches.
+        raise HomeAssistantCommandError(
+            "Command failed: reading the exposed entities failed: "
+            + _extract_ws_error(reply).removeprefix("Command failed: "),
+            code=reply.get("error_code"),
+        )
+    exposed_entities = (reply.get("result") or {}).get("exposed_entities") or {}
+    known: dict[str, tuple[str, dict[str, Any]]] = {}
+    for eid, state_id in zip(entity_ids, state_ids, strict=True):
+        key = state_id or (eid if eid in exposed_entities else None)
+        if key is not None:
+            known[eid] = (key, exposed_entities.get(key) or {})
+    return known
 
 
-async def _has_state(client: Any, entity_id: str) -> bool:
-    """Whether the entity has a state; a 404 is the only "no"."""
+async def get_entries_or_unregistered(
+    client: Any, entity_ids: list[str]
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, tuple[str, dict[str, Any]]],
+    dict[str, str],
+]:
+    """Registry entries, the ids without one that Home Assistant knows (as
+    ``unregistered_lookup`` returns them), and the get_entries error of every
+    id without a registry entry.
+
+    When the lookup fails, each id without a registry entry gets that failure
+    as its error, since whether Home Assistant knows it is still open.
+    """
+    found, errors = await get_entries_raw(client, entity_ids)
+    missing = [eid for eid, err in errors.items() if err == _NOT_IN_REGISTRY]
     try:
-        await client.get_entity_state(entity_id)
-    except HomeAssistantAPIError as exc:
-        if exc.status_code == 404:
-            return False
-        raise
-    return True
+        known = await unregistered_lookup(client, missing)
+    except HomeAssistantError as exc:
+        known = {}
+        unchecked = (
+            "no registry entry, and checking whether Home Assistant knows it "
+            f"failed: {exc}"
+        )
+        errors.update(dict.fromkeys(missing, unchecked))
+    return found, known, errors
+
+
+def unregistered_row(entity_id: str, exposed_to: dict[str, Any]) -> dict[str, Any]:
+    """ha_get_entity's answer for an entity without a registry entry."""
+    return {
+        "entity_id": entity_id,
+        "entity_entry": None,
+        "exposed_to": exposed_to,
+        "is_exposed_anywhere": bool(exposed_to),
+    }
+
+
+async def _state_entity_id(client: Any, entity_id: str) -> str | None:
+    """The id the entity's state carries, or None when it has no state (a 404)."""
+    state = await get_entity_state_or_none(client, entity_id)
+    if state is None:
+        return None
+    state_id = state.get("entity_id")
+    if not isinstance(state_id, str):
+        raise HomeAssistantAPIError(f"the state reply for {entity_id} has no entity_id")
+    return state_id

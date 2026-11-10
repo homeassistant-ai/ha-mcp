@@ -3,9 +3,11 @@
 Home Assistant 2026.2 renamed add-ons to apps, and this server's two add-on
 tools moved with it. Issue #2329 then folded the two blueprint tools into one
 ``ha_manage_blueprints``, and #2632 folded ``ha_get_entity_exposure`` into
-``ha_get_entity``. None is a breaking change for callers — clients
-resolve by name at runtime, and ``RenamedToolAliasMiddleware`` keeps the old
-name callable for one that has not re-listed yet.
+``ha_get_entity``. None breaks a call by name — clients resolve by name at
+runtime, and ``RenamedToolAliasMiddleware`` keeps the old name callable for
+one that has not re-listed yet. A call on the old exposure name gets
+``ha_get_entity``'s reply, where a registered entity's exposure is in its
+``entity_entry.options``.
 
 What does not repair itself is state a user already stored under the old name:
 a tool they disabled or pinned in the settings UI, a ``DISABLED_TOOLS`` entry,
@@ -16,9 +18,9 @@ which for a disabled write tool means silently re-enabling it.
 A consolidation adds two wrinkles a plain rename does not have. Two retired
 names can now carry different stored states for one current tool, so the
 readers pick the more restrictive one (``rename_retired_keys``'s ``prefer``).
-And a call on a retired name carries the old signature, which the merged tool
-cannot dispatch without the ``action`` it never had —
-``adapt_retired_arguments`` fills that in.
+And a call on a retired name carries the old signature, which
+``adapt_retired_arguments`` maps onto the current tool's: the blueprint
+tools' missing ``action``, the exposure tool's ``assistant``.
 
 A parameter can move the same way a tool does. ``RENAMED_PARAMETERS`` keeps
 the old parameter name callable for a client that has not re-listed, and
@@ -43,6 +45,8 @@ RENAMED_TOOLS: dict[str, str] = {
     "ha_import_blueprint": "ha_manage_blueprints",
     # #2632: folded into ha_get_entity, which lists the exposed entities
     # (``exposed_to``) and answers for entities without a registry entry.
+    # State stored for the old tool follows it unless ha_get_entity has its
+    # own, so a disabled ha_get_entity_exposure disables ha_get_entity.
     "ha_get_entity_exposure": "ha_get_entity",
 }
 
@@ -108,7 +112,8 @@ def _adapt_import_blueprint(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _adapt_get_entity_exposure(arguments: dict[str, Any]) -> dict[str, Any]:
-    # The assistant filter applied only to the listing, without an entity_id.
+    # The assistant filter applied only to the listing, without an entity_id;
+    # with one, the old tool only checked the name.
     assistant = arguments.pop("assistant", None)
     if assistant is not None and arguments.get("entity_id") is None:
         arguments["exposed_to"] = assistant

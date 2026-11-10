@@ -8,6 +8,7 @@ fields ha_set_entity takes from the entity dialog land in a real registry.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -74,16 +75,36 @@ async def test_auto_takes_the_id_core_generates(
     assert registry.async_get(generated) is not None
 
 
+async def test_auto_on_a_mixed_case_id_takes_the_id_core_generates(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    registry = er.async_get(hass)
+    entry = registry.async_get(lamp)
+    assert entry is not None
+    generated = registry.async_regenerate_entity_id(entry)
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp.title(), new_entity_id="auto"
+    )
+
+    assert result["entity_id"] == generated
+    assert registry.async_get(generated) is not None
+
+
+@pytest.mark.parametrize("spelling", [str.lower, str.title])
 async def test_auto_on_an_automatic_id_renames_nothing(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,  # noqa: F811
+    spelling: Callable[[str], str],
 ) -> None:
     registry = er.async_get(hass)
     entry = registry.async_get_or_create("light", "demo", "plain")
     assert registry.async_regenerate_entity_id(entry) == entry.entity_id
 
     result = await EntityTools(core_client).ha_set_entity(
-        entity_id=entry.entity_id, new_entity_id="auto"
+        entity_id=spelling(entry.entity_id), new_entity_id="auto"
     )
 
     assert result["updates"] == ["entity_id unchanged"]
@@ -260,17 +281,35 @@ async def test_an_entity_without_registry_entry_reads_cores_store(
     hass.states.async_set("light.loose", "on")
     hass.states.async_set("light.quiet", "off")
     async_expose_entity(hass, "conversation", "light.loose", True)
+    async_expose_entity(hass, "conversation", "light.gone", True)
     tools = EntityTools(core_client)
 
     loose = await tools.ha_get_entity(entity_id="light.loose")
+    mixed = await tools.ha_get_entity(entity_id="Light.Loose")
     quiet = await tools.ha_get_entity(entity_id="light.quiet")
+    gone = await tools.ha_get_entity(entity_id="light.gone")
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_get_entity(entity_id="light.nowhere")
 
+    assert loose["success"] is True
     assert loose["entity_entry"] is None
     assert loose["exposed_to"] == {"conversation": True}
+    assert mixed["exposed_to"] == {"conversation": True}
     assert quiet["exposed_to"] == {}
-    assert "not found" in _error(exc_info)["message"].lower()
+    assert quiet["is_exposed_anywhere"] is False
+    assert gone["exposed_to"] == {"conversation": True}
+    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+
+
+async def test_a_mixed_case_list_read_finds_the_entry(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(entity_id=["Light.My_Lamp"])
+
+    [entry] = result["entity_entries"]
+    assert entry["entity_id"] == lamp
 
 
 async def test_expose_new_entities_writes_cores_flag(
@@ -286,6 +325,7 @@ async def test_expose_new_entities_writes_cores_flag(
     )
 
     assert store.async_get_expose_new_entities("conversation") is (not before)
+    assert result["expose_new_entities"] == {"conversation": not before}
     assert result["previous_expose_new_entities"] == {"conversation": before}
 
 
@@ -299,6 +339,7 @@ async def test_entity_id_parts_are_cores_settings(
 
     written = await tools.ha_set_entity(entity_id_parts=["device", "entity"])
     assert registry.settings.entity_id_parts == ("device", "entity")
+    assert written["settings"] == {"entity_id_parts": ["device", "entity"]}
     assert written["previous_settings"] == {"entity_id_parts": None}
 
     with pytest.raises(ToolError) as exc_info:
@@ -308,3 +349,126 @@ async def test_entity_id_parts_are_cores_settings(
 
     await tools.ha_set_entity(entity_id_parts=[])
     assert registry.settings.entity_id_parts is None
+
+
+async def test_expose_to_on_an_entity_without_registry_entry(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    hass.states.async_set("light.loose", "on")
+    tools = EntityTools(core_client)
+
+    written = await tools.ha_set_entity(
+        entity_id="Light.Loose", expose_to={"conversation": True}
+    )
+    read = await tools.ha_get_entity(entity_id="light.loose")
+
+    assert written["exposure"] == {"conversation": True}
+    assert written["entity_entry"] is None
+    assert "warnings" not in written
+    assert read["exposed_to"] == {"conversation": True}
+
+
+async def test_expose_to_hides_a_stored_entity_without_a_state(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    async_expose_entity(hass, "conversation", "light.gone", True)
+
+    written = await EntityTools(core_client).ha_set_entity(
+        entity_id="light.gone", expose_to={"conversation": False}
+    )
+
+    store = hass.data[DATA_EXPOSED_ENTITIES].entities
+    assert store["light.gone"].assistants["conversation"]["should_expose"] is False
+    assert written["entity_entry"] is None
+
+
+async def test_expose_to_on_a_mixed_case_id_exposes_the_entry(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    # Core exposes a light to Assist by default, so hiding it is a change.
+    written = await EntityTools(core_client).ha_set_entity(
+        entity_id="Light.My_Lamp", expose_to={"conversation": False}
+    )
+
+    entry = er.async_get(hass).async_get(lamp)
+    assert entry is not None
+    assert entry.options["conversation"]["should_expose"] is False
+    assert written["updates"] == ["expose_to={'conversation': False}"]
+
+
+async def test_an_empty_expose_to_changes_nothing(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    written = await EntityTools(core_client).ha_set_entity(entity_id=lamp, expose_to={})
+
+    assert written["updates"] == ["expose_to={} (already set, nothing changed)"]
+    entry = er.async_get(hass).async_get(lamp)
+    assert entry is not None
+    assert "conversation" not in entry.options
+
+
+async def test_expose_to_after_a_registry_update_exposes_the_entry(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    """The registry update's reply is the entry the exposure is sent for."""
+    await EntityTools(core_client).ha_set_entity(
+        entity_id="Light.My_Lamp", name="Desk", expose_to={"conversation": True}
+    )
+
+    entry = er.async_get(hass).async_get(lamp)
+    assert entry is not None
+    assert entry.name == "Desk"
+    assert entry.options["conversation"]["should_expose"] is True
+
+
+async def test_expose_to_on_an_unknown_entity_writes_nothing(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        await EntityTools(core_client).ha_set_entity(
+            entity_id="light.typo", expose_to={"conversation": True}
+        )
+
+    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert "light.typo" not in hass.data[DATA_EXPOSED_ENTITIES].entities
+
+
+async def test_bulk_expose_to_writes_under_the_ids_core_reads(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,  # noqa: F811
+    lamp: str,
+) -> None:
+    hass.states.async_set("light.loose", "on")
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=["Light.My_Lamp", "Light.Loose", "light.typo"],
+        expose_to={"conversation": False},
+    )
+
+    entry = er.async_get(hass).async_get(lamp)
+    assert entry is not None
+    assert entry.options["conversation"]["should_expose"] is False
+    store = hass.data[DATA_EXPOSED_ENTITIES].entities
+    assert store["light.loose"].assistants["conversation"]["should_expose"] is False
+    assert "light.typo" not in store
+    lamp_row, loose_row = result["succeeded"]
+    assert lamp_row["entity_id"] == "Light.My_Lamp"
+    assert lamp_row["entity_entry"]["options"]["conversation"]["should_expose"] is False
+    assert lamp_row["updates"] == ["expose_to={'conversation': False}"]
+    assert loose_row["entity_id"] == "Light.Loose"
+    assert loose_row["entity_entry"] is None
+    [typo_row] = result["failed"]
+    assert typo_row == {"entity_id": "light.typo", "error": "Entity not found"}
+    assert "warnings" not in result

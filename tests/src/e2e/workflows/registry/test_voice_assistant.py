@@ -16,7 +16,8 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import MCPAssertions, parse_mcp_result
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -76,13 +77,10 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_get_entity with invalid assistant")
 
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_entity",
-            {"exposed_to": "invalid_assistant"},
+        data = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_get_entity", {"exposed_to": "invalid_assistant"}
         )
 
-        assert not data.get("success"), "Invalid assistant should fail"
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
 
         logger.info("Invalid assistant correctly rejected")
@@ -239,8 +237,7 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_set_entity expose_to with invalid assistant")
 
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_set_entity",
             {
                 "entity_id": "input_boolean.test",
@@ -248,7 +245,7 @@ class TestVoiceAssistantExposure:
             },
         )
 
-        assert not data.get("success"), "Invalid assistant should fail"
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
 
         logger.info("Invalid assistant correctly rejected")
 
@@ -291,11 +288,10 @@ async def test_expose_new_entities_round_trip(mcp_client):
         )
         assert after["expose_new_entities"] is (not before)
     finally:
-        await safe_call_tool(
-            mcp_client,
-            "ha_set_entity",
-            {"expose_new_entities": {"conversation": before}},
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_set_entity", {"expose_new_entities": {"conversation": before}}
+            )
 
 
 @pytest.mark.registry
@@ -313,11 +309,12 @@ async def test_entity_id_parts_round_trip(mcp_client):
         assert written["settings"] == {"entity_id_parts": ["device", "entity"]}
         assert written["previous_settings"] == {"entity_id_parts": before}
 
-        refused = await safe_call_tool(
-            mcp_client, "ha_set_entity", {"entity_id_parts": ["entity"]}
+        refused = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_set_entity", {"entity_id_parts": ["entity"]}
         )
         assert refused["error"]["code"] == "VALIDATION_INVALID_PARAMETER", refused
     finally:
-        await safe_call_tool(
-            mcp_client, "ha_set_entity", {"entity_id_parts": before or []}
-        )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_set_entity", {"entity_id_parts": before or []}
+            )

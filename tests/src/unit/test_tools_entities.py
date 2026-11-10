@@ -1,7 +1,6 @@
 """Unit tests for entity management tools module."""
 
 import json
-import logging
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -447,11 +446,7 @@ class TestHaSetEntityExposeTo:
     @pytest.mark.asyncio
     async def test_expose_to_single_assistant(self, mock_mcp, mock_client):
         """expose_to with single assistant should send expose message."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"exposed_entities": {}}}
-        )
-
-        # For expose-only calls, the tool also fetches entity state
+        # For expose-only calls, the tool reads the entry before and after
         entity_entry = {
             "entity_id": "light.test",
             "name": None,
@@ -466,6 +461,7 @@ class TestHaSetEntityExposeTo:
 
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                {"success": True, "result": entity_entry},  # registry read
                 {"success": True},  # expose call
                 {"success": True, "result": entity_entry},  # get entity call
             ]
@@ -482,11 +478,11 @@ class TestHaSetEntityExposeTo:
         assert result["exposure"] == {"conversation": True}
 
         # Verify the expose WebSocket message
-        first_call = mock_client.send_websocket_message.call_args_list[0][0][0]
-        assert first_call["type"] == "homeassistant/expose_entity"
-        assert first_call["assistants"] == ["conversation"]
-        assert first_call["entity_ids"] == ["light.test"]
-        assert first_call["should_expose"] is True
+        expose_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        assert expose_call["type"] == "homeassistant/expose_entity"
+        assert expose_call["assistants"] == ["conversation"]
+        assert expose_call["entity_ids"] == ["light.test"]
+        assert expose_call["should_expose"] is True
 
     @pytest.mark.asyncio
     async def test_expose_to_mixed_true_false(self, mock_mcp, mock_client):
@@ -505,6 +501,7 @@ class TestHaSetEntityExposeTo:
 
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                {"success": True, "result": entity_entry},  # registry read
                 {"success": True},  # expose=true call
                 {"success": True},  # expose=false call
                 {"success": True, "result": entity_entry},  # get entity call
@@ -521,8 +518,8 @@ class TestHaSetEntityExposeTo:
         assert result["success"] is True
         assert result["exposure"] == {"conversation": True, "cloud.alexa": False}
 
-        # Should have made 3 calls: expose true, expose false, get entity
-        assert mock_client.send_websocket_message.call_count == 3
+        # Registry read, expose true, expose false, get entity
+        assert mock_client.send_websocket_message.call_count == 4
 
     @pytest.mark.asyncio
     async def test_expose_hide_only_still_refetches(self, mock_mcp, mock_client):
@@ -539,6 +536,7 @@ class TestHaSetEntityExposeTo:
         }
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                {"success": True, "result": entity_entry},  # registry read
                 {"success": True},  # expose=false call
                 {"success": True, "result": entity_entry},  # refetch
             ]
@@ -554,9 +552,9 @@ class TestHaSetEntityExposeTo:
         assert result["success"] is True
         assert result["exposure"] == {"conversation": False}
         # Refetch fired even though nothing was exposed True.
-        assert mock_client.send_websocket_message.call_count == 2
+        assert mock_client.send_websocket_message.call_count == 3
         assert (
-            mock_client.send_websocket_message.call_args_list[1][0][0]["type"]
+            mock_client.send_websocket_message.call_args_list[2][0][0]["type"]
             == "config/entity_registry/get"
         )
 
@@ -752,12 +750,10 @@ class TestHaSetEntityCombined:
 
     @pytest.mark.asyncio
     async def test_expose_refetch_failure_keeps_snapshot_and_succeeds(
-        self, mock_mcp, mock_client, caplog
+        self, mock_mcp, mock_client
     ):
-        """A failed cosmetic post-exposure refetch must NOT fail the whole call when a
-        prior phase already produced a snapshot. The exposure committed, so the tool
-        returns the (pre-exposure) entity and warns instead of raising ENTITY_NOT_FOUND.
-        """
+        """A failed post-exposure refetch does not fail the call: the exposure
+        committed, so the tool returns the pre-exposure entry and says so."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 # Registry name update -> pre-exposure snapshot
@@ -773,28 +769,24 @@ class TestHaSetEntityCombined:
                 },
                 # Exposure succeeds
                 {"success": True},
-                # Post-exposure refetch FAILS (transient WS error)
-                {"success": False, "error": {"message": "connection lost"}},
+                # Post-exposure refetch: the connection drops
+                HomeAssistantConnectionError("connection lost"),
             ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        with caplog.at_level(logging.WARNING):
-            result = await tool(
-                entity_id="light.test",
-                name="Porch",
-                expose_to={"conversation": True},
-            )
+        result = await tool(
+            entity_id="light.test",
+            name="Porch",
+            expose_to={"conversation": True},
+        )
 
-        # Operation succeeded; exposure reported; entity falls back to the
-        # pre-exposure snapshot rather than raising.
         assert result["success"] is True
         assert result["exposure"] == {"conversation": True}
         assert result["entity_entry"]["name"] == "Porch"
-        assert mock_client.send_websocket_message.call_count == 3
-        # The real WS error is surfaced in the warning, not swallowed.
-        assert "connection lost" in caplog.text
+        [warning] = result["warnings"]
+        assert "connection lost" in warning
 
     @pytest.mark.asyncio
     async def test_expose_with_options_only_refetches_fresh_state(
@@ -985,10 +977,10 @@ class TestHaSetEntityCombined:
     ):
         """If only expose_to is set and it fails, raise ToolError without partial flag."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "Exposure not supported"},
-            }
+            side_effect=[
+                {"success": True, "result": {"entity_id": "light.test"}},
+                {"success": False, "error": {"message": "Exposure not supported"}},
+            ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1012,6 +1004,7 @@ class TestHaSetEntityCombined:
         """If first exposure group succeeds but second fails, raise ToolError with context."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                {"success": True, "result": {"entity_id": "light.test"}},
                 {"success": True},  # expose_true succeeds
                 {
                     "success": False,
@@ -1034,34 +1027,6 @@ class TestHaSetEntityCombined:
         assert result["exposure_failed"] == {"cloud.alexa": False}
 
     @pytest.mark.asyncio
-    async def test_expose_only_entity_not_found_raises_tool_error(
-        self, mock_mcp, mock_client
-    ):
-        """If only expose_to is set and entity fetch fails, raise ToolError."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose call succeeds
-                {
-                    "success": False,
-                    "error": {"message": "Entity not found"},
-                },  # get entity fails
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.nonexistent",
-                expose_to={"conversation": True},
-            )
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert "not found" in result["error"]["message"]
-        assert result["exposure_succeeded"] == {"conversation": True}
-
-    @pytest.mark.asyncio
     async def test_expose_to_all_three_assistants(self, mock_mcp, mock_client):
         """All 3 assistants in a single expose_to call should work."""
         entity_entry = {
@@ -1078,6 +1043,7 @@ class TestHaSetEntityCombined:
 
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                {"success": True, "result": entity_entry},  # registry read
                 {"success": True},  # expose_true call
                 {"success": True},  # expose_false call
                 {"success": True, "result": entity_entry},  # get entity call
@@ -1436,10 +1402,18 @@ class TestHaSetEntityBulkOperations:
 
     @pytest.mark.asyncio
     async def test_bulk_expose_to(self, mock_mcp, mock_client):
-        """Bulk expose sends ONE expose_entity call with the full id list, then a
-        single get_entries refetch — not one expose + one get per entity."""
+        """Bulk expose reads the registry's ids once, sends ONE expose_entity
+        call with the full id list, then a single get_entries refetch — not
+        one expose + one get per entity."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                {  # single get_entries read of the ids to send
+                    "success": True,
+                    "result": {
+                        "light.a": {"entity_id": "light.a"},
+                        "light.b": {"entity_id": "light.b"},
+                    },
+                },
                 {"success": True},  # single batched expose call for [a, b]
                 {  # single get_entries refetch for [a, b]
                     "success": True,
@@ -1466,13 +1440,13 @@ class TestHaSetEntityBulkOperations:
 
         assert result["success"] is True
         assert result["succeeded_count"] == 2
-        # Exactly two WS calls: one batched expose + one batched refetch.
-        assert mock_client.send_websocket_message.call_count == 2
-        expose_call = mock_client.send_websocket_message.call_args_list[0][0][0]
+        # Exactly three WS calls: id read, one batched expose, one refetch.
+        assert mock_client.send_websocket_message.call_count == 3
+        expose_call = mock_client.send_websocket_message.call_args_list[1][0][0]
         assert expose_call["type"] == "homeassistant/expose_entity"
         assert expose_call["entity_ids"] == ["light.a", "light.b"]
         assert expose_call["should_expose"] is True
-        refetch_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        refetch_call = mock_client.send_websocket_message.call_args_list[2][0][0]
         assert refetch_call["type"] == "config/entity_registry/get_entries"
         assert refetch_call["entity_ids"] == ["light.a", "light.b"]
         # entity_entry reflects the post-exposure refetch (options carry the
@@ -1481,6 +1455,30 @@ class TestHaSetEntityBulkOperations:
         assert entries["light.a"]["entity_entry"]["options"] == {
             "conversation": {"should_expose": True}
         }
+
+    @pytest.mark.asyncio
+    async def test_bulk_refetch_failure_warns(self, mock_mcp, mock_client):
+        """A failed refetch after the bulk exposure keeps the rows and says so."""
+        ids = ["light.a", "light.b"]
+        entries = {"success": True, "result": {e: {"entity_id": e} for e in ids}}
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                entries,
+                {"success": True},
+                {"success": False, "error": "busy"},
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(entity_id=ids, expose_to={"conversation": True})
+
+        assert result["success"] is True
+        assert [row["entity_entry"] for row in result["succeeded"]] == [
+            {"entity_id": e} for e in ids
+        ]
+        assert [w.split(":")[0] for w in result["warnings"]] == ids
+        assert all("busy" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_bulk_rejects_single_entity_params(self, mock_mcp, mock_client):

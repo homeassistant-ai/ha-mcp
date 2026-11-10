@@ -94,7 +94,9 @@ class RoutingClient:
         self._entries = dict(entries)
         self.ws_calls: list[str] = []
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self, msg: dict[str, Any], **_: Any
+    ) -> dict[str, Any]:
         msg_type = msg.get("type")
         self.ws_calls.append(msg_type)
         if msg_type == "config/entity_registry/get":

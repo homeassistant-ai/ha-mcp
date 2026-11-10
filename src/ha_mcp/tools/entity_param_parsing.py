@@ -136,12 +136,12 @@ def _parse_options_param(
 
 
 def _parse_expose_to_param(
-    expose_to: dict[str, bool] | None,
+    value: dict[str, bool] | None, param: str = "expose_to"
 ) -> dict[str, bool] | None:
-    """Parse and validate the expose_to parameter."""
-    if expose_to is not None:
+    """Parse and validate an assistant -> bool parameter named ``param``."""
+    if value is not None:
         try:
-            parsed = parse_json_param(expose_to, "expose_to")
+            parsed = parse_json_param(value, param)
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -153,7 +153,7 @@ def _parse_expose_to_param(
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "expose_to must be a dict mapping assistant IDs to booleans, "
+                    f"{param} must be a dict mapping assistant IDs to booleans, "
                     'e.g. {"conversation": true, "cloud.alexa": false}',
                 )
             )

@@ -189,6 +189,22 @@ async def test_pre_child_semantics_exposure_capability_uses_legacy_list() -> Non
 
 
 @pytest.mark.asyncio
+async def test_a_reply_without_a_map_falls_back_to_cores_list() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/exposure",
+        info_result=_CAPS_EXPOSURE,
+        cmd_result={"exposed_entities": None},
+    )
+    client = RoutingClient(_LEGACY_MAP)
+
+    with patch_ws(ws, entity_exposure):
+        resp = await _build_get_entity(client)()
+
+    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert client.legacy_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_unknown_command_invalidates_and_falls_back() -> None:
     """unknown_command on the exposure frame → invalidate caps + legacy list."""
     ws = make_ws(

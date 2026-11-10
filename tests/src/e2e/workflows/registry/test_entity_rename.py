@@ -407,7 +407,8 @@ class TestEntityRenameVoiceExposure:
             {"entity_id": new_entity_id},
         )
         assert check_data.get("success"), f"Failed to check exposure: {check_data}"
-        logger.info(f"New entity options: {check_data['entity_entry']['options']}")
+        options = check_data["entity_entry"]["options"]
+        assert options["conversation"]["should_expose"] is True, options
 
         # 5. CLEANUP
         delete_data = await safe_call_tool(

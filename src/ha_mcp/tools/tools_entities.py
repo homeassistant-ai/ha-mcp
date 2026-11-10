@@ -17,9 +17,14 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
-from ..errors import ErrorCode, create_error_response
+from ..errors import (
+    ErrorCode,
+    create_entity_not_found_error,
+    create_error_response,
+)
 from ..utils.registry_update_lock import registry_update_locks
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
@@ -34,9 +39,15 @@ from .config_helpers.registry import validate_registry_ids
 from .entity_expose_batch import (
     apply_bulk_expose,
     changed_entity_ids,
+    expose_targets,
+    refresh_warning,
     reject_unknown_assistants,
 )
-from .entity_exposure import unregistered_exposure
+from .entity_exposure import (
+    get_entries_or_unregistered,
+    unregistered_lookup,
+    unregistered_row,
+)
 from .entity_param_parsing import (
     _parse_aliases_param,
     _parse_categories_param,
@@ -46,7 +57,6 @@ from .entity_param_parsing import (
 )
 from .entity_registry_reads import (
     _GET_ENTRIES_CHUNK_SIZE,
-    _NOT_IN_REGISTRY,
     _extract_ws_error,
     get_entries_raw,
     resolve_by_unique_id,
@@ -431,8 +441,9 @@ class EntityTools:
                 "entity_ids": [entity_id],
             }
         )
+        # Core lowercases the ids it is sent and keys its reply so.
         automatic = result.get("success") and (result.get("result") or {}).get(
-            entity_id
+            entity_id.lower()
         )
         if not automatic:
             if result.get("success"):
@@ -645,7 +656,7 @@ class EntityTools:
     def _build_expose_failure_context(
         self,
         entity_id: str,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         succeeded: dict[str, bool],
         failed: dict[str, bool],
         options_succeeded: dict[str, dict[str, Any]],
@@ -680,6 +691,25 @@ class EntityTools:
                 context["device_rename_succeeded"] = True
         return context
 
+    async def _expose_target(
+        self, entity_id: str, entity_entry: dict[str, Any]
+    ) -> tuple[str, dict[str, Any] | None]:
+        """The id to send Core for the exposure, and the registry entry if any.
+
+        Same resolution as ``expose_targets``: an id Home Assistant does not
+        know is refused before anything is written.
+        """
+        if entity_entry:
+            return entity_entry["entity_id"], entity_entry
+        try:
+            entry = await self._fetch_entity(entity_id)
+        except _NotInRegistry:
+            known = await unregistered_lookup(self._client, [entity_id])
+            if entity_id not in known:
+                raise_tool_error(create_entity_not_found_error(entity_id))
+            return known[entity_id][0], None
+        return entry["entity_id"], entry
+
     async def _apply_expose_to(
         self,
         entity_id: str,
@@ -688,12 +718,20 @@ class EntityTools:
         has_registry_updates: bool,
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
-    ) -> tuple[dict[str, bool] | None, dict[str, Any], bool]:
-        """Apply expose_to changes; returns (exposure_result, entity_entry, unchanged)."""
+        updates_made: list[str],
+    ) -> tuple[dict[str, bool] | None, dict[str, Any] | None, str | None]:
+        """Apply expose_to changes and add their entry to updates_made.
+
+        Returns (exposure_result, entity_entry, warning): entity_entry is None
+        for an entity without a registry entry, and warning says when the
+        entry could not be re-read after the write.
+        """
         if parsed_expose_to is None:
-            return None, entity_entry, False
-        if not parsed_expose_to and entity_entry:
-            return None, entity_entry, True
+            return None, entity_entry, None
+        target, entry = await self._expose_target(entity_id, entity_entry)
+        if not parsed_expose_to:
+            updates_made.append(_expose_update(parsed_expose_to, True))
+            return None, entry, None
 
         # Group by should_expose value for efficient API calls
         expose_true = [a for a, v in parsed_expose_to.items() if v]
@@ -708,11 +746,11 @@ class EntityTools:
             expose_msg: dict[str, Any] = {
                 "type": "homeassistant/expose_entity",
                 "assistants": assistants,
-                "entity_ids": [entity_id],
+                "entity_ids": [target],
                 "should_expose": should_expose,
             }
             logger.info(
-                f"{'Exposing' if should_expose else 'Hiding'} {entity_id} "
+                f"{'Exposing' if should_expose else 'Hiding'} {target} "
                 f"{'to' if should_expose else 'from'} {assistants}"
             )
             expose_result = await self._client.send_websocket_message(expose_msg)
@@ -722,7 +760,7 @@ class EntityTools:
                 failed = dict.fromkeys(assistants, should_expose)
                 context = self._build_expose_failure_context(
                     entity_id,
-                    entity_entry,
+                    entry,
                     succeeded,
                     failed,
                     options_succeeded,
@@ -749,59 +787,36 @@ class EntityTools:
             )
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
-        unchanged = changed is not None and entity_id not in changed
+        unchanged = changed is not None and target not in changed
+        updates_made.append(_expose_update(parsed_expose_to, unchanged))
+        if entry is None:
+            return exposure_result, None, None
 
-        # Exposure mutates the registry entry's options, so refetch to return the
-        # post-exposure state. An empty expose_to applies nothing and lands
-        # here only when no earlier phase read the entry.
-        get_msg: dict[str, Any] = {
-            "type": "config/entity_registry/get",
-            "entity_id": entity_id,
-        }
-        get_result = await self._client.send_websocket_message(get_msg)
+        # Exposure mutates the registry entry's options, so refetch to return
+        # the post-exposure state. The exposure already committed: a failed
+        # refresh keeps the pre-exposure entry and says so.
+        try:
+            get_result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": target}
+            )
+        except HomeAssistantError as exc:
+            get_result = {"success": False, "error": str(exc)}
         if get_result.get("success"):
-            entity_entry = get_result.get("result") or {}
-        elif entity_entry:
-            # The exposure already committed; only the cosmetic post-exposure
-            # refresh failed. Keep the pre-exposure snapshot and warn rather
-            # than reporting the whole (successful) operation as a failure.
-            logger.warning(
-                f"Exposure applied to {entity_id} but its registry state could "
-                f"not be refreshed: {_extract_ws_error(get_result)}"
-            )
-        else:
-            # No prior-phase snapshot to fall back on -- surface the read
-            # failure with the actual WebSocket error.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Entity '{entity_id}' could not be read after applying "
-                    f"exposure changes: {_extract_ws_error(get_result)}",
-                    context={
-                        "entity_id": entity_id,
-                        "exposure_succeeded": exposure_result,
-                        "has_registry_updates": has_registry_updates,
-                        "options_succeeded": options_succeeded,
-                    },
-                    suggestions=[
-                        "Verify the entity_id exists using ha_search()",
-                        "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
-                    ],
-                )
-            )
-
-        return exposure_result, entity_entry, unchanged
+            return exposure_result, get_result.get("result") or {}, None
+        warning = refresh_warning(entity_id, _extract_ws_error(get_result))
+        logger.warning(warning)
+        return exposure_result, entry, warning
 
     def _build_entity_response(
         self,
         entity_id: str,
         original_entity_id: str,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         updates_made: list[str],
         new_entity_id: str | None,
         exposure_result: dict[str, bool] | None,
         device_rename_result: dict[str, Any] | None,
-        device_name_warning: str | None = None,
+        extra_warnings: list[str] | None = None,
         core_extras: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the final response dict for a single-entity update."""
@@ -814,8 +829,13 @@ class EntityTools:
             "message": f"Entity updated: {', '.join(updates_made)}",
         }
 
-        # Include old_entity_id and rename warning when a rename was performed
-        if new_entity_id not in (None, original_entity_id):
+        # Include old_entity_id and rename warning when a rename was performed;
+        # Core lowercases the entity_id it is sent; a new_entity_id it
+        # accepts is already lowercase.
+        if (
+            new_entity_id is not None
+            and new_entity_id.lower() != original_entity_id.lower()
+        ):
             response_data["old_entity_id"] = original_entity_id
             response_data.setdefault("warnings", []).append(
                 "Remember to update any automations, scripts, or dashboards "
@@ -825,8 +845,8 @@ class EntityTools:
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
 
-        if device_name_warning is not None:
-            response_data.setdefault("warnings", []).append(device_name_warning)
+        if extra_warnings:
+            response_data.setdefault("warnings", []).extend(extra_warnings)
 
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
@@ -924,7 +944,7 @@ class EntityTools:
                 message["new_entity_id"] = new_entity_id
                 updates_made.append(
                     f"entity_id -> {new_entity_id}"
-                    if new_entity_id != entity_id
+                    if new_entity_id.lower() != entity_id.lower()
                     else "entity_id unchanged"
                 )
             # expose_to and device_name are appended to updates_made only after their
@@ -999,16 +1019,19 @@ class EntityTools:
                 updates_made.append(f"device_name -> {new_device_name}")
 
             # Phase 6: Expose to assistants
-            exposure_result, entity_entry, unchanged = await self._apply_expose_to(
+            (
+                exposure_result,
+                entity_entry,
+                exposure_warning,
+            ) = await self._apply_expose_to(
                 entity_id,
                 parsed_expose_to,
                 entity_entry,
                 registry_updated,
                 options_succeeded,
                 device_rename_result,
+                updates_made,
             )
-            if parsed_expose_to is not None:
-                updates_made.append(_expose_update(parsed_expose_to, unchanged))
 
         # Phase 7: Build response
         return self._build_entity_response(
@@ -1019,7 +1042,7 @@ class EntityTools:
             new_entity_id,
             exposure_result,
             device_rename_result,
-            device_name_warning,
+            [w for w in (device_name_warning, exposure_warning) if w],
             core_result,
         )
 
@@ -1096,64 +1119,50 @@ class EntityTools:
         parsed_expose_to: dict[str, bool],
         entry_by_id: dict[str, dict[str, Any] | None],
         updates_by_id: dict[str, list[str]],
-    ) -> tuple[list[str], list[dict[str, Any]]]:
-        """Batch-expose eligible_ids, then refetch their post-exposure state.
+    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+        """Batch-expose eligible_ids, then refetch the registry entries among them.
 
-        Returns (still_eligible_ids, newly_failed). A batched-expose failure
-        is reported against every eligible id (the command acts on the whole
-        list atomically) — matching the old per-entity path where each entity
-        raised on its own expose failure — and clears eligibility. On success,
-        options mutate, so a single get_entries refetch refreshes each
-        entity_entry; a refetch failure keeps the pre-exposure snapshot since
-        the exposure already committed.
+        Returns (still_eligible_ids, newly_failed, warnings). An id that
+        ``expose_targets`` cannot resolve fails before the write. A failed
+        expose call is reported against every id it was sent for (each call
+        acts on the whole list) and clears eligibility. On success, options
+        mutate, so one get_entries refetch refreshes each registry entry; a
+        refetch failure keeps the pre-exposure entry, since the exposure
+        already committed, and adds a warning.
         """
+        targets, failed = await expose_targets(self._client, eligible_ids, entry_by_id)
+        eligible_ids = [eid for eid in eligible_ids if eid in targets]
+        if not eligible_ids:
+            return [], failed, []
         expose_error, changed = await apply_bulk_expose(
-            self._client, eligible_ids, parsed_expose_to, _extract_ws_error
+            self._client,
+            [targets[eid] for eid in eligible_ids],
+            parsed_expose_to,
+            _extract_ws_error,
         )
         if expose_error is not None:
-            failed = [
+            failed.extend(
                 {"entity_id": eid, "error": f"Exposure failed: {expose_error}"}
                 for eid in eligible_ids
-            ]
-            return [], failed
+            )
+            return [], failed, []
 
         for eid in eligible_ids:
-            unchanged = changed is not None and eid not in changed
+            unchanged = changed is not None and targets[eid] not in changed
             updates_by_id[eid].append(_expose_update(parsed_expose_to, unchanged))
-        refetched_raw, refetch_errors = await get_entries_raw(
-            self._client, eligible_ids
+        registered = [eid for eid in eligible_ids if entry_by_id.get(eid) is not None]
+        refetched, refetch_errors = await get_entries_raw(
+            self._client, [targets[eid] for eid in registered]
         )
-        for eid in eligible_ids:
-            if eid in refetched_raw:
-                entry_by_id[eid] = refetched_raw[eid]
-        # An id whose refetch failed AND that has no earlier registry snapshot
-        # (expose-only bulk never populates one) would otherwise be reported
-        # as a success row with entity_entry=None — e.g. a typo'd or deleted
-        # entity. The old per-entity path raised for exactly this case.
-        still_eligible: list[str] = []
-        newly_failed: list[dict[str, Any]] = []
-        for eid in eligible_ids:
-            if eid in refetch_errors and entry_by_id.get(eid) is None:
-                newly_failed.append(
-                    {
-                        "entity_id": eid,
-                        "error": (
-                            "Exposure command was sent, but the entity could "
-                            "not be verified in the registry: "
-                            f"{refetch_errors[eid]}"
-                        ),
-                    }
-                )
+        warnings: list[str] = []
+        for eid in registered:
+            if targets[eid] in refetched:
+                entry_by_id[eid] = refetched[targets[eid]]
             else:
-                still_eligible.append(eid)
-        if refetch_errors:
-            logger.warning(
-                "Bulk exposure applied but post-exposure refresh failed "
-                "for %d id(s); %d had a pre-exposure snapshot to return",
-                len(refetch_errors),
-                len(refetch_errors) - len(newly_failed),
-            )
-        return still_eligible, newly_failed
+                warnings.append(refresh_warning(eid, refetch_errors[targets[eid]]))
+        if warnings:
+            logger.warning("Bulk exposure applied; %s", " ".join(warnings))
+        return eligible_ids, failed, warnings
 
     async def _bulk_update_entities(
         self,
@@ -1194,8 +1203,9 @@ class EntityTools:
             entity_ids, parsed_categories, parsed_labels, label_operation
         )
 
+        warnings: list[str] = []
         if parsed_expose_to is not None and eligible_ids:
-            eligible_ids, expose_failed = await self._bulk_expose_phase(
+            eligible_ids, expose_failed, warnings = await self._bulk_expose_phase(
                 eligible_ids, parsed_expose_to, entry_by_id, updates_by_id
             )
             failed.extend(expose_failed)
@@ -1221,6 +1231,8 @@ class EntityTools:
         if failed:
             response["failed"] = failed
             response["partial"] = len(succeeded_list) > 0
+        if warnings:
+            response["warnings"] = warnings
         return response
 
     async def _fetch_entity(self, eid: str) -> dict[str, Any]:
@@ -1229,12 +1241,22 @@ class EntityTools:
             "type": "config/entity_registry/get",
             "entity_id": eid,
         }
-        result = await self._client.send_websocket_message(message)
+        # Not in the registry is an answer here, not a failure to log.
+        result = await self._client.send_websocket_message(
+            message, expected_error_codes=frozenset({"not_found"})
+        )
 
         if not result.get("success"):
             if result.get("error_code") == "not_found":
                 raise _NotInRegistry(_extract_ws_error(result))
-            raise ValueError(_extract_ws_error(result))
+            raise_tool_error(
+                create_error_response(
+                    ws_failure_code(result),
+                    f"Reading the registry entry of {eid} failed: "
+                    f"{_extract_ws_error(result)}",
+                    context={"entity_id": eid},
+                )
+            )
 
         return result.get("result") or {}
 
@@ -1425,7 +1447,10 @@ class EntityTools:
                     "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. "
                     "Assistant IDs Home Assistant knows, today 'conversation' (Assist), 'cloud.alexa' "
                     "and 'cloud.google_assistant'; it refuses any other name before any change is sent to it. "
-                    'Example: {"conversation": true, "cloud.alexa": false}.'
+                    'Example: {"conversation": true, "cloud.alexa": false}. '
+                    "An entity without a registry entry is written under the id Home "
+                    "Assistant reads it by and answers with entity_entry null; an id "
+                    "Home Assistant does not know is refused before anything is written."
                 ),
                 default=None,
             ),
@@ -1449,10 +1474,10 @@ class EntityTools:
             Field(
                 description=(
                     "Registry-wide, no entity_id: the name parts new entity IDs "
-                    "are built from, in order, from 'area', 'floor', "
-                    "'parent_device', 'device', 'entity'; 'device' and 'entity' "
-                    "are required. [] restores Home Assistant's default. Home "
-                    "Assistant validates the list."
+                    "are built from, in order. Home Assistant judges the list; "
+                    "today it takes 'area', 'floor', 'parent_device', 'device' "
+                    "and 'entity', and requires 'device' and 'entity'. [] "
+                    "restores Home Assistant's default."
                 ),
                 default=None,
             ),
@@ -1484,7 +1509,7 @@ class EntityTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Update entity properties in the entity registry.
+        """Update entity registry entries, or without entity_id the registry-wide settings.
 
         Allows modifying entity metadata such as area assignment, display name,
         icon, "Show As" device class override, per-domain registry options,
@@ -1516,10 +1541,11 @@ class EntityTools:
         new_device_name can be combined with new_entity_id to rename both in one
         call. The device is looked up automatically.
 
-        REGISTRY-WIDE SETTINGS (no entity_id): expose_new_entities and
-        entity_id_parts change no entity; the reply carries Home Assistant's
-        new values and the previous ones (`previous_expose_new_entities`,
-        `previous_settings`) to restore them. ha_get_entity() reads them.
+        REGISTRY-WIDE SETTINGS: for the parameters sent, the reply has Home
+        Assistant's `settings`, the `expose_new_entities` written, and the values
+        they replace
+        (`previous_settings`, `previous_expose_new_entities`). Restore a null
+        `entity_id_parts` with []. ha_get_entity() reads them.
 
         Use ha_search() or ha_get_device() to find entity IDs.
         Use ha_config_get_label() to find available label IDs.
@@ -1528,6 +1554,7 @@ class EntityTools:
         - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
         - Set Show As: ha_set_entity("binary_sensor.zone_10", device_class="window")
         - Set sensor precision: ha_set_entity("sensor.power", options={"sensor": {"display_precision": 2}})
+        - Stop exposing new entities to Alexa: ha_set_entity(expose_new_entities={"cloud.alexa": false})
         - Rename entity and device: ha_set_entity("light.old", new_entity_id="light.new", new_device_name="New Lamp")
         - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
         - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": True})
@@ -1708,14 +1735,15 @@ class EntityTools:
                 description=(
                     "Without entity_id and unique_id: list only the entities "
                     "exposed to this voice assistant, an ID Home Assistant knows "
-                    "(today 'conversation', 'cloud.alexa', 'cloud.google_assistant'), "
-                    "and return its 'expose new entities' flag."
+                    "(today 'conversation', 'cloud.alexa', 'cloud.google_assistant'). "
+                    "Adds `assistant` and its `expose_new_entities` flag; leaves "
+                    "out `summary`."
                 ),
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get entity registry information for one or more entities.
+        """Get entity registry entries, or without an entity the registry settings and exposed entities.
 
         Returns each entry as Home Assistant's entity registry serves it
         (`config/entity_registry/get` / `get_entries`): area_id, name override,
@@ -1751,9 +1779,10 @@ class EntityTools:
 
         VOICE ASSISTANT EXPOSURE:
         An entity with a registry entry keeps its exposure in the entry's
-        `options` (`options.<assistant>.should_expose`). An entity without a
-        registry entry but with a state returns `entity_entry: null` with
-        `exposed_to` (the assistants Home Assistant has stored as exposed) and
+        `options` (`options.<assistant>.should_expose`; absent while nothing is
+        stored). An entity without a registry entry that has a state, or is
+        stored as exposed, returns `entity_entry: null` with `exposed_to` (the
+        assistants Home Assistant has stored as exposed) and
         `is_exposed_anywhere`; a list call returns such entities under
         `unregistered_entities`.
 
@@ -1765,12 +1794,12 @@ class EntityTools:
         `expose_entity/list` map, with `count` and a per-assistant `summary`
         (an assistant with no exposed entity is left out). An entity missing
         from that map is not stored as exposed: either it is stored as not
-        exposed, or nothing is stored yet and Home Assistant applies its
-        expose-new-entities default when an assistant first asks. When the
-        ha_mcp_tools component advertises it, `entity_info` names each listed
-        entity: friendly_name, domain, area, floor and labels (plus state when
-        it has one). With exposed_to, only the entities exposed to that
-        assistant, plus its `expose_new_entities` flag.
+        exposed, or nothing is stored yet and Home Assistant applies its own
+        default when an assistant first asks (it depends on the assistant's
+        expose-new-entities flag and on the entity). When the ha_mcp_tools
+        component advertises it, `entity_info` names each listed entity:
+        domain, area, floor and labels (plus friendly_name and state when it
+        has a state).
 
         RELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()
         for current state/attributes; ha_search() to find entities.
@@ -1847,30 +1876,19 @@ class EntityTools:
         logger.info(f"Getting entity registry entry for {eid}")
         try:
             result = await self._fetch_entity(eid)
-        except ValueError as e:
+        except _NotInRegistry:
             # An entity without a registry entry still has exposure settings,
             # kept in Core's separate exposed-entities store.
-            if isinstance(e, _NotInRegistry):
-                rows = await unregistered_exposure(self._client, [eid])
-                if eid in rows:
-                    return {"success": True, **rows[eid]}
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Entity not found: {e}",
-                    context={"entity_id": eid},
-                    suggestions=[
-                        "Use ha_search() to find valid entity IDs",
-                        "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
-                    ],
+            try:
+                known = await unregistered_lookup(self._client, [eid])
+            except HomeAssistantError as exc:
+                exception_to_structured_error(
+                    exc, context={"entity_id": eid, "registry_entry": None}
                 )
-            )
-        # Additive area/floor/label-name enrichment via the component when it
-        # advertises entity_enrich; a capability miss leaves the fields off
-        # (legacy shape unchanged).
-        enriched = await fetch_entity_enrichment_via_component(self._client, [eid])
-        if enriched is not None:
-            _merge_entity_enrichment(result, enriched.get(eid))
+            if eid not in known:
+                raise_tool_error(create_entity_not_found_error(eid))
+            return {"success": True, **unregistered_row(eid, known[eid][1])}
+        await self._enrich_entries([result])
         return {
             "success": True,
             "entity_id": eid,
@@ -1889,15 +1907,12 @@ class EntityTools:
         # Bulk case - fetch all entities in one chunked get_entries call
         # (native HA bulk command) instead of one registry get per id.
         logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
-        raw_map, error_map = await get_entries_raw(self._client, entity_ids)
-        unregistered = await unregistered_exposure(
-            self._client,
-            [eid for eid, err in error_map.items() if err == _NOT_IN_REGISTRY],
+        raw_map, known, error_map = await get_entries_or_unregistered(
+            self._client, entity_ids
         )
 
         # Iterate the requested ids (not the map) to preserve request order and
-        # duplicate handling; each id is classified found/error exactly as the
-        # old per-id fan-out did.
+        # duplicate handling; each id is found, unregistered, or an error.
         entity_entries: list[dict[str, Any]] = []
         unregistered_entities: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -1905,15 +1920,10 @@ class EntityTools:
             raw = raw_map.get(eid)
             if raw is not None:
                 entity_entries.append(raw)
-            elif eid in unregistered:
-                unregistered_entities.append(unregistered[eid])
+            elif eid in known:
+                unregistered_entities.append(unregistered_row(eid, known[eid][1]))
             else:
-                errors.append(
-                    {
-                        "entity_id": eid,
-                        "error": error_map.get(eid, _NOT_IN_REGISTRY),
-                    }
-                )
+                errors.append({"entity_id": eid, "error": error_map[eid]})
 
         await self._enrich_entries(entity_entries)
 

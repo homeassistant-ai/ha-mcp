@@ -5,7 +5,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from .helpers import clearable_value, raise_tool_error
 
 # Home Assistant release that reads an empty entity-name override as "use the
@@ -64,13 +64,10 @@ async def ensure_use_device_name_allowed(
     await ensure_use_device_name_supported(client)
     try:
         current = await fetch_entity(entity_id)
-    except ValueError as e:
+    except ValueError:
         raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Entity not found: {e}",
-                context={"entity_id": entity_id},
-                suggestions=["Use ha_search() to find valid entity IDs"],
+            create_entity_not_found_error(
+                entity_id, details=f"{entity_id} has no entity registry entry."
             )
         )
     reject_use_device_name_without_device(entity_id, current)

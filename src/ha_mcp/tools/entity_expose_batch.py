@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from ..errors import create_error_response
+from .entity_exposure import get_entries_or_unregistered
 from .helpers import raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,9 @@ def changed_entity_ids(reply: dict[str, Any]) -> set[str] | None:
 
 
 async def read_expose_new(client: Any, assistant: str) -> bool:
-    """The assistant's "expose new entities" flag, as Core stores it.
+    """The assistant's "expose new entities" flag, as Core reports it.
+
+    Core answers with the stored value, else its default for the assistant.
 
     ``homeassistant/expose_new_entities/get`` validates its ``assistant``
     against Core's own list, so an unknown name fails here with Core's
@@ -39,7 +42,7 @@ async def read_expose_new(client: Any, assistant: str) -> bool:
                 suggestions=reply.get("suggestions"),
             )
         )
-    return bool((reply.get("result") or {}).get("expose_new"))
+    return bool(reply["result"]["expose_new"])
 
 
 async def reject_unknown_assistants(
@@ -101,3 +104,40 @@ async def apply_bulk_expose(
         reported = changed_entity_ids(result)
         changed = None if reported is None or changed is None else changed | reported
     return None, changed
+
+
+async def expose_targets(
+    client: Any,
+    entity_ids: list[str],
+    entry_by_id: dict[str, dict[str, Any] | None],
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """The id to send Core for each entity's exposure, and the ids that fail.
+
+    The id sent is the one Core reads the exposure under: the registry
+    entry's, else the one ``unregistered_lookup`` finds. Entries read here
+    land in entry_by_id. An id Home Assistant does not know, or whose
+    registry entry or state cannot be read, fails before anything is
+    written.
+    """
+    unread = [eid for eid in entity_ids if entry_by_id.get(eid) is None]
+    found, known, errors = await get_entries_or_unregistered(client, unread)
+    entry_by_id.update(found)
+    targets: dict[str, str] = {}
+    failed: list[dict[str, Any]] = []
+    for eid in entity_ids:
+        entry = entry_by_id.get(eid)
+        if entry is not None:
+            targets[eid] = entry["entity_id"]
+        elif eid in known:
+            targets[eid] = known[eid][0]
+        else:
+            failed.append({"entity_id": eid, "error": errors[eid]})
+    return targets, failed
+
+
+def refresh_warning(entity_id: str, error: str) -> str:
+    """The warning for an entry that could not be re-read after its exposure."""
+    return (
+        f"{entity_id}: the exposure was applied, but re-reading the registry "
+        f"entry failed ({error}); entity_entry shows it as before."
+    )

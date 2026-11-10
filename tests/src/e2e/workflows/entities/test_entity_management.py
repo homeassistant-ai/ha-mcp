@@ -6,7 +6,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    safe_call_tool,
+)
 from ...utilities.cleanup import (
     TestEntityCleaner as EntityCleaner,
 )
@@ -543,17 +547,12 @@ class TestEntityManagement:
 
     async def test_get_entity_nonexistent(self, mcp_client):
         """Test error handling for non-existent entity in ha_get_entity."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_entity",
-            {"entity_id": "sensor.nonexistent_entity_xyz"},
+        data = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_get_entity", {"entity_id": "sensor.nonexistent_entity_xyz"}
         )
 
-        assert not data.get("success", True), "Should fail for non-existent entity"
-        assert "error" in data, f"Missing error field: {data}"
-        assert data.get("error", {}).get("suggestions"), (
-            f"Missing suggestions field: {data}"
-        )
+        assert data["error"]["code"] == "ENTITY_NOT_FOUND", data
+        assert data["error"]["suggestions"], data
 
         logger.info("Non-existent entity error handling verified")
 

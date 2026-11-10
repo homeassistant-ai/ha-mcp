@@ -140,13 +140,30 @@ class TestSetEntityUseDeviceName:
         assert sent["name"] == ""
         assert result["success"] is True
 
+    async def test_an_entity_outside_the_registry_is_not_found(self, tools) -> None:
+        registered, client = tools
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Entity not found",
+                "error_code": "not_found",
+            }
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered["ha_set_entity"](
+                entity_id="sensor.sun_next_dawn", use_device_name=True
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "ENTITY_NOT_FOUND"
+        assert client.send_websocket_message.await_count == 1
+
     async def test_entry_is_read_under_the_update_lock(self, tools) -> None:
         """The write is built from the entry, so no update may land between."""
         registered, client = tools
         lock = registry_update_lock("entity", "sensor.sun_next_dawn")
         held: list[bool] = []
 
-        async def ws(message: dict) -> dict:
+        async def ws(message: dict, **_: object) -> dict:
             if message["type"] == "config/entity_registry/get":
                 held.append(lock.locked())
                 return _ws_get()

@@ -77,7 +77,8 @@ async def get_entries_raw(
         if isinstance(resp, dict) and resp.get("success"):
             result_map = resp.get("result") or {}
             for eid in chunk:
-                entry = result_map.get(eid)
+                # Core lowercases the ids it is sent and keys its reply so.
+                entry = result_map.get(eid.lower())
                 if entry is None:
                     errors[eid] = _NOT_IN_REGISTRY
                 else:
