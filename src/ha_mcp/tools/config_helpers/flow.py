@@ -13,7 +13,7 @@ from typing import Any
 from ...errors import ErrorCode, create_error_response
 from ..coercion import parse_json_param, parse_string_list_param
 from ..config_entry_flow import (
-    _SUBENTRY_CREATE_LOCKS,
+    SUBENTRY_CREATE_LOCKS,
     _created_subentry_id,
     _subentry_ids,
 )
@@ -403,7 +403,7 @@ async def _handle_set_config_subentry(
         # Core's create result carries no subentry_id: the new one is the
         # difference in the parent's listing, so creates under one parent
         # finish one at a time.
-        async with _SUBENTRY_CREATE_LOCKS[entry_id]:
+        async with SUBENTRY_CREATE_LOCKS[entry_id]:
             before = await _subentry_ids(client, entry_id)
             flow_id, step, unsent = await advance()
             if before is not None and step.get("type") == "create_entry":

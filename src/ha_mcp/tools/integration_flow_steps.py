@@ -46,8 +46,8 @@ from .config_entry_flow_form import form_submission
 from .config_entry_flow_introspect import menu_choices, shielded_abort
 from .config_entry_flow_progress import _FLOW_RESOURCES, PROGRESS_STEP_TYPES
 from .config_entry_flow_submit import (
-    _RECONFIGURE_SUCCESS_REASONS,
     EXTERNAL_STEP_TYPES,
+    RECONFIGURE_SUCCESS_REASONS,
     _rejected_on_submit,
     _submit_step,
     _wait_for_progress,
@@ -392,7 +392,7 @@ async def settle(
     if step_type == "create_entry" and is_reconfigure:
         raise_reconfigure_created_entry(flow_id, step)
     entry_updated = (
-        step_type == "abort" and step.get("reason") in _RECONFIGURE_SUCCESS_REASONS
+        step_type == "abort" and step.get("reason") in RECONFIGURE_SUCCESS_REASONS
     )
     if entry_updated and not is_reconfigure:
         # A setup flow ended by updating an existing entry

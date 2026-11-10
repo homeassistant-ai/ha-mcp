@@ -556,7 +556,7 @@ async def _created_subentry_id(
 
 # A create finds its subentry by diffing the parent's listing, so creates under
 # one parent run one at a time.
-_SUBENTRY_CREATE_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+SUBENTRY_CREATE_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 async def restore_config_entry_options(

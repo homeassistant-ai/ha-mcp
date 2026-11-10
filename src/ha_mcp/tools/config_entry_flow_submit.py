@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # External steps need a browser (OAuth / cloud authorization), which an MCP
 # client cannot drive (issue #1814).
 EXTERNAL_STEP_TYPES = frozenset({"external", "external_done"})
-_RECONFIGURE_SUCCESS_REASONS = frozenset(
+RECONFIGURE_SUCCESS_REASONS = frozenset(
     {
         "reauth_successful",
         "reconfigure_successful",
