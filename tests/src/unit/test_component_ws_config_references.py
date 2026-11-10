@@ -9,31 +9,16 @@ asks Core, and what it reports from Core's answers.
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
-sys.modules.setdefault("homeassistant", SimpleNamespace())
-for _mod in (
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_mod, MagicMock())
+from ha_mcp.tools.reference_validator import _warnings
 
-from ha_mcp.tools.reference_validator import _warnings  # noqa: E402
-
-from ._component_ws_api import wsapi  # noqa: E402  (after the stubs above)
-from .test_component_ws_search import (  # noqa: E402
+from ._component_ws_api import wsapi
+from .test_component_ws_search import (
     FakeHass,
     _FakeConnection,
     _Unauthorized,

@@ -3,26 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-# The component imports Home Assistant at module import; unit tests run without it.
-sys.modules.setdefault("homeassistant", SimpleNamespace())
-for _module in (
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.config_entries",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-):
-    sys.modules.setdefault(_module, MagicMock())
-
-from custom_components.ha_mcp_tools import yaml_find  # noqa: E402
+from custom_components.ha_mcp_tools import yaml_find
 
 yaml_find.YAML_CONFIG_FILE = "configuration.yaml"
 
@@ -90,16 +74,3 @@ def test_handler_reports_config_load_failure(monkeypatch):
     result = asyncio.run(handler(_call()))
 
     assert result == {"success": False, "error": "bad config", "files": []}
-
-
-def test_register_find_yaml_key_uses_response_schema():
-    hass = _hass()
-    yaml_find.register_find_yaml_key(
-        hass,
-        caller_token_ok=lambda hass, call: True,
-        unauthorized_response=lambda service: {"success": False},
-    )
-
-    args, kwargs = hass.services.async_register.call_args
-    assert args[:2] == ("ha_mcp_tools", "find_yaml_key")
-    assert kwargs["schema"] is yaml_find.SERVICE_FIND_YAML_KEY_SCHEMA

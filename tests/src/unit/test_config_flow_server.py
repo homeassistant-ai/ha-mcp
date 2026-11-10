@@ -395,8 +395,10 @@ class TestAdminTokenReplacement:
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
         fields = {m.schema: v for m, v in form["data_schema"].schema.items()}
-        assert fields[cf.server_credentials.ADMIN_USERNAME].config.autocomplete == "off"
-        assert fields[cf.server_credentials.ADMIN_PASSWORD].config.autocomplete == (
+        assert (
+            fields[cf.server_credentials.ADMIN_USERNAME].config["autocomplete"] == "off"
+        )
+        assert fields[cf.server_credentials.ADMIN_PASSWORD].config["autocomplete"] == (
             "new-password"
         )
 
@@ -409,9 +411,7 @@ class TestAdminTokenReplacement:
         assert not (self._marker(form).description or {}).get("suggested_value")
 
     def _token_flow(self, options=None):
-        flow = _make_options_flow(options=options, data={"webhook_id": "w"})
-        flow.config_entry.entry_id = "srv1"
-        return flow
+        return _make_options_flow(options=options, data={"webhook_id": "w"})
 
     def test_a_working_token_goes_into_the_entry_data_not_the_options(self):
         # config_entries/get returns the options, so the token must never

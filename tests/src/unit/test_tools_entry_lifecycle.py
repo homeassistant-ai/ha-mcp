@@ -24,11 +24,11 @@ may still be serving from that surface). The server entry's own half of that
 contract is covered by
 ``test_embedded_entry.py::TestWebSocketCommandRegistration``.
 
-Home Assistant is stubbed via ``_embedded_stubs`` (imported first so the fakes
-are installed before the component module binds them); the collaborators the
-tools setup reaches for at call time — the ``.storage`` ``Store``, the device
-registry, the manifest read, the WS command registration — are replaced per
-test, so the whole lifecycle runs with no HA install and no I/O.
+The collaborators the tools setup reaches for at call time — the ``.storage``
+``Store``, the device registry, the manifest read, the WS command registration
+— are replaced per test, so the whole lifecycle runs with no I/O. That Core
+refuses a non-admin caller of every registered service is covered on a real
+``hass`` by ``test_tools_services_real_core.py``.
 """
 
 from __future__ import annotations
@@ -43,12 +43,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools as comp  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools as comp
+from custom_components.ha_mcp_tools.const import (
     CONF_ENTRY_TYPE,
     DOMAIN,
     ENTRY_TYPE_SERVER,

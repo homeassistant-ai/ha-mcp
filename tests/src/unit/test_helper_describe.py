@@ -485,6 +485,20 @@ def test_long_select_lists_are_truncated_but_say_how_many_remain() -> None:
     assert str(175 - mod.MAX_OPTIONS) in options[-1]
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"name": "password", "type": "string", "secret": True},
+        {"name": "api_key", "selector": {"text": {}}, "secret": True},
+    ],
+    ids=["serialized", "selector"],
+)
+def test_core_secret_fields_stay_recognisable_as_secrets(field) -> None:
+    """A field Core marks secret (#3002) is shown as one, so the model knows a
+    redacted value is withheld rather than empty."""
+    assert mod.compact_field(field)["secret"] is True
+
+
 def test_collapsed_sections_are_described_inline() -> None:
     """Fields hidden in an expandable section (e.g. availability) stay visible."""
     field = {

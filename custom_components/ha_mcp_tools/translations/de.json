@@ -185,6 +185,21 @@
           "entry_removed": "Der HA-MCP Server Eintrag ist nicht mehr vorhanden."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP ist von zwei Store-Einträgen installiert",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "HA-MCP auf einem Store-Eintrag belassen?",
+            "description": "HA-MCP ist laut {records} von beiden installiert. Sie führen dieselbe Integration (der zweite ist der ältere Distributionsspiegel). Der Marketplace in Home Assistant 2026.11 lässt nur zu, dass ein Eintrag eine Integration besitzt, sodass dort keiner von beiden HA-MCP aktualisieren kann; HACS aktualisiert zwar weiterhin, aber das Upgrade auf 2026.11 würde HA-MCP festhängen lassen.\n\nDurch Absenden wird **{keep}** beibehalten – der Eintrag im Standardkatalog, der kein benutzerdefiniertes Repository benötigt –, und der andere Eintrag wird als nicht installiert markiert. Es wird nichts gelöscht: Deine HA-MCP-Einträge, Einstellungen und Dateien bleiben exakt so, wie sie sind, und ab jetzt erscheinen Updates wie gewohnt unter {keep}."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP ist jetzt von einem Store-Eintrag installiert; es gibt nichts zu beheben.",
+          "store_unavailable": "Der Store (HACS oder der Marketplace) ist noch nicht geladen, daher können die Einträge nicht überprüft werden. Versuche es in wenigen Minuten noch einmal."
+        }
+      }
     }
   },
   "selector": {

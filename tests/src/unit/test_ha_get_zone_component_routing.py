@@ -440,7 +440,7 @@ async def test_missing_covered_types_falls_back_to_legacy() -> None:
 
 
 class _IconRegistryClient(RoutingClient):
-    """zone.work's registry entry sets the icon a zone tool gave it (#2643)."""
+    """zone.work's registry entry sets an icon override over its stored icon."""
 
     def __init__(self, registry_ok: bool = True) -> None:
         super().__init__()
@@ -455,27 +455,6 @@ class _IconRegistryClient(RoutingClient):
                 "result": [{**_WORK_REGISTRY_ENTRY, "icon": "mdi:star"}],
             }
         return await super().send_websocket_message(msg)
-
-
-@pytest.mark.parametrize("served_by", ["component", "legacy"])
-@pytest.mark.asyncio
-async def test_a_zone_shows_the_icon_its_registry_entry_sets(served_by: str) -> None:
-    """The entity shows its registry icon over the stored one, so the listing
-    does too: a zone read back after ha_set_zone set an icon has it."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS if served_by == "component" else None,
-        info_exc=None
-        if served_by == "component"
-        else HomeAssistantCommandError("Command failed: no info", "unknown_command"),
-        cmd_result=_component_zone_result(),
-    )
-    get_zone = _build_get_zone(_IconRegistryClient())
-
-    with patch_ws(ws, tools_zones):
-        resp = await get_zone(zone_id="work")
-
-    assert resp["zone"]["icon"] == "mdi:star"
 
 
 @pytest.mark.asyncio
@@ -526,3 +505,47 @@ async def test_a_dropped_registry_read_keeps_the_component_listing() -> None:
 
     assert resp["count"] == 2
     assert any("socket closed" in w for w in resp["warnings"])
+
+
+class _OccupiedClient(RoutingClient):
+    """Anna is in zone.work; nobody is home. ``fail`` drops the state read."""
+
+    def __init__(self, fail: bool = False) -> None:
+        super().__init__()
+        self._fail = fail
+
+    async def get_states(self) -> list[dict[str, Any]]:
+        if self._fail:
+            raise HomeAssistantConnectionError("states down")
+        return [
+            {
+                "entity_id": "zone.work",
+                "attributes": {**_LEGACY_STORAGE_ZONE, "persons": ["person.anna"],
+                               "device_trackers": ["device_tracker.work_phone"],
+                               "friendly_name": "Work"},
+            },
+            {
+                "entity_id": "zone.home",
+                "attributes": {"latitude": 41.0, "longitude": -73.0, "radius": 100,
+                               "passive": False, "persons": [],
+                               "device_trackers": ["device_tracker.tablet"],
+                               "editable": True,
+                               "icon": "mdi:home", "friendly_name": "Home"},
+            },
+        ]  # fmt: skip
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_state_names_the_missing_persons() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_zone_result(),
+    )
+    get_zone = _build_get_zone(_OccupiedClient(fail=True))
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    assert resp["count"] == 2
+    assert any("persons" in w and "states down" in w for w in resp["warnings"])

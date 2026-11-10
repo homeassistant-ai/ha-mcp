@@ -1,6 +1,6 @@
 """Opt-in environment knobs that trade E2E container boot time for reliability.
 
-Both knobs are inert when unset: the defaults are the values every lane has
+All knobs are inert when unset: the defaults are the values every lane has
 always used.
 
 ``HA_E2E_PIP_CACHE``
@@ -21,8 +21,18 @@ always used.
     (QEMU) lanes keep their own budgets: a VM boot is bounded by the image, not
     by a pip window, so this knob would be the wrong lever there.
 
-Resolution lives here rather than in the fixtures so the timeout budget and the
-pip-cache assembly can be asserted without Docker.
+``HA_E2E_BASE_HOST``
+    Host name used in the testcontainer's ``base_url``. The default is
+    ``localhost``; set it when pytest itself runs inside a container and
+    reaches the sibling testcontainer through the Docker host address
+    (typically the bridge gateway) rather than through its own localhost.
+    Only the host is replaced: the port stays the one testcontainers resolves
+    for its connection mode — the published host port when it maps ports, the
+    container port (8123) when it connects through the container's bridge IP —
+    so give the host that reaches that port.
+
+Resolution lives here rather than in the fixtures so the boot knobs can be
+asserted without Docker.
 """
 
 from __future__ import annotations
@@ -35,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 PIP_CACHE_ENV_VAR = "HA_E2E_PIP_CACHE"
 READY_TIMEOUT_ENV_VAR = "HA_E2E_READY_TIMEOUT"
+BASE_HOST_ENV_VAR = "HA_E2E_BASE_HOST"
 
 # pip's cache directory inside the Home Assistant container image. The upstream
 # image sets no ``USER`` (it runs as root), and neither
@@ -114,3 +125,8 @@ def resolve_ready_timeout(default: int) -> int:
         default,
     )
     return timeout
+
+
+def resolve_base_host() -> str:
+    """Host used in the testcontainer URL: ``HA_E2E_BASE_HOST`` or ``localhost``."""
+    return os.environ.get(BASE_HOST_ENV_VAR, "localhost").strip() or "localhost"

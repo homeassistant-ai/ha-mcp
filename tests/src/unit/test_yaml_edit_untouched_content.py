@@ -15,40 +15,21 @@ Covers both layers of the fix:
 """
 
 import asyncio
-import sys
 from io import StringIO
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock as MM
 
 import pytest
+from ruamel.yaml import YAML
 
-# Mock HA imports before importing the module
-sys.modules["voluptuous"] = MagicMock()
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.components"] = MagicMock()
-sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
-sys.modules["homeassistant.config"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function (production code decorates real closures with
-# it - a clobbered auto-mock attribute would silently replace them). This
-# file doesn't care what's already there, only that something importable is.
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
-sys.modules["homeassistant.helpers.storage"] = MagicMock()
-sys.modules["homeassistant.loader"] = MagicMock()
-
-from ruamel.yaml import YAML  # noqa: E402
-
-from custom_components.ha_mcp_tools import (  # noqa: E402
+from custom_components.ha_mcp_tools import (
     CALLER_TOKEN_FIELD,
     _build_edit_yaml_config_handler,
 )
-from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
-from custom_components.ha_mcp_tools.yaml_rt import make_yaml  # noqa: E402
-from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
+from custom_components.ha_mcp_tools.const import DOMAIN
+from custom_components.ha_mcp_tools.yaml_rt import make_yaml
+from custom_components.ha_mcp_tools.yaml_rt import (
     yaml_dumps as real_yaml_dumps,
 )
 

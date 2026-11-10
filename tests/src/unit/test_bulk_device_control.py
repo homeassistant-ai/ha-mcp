@@ -362,11 +362,12 @@ class TestRegisteredBulkToolCompatibility:
                         "timeout_seconds": 10**400,
                     },
                     # json.loads raises RecursionError past the interpreter
-                    # depth limit; that too must skip the row, not the batch.
+                    # depth limit (Python 3.14 parses 50,000 levels, not
+                    # 200,000); that too must skip the row, not the batch.
                     {
                         "entity_id": "light.deep_parameters",
                         "action": "off",
-                        "parameters": "[" * 50_000 + "]" * 50_000,
+                        "parameters": "[" * 200_000 + "]" * 200_000,
                     },
                     # A direct Python caller can pass a non-string key; mixed
                     # key types must not make sorted()/join() abort the batch.

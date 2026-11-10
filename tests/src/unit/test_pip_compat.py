@@ -6,12 +6,8 @@ from typing import Any
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
-from custom_components.ha_mcp_tools import pip_compat  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_server as es
+from custom_components.ha_mcp_tools import pip_compat
 
 
 def test_embedded_server_uses_the_compat_wrapper() -> None:

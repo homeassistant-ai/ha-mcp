@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -64,15 +65,14 @@ from .entry_device import async_register_entry_device
 # several homeassistant.* submodules (auth, requirements, util.package,
 # components.http/webhook, components.websocket_api, half a dozen helpers) that
 # the entry-point wiring here never touches directly, so a top-level import
-# would make importing this package require that whole stack — breaking
-# hermetic unit tests that stub only the modules they use.
+# would load that whole stack for everything that imports this module for its
+# helpers: the access switch, diagnostics and the options flow.
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
-# The access switch (#2801). Plain strings: Home Assistant accepts them, and
-# the unit tests' ``homeassistant.const`` stubs carry no ``Platform``.
-_PLATFORMS = ("switch",)
+# The access switch (#2801).
+_PLATFORMS = [Platform.SWITCH]
 
 
 async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

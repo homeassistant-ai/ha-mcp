@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+import voluptuous as vol
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
@@ -18,7 +19,6 @@ from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_component_integration_commands import _execute, _hass
-from .test_component_ws_search import _REAL_VOL
 
 _NOT_EXPOSED = (
     "The installed component does not expose the listing of an "
@@ -330,7 +330,7 @@ async def test_server_bridge_reaches_the_component_producer(
     from custom_components.ha_mcp_tools import websocket_api as wsapi
     from ha_mcp.tools import component_api, core_contract
 
-    hass = _hass(knx__delete_entity=_REAL_VOL.Schema({}))
+    hass = _hass(knx__delete_entity=vol.Schema({}))
     execute = _execute()
 
     async def send_command(name: str, **params: Any) -> dict[str, Any]:

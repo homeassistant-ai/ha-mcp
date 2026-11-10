@@ -143,7 +143,7 @@ async def test_on_demand_capture_of_a_refused_path_reports_the_refusal() -> None
 
 
 def test_suggestion_rules_match_the_component_allowlist() -> None:
-    # Loaded by file path: importing the package would need the HA stubs.
+    # Loaded by file path, without importing the component package.
     const_py = Path(__file__).parents[3] / "custom_components/ha_mcp_tools/const.py"
     spec = importlib.util.spec_from_file_location("_component_const", const_py)
     assert spec is not None and spec.loader is not None

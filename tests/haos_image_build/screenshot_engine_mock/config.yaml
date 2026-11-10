@@ -15,7 +15,7 @@ description: >-
 arch:
   - aarch64
   - amd64
-# python:3.13-slim is not an HA base image (no s6 init), so run our own CMD.
+# python:3.14-slim is not an HA base image (no s6 init), so run our own CMD.
 init: false
 ports:
   "10000/tcp": 10000

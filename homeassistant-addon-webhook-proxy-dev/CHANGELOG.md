@@ -9,6 +9,22 @@ history from before the fork.
 -->
 
 
+## v3.0.6.dev2 (2026-11-09)
+
+- The app (add-on) image is built on Python 3.14 (`python:3.14-slim`).
+
+
+## v3.0.6.dev1 (2026-11-09)
+
+Version line rebased onto stable 3.0.5 by the promotion workflow. The tool
+catalog suffixes, the `ha_auth` fix for Home Assistant serving HTTPS itself,
+the Claude.ai connector steps, the `PYTHON_BASE` build argument and the Core
+2026.11 type annotations developed through 3.0.5.dev6 now ship in stable 3.0.5.
+See the [stable release notes](../homeassistant-addon-webhook-proxy/CHANGELOG.md#v305-2026-11-09).
+Dev and stable runtime code are equivalent apart from flavor identity at this
+promotion.
+
+
 ## v3.0.5.dev6 (2026-11-08)
 
 - Type annotations match Home Assistant Core 2026.11's own types (repairs

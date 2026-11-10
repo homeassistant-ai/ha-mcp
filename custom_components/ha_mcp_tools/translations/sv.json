@@ -185,6 +185,21 @@
           "entry_removed": "HA-MCP Server-posten finns inte längre."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP är installerat från två butiksposter",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Behåll HA-MCP på en butikspost?",
+            "description": "HA-MCP är markerat som installerat från både {records}. De innehåller samma integration (den andra är den äldre distributionsspegeln). Marketplace i Home Assistant 2026.11 tillåter endast att en post äger en integration, så där kan ingen av dem uppdatera HA-MCP; HACS uppdaterar fortfarande, men uppgraderingen till 2026.11 skulle göra att HA-MCP fastnar.\n\nGenom att skicka in behålls **{keep}**, posten i standardkatalogen som inte behöver något anpassat förråd, och den andra posten markeras som ej installerad. Ingenting raderas: dina HA-MCP-poster, inställningar och filer förblir exakt som de är, och från och med nu visas uppdateringar under {keep} som vanligt."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP är installerat från en butikspost nu; inget att åtgärda.",
+          "store_unavailable": "Butiken (HACS eller Marketplace) har inte lästs in än, så posterna kan inte kontrolleras. Försök igen om några minuter."
+        }
+      }
     }
   },
   "selector": {

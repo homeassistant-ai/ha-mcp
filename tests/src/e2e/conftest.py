@@ -23,6 +23,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import AsyncGenerator, Iterator
@@ -64,6 +65,7 @@ from ._conftest_haos import (
     _haos_post_boot_setup,
     _prepare_haos_image,
 )
+from ._conftest_knobs import resolve_base_host
 from ._conftest_readiness import (
     _HA_CONTAINER_KEY,
     pytest_runtest_makereport,  # noqa: F401  (pytest hook)
@@ -243,8 +245,16 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
     # into this same testcontainer and drive it over its ingress webhook. The
     # wheel name is captured here and consumed by the entrypoint preinstall below.
     embedded = _is_embedded_backend_selected()
-    config_path, temp_dir, local_blueprint, embedded_wheel_name = (
-        _prepare_testcontainer_config(embedded)
+    # The staged config can hold an injected GITHUB_TOKEN (see
+    # ``_prepare_testcontainer_config``), and staging itself can fail partway.
+    # Create the directory here and register its removal first, so pytest
+    # removes it however this fixture ends, setup failures included. The
+    # finalizer also runs after the ``with container:`` block has stopped Home
+    # Assistant, so the bind mount is released before the directory goes away.
+    temp_dir = Path(tempfile.mkdtemp(prefix="ha_e2e_test_"))
+    request.addfinalizer(partial(shutil.rmtree, temp_dir, ignore_errors=True))
+    config_path, local_blueprint, embedded_wheel_name = _prepare_testcontainer_config(
+        embedded, temp_dir
     )
 
     container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
@@ -277,7 +287,7 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
 
         # Get the dynamically assigned port
         host_port = container.get_exposed_port(8123)
-        base_url = f"http://localhost:{host_port}"
+        base_url = f"http://{resolve_base_host()}:{host_port}"
 
         # Set environment variables for the dynamic URL so WebSocket client uses correct port
         os.environ["HOMEASSISTANT_URL"] = base_url
@@ -361,7 +371,9 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
             # ``remove(force=True)`` and is non-idempotent — a second call
             # from the enclosing ``with container:`` ``__exit__`` raises
             # ``docker.errors.NotFound`` at session teardown.
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            #
+            # The staged config is removed by the finalizer registered above,
+            # which also covers setup failures that never reach this block.
             logger.info("✅ Cleanup completed")
 
 

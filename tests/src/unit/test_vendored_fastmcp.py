@@ -51,6 +51,16 @@ def _declared() -> list[Requirement]:
     return [Requirement(d) for d in pyproject["project"]["dependencies"]]
 
 
+_PYTHON_CLASSIFIER = "Programming Language :: Python :: "
+_SUPPORTED_PYTHONS = [
+    c.removeprefix(_PYTHON_CLASSIFIER)
+    for c in tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text("utf-8"))[
+        "project"
+    ]["classifiers"]
+    if c.startswith(_PYTHON_CLASSIFIER) and c.count(".") == 1
+]
+
+
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
 class TestVendoredTreeMatchesPin:
     def test_marker_matches_the_pin(self, spec):
@@ -186,7 +196,7 @@ def _ceiling(requirement: Requirement) -> Version | None:
 
 
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
-@pytest.mark.parametrize("python_version", ["3.13", "3.14"])
+@pytest.mark.parametrize("python_version", _SUPPORTED_PYTHONS)
 @pytest.mark.parametrize("sys_platform", ["linux", "darwin", "win32"])
 def test_pyproject_covers_each_vendored_runtime_requirement(
     spec, python_version, sys_platform

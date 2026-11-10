@@ -39,8 +39,12 @@ automatically on the next clean start.
 
 ### Connecting from Claude.ai (web)
 
-1. In Claude.ai, go to **Settings → Connectors → Add custom connector**, give it a name, paste the remote URL, and click **Add**.
-2. **Click _Connect_ on the new connector.** This step is required — adding the connector does not connect it. With OAuth enabled this opens the consent page; click **Allow** to finish. (With OAuth off there is no consent page and it connects directly.)
+1. In Claude.ai, open the connector form for your plan:
+   - **Individual plan:** **Settings** → **Customize** → **Add** → **Add custom connector** (the entry point can differ by browser; on accounts with the new Plugins page, **Customize** reads **Plugins**).
+   - **Team or Enterprise plan:** an Owner or Primary Owner goes to **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**. With OAuth off, the remote URL is the only credential, and in `legacy` mode the Client ID and Secret the owner enters are, so every member who connects it gets this server's Home Assistant access without signing in. In `ha_auth` mode (see below) each member signs in to Home Assistant, but any account that can sign in gets the same admin-equivalent access, not its own Home Assistant permissions.
+
+   Give it a name, paste the remote URL, and click **Continue**. Claude detects the server and selects the sign-in settings; keep them (the OAuth modes below say what to expect) and click **Add**.
+2. **If the connector shows a _Connect_ button, click it.** Adding the connector does not always connect it. With OAuth enabled this opens the consent page; click **Allow** to finish. (With OAuth off there is no consent page.) On a Team or Enterprise plan, members then find the connector under **Customize** → **Connectors** (under **Plugins** on accounts with the new Plugins page) and click **Connect** themselves.
 3. Claude.ai may briefly show *"Couldn't reach the MCP server"* — this is often a harmless artifact of the initial handshake. Check whether the connector actually shows as connected before assuming it failed.
 
 > **Reachability check:** Claude.ai connects from Anthropic's servers, not from your computer — so the URL must be reachable from the public internet, not just your LAN. If a connection won't establish, open the remote URL on your **phone with Wi-Fi turned off** (cellular only). If it doesn't load there, the URL isn't publicly reachable (a DNS, port-forward, TLS, or reverse-proxy problem) and Claude.ai can't reach it either — fix that first.
@@ -135,7 +139,7 @@ If you want a real auth layer on top of the URL secret, turn on **Enable OAuth (
 The proxy has three live OAuth behaviors. When OAuth protection is enabled, choose one of the two protected modes with **OAuth Mode (Beta)**:
 
 - **None mode (OAuth protection off)** — the secret webhook URL remains the only credential. OAuth discovery, stateless registration, and an invisible public-PKCE exchange are available for client compatibility, but the resulting token is not checked by the webhook.
-- **`ha_auth` (recommended, the default for a first-time enable)** — Home Assistant itself is the authorization server. You sign in with your Home Assistant account and **leave the connector's OAuth fields blank** (Claude.ai auto-detects **Always required** + **Use Anthropic's hosted client metadata** — keep both). No Client ID or Client Secret, works with any hostname/URL, and no Home Assistant restart is needed to enable or disable it.
+- **`ha_auth` (recommended, the default for a first-time enable)** — Home Assistant itself is the authorization server. You sign in with your Home Assistant account and **leave the connector's OAuth fields blank** (Claude.ai auto-detects **Sign in now** or **Sign in when needed**, plus **Use Claude's published identity** — keep both). No Client ID or Client Secret, works with any hostname/URL, and no Home Assistant restart is needed to enable or disable it.
 - **`legacy` (deprecated)** — the previous flow, where the app generates a Client ID + Secret you paste into the connector.
 
 > **Upgrading? Your OAuth setup is not changed.** If you already used the legacy flow (you set a Client ID/Secret, or the app stored one), leaving **OAuth Mode** unset keeps you on **legacy** — nothing breaks. New/first-time enables default to **ha_auth**. Switching modes is an explicit action (set **OAuth Mode**) and, because Claude.ai binds the auth mode per connector, requires **deleting and re-adding your MCP connector**.
@@ -168,7 +172,7 @@ Set **OAuth Mode** to `legacy` (or leave it unset if you are upgrading an existi
      Use your own OAuth client).
    ```
 5. In your MCP client, configure the OAuth fields:
-   - **Claude.ai:** when adding the connector, on the second wizard step keep **Authentication: Always required**, pick **OAuth client: Use your own OAuth client**, and paste the Client ID and Client Secret. Click **Add**, then the connector's **Connect** button — Claude.ai completes the rest (consent screen → token exchange → bearer token).
+   - **Claude.ai:** when adding the connector, after **Continue** keep the sign-in option Claude detected (**Sign in now** or **Sign in when needed**), pick **OAuth client: Use your own OAuth client**, and paste the Client ID and Client Secret. Click **Add**, then the connector's **Connect** button if it shows one — Claude.ai completes the rest (consent screen → token exchange → bearer token).
    - **Other clients:** configure the same Client ID + Client Secret in the client's OAuth settings if it supports OAuth 2.1 with manual client registration.
 
 The generated values are persisted at `/data/oauth_creds.json` inside the app, so they stay the same across restarts.
@@ -369,4 +373,13 @@ Append `/readonly` to your webhook URL to hide write tools and block write calls
 for that connection. It uses the same webhook secret and OAuth login. The normal
 URL keeps its usual access; this is a client mode, not a separate credential
 permission. Both this app (add-on) and the target MCP server need a version that
+supports the suffix. Reconnect your client after changing its URL.
+
+### Per-URL tool catalog
+
+Append `/catalog/full` or `/catalog/search` to your webhook URL, alone or after
+`/readonly` (`/readonly/catalog/search`), to give that client a fixed tool
+catalog: the full tool list, or ha-mcp's search tools. The plain URL follows the
+server's `enable_tool_search` option. It uses the same webhook secret and OAuth
+login. Both this app (add-on) and the target MCP server need a version that
 supports the suffix. Reconnect your client after changing its URL.

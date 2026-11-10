@@ -2,67 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from io import StringIO
-from unittest.mock import MagicMock
 
 import pytest
 
-# Mock Home Assistant imports so the package __init__ can be loaded.
-sys.modules["voluptuous"] = MagicMock()
-homeassistant = MagicMock()
-sys.modules["homeassistant"] = homeassistant
-sys.modules["homeassistant.components"] = homeassistant.components
-sys.modules["homeassistant.config"] = homeassistant.config
-sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function (production code decorates real closures with
-# it - a clobbered auto-mock attribute would silently replace them). This
-# file doesn't care what's already there, only that something importable is.
-sys.modules.setdefault("homeassistant.core", homeassistant.core)
-sys.modules["homeassistant.helpers"] = homeassistant.helpers
-sys.modules["homeassistant.helpers.config_validation"] = (
-    homeassistant.helpers.config_validation
-)
-# The package __init__ also imports these; without them this file only
-# collects cleanly when an earlier test file has already mocked them.
-sys.modules["homeassistant.components.persistent_notification"] = (
-    homeassistant.components.persistent_notification
-)
-sys.modules["homeassistant.helpers.storage"] = homeassistant.helpers.storage
-sys.modules["homeassistant.loader"] = homeassistant.loader
-
-# annotatedyaml is a Home Assistant runtime dependency, so the component imports
-# FastSafeLoader directly. Stub its constructor registry before importing yaml_rt.
-annotatedyaml = types.ModuleType("annotatedyaml")
-annotatedyaml_loader = types.ModuleType("annotatedyaml.loader")
-
-
-class _FastSafeLoader:
-    pass
-
-
-_FastSafeLoader.yaml_constructors = {
-    "!include": None,
-    "!include_dir_list": None,
-    "!include_dir_named": None,
-    "!include_dir_merge_list": None,
-    "!include_dir_merge_named": None,
-    "!secret": None,
-    "!env_var": None,
-    "!input": None,
-    "!future": None,
-    "tag:yaml.org,2002:str": None,
-}
-annotatedyaml_loader.FastSafeLoader = _FastSafeLoader
-annotatedyaml.loader = annotatedyaml_loader
-annotatedyaml.Secrets = MagicMock
-annotatedyaml.SECRET_YAML = "secrets.yaml"
-sys.modules["annotatedyaml"] = annotatedyaml
-sys.modules["annotatedyaml.loader"] = annotatedyaml_loader
-
-from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
+from custom_components.ha_mcp_tools.yaml_rt import (
     _HA_TAGS,
     _TaggedScalar,
     find_yaml_key_files,

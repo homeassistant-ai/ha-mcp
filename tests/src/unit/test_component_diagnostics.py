@@ -1,7 +1,6 @@
 """Unit tests for the component's "Download diagnostics" handler (#2584).
 
-Home Assistant is stubbed via ``_embedded_stubs``. Startup errors are filed
-through the real ``embedded_setup._create_issue`` into a recording issue
+Startup errors are filed through the real ``embedded_setup._create_issue`` into a recording issue
 registry, so the handler reads the placeholder shape bring-up actually writes.
 """
 
@@ -13,14 +12,10 @@ from typing import Any
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.diagnostics as diag  # noqa: E402
-import custom_components.ha_mcp_tools.embedded_server as eserver  # noqa: E402
-import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.diagnostics as diag
+import custom_components.ha_mcp_tools.embedded_server as eserver
+import custom_components.ha_mcp_tools.embedded_setup as esetup
+from custom_components.ha_mcp_tools.const import (
     CONF_ENTRY_TYPE,
     DATA_ACCESS_ENABLED,
     DATA_ACCESS_TOKEN,

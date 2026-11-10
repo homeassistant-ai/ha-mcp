@@ -10,13 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ._embedded_stubs import install
+from custom_components.ha_mcp_tools.const import DATA_MANAGER, DOMAIN
 
-install()
-
-from custom_components.ha_mcp_tools.const import DATA_MANAGER, DOMAIN  # noqa: E402
-
-from .test_embedded_setup import (  # noqa: E402
+from .test_embedded_setup import (
     _make_entry,
     _make_hass,
     esetup,

@@ -185,6 +185,21 @@
           "entry_removed": "La voce del server HA-MCP non esiste più."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP è installato da due elenchi dello store",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Mantieni HA-MCP su un solo elenco dello store?",
+            "description": "HA-MCP risulta installato da entrambi i seguenti {records}. Contengono la stessa integrazione (il secondo è il mirror di distribuzione precedente). Il Marketplace in Home Assistant 2026.11 consente a un solo elenco di gestire un'integrazione, quindi nessuno dei due può aggiornare HA-MCP in quel modo; HACS continua ad aggiornare, ma l'aggiornamento a 2026.11 lascerebbe HA-MCP bloccato.\n\nInviando mantieni **{keep}**, l'elenco nel catalogo predefinito che non richiede un repository personalizzato, e contrassegna l'altro elenco come non installato. Non viene eliminato nulla: le tue voci, impostazioni e file di HA-MCP rimangono esattamente come sono e d'ora in poi gli aggiornamenti verranno visualizzati in {keep} come di consueto."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP è ora installato da un solo elenco dello store; non c'è nulla da correggere.",
+          "store_unavailable": "Lo store (HACS o il Marketplace) non è ancora caricato, quindi non è possibile controllare gli elenchi. Riprova tra qualche minuto."
+        }
+      }
     }
   },
   "selector": {

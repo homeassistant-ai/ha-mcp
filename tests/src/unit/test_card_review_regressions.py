@@ -1,7 +1,6 @@
 """Human-review regressions reproduced against the live HA runner."""
 
 import asyncio
-import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -328,10 +327,8 @@ async def test_optional_runtime_install_uses_ha_manager_and_failure_is_advisory(
     from custom_components.ha_mcp_tools import card_runtime as runtime
 
     install = AsyncMock(side_effect=RuntimeError("no compatible wheel"))
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.requirements",
-        SimpleNamespace(async_process_requirements=install),
+    monkeypatch.setattr(
+        "homeassistant.requirements.async_process_requirements", install
     )
     monkeypatch.setattr(runtime, "_check_core_constraints", lambda: None)
     monkeypatch.setattr(runtime, "_provider_state", lambda: "missing")
@@ -382,10 +379,8 @@ async def test_skip_pip_never_installs_but_allows_compatible_provider(
     from custom_components.ha_mcp_tools import card_runtime as runtime
 
     install = AsyncMock()
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.requirements",
-        SimpleNamespace(async_process_requirements=install),
+    monkeypatch.setattr(
+        "homeassistant.requirements.async_process_requirements", install
     )
     monkeypatch.setattr(runtime, "_check_core_constraints", lambda: None)
     monkeypatch.setattr(runtime, "_provider_state", lambda: state)

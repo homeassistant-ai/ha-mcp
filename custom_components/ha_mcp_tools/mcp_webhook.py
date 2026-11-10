@@ -916,7 +916,9 @@ async def async_register_webhook(
                 DOMAIN,
                 _WEBHOOK_NAME,
                 webhook_id,
-                _async_handle_webhook,
+                # Core types a webhook handler as returning a Response; the SSE
+                # branch returns a StreamResponse, which aiohttp serves the same way.
+                _async_handle_webhook,  # type: ignore[arg-type]
                 allowed_methods=["POST", "GET"],
             )
             register_readonly_webhook(hass, webhook_id, _async_handle_webhook)

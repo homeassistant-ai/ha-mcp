@@ -22,13 +22,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ._embedded_stubs import install, no_direct_listener_helpers  # noqa: F401
+from custom_components.ha_mcp_tools.const import OPT_SERVER_URL
 
-install()
-
-from custom_components.ha_mcp_tools.const import OPT_SERVER_URL  # noqa: E402
-
-from .test_embedded_server import (  # noqa: E402
+from ._embedded_helpers import no_direct_listener_helpers  # noqa: F401
+from .test_embedded_server import (
     _manager,
     _no_manifest_pin,  # noqa: F401 - autouse fixture
     _stub_ha_mcp_surface,

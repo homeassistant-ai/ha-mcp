@@ -11,7 +11,6 @@ import importlib.metadata
 import importlib.util
 import logging
 import os
-import platform
 import sys
 import time
 from pathlib import Path
@@ -35,6 +34,7 @@ from ..mcp_client_context import (
     protocol_version,
 )
 from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
+from ..update_check import python_upgrade_hint
 from ..utils.mcp_client_host import detect_client_host
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
@@ -47,6 +47,7 @@ from .bug_report_sources import (
     _fetch_addon_logs,
     _fetch_core_error_log,
     collect_known_identifiers,
+    detect_platform,
     fetch_ha_install,
 )
 from .bug_report_templates import (
@@ -200,17 +201,6 @@ def _instance_identity() -> dict[str, Any]:
         "instance_id": _PROCESS_INSTANCE_ID,
         "started_at": _PROCESS_STARTED_AT,
         "uptime_seconds": round(time.time() - _PROCESS_STARTED_AT, 1),
-    }
-
-
-def _detect_platform() -> dict[str, str]:
-    """Detect platform information."""
-    return {
-        "os": platform.system(),  # Windows, Darwin, Linux
-        "os_release": platform.release(),
-        "os_version": platform.version(),
-        "architecture": platform.machine(),
-        "python_version": platform.python_version(),
     }
 
 
@@ -766,7 +756,7 @@ class BugReportTools:
                     "startup_log_count, formatted_report, issue_title, "
                     "issue_body, issue_url, anonymization_guide, "
                     "duplicate_check_urls, missing_tool_hint, "
-                    "known_client_issues_hint, instructions."
+                    "known_client_issues_hint, python_upgrade_hint, instructions."
                 ),
             ),
         ] = None,
@@ -819,7 +809,7 @@ class BugReportTools:
 
         # Detect installation method, platform, and runtime config.
         install_method = _detect_installation_method()
-        platform_info = _detect_platform()
+        platform_info = detect_platform()
         config_toggles = _get_config_toggles()
         tool_policy = await asyncio.to_thread(_tool_policy_summary)
         mcp_transport = _detect_mcp_transport()
@@ -989,6 +979,7 @@ class BugReportTools:
                 "duplicate_check_urls": duplicate_check_urls,
                 "missing_tool_hint": MISSING_TOOL_HINT,
                 "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
+                "python_upgrade_hint": python_upgrade_hint(),
                 "instructions": (
                     "WORKFLOW FOR FILING A REPORT:\n\n"
                     "0. **PRE-CHECK — missing tool or unknown parameter?** If the "
@@ -1004,6 +995,8 @@ class BugReportTools:
                     "bug with an upstream ticket. See the `known_client_issues_hint` "
                     "field for the workaround to give the user, and only continue "
                     "if the problem persists after it.\n\n"
+                    "0c. **Python upgrade?** If `python_upgrade_hint` is set, pass "
+                    "it on to the user, whatever the report is about.\n\n"
                     "1. **Check for duplicates FIRST**:\n"
                     "   - Use the duplicate_check_urls to search for similar issues\n"
                     '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'

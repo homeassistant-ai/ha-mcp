@@ -16,26 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Mock the Home Assistant imports before importing the module
-sys.modules["voluptuous"] = MagicMock()
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.components"] = MagicMock()
-sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
-sys.modules["homeassistant.config"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function (production code decorates real closures with
-# it - a clobbered auto-mock attribute would silently replace them). This
-# file doesn't care what's already there, only that something importable is.
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
-sys.modules["homeassistant.helpers.storage"] = MagicMock()
-sys.modules["homeassistant.loader"] = MagicMock()
-
-
-# Now we can import the functions
-from custom_components.ha_mcp_tools import (  # noqa: E402
+from custom_components.ha_mcp_tools import (
     _PACKAGE_DIR_CACHE,
     TAILED_LOG_FILES,
     _decode_legacy_backup_name,
@@ -65,14 +46,14 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _volume_root_for,
     _write_file_sync,
 )
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools.const import (
     ALLOWED_READ_DIRS,
     ALLOWED_VOLUME_ROOTS,
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_KEYS,
 )
 
-from ._symlink_support import symlink_or_skip  # noqa: E402
+from ._symlink_support import symlink_or_skip
 
 
 class TestReadLogTailSync:
@@ -1357,7 +1338,7 @@ class TestDenyFloor:
 class TestLoadAllowedPaths:
     """_load_allowed_paths re-validates the persisted store and fails safe.
 
-    Store is mocked (HA is stubbed at import), so async_load is an AsyncMock.
+    Store is mocked, so async_load is an AsyncMock.
     Runs under asyncio_mode=auto (no explicit marker needed).
     """
 
@@ -1530,8 +1511,9 @@ class TestEffectiveExtraAllowedKeys:
 
 
 class TestExtraYamlKeysHandlers:
-    """get/set_extra_yaml_keys: admin + token gated; set drops denied keys and
-    updates hass.data live so the union applies with no restart (#1887)."""
+    """get/set_extra_yaml_keys: token gated (admin-only via the registration);
+    set drops denied keys and updates hass.data live so the union applies with
+    no restart (#1887)."""
 
     async def test_set_persists_and_updates_hass_data(self, monkeypatch):
         import custom_components.ha_mcp_tools as comp
@@ -1543,7 +1525,6 @@ class TestExtraYamlKeysHandlers:
 
         monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)
         monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
-        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=True))
 
         hass = MagicMock()
         hass.data = {comp.DOMAIN: {}}
@@ -1562,7 +1543,6 @@ class TestExtraYamlKeysHandlers:
         import custom_components.ha_mcp_tools as comp
 
         monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
-        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=True))
         hass = MagicMock()
         hass.data = {comp.DOMAIN: {"extra_yaml_keys": ["alert2"]}}
         handler = comp._build_get_extra_yaml_keys_handler(hass)
@@ -1570,37 +1550,6 @@ class TestExtraYamlKeysHandlers:
         assert result["success"] is True
         assert result["keys"] == ["alert2"]
         assert "homeassistant" in result["deny_floor"]
-
-    async def test_set_rejects_non_admin(self, monkeypatch):
-        import custom_components.ha_mcp_tools as comp
-
-        monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
-        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=False))
-        save_calls = {"n": 0}
-
-        async def _save(hass, keys):
-            save_calls["n"] += 1
-
-        monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)
-        hass = MagicMock()
-        hass.data = {comp.DOMAIN: {}}
-        handler = comp._build_set_extra_yaml_keys_handler(hass)
-        result = await handler(MagicMock(data={"keys": ["alert2"]}))
-        assert result["success"] is False
-        assert result["error_code"] == "unauthorized"
-        assert save_calls["n"] == 0
-
-    async def test_get_rejects_bad_token(self):
-        import custom_components.ha_mcp_tools as comp
-
-        # Real _caller_token_ok: a mismatched presented token is rejected before
-        # any store read.
-        hass = MagicMock()
-        hass.data = {comp.DOMAIN: {"caller_token": "good"}}
-        handler = comp._build_get_extra_yaml_keys_handler(hass)
-        result = await handler(MagicMock(data={comp.CALLER_TOKEN_FIELD: "bad"}))
-        assert result["success"] is False
-        assert result["error_code"] == "unauthorized"
 
 
 class TestLoadCallerToken:

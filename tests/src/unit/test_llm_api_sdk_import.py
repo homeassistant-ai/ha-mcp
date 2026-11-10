@@ -10,11 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import llm_api  # noqa: E402
+from custom_components.ha_mcp_tools import llm_api
 
 
 def test_warm_up_imports_jsonschema_off_the_loop(

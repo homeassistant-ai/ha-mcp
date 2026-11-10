@@ -12,16 +12,13 @@ from typing import Any
 
 import pytest
 
-from ._embedded_stubs import install
+from custom_components.ha_mcp_tools import llm_api
+from custom_components.ha_mcp_tools.const import EXPOSURE_TOOL_SEARCH
 
-install()
-
-from custom_components.ha_mcp_tools import llm_api  # noqa: E402
-from custom_components.ha_mcp_tools.const import EXPOSURE_TOOL_SEARCH  # noqa: E402
-
-from ._llm_api_helpers import (  # noqa: E402
+from ._llm_api_helpers import (
     CoreToolResult,
     fake_session,
+    llm_context,
     make_api,
     make_hass,
     tool_entry,
@@ -70,7 +67,7 @@ async def _instance(monkeypatch: pytest.MonkeyPatch, tools: list[Any]) -> Any:
     fake_session(monkeypatch, tools=tools)
     return await make_api(
         make_hass(), mode=EXPOSURE_TOOL_SEARCH
-    ).async_get_api_instance(llm_api.llm.LLMContext())
+    ).async_get_api_instance(llm_context())
 
 
 async def _search(
@@ -82,7 +79,7 @@ async def _search(
     return await search.async_call(
         make_hass(),
         llm_api.llm.ToolInput("ha_search_tools", args),
-        llm_api.llm.LLMContext(),
+        llm_context(),
     )
 
 

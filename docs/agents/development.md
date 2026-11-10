@@ -90,6 +90,15 @@ slow host or network:
   falling back to the budget it was meant to escape. CI leaves it unset: its
   runners are not the slow case this knob exists for.
 
+A separate opt-in variable covers containerized pytest runs rather than boot
+time:
+
+- `HA_E2E_BASE_HOST=<host>` replaces `localhost` in the testcontainer URL. Set
+  it when pytest runs inside a container and the sibling testcontainer is
+  reachable through the Docker host address (typically the bridge gateway), not
+  the test process's localhost. Only the host changes; the port is the one
+  testcontainers resolves for its connection mode. CI leaves it unset.
+
 Do not set `HOMEASSISTANT_URL` manually before testcontainer E2E tests.
 `tests/.env.test` contains placeholders, and the fixture supplies the real
 URL dynamically. The shared token is in `tests/test_constants.py`.

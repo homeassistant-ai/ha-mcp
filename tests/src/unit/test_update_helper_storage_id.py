@@ -235,18 +235,22 @@ async def test_a_component_reply_without_an_entity_names_none() -> None:
 
 
 async def test_an_error_names_no_guessed_entity_when_the_component_read_none() -> None:
-    """The component read no entity for zone z: zone.z can be another zone's."""
+    """The component read no entity for zone z: zone.z can be another zone's,
+    so a failed write must not name it."""
     read = AsyncMock(
         return_value={"success": True, "item_id": "z", "item": _STORED_ZONE}
     )
+    write = AsyncMock(
+        return_value={"success": True, "item": _STORED_ZONE, "entity_id": None,
+                      "registry_applied": {}, "warnings": []}
+    )  # fmt: skip
     with (
         patch.object(hc_update, "read_stored_helper_item", read),
-        patch.object(hc_update, "write_helper_item", AsyncMock()),
-        pytest.raises(ToolError) as exc_info,
+        patch.object(hc_update, "write_helper_item", write),
     ):
         await hc_update._execute_update_simple_helper(
-            MagicMock(), "zone", "zone.z", "z", None, "", None, None, None,
-            False, False, {},
+            MagicMock(), "zone", "zone.z", "z", None, None, None, None, None,
+            False, False, {"radius": 50.0},
         )  # fmt: skip
 
-    assert "zone.z" not in str(exc_info.value)
+    assert "zone.z" not in str(write.call_args.kwargs["error_context"])

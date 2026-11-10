@@ -15,6 +15,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..backup_helper_target import stored_target
 from ..client.rest_client import (
+    _NO_ANSWER_ERRORS,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -44,6 +45,9 @@ from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
+
+# The zone state attributes that say who is in the zone.
+_OCCUPANCY_ATTRS = ("persons", "device_trackers")
 
 
 def _build_zone_result(
@@ -133,15 +137,31 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
 def _with_registry_icons(
     rows: list[dict[str, Any]], entries: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """The rows with the icon each zone's entity shows: its registry icon, where
-    the zone tools keep a new zone's icon (#2643), over the stored one."""
+    """The rows with each zone entity's registry icon override as
+    ``entity_icon``, beside the stored ``icon`` the Zones editor shows: the
+    override is what the map and the zone's state show (#3001)."""
     icons = {e.get("entity_id"): e["icon"] for e in entries if e.get("icon")}
     return [
-        {**row, "icon": icons[row["entity_id"]]}
+        {**row, "entity_icon": icons[row["entity_id"]]}
         if row.get("entity_id") in icons
         else row
         for row in rows
     ]
+
+
+def _with_occupancy(
+    rows: list[dict[str, Any]], states: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The rows with who is in each zone, from the zone entity's state: Core
+    puts it there for every zone, stored or not, as the Map panel shows it."""
+    occupancy = {
+        s.get("entity_id"): {
+            key: attrs[key] for key in _OCCUPANCY_ATTRS if key in attrs
+        }
+        for s in states
+        if isinstance(s, dict) and isinstance(attrs := s.get("attributes"), dict)
+    }
+    return [{**row, **occupancy.get(row.get("entity_id"), {})} for row in rows]
 
 
 def _shape_component_zone_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -191,6 +211,11 @@ class ZoneTools:
         settings) and YAML zones, are listed with ``editable=false`` /
         ``source="yaml"``; editable means ha_set_zone and ha_remove_zone can
         change the zone. Each zone carries its entity_id.
+
+        A stored zone's ``icon`` is the one stored in the zone, which the
+        Zones editor shows. ``entity_icon`` is an icon override in the zone
+        entity's registry entry: the map and the zone's state show it instead.
+        Set or clear the override with ha_set_entity.
         """
         try:
             # Prefer the ha_mcp_tools component's helpers_list, one call for
@@ -284,26 +309,69 @@ class ZoneTools:
             entries, registry_error = await self._zone_registry()
         except HomeAssistantConnectionError as exc:
             entries, registry_error = [], str(exc)
-        # The listing is complete without the registry; only its icons are missing.
-        response = _build_zone_result(_with_registry_icons(rows, entries), zone_id)
+        states_error = None
+        try:
+            states = await self._zone_states(
+                [row["entity_id"] for row in rows if row.get("entity_id")]
+            )
+        except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
+            states, states_error = [], str(exc)
+        # The listing is complete without the registry and the states; only
+        # their icons and persons are missing.
+        rows = _with_occupancy(_with_registry_icons(rows, entries), states)
+        response = _build_zone_result(rows, zone_id)
         if registry_error:
             response.setdefault("warnings", []).append(
                 f"Icons set in the entity registry are missing: {registry_error}"
             )
+        if states_error:
+            response.setdefault("warnings", []).append(
+                f"Who is in each zone (persons) is missing: {states_error}"
+            )
         return response
 
-    async def _send_component_zone_list(self) -> dict[str, Any]:
-        """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
-        ws = await get_websocket_client(
+    async def _component_ws(self) -> Any:
+        """The per-client WebSocket the component commands go over."""
+        return await get_websocket_client(
             url=self._client.base_url,
             token=self._client.token,
             verify_ssl=getattr(self._client, "verify_ssl", None),
         )
-        return await ws.send_command(
+
+    async def _send_component_zone_list(self) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
+        ws = await self._component_ws()
+        result: dict[str, Any] = await ws.send_command(
             "ha_mcp_tools/helpers_list",
             helper_types=["zone"],
             include_flow_helpers=False,
         )
+        return result
+
+    async def _zone_states(self, entity_ids: list[str]) -> list[dict[str, Any]]:
+        """The zones' states through the component's targeted read, or every
+        state when the component has no ``states`` command or it fails."""
+        caps = await get_component_caps(self._client)
+        if component_supports(caps, "states"):
+            try:
+                ws = await self._component_ws()
+                raw = await ws.send_command(
+                    "ha_mcp_tools/states", entity_ids=entity_ids
+                )
+                found = (raw.get("result") or {}).get("states")
+                if isinstance(found, dict):
+                    return list(found.values())
+                logger.warning("ha_mcp_tools/states returned a malformed payload")
+            # A raw socket reset reaches here unwrapped (send_command keeps
+            # writes at-most-once), and every state is still readable.
+            except (HomeAssistantCommandError, *_NO_ANSWER_ERRORS) as exc:
+                if is_unknown_command(exc):
+                    invalidate_caps(self._client)
+                logger.warning(
+                    "ha_mcp_tools/states failed; reading all states: %r", exc
+                )
+        states: list[dict[str, Any]] = await self._client.get_states()
+        return states
 
     async def _legacy_zone_result(self, zone_id: str | None) -> dict[str, Any]:
         """Serve ha_get_zone from Core's own commands."""
@@ -314,9 +382,9 @@ class ZoneTools:
         """Storage zones from Core's ``zone/list``, then every other zone state.
 
         A storage row is the stored body with its registry icon; the home
-        zone's and YAML zones' rows are their state attributes
-        (``friendly_name`` also as ``name``, plus ``persons`` and
-        ``device_trackers``). Every row carries ``entity_id``,
+        zone's and YAML zones' rows are their state attributes, with
+        ``friendly_name`` as ``name``. Every row carries who is in the zone
+        (``persons``, ``device_trackers``) from its state, ``entity_id``,
         ``editable`` and ``source``, like the component's. The registry links a
         storage zone to its entity (its ``unique_id`` is the zone_id); a zone
         state without such an entry is not stored. Returns the rows and the
@@ -354,19 +422,22 @@ class ZoneTools:
             states = await self._client.get_states()
         except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
             return rows, [
-                f"Zones outside the zone storage such as 'home' are missing: {exc}"
+                "Zones outside the zone storage such as 'home', and who is in "
+                f"each zone, are missing: {exc}"
             ]
+        rows = _with_occupancy(rows, states)
         stored = set(entity_ids.values())
         for state in states:
             entity_id = state.get("entity_id", "") if isinstance(state, dict) else ""
             if not entity_id.startswith("zone.") or entity_id in stored:
                 continue
-            attrs = state.get("attributes") or {}
+            attrs = dict(state.get("attributes") or {})
             object_id = entity_id.split(".", 1)[1]
+            name = attrs.pop("friendly_name", object_id)
             rows.append(
                 {
                     **attrs,
-                    "name": attrs.get("friendly_name", object_id),
+                    "name": name,
                     "id": object_id,
                     "entity_id": entity_id,
                     "editable": False,
@@ -410,17 +481,16 @@ class ZoneTools:
             )
         return state
 
-    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str, str | None]:
-        """The entity_id, storage zone_id and registry icon of a stored zone,
-        given its entity_id or zone_id.
+    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str]:
+        """The entity_id and storage zone_id of a stored zone, given its
+        entity_id or zone_id.
 
         Resolved as ``stored_target`` resolves it, and so as the zone backups
         do: a bare ``zone_id`` is a storage id from ``zone/list``, and
         ``zone.<name>`` is the zone whose registry entry has that entity_id. A
         renamed entity can carry another zone's id as its name, so a bare id
         never names an entity, and a repeated removal deletes nothing.
-        Both entity_id and icon are None for a stored zone without a registry
-        entry; the icon is also None when the entry sets none. The
+        The entity_id is None for a stored zone without a registry entry. The
         home zone and YAML zones are not in the storage; Core gives them no
         ``unique_id``, so they have no registry entry.
         """
@@ -446,11 +516,7 @@ class ZoneTools:
         stored = {str(zone.get("id")) for zone in listed.get("result") or []}
         storage_id, entity = stored_target("zone", zone_id, stored, entries)
         if storage_id in stored:
-            icon = next(
-                (e.get("icon") for e in entries if e.get("unique_id") == storage_id),
-                None,
-            )
-            return entity, storage_id, icon
+            return entity, storage_id
         entity_id = zone_id if zone_id.startswith("zone.") else f"zone.{zone_id}"
         # A registry entry links a stored zone, so only a state without one is
         # a YAML or the home zone.
@@ -533,7 +599,7 @@ class ZoneTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon stored in the zone itself (as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed",
+                description="Material Design Icon (e.g., 'mdi:briefcase'), stored in the zone as the Home Assistant zone dialog stores it. Home Assistant keeps a zone's stored icon on update: it can be changed but not removed, so '' leaves it. An icon override in the entity registry (ha_get_zone's entity_icon) is set or cleared with ha_set_entity",
                 default=None,
             ),
         ] = None,
@@ -616,10 +682,8 @@ class ZoneTools:
                             context={"zone_id": zone_id},
                         )
                     )
-                entity_id, storage_id, registry_icon = await self._resolve_zone(zone_id)
-                # The helper write path merges into the stored zone and keeps a
-                # new icon in the registry, where it stays clearable, unless the
-                # zone already stores one (#2643). It takes the storage id first.
+                entity_id, storage_id = await self._resolve_zone(zone_id)
+                # The helper write path takes the storage id first.
                 result = await _execute_update_simple_helper(
                     self._client,
                     "zone",
@@ -635,20 +699,14 @@ class ZoneTools:
                     fields,
                 )
                 response = _zone_write_response(result, storage_id, "updated")
-                # The reply holds the stored zone plus the registry fields this
-                # write set; the entity shows its registry icon over the stored
-                # one, as ha_get_zone reports it. An icon this write set or
-                # cleared ('') is already in the reply.
-                if icon is None and registry_icon:
-                    response["zone_data"]["icon"] = registry_icon
                 response["updated_fields"] = updated
                 return response
 
-            if name is None or latitude is None or longitude is None:
+            # Core's zone/create names any other missing field itself; the
+            # shared create path refuses a missing name in its own tool's terms.
+            if name is None:
                 raise_tool_error(
-                    create_validation_error(
-                        "name, latitude, and longitude are required when creating a zone.",
-                    )
+                    create_validation_error("name is required when creating a zone.")
                 )
             result = await _execute_create_simple_helper(
                 self._client,
@@ -725,7 +783,7 @@ class ZoneTools:
                 suggestions=["Use ha_get_zone() to find existing zone_ids"],
                 context={"operation": "remove_zone"},
             )
-            entity_id, storage_id, _ = await self._resolve_zone(zone_id)
+            entity_id, storage_id = await self._resolve_zone(zone_id)
             result = await self._client.send_websocket_message(
                 {"type": "zone/delete", "zone_id": storage_id}
             )

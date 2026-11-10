@@ -29,6 +29,10 @@ from tests.src.haos_runtime import (
     wait_for_addon_ha_link_ready,
 )
 
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
+
 _URL = "http://127.0.0.1:9583/mcp_e2e_test_path"
 
 

@@ -1,161 +1,121 @@
-"""Unit tests for the in-process server's access switch entity (#2801).
+"""The in-process server's access switch entity (#2801), on a real ``hass``.
 
-The switch platform imports Home Assistant's switch, const and device-registry
-modules at import time; the fixture installs minimal stand-ins for them and
-imports the platform fresh against those, so other test modules' stubs of the
-same names cannot leak in. The bring-up / teardown it drives are patched on
-``embedded_setup``, as in ``test_ha_mcp_server_entry``.
+Home Assistant sets the server entry up and adds the switch through its own
+entity platform; only the server bring-up / teardown are replaced.
 """
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
-from enum import StrEnum
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
+from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
-from ._embedded_stubs import install
+from custom_components.ha_mcp_tools import switch as switch_platform
+from custom_components.ha_mcp_tools.const import DATA_ACCESS_ENABLED
 
-install()
-
-import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
-    DATA_ACCESS_ENABLED,
-    DOMAIN,
-)
-
-
-class _EntityCategory(StrEnum):
-    CONFIG = "config"
-    DIAGNOSTIC = "diagnostic"
-
-
-class _SwitchEntity:
-    hass: MagicMock
-
-    @property
-    def entity_category(self) -> _EntityCategory | None:
-        # As Home Assistant's Entity: the class attribute backs the property.
-        return getattr(self, "_attr_entity_category", None)
-
-    @property
-    def entity_registry_enabled_default(self) -> bool:
-        # As Home Assistant's Entity: enabled unless the class attribute says not.
-        return getattr(self, "_attr_entity_registry_enabled_default", True)
-
-    def async_write_ha_state(self) -> None:
-        self.written_state = self.is_on  # type: ignore[attr-defined]
+from ._server_entry import add_server_entry, replace_server, set_up
 
 
 @pytest.fixture
-def switch_platform(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    switch_mod = ModuleType("homeassistant.components.switch")
-    switch_mod.SwitchEntity = _SwitchEntity  # type: ignore[attr-defined]
-    const_mod = ModuleType("homeassistant.const")
-    const_mod.EntityCategory = _EntityCategory  # type: ignore[attr-defined]
-    dr_mod = ModuleType("homeassistant.helpers.device_registry")
-    dr_mod.DeviceInfo = dict  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "homeassistant.components.switch", switch_mod)
-    monkeypatch.setitem(sys.modules, "homeassistant.const", const_mod)
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.device_registry", dr_mod)
-    monkeypatch.delitem(
-        sys.modules, "custom_components.ha_mcp_tools.switch", raising=False
-    )
-    monkeypatch.setattr(esetup, "async_teardown_server", AsyncMock(name="teardown"))
-    monkeypatch.setattr(esetup, "async_bring_up_server", MagicMock(name="bring_up"))
-    return importlib.import_module("custom_components.ha_mcp_tools.switch")
+def server(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    return replace_server(monkeypatch)
 
 
-def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
-    hass = MagicMock(name="hass")
-    hass.data = {DOMAIN: {}}
-
-    def _update_entry(
-        entry: MagicMock, *, data: dict[str, object] | None = None, **_kw: object
-    ) -> None:
-        if data is not None:
-            entry.data = data
-
-    hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
-    entry = MagicMock(name="entry")
-    entry.entry_id = "entry-1"
-    entry.data = {}
-    return hass, entry
+async def _switch_entry(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, **data: object
+) -> er.RegistryEntry:
+    """The access switch's registry entry after Home Assistant set the entry up."""
+    entry = add_server_entry(hass, data=dict(data))
+    assert await set_up(hass, entry)
+    [registered] = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+    return registered
 
 
 async def test_the_server_entry_gets_one_access_switch(
-    switch_platform: ModuleType,
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
 ) -> None:
-    hass, entry = _hass_and_entry()
-    added: list = []
+    registered = await _switch_entry(hass, entity_registry)
 
-    await switch_platform.async_setup_entry(hass, entry, added.extend)
-
-    [switch] = added
-    assert isinstance(switch, switch_platform.ServerAccessSwitch)
-    assert switch.is_on
+    assert registered.domain == "switch"
+    state = hass.states.get(registered.entity_id)
+    assert state is not None
+    assert state.state == STATE_ON
 
 
-def test_the_switch_name_comes_from_the_catalog(switch_platform: ModuleType) -> None:
+async def test_the_switch_name_comes_from_the_catalog(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, server: SimpleNamespace
+) -> None:
     # A translation key the catalog lacks leaves the entity with no name.
+    registered = await _switch_entry(hass, entity_registry)
     strings = Path(switch_platform.__file__).with_name("strings.json")
     names = json.loads(strings.read_text(encoding="utf-8"))["entity"]["switch"]
 
-    assert switch_platform.ServerAccessSwitch._attr_translation_key in names
+    assert registered.translation_key in names
 
 
-def test_assist_does_not_expose_the_access_switch_by_default(
-    switch_platform: ModuleType,
+async def test_assist_does_not_expose_the_access_switch_by_default(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, server: SimpleNamespace
 ) -> None:
     # Home Assistant exposes switches to Assist by default unless they carry an
     # entity category; exposed, a voice satellite could turn access back on.
-    _hass, entry = _hass_and_entry()
+    registered = await _switch_entry(hass, entity_registry)
 
-    switch = switch_platform.ServerAccessSwitch(entry)
-
-    assert switch.entity_category is not None
+    assert registered.entity_category is not None
 
 
-def test_an_everything_off_call_cannot_close_access_on_a_default_install(
-    switch_platform: ModuleType,
+async def test_an_everything_off_call_cannot_close_access_on_a_default_install(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, server: SimpleNamespace
 ) -> None:
     # `entity_id: all` reaches every entity of the switch platform, entity
     # category or not. Home Assistant adds no disabled entity to its platform,
     # so an "everything off" call can close access only once a user enabled it.
-    _hass, entry = _hass_and_entry()
+    registered = await _switch_entry(hass, entity_registry)
 
-    switch = switch_platform.ServerAccessSwitch(entry)
+    assert registered.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(registered.entity_id) is None
 
-    assert switch.entity_registry_enabled_default is False
 
+async def test_turning_the_switch_on_shows_on(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
+) -> None:
+    registered = await _switch_entry(
+        hass, entity_registry, **{DATA_ACCESS_ENABLED: False}
+    )
+    assert hass.states.get(registered.entity_id).state == STATE_OFF
 
-async def test_turning_the_switch_on_shows_on(switch_platform: ModuleType) -> None:
-    hass, entry = _hass_and_entry()
-    entry.data = {DATA_ACCESS_ENABLED: False}
-    switch = switch_platform.ServerAccessSwitch(entry)
-    switch.hass = hass
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": registered.entity_id}, blocking=True
+    )
 
-    await switch.async_turn_on()
-
-    assert switch.written_state is True
+    assert hass.states.get(registered.entity_id).state == STATE_ON
 
 
 async def test_switch_shows_off_when_the_stop_fails(
-    switch_platform: ModuleType,
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
 ) -> None:
     # Access is stored off before the stop runs; a failing stop must not leave
     # the switch showing on.
-    hass, entry = _hass_and_entry()
-    esetup.async_teardown_server.side_effect = RuntimeError("stop failed")
-    switch = switch_platform.ServerAccessSwitch(entry)
-    switch.hass = hass
+    registered = await _switch_entry(hass, entity_registry)
+    server.teardown.side_effect = RuntimeError("stop failed")
 
     with pytest.raises(RuntimeError):
-        await switch.async_turn_off()
+        await hass.services.async_call(
+            "switch", "turn_off", {"entity_id": registered.entity_id}, blocking=True
+        )
+    server.teardown.side_effect = None
 
-    assert switch.written_state is False
+    assert hass.states.get(registered.entity_id).state == STATE_OFF

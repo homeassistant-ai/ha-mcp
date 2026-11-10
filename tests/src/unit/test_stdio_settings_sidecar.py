@@ -1030,12 +1030,11 @@ class TestMaybeSpawnGates:
         def _publish(_duration: float) -> None:
             url_file.write_text("http://127.0.0.1:54321/private_x/settings\n")
 
+        # Patched for the whole test: the retire would POST to the URL above.
+        monkeypatch.setattr(
+            sidecar, "_shutdown_existing_sidecar", lambda: events.append("retire")
+        )
         with (
-            patch.object(
-                sidecar,
-                "_shutdown_existing_sidecar",
-                side_effect=lambda: events.append("retire"),
-            ),
             patch("subprocess.Popen", return_value=fake_proc),
             patch("time.sleep", side_effect=_publish),
         ):
@@ -1050,7 +1049,7 @@ class TestMaybeSpawnGates:
 
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
         sidecar.maybe_spawn(prepare=lambda: events.append("disabled"))
-        assert events == []
+        assert "disabled" not in events
 
     def test_lock_loser_reports_existing_url_to_stderr(
         self,

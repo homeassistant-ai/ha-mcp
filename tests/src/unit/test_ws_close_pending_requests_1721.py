@@ -38,6 +38,10 @@ from ha_mcp.client.websocket_client import (
 )
 from ha_mcp.client.websocket_state import WebSocketConnectionState
 
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
+
 HA_VERSION = "2026.7.0"
 
 
@@ -207,7 +211,7 @@ class _ClosingFakeWebSocket:
 
 async def _run_handler_with(
     exc: BaseException,
-) -> tuple[HomeAssistantWebSocketClient, "asyncio.Future[dict]"]:
+) -> tuple[HomeAssistantWebSocketClient, asyncio.Future[dict]]:
     """Drive _message_handler against a stub socket that dies with ``exc``."""
     client = HomeAssistantWebSocketClient(
         "http://127.0.0.1:1", "test-token", verify_ssl=False

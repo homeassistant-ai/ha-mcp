@@ -68,7 +68,12 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
         ... )
         >>> raise_tool_error(error)  # Raises ToolError with isError=true
     """
-    raise ToolError(
+    raise tool_error_from_response(error_response)
+
+
+def tool_error_from_response(error_response: dict[str, Any]) -> ToolError:
+    """Build the ``ToolError`` that :func:`raise_tool_error` raises."""
+    return ToolError(
         json.dumps(error_response, indent=2, default=str),
         log_level=TOOL_ERROR_LOG_LEVEL,
     )
@@ -149,7 +154,8 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
         else error.get("suggestion")
     )
     if isinstance(first, str) and first:
-        return f"{message} {first}"
+        separator = " " if message[-1] in ".!?:" else ". "
+        return f"{message}{separator}{first}"
     return message
 
 
@@ -422,7 +428,9 @@ def _classify_exception(
                 error_msg,
                 suggestions=[
                     "Use a long-lived access token from an administrator's profile",
-                    "Or use the in-process server, which provisions its own admin token",
+                    "Or, on the in-process server, use a token issued in the "
+                    + "integration's forms from the login of a local-only "
+                    + "administrator account",
                 ],
                 context=context,
             )

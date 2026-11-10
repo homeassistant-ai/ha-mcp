@@ -12,8 +12,13 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+import pytest_socket
 
 from .test_sidecar_pin_port import _a_free_port
+
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 _REPO = Path(__file__).parents[3]
 
@@ -47,6 +52,8 @@ def _connects(address: str, port: int) -> bool:
 
 def test_wildcard_host_accepts_ipv4_and_ipv6_clients() -> None:
     _require_ipv6_loopback()
+    # Core's test plugin allows connections to 127.0.0.1 only.
+    pytest_socket.socket_allow_hosts(["127.0.0.1", "::1"])
     port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None

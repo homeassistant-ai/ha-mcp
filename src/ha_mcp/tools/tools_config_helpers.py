@@ -598,7 +598,7 @@ class HelperConfigTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
+                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon, which Home Assistant keeps on update as the zone dialog does: it can be changed but not removed. A storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, as the helper's own dialog stores it, and the entity registry is left alone; otherwise (person, tag, or another type without the ha_mcp_tools component) it goes into the entity registry. An icon override in the entity registry is set or cleared with ha_set_entity. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
                 default=None,
             ),
         ] = None,

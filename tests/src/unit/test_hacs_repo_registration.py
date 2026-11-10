@@ -34,7 +34,7 @@ def _list_response_empty() -> dict:
 
 def _build_ws_client(
     list_responses: list[dict],
-    subscribe_result: tuple[int, "asyncio.Queue"] | Exception = (1, None),
+    subscribe_result: tuple[int, asyncio.Queue] | Exception = (1, None),
 ):
     """Build a MagicMock WS client whose ``send_command`` returns each list_responses entry in turn.
 

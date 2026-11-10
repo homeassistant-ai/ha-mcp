@@ -12,15 +12,12 @@ import asyncio
 
 import pytest
 
-from ._embedded_stubs import FakeSession, FakeUpstream, install
+import custom_components.ha_mcp_tools.mcp_webhook as mw
+from custom_components.ha_mcp_tools import cloudhook
+from custom_components.ha_mcp_tools.const import WEBHOOK_AUTH_HA
 
-install()
-
-import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
-from custom_components.ha_mcp_tools import cloudhook  # noqa: E402
-from custom_components.ha_mcp_tools.const import WEBHOOK_AUTH_HA  # noqa: E402
-
-from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg  # noqa: E402
+from ._embedded_helpers import FakeSession, FakeUpstream
+from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg
 
 
 async def test_cloudhook_relay_reads_body_and_buffers_sse() -> None:
