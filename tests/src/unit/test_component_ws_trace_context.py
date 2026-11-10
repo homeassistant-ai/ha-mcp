@@ -11,16 +11,17 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.script.trace import ScriptTrace
-from homeassistant.components.trace.const import DATA_TRACE, DATA_TRACE_STORE
+from homeassistant.components.trace import async_store_trace
+from homeassistant.components.trace.const import DATA_TRACE
 from homeassistant.components.trace.models import TraceBuckets
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers.trace import TraceElement
+from homeassistant.setup import async_setup_component
 from homeassistant.util.limited_size_dict import LimitedSizeDict
 
 from custom_components.ha_mcp_tools.websocket_api import trace_context
@@ -62,7 +63,7 @@ def _store(hass: HomeAssistant, key: str, *traces: AutomationTrace) -> None:
 
 
 @pytest.mark.asyncio
-async def test_own_context_match_returns_core_extended_trace(
+async def test_context_lookup_finds_trace_by_its_own_context(
     hass: HomeAssistant,
 ) -> None:
     _store(hass, "automation.uid_1", _trace(run_id="r1", context_id="ctx-1"))
@@ -80,7 +81,7 @@ async def test_own_context_match_returns_core_extended_trace(
 
 
 @pytest.mark.asyncio
-async def test_parent_match_prefers_real_run_over_newer_diagnostic(
+async def test_context_lookup_prefers_real_run_over_newer_diagnostic(
     hass: HomeAssistant,
 ) -> None:
     older = _trace(
@@ -118,7 +119,9 @@ async def test_parent_match_prefers_real_run_over_newer_diagnostic(
 
 
 @pytest.mark.asyncio
-async def test_missing_start_time_does_not_sort_as_newest(hass: HomeAssistant) -> None:
+async def test_context_lookup_treats_missing_start_as_oldest(
+    hass: HomeAssistant,
+) -> None:
     missing = _trace(run_id="missing", context_id="own-missing", parent_id="parent-1")
     missing._timestamp_start = None
     valid = _trace(
@@ -136,7 +139,9 @@ async def test_missing_start_time_does_not_sort_as_newest(hass: HomeAssistant) -
     assert result["run_id"] == "valid"
 
 @pytest.mark.asyncio
-async def test_domain_and_item_filters_limit_the_scan(hass: HomeAssistant) -> None:
+async def test_context_lookup_honors_domain_and_item_filters(
+    hass: HomeAssistant,
+) -> None:
     automation = _trace(run_id="auto", context_id="own-auto", parent_id="parent-1")
     script = _trace(run_id="script", context_id="own-script", parent_id="parent-1")
     _store(hass, "automation.uid_1", automation)
@@ -160,7 +165,9 @@ async def test_domain_and_item_filters_limit_the_scan(hass: HomeAssistant) -> No
 
 
 @pytest.mark.asyncio
-async def test_no_match_reports_the_scan_count(hass: HomeAssistant) -> None:
+async def test_context_lookup_reports_no_match_with_scan_count(
+    hass: HomeAssistant,
+) -> None:
     _store(
         hass,
         "automation.uid_1",
@@ -177,7 +184,9 @@ async def test_no_match_reports_the_scan_count(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unavailable_store_reports_unavailable(hass: HomeAssistant) -> None:
+async def test_context_lookup_reports_unavailable_when_store_is_not_set_up(
+    hass: HomeAssistant,
+) -> None:
     result = trace_context._trace_context_payload(
         hass, {"id": 1, "context_id": "ctx-1"}, available=False
     )
@@ -188,7 +197,7 @@ async def test_unavailable_store_reports_unavailable(hass: HomeAssistant) -> Non
 
 
 @pytest.mark.asyncio
-async def test_encoding_uses_cores_extended_json_encoder(
+async def test_context_lookup_encodes_trace_with_cores_extended_json_encoder(
     hass: HomeAssistant,
 ) -> None:
     """A timedelta in a trigger's ``for`` survives; Core encodes it in trace/get."""
@@ -213,7 +222,7 @@ async def test_encoding_uses_cores_extended_json_encoder(
 
 
 @pytest.mark.asyncio
-async def test_prep_reports_unavailable_without_a_trace_store(
+async def test_context_lookup_reports_unavailable_when_trace_storage_is_off(
     hass: HomeAssistant,
 ) -> None:
     result = await trace_context._trace_context_prep(hass, {})
@@ -222,19 +231,22 @@ async def test_prep_reports_unavailable_without_a_trace_store(
 
 
 @pytest.mark.asyncio
-async def test_prep_restores_saved_traces(hass: HomeAssistant) -> None:
-    hass.data[DATA_TRACE] = {}
-    hass.data[DATA_TRACE_STORE] = object()
-    restore = AsyncMock()
+async def test_context_lookup_restores_saved_traces(hass: HomeAssistant) -> None:
+    await async_setup_component(hass, "trace", {})
+    saved = _trace(run_id="r1", context_id="ctx-1")
+    async_store_trace(hass, saved, stored_traces=5)
 
-    with patch.object(trace_context, "async_restore_traces", restore):
-        result = await trace_context._trace_context_prep(hass, {})
+    result = await trace_context._trace_context_prep(hass, {})
 
     assert result == {"available": True}
-    restore.assert_awaited_once_with(hass)
+    payload = trace_context._trace_context_payload(
+        hass, {"id": 1, "context_id": "ctx-1"}, available=True
+    )
+    assert payload["match"] == "trace"
+    assert payload["run_id"] == "r1"
 
 
-def test_schema_accepts_the_documented_selectors() -> None:
+def test_schema_rejects_an_unknown_trace_domain() -> None:
     schema = vol.Schema(_trace_context_schema())
 
     assert schema(
@@ -256,7 +268,7 @@ def test_schema_accepts_the_documented_selectors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_multiple_matches_selects_newest_and_lists_others(
+async def test_context_lookup_selects_newest_match_and_lists_others(
     hass: HomeAssistant,
 ) -> None:
     """One context can match several runs; the newest is selected and rest listed."""
@@ -297,7 +309,7 @@ async def test_multiple_matches_selects_newest_and_lists_others(
 
 
 @pytest.mark.asyncio
-async def test_own_and_parent_matches_use_the_same_selection_rule(
+async def test_context_lookup_prefers_newest_across_own_and_parent_matches(
     hass: HomeAssistant,
 ) -> None:
     """The selected run is the newest across own-context and parent matches."""
@@ -334,7 +346,9 @@ async def test_own_and_parent_matches_use_the_same_selection_rule(
 
 
 @pytest.mark.asyncio
-async def test_no_other_matches_omits_the_list(hass: HomeAssistant) -> None:
+async def test_context_lookup_omits_other_matches_for_a_single_match(
+    hass: HomeAssistant,
+) -> None:
     """A single match has no other_matches field."""
     _store(hass, "automation.uid_1", _trace(run_id="r1", context_id="ctx-1"))
 

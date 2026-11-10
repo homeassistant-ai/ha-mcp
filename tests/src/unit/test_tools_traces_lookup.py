@@ -268,6 +268,52 @@ class TestResolveContextTrace:
         assert match.match == "parent"
 
     @pytest.mark.asyncio
+    async def test_direct_map_prefers_real_run_over_newer_diagnostic(self):
+        """A direct-map diagnostic loses to a newer real run in the scan."""
+        traces = [
+            {
+                "run_id": "diagnostic",
+                "not_triggered": True,
+                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
+            },
+            {
+                "run_id": "run",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            },
+        ]
+        details = {
+            "diagnostic": {
+                "run_id": "diagnostic",
+                "not_triggered": True,
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            },
+            "run": {
+                "run_id": "run",
+                "context": {"id": "own-2", "parent_id": "parent-1"},
+            },
+        }
+        contexts = {
+            "parent-1": {
+                "run_id": "diagnostic",
+                "domain": "automation",
+                "item_id": "uid",
+            }
+        }
+        client = _context_client(
+            contexts=contexts, traces=traces, details=details
+        )
+
+        match = await resolve_context_trace(
+            client, "automation", "uid", "parent-1"
+        )
+
+        assert match.run_id == "run"
+        assert match.match == "parent"
+        assert any(
+            other["run_id"] == "diagnostic" for other in match.other_matches
+        )
+
+    @pytest.mark.asyncio
     async def test_parent_context_not_found(self):
         """No matching parent id returns a structured not-found error."""
         client = _context_client(
@@ -495,7 +541,8 @@ class TestNotTriggeredPreference:
 
     @pytest.mark.asyncio
     async def test_public_path_prefers_real_run_over_newer_diagnostic(self):
-        """A newer not-triggered diagnostic does not beat a real run on the public path."""
+        """A newer not-triggered diagnostic does not beat a real run on the
+        public path."""
         traces = [
             {
                 "run_id": "diagnostic",
@@ -528,33 +575,4 @@ class TestNotTriggeredPreference:
             other["run_id"] == "diagnostic" for other in match.other_matches
         )
 
-    @pytest.mark.asyncio
-    async def test_preference_comes_from_trace_list_row(self):
-        """The real-run preference is driven by ``not_triggered`` in the trace/list row."""
-        # The detail payloads do not mark not_triggered; only the list rows do.
-        traces = [
-            {
-                "run_id": "diagnostic",
-                "not_triggered": True,
-                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
-            },
-            {
-                "run_id": "run",
-                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
-            },
-        ]
-        details = {
-            "diagnostic": {
-                "run_id": "diagnostic",
-                "context": {"id": "own-1", "parent_id": "parent-1"},
-            },
-            "run": {
-                "run_id": "run",
-                "context": {"id": "own-2", "parent_id": "parent-1"},
-            },
-        }
-        client = _context_client(contexts={}, traces=traces, details=details)
 
-        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
-
-        assert match.run_id == "run"

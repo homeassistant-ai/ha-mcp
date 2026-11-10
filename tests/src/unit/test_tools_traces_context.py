@@ -493,8 +493,8 @@ class TestTraceContextLookup:
         assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
-    async def test_component_absent_context_lookup_warns_about_fallback_scan(self):
-        """A public fallback context match warns that the component is absent."""
+    async def test_component_unknown_command_falls_back_and_warns(self):
+        """An explicit unknown_command from the component falls back to the public scan."""
         detail = {
             "run_id": "r1",
             "state": "stopped",
@@ -505,6 +505,12 @@ class TestTraceContextLookup:
         def _d(mtype, message):
             if mtype == "trace/contexts":
                 return {"success": True, "result": {}}
+            if mtype == "ha_mcp_tools/trace_context":
+                return {
+                    "success": False,
+                    "error_code": "unknown_command",
+                    "error": "Unknown command",
+                }
             if mtype == "trace/list":
                 if message.get("domain") == "script":
                     return {"success": True, "result": []}
@@ -524,9 +530,14 @@ class TestTraceContextLookup:
             return {"success": False, "error": f"unexpected {mtype}"}
 
         client = _make_pooled_client(_d)
-        result = await TraceTools(client).ha_get_automation_traces(
-            context_id="parent-1"
-        )
+        caps = SimpleNamespace(capabilities=frozenset({"trace_context"}))
+        with patch(
+            "ha_mcp.tools.trace_lookup.get_component_caps",
+            AsyncMock(return_value=caps),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                context_id="parent-1"
+            )
 
         assert result["context_match"] == "parent"
         assert result["context_scanned"] == 1
@@ -597,6 +608,10 @@ class TestTraceContextLookup:
         assert "ha_mcp_tools/trace_context" in types
         assert "trace/list" not in types
         assert "trace/get" not in types
+        assert not any(
+            "public fallback scan" in warning
+            for warning in result.get("warnings", [])
+        )
 
     @pytest.mark.asyncio
     async def test_public_fallback_lists_other_matching_runs(self):

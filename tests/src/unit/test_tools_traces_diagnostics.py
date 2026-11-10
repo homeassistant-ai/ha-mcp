@@ -71,6 +71,7 @@ class TestGatherDiagnostics:
         assert result["trace_storage_enabled"] is True
         assert result["last_triggered"] == "2025-11-30T15:00:00Z"
         assert "run the automation/script once" in result["suggestion"].lower()
+        assert "warnings" not in result
 
     @pytest.mark.asyncio
     async def test_no_unique_id_does_not_claim_a_trace_key(self) -> None:
@@ -148,6 +149,23 @@ class TestGatherDiagnostics:
         assert "stored_traces: 0" in result["suggestion"]
 
     @pytest.mark.asyncio
+    async def test_validation_failure_suggests_core_did_not_load(self) -> None:
+        """A failed validation dict surfaces Core's load failure first."""
+        client = _client({"state": "on", "attributes": {}})
+        result, _warnings = await _diagnostics(
+            client,
+            entity={"unique_id": "uid_1"},
+            loaded=True,
+            validation={"status": "failed", "error": "bad template"},
+        )
+
+        assert result["validation"] == {"status": "failed", "error": "bad template"}
+        assert "core reports this automation did not load" in result[
+            "suggestion"
+        ].lower()
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
     async def test_unreadable_config_reports_unknown(self) -> None:
         client = _client(
             {"state": "on", "attributes": {}},
@@ -166,6 +184,7 @@ class TestGatherDiagnostics:
 
         assert result["entity_exists"] is True
         assert result["trace_key_available"] is True
+        assert "warnings" not in result
 
     @pytest.mark.asyncio
     async def test_script_registry_fallback_does_not_claim_missing_component(
