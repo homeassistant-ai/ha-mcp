@@ -76,7 +76,7 @@ def _no_strings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(integration_flow_steps, "describe_form", describe_form)
     # No component: a flow is bound by the server's own list alone.
     monkeypatch.setattr(
-        integration_flow_steps, "_core_flow_record", AsyncMock(return_value=None)
+        integration_flow_steps, "flow_record", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(integration_flow_steps, "_flow_texts", flow_texts)
     monkeypatch.setattr(config_entry_flow_errors, "_flow_texts", flow_texts)

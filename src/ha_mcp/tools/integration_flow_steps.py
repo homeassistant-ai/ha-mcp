@@ -26,9 +26,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantCommandNotSent
+from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
-from .component_api import component_supports, get_component_caps, invalidate_caps
+from .component_flow import flow_record
 from .config_entry_flow import (
     _reject_redaction_sentinels,
     config_entry_of_domain,
@@ -65,11 +65,15 @@ logger = logging.getLogger(__name__)
 # Assistant reports neither a user flow's nor a reconfigure flow's source over
 # REST or WebSocket, so a flow this server opened is recorded here. An ha-mcp
 # restart empties it; a flow_id it does not hold is looked up in Core's own
-# flow manager through the component (``_core_flow_record``).
+# flow manager through the component (``component_flow.flow_record``).
 _opened_flows: dict[str, tuple[str, str | None]] = {}
-
-WS_FLOW_RECORD = "ha_mcp_tools/flow_record"
-FLOW_RECORD_CAPABILITY = "flow_record"
+# FlowTarget.kind -> the flow manager holding its flows.
+_FLOW_MANAGERS = {
+    "setup": "config",
+    "reconfigure": "config",
+    "options": "options",
+    "subentry": "subentries",
+}
 
 
 @dataclass(frozen=True)
@@ -147,30 +151,6 @@ def _raise_flow_not_open(target: FlowTarget, flow_id: str) -> NoReturn:
     )
 
 
-async def _core_flow_record(
-    client: Any, target: FlowTarget, flow_id: str
-) -> dict[str, Any] | None:
-    """Core's record of ``flow_id`` in the flow manager of ``target``'s kind,
-    read by the component; ``None`` when no component can read it."""
-    if not component_supports(await get_component_caps(client), FLOW_RECORD_CAPABILITY):
-        return None
-    manager = {"options": "options", "subentry": "subentries"}.get(
-        target.kind, "config"
-    )
-    try:
-        reply = await client.send_websocket_message(
-            {"type": WS_FLOW_RECORD, "manager": manager, "flow_id": flow_id}
-        )
-    except HomeAssistantCommandNotSent:
-        return None
-    if not reply.get("success"):
-        if reply.get("error_code") == "unknown_command":
-            invalidate_caps(client)
-        return None
-    record = reply.get("result")
-    return record if isinstance(record, dict) else None
-
-
 def _record_anchor(kind: str, record: dict[str, Any]) -> tuple[str, str | None] | None:
     """The ``FlowTarget.anchor`` of the flow Core recorded, read as a flow of
     ``kind``; ``None`` when it is not one (a discovery or reauth flow is not a
@@ -197,7 +177,7 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
         return
     record = None
     if flow_id not in _opened_flows:
-        record = await _core_flow_record(client, target, flow_id)
+        record = await flow_record(client, _FLOW_MANAGERS[target.kind], flow_id)
         if record is not None:
             if not record.get("found"):
                 _raise_flow_not_open(target, flow_id)
@@ -573,9 +553,9 @@ async def advance_flow(
     ``defaults`` goes to the forms ``config`` answers (see ``_form_payload``).
     """
     answers = [config] if isinstance(config, dict) else list(config or [])
-    for values in answers:
+    for given in answers:
         # Before a flow is opened for an answer that cannot be sent.
-        _reject_redaction_sentinels(values)
+        _reject_redaction_sentinels(given)
     if flow_id is None:
         step = await start()
         flow_id = _require_flow_id(step, target)
@@ -590,7 +570,7 @@ async def advance_flow(
         step = await read_step(client, target, flow_id)
     step = await settle(client, target, flow_id, step)
     pending: list[tuple[str | None, dict[str, Any] | None]] = [
-        (None, values) for values in answers
+        (None, given) for given in answers
     ]
     if menu_choice is not None:
         pending.insert(0, (menu_choice, None))

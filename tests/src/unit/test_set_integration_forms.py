@@ -16,6 +16,16 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 from .test_integration_schema import _HOST, _MENU, _client, _error, _form
 
 
+@pytest.fixture(autouse=True)
+def _no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No component describes the flow's steps."""
+    from unittest.mock import AsyncMock
+
+    from ha_mcp.tools.config_helpers import describe
+
+    monkeypatch.setattr(describe, "flow_outline", AsyncMock(return_value=None))
+
+
 @pytest.mark.asyncio
 async def test_set_integration_returns_the_setup_form() -> None:
     client = _client(

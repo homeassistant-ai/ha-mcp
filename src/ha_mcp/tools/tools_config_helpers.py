@@ -183,9 +183,9 @@ class HelperConfigTools:
         COMPONENT_NOT_INSTALLED error rather than a partial or empty list.
 
         describe=True returns each field's name, type, required flag, options,
-        default and (with helper_id) current value, or the menu_options a
-        menu-based helper needs a menu_choice from. Call it before
-        ha_config_set_helper to learn the config keys for a type.
+        default and (with helper_id) current value, the later_forms of a
+        helper with several forms, or the menu_options a menu-based helper
+        needs a menu_choice from. Call it before ha_config_set_helper.
 
         EXAMPLES:
         - List all counters: ha_config_list_helpers("counter")
@@ -795,13 +795,12 @@ class HelperConfigTools:
         returns the step again, and flow_id with abort=True ends the flow.
         Without flow_id a new flow starts: menu_choice answers its opening
         menu and config the form after it, so a one-form helper is created or
-        updated in one call; without config the call returns the form. A
-        helper with several forms (statistics, history_stats,
-        generic_thermostat, ...) takes one call per form, or one call in all
-        when config is a list with one object per form, in order: each is
-        sent to the form the flow is then at, and the call returns at the
-        first form Home Assistant rejects or once the answers run out. A form
-        Home Assistant rejects is an error with Core's text, and the flow
+        updated in one call; without config the call returns the form, and
+        its later_forms when the helper has more than one (statistics,
+        history_stats, generic_thermostat, ...). A config list answers
+        several forms in one call, one object per form in order; the call
+        returns at the first form Home Assistant rejects or once the answers
+        run out. A rejected form is an error with Core's text, and the flow
         stays open to correct it. Nothing is saved until the flow finishes.
 
         Behavior:

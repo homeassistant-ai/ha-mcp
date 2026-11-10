@@ -17,6 +17,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
+from ..component_flow import flow_outline, steps_after
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_errors import (
@@ -171,15 +172,67 @@ async def describe_form(
     text to read.
     """
     fields = compact_schema(step.get("data_schema") or [])
-    described: dict[str, Any] = {"fields": fields, **_later_forms(step)}
+    described: dict[str, Any] = {"fields": fields}
     step_id = step.get("step_id")
+    strings = None
     if step_id and domain:
         strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
         if strings is None:
             described["warnings"] = [strings_unread_warning(domain)]
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
+    declared = None
+    if step_id and domain and path in ("config", "options"):
+        outline = await flow_outline(client, domain, path)
+        declared = steps_after(outline, step_id) if outline is not None else None
+    if declared is None:
+        # Core's flow is not declared as steps: only the step itself says.
+        described.update(_later_forms(step))
+    elif declared:
+        described["later_forms"] = [
+            _later_form(later, always, strings, domain, path)
+            for later, always in declared
+        ]
+        described["note"] = _LATER_FORMS_NOTE + (
+            _LATER_FORMS_EDIT_NOTE if path == "options" else ""
+        )
     return described
+
+
+_LATER_FORMS_NOTE = (
+    "later_forms are the steps Home Assistant's flow declares after this one. "
+    "A config list answers this form and later ones in one call, one object "
+    "per form. A form marked fields_depend_on_answers is built from the "
+    "earlier answers and is returned by the call that answers the form "
+    "before it; one marked only_for_some_answers is shown for some answers."
+)
+_LATER_FORMS_EDIT_NOTE = (
+    " A later form's current values are shown when the flow reaches it."
+)
+
+
+def _later_form(
+    step: dict[str, Any],
+    always: bool,
+    strings: dict[str, Any] | None,
+    domain: str | None,
+    path: str,
+) -> dict[str, Any]:
+    """One declared later step, in brief."""
+    step_id = step["step_id"]
+    form: dict[str, Any] = {"step_id": step_id}
+    if step.get("type") == "menu":
+        form["menu_options"] = step.get("menu_options") or "depends_on_answers"
+    elif step.get("schema_from_answers"):
+        form["fields_depend_on_answers"] = True
+    else:
+        # No schema: Core shows no form at this step.
+        form["fields"] = compact_schema(step.get("data_schema") or [])
+        if strings is not None and domain:
+            _with_help(form["fields"], field_help(strings, domain, path, step_id))
+    if not always:
+        form["only_for_some_answers"] = True
+    return form
 
 
 _LATER_FORM_TAIL = (

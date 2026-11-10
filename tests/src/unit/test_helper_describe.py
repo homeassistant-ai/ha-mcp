@@ -36,6 +36,13 @@ def client() -> AsyncMock:
     return AsyncMock()
 
 
+@pytest.fixture(autouse=True)
+def _no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No component describes the flow's steps: only the step itself says
+    whether more forms follow."""
+    monkeypatch.setattr(mod, "flow_outline", AsyncMock(return_value=None))
+
+
 @pytest.fixture
 def no_component(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "fetch_helper_schemas", AsyncMock(return_value=None))

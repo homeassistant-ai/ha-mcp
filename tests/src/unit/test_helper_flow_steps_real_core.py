@@ -216,6 +216,47 @@ async def test_answers_the_flow_never_asked_for_are_reported(
     assert any("before the last 1" in warning for warning in created["warnings"])
 
 
+async def test_describe_shows_the_later_forms_core_declares(
+    component_tools: HelperConfigTools,
+) -> None:
+    """The forms after the first are read from Core's own declaration of the
+    flow, so they are known before any of them is answered. A form Core
+    builds from the earlier answers is named, not guessed."""
+    thermostat = await component_tools.ha_config_list_helpers(
+        helper_type="generic_thermostat", describe=True
+    )
+    statistics = await component_tools.ha_config_list_helpers(
+        helper_type="statistics", describe=True
+    )
+
+    (presets,) = thermostat["later_forms"]
+    assert presets["step_id"] == "presets"
+    assert "away_temp" in {field["name"] for field in presets["fields"]}
+    characteristic, options = statistics["later_forms"]
+    assert characteristic == {
+        "step_id": "state_characteristic",
+        "fields_depend_on_answers": True,
+    }
+    assert "sampling_size" in {field["name"] for field in options["fields"]}
+
+
+async def test_an_open_form_names_the_later_forms_and_the_last_one_none(
+    component_tools: HelperConfigTools,
+) -> None:
+    """Each form the flow returns says what is still to come from there on."""
+    first = await component_tools.ha_config_set_helper(helper_type="generic_thermostat")
+    last = await component_tools.ha_config_set_helper(
+        helper_type="generic_thermostat",
+        flow_id=first["flow_id"],
+        config=dict(_THERMOSTAT),
+    )
+
+    assert [form["step_id"] for form in first["later_forms"]] == ["presets"]
+    assert last["step_id"] == "presets"
+    assert "later_forms" not in last
+    assert "more_forms" not in last
+
+
 async def test_a_flow_is_continued_after_the_server_forgot_it(
     hass: HomeAssistant, component_tools: HelperConfigTools, opened_flows: Any
 ) -> None:

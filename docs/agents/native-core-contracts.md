@@ -262,7 +262,13 @@ valid are Core's to say, so a key a form does not declare is sent and refused
 by Core. A caller that already knows a flow's forms may pass their answers as
 an ordered list: each is sent, unchanged, as the answer to the step the flow
 is then at, the call stops at the first one Core refuses, and no key is moved
-from one answer to another. A `flow_id` continues only the flow opened for
+from one answer to another. The forms after the first are not learned by
+walking the flow either: for a flow Core declares as a mapping of steps (most
+helper flows) the component's `ha_mcp_tools/flow_outline` bridge (capability
+`flow_outline`) reads that declaration from the loaded handler on every call,
+and a form response lists them as `later_forms`; a form or next step Core
+computes from the answers is marked as such, never evaluated or copied.
+A `flow_id` continues only the flow opened for
 the call's target; one the server no longer holds (it restarted) is bound by
 Core's own record of the flow, read through the component's
 `ha_mcp_tools/flow_record` bridge (capability `flow_record`), and refused
