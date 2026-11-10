@@ -163,6 +163,32 @@ async def test_a_helper_that_is_not_stored_is_found_as_a_duplicate(
     assert hass.states.async_entity_ids(domain) == before
 
 
+async def test_an_id_core_has_reserved_is_found_after_its_entity_was_renamed(
+    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+) -> None:
+    """A YAML helper keeps its id in the id manager Core generates a new
+    helper's id with, whatever its entity is called now: Core would store
+    the new one as ``yaml_flag_2``."""
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"yaml_flag": None}}
+    )
+    er.async_get(hass).async_update_entity(
+        "input_boolean.yaml_flag", new_entity_id="input_boolean.renamed"
+    )
+    await hass.async_block_till_done()
+
+    async with core_backed_client(
+        hass, hass_ws_client, hass_client, component=True
+    ) as client:
+        with pytest.raises(ToolError) as exc_info:
+            await HelperConfigTools(client).ha_config_set_helper(
+                helper_type="input_boolean", name="Yaml Flag"
+            )
+
+    assert "not a stored helper" in json.loads(str(exc_info.value))["error"]["message"]
+    assert hass.states.async_entity_ids("input_boolean") == ["input_boolean.renamed"]
+
+
 async def test_without_the_component_a_create_says_what_went_unchecked(
     hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
 ) -> None:
