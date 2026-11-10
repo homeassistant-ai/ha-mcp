@@ -1,15 +1,27 @@
-# A test module is not a library. Importing a helper from another test module,
-# or taking the old `mock_client` fixture, brings in that file's hand-written
+# A test module is not a library. Importing from another test module, or
+# taking the old `mock_client` fixture, brings in that file's hand-written
 # Home Assistant client without the stand-in rules seeing it in the importing
-# file. Shared helpers live in `_*.py` modules, which the rules scan.
+# file. The four old fake-client helper modules are refused for the same
+# reason. A shared helper that builds no stand-in goes in a `_*.py` module.
 id: no-shared-fake-clients
 language: python
 rule:
   any:
+    # from .test_x import y, from ..test_x import y, from tests.src.unit.test_x
+    # import y, from . import test_x, import tests.src.unit.test_x
+    - all:
+        - any:
+            - kind: import_from_statement
+              regex: '^from\s+(\.+|tests\.)([\w.]*\.)?test_\w+\s+import'
+            - kind: import_from_statement
+              regex: '^from\s+(\.+|tests(\.\w+)*)\s+import\s+[^#]*\btest_\w+'
+            - kind: import_statement
+              regex: '^import\s+tests\.([\w.]*\.)?test_\w+'
+        # tests/test_constants.py holds constants, not tests.
+        - not:
+            regex: '\btest_constants\b'
     - kind: import_from_statement
-      regex: '^from\s+(\.|tests\.src\.unit\.)test_\w+\s+import'
-    - kind: import_from_statement
-      regex: '^from\s+(\.|tests\.src\.unit\.)(_backup_snapshot_fakes|_component_routing_helpers|_error_log_test_helpers|_logbook_fallback)\s+import'
+      regex: '^from\s+[\w.]*\b(_backup_snapshot_fakes|_component_routing_helpers|_error_log_test_helpers|_logbook_fallback)\s+import'
     - kind: identifier
       regex: '^mock_client$'
       inside:

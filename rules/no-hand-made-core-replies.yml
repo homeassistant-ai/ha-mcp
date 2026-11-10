@@ -1,8 +1,8 @@
 # A unit test that replaces the Home Assistant client and types in what Core
-# "answered" asserts against a guess of Core (#2752). The four stand-in rules
-# only see a faked Core object; this one sees the faked reply. Use the
-# `core_client` fixture (tests/src/unit/_core_client.py): the server's own client
-# connected to the real `hass`.
+# "answered" asserts against a guess of Core (#2752). The stand-in rules from
+# #3009 see a faked Core object; this one sees the faked reply. Use the
+# `core_client` fixture (tests/src/unit/_core_client.py): the server's own
+# client connected to the real `hass`.
 id: no-hand-made-core-replies
 language: python
 rule:
@@ -11,24 +11,42 @@ rule:
         # client.send_websocket_message = AsyncMock(...), and the
         # .return_value / .side_effect forms.
         - kind: assignment
-          regex: '^[^=]*\.(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command)(\.(return_value|side_effect))?\s*=[^=]'
+          regex: '^[^=]*\.(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription|ping)(\.(return_value|side_effect))?\s*(:[^=]+)?=[^=]'
+        # A fake client written as class attributes: get_states = AsyncMock(...)
+        - kind: assignment
+          regex: '^(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription|ping)\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|PropertyMock|staticmethod|lambda\b)'
         # MagicMock(get_states=AsyncMock(...))
         - kind: keyword_argument
-          regex: '^(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command)\s*='
-        # A hand-written client class: async def send_websocket_message(self, ...)
+          regex: '^(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription|ping)\s*='
+        # A hand-written client: async def send_websocket_message(self, ...)
         - kind: function_definition
-          regex: '^(async\s+)?def\s+(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command)\s*\(\s*self\b'
-        # patch.object(client, "send_websocket_message", ...)
+          regex: '^(async\s+)?def\s+(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription|ping)\s*\(\s*self\b'
+        # patch.object(client, "get_states", ...), monkeypatch.setattr(client,
+        # "get_states", ...), setattr(...), patch("pkg.Client.get_states"),
+        # configure_mock(...): the method, or where the client comes from, is
+        # named in a string.
         - kind: call
-          regex: '^(mock\.)?patch\.object\([^,]+,\s*["''](abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command)["'']'
-        # patch("...get_websocket_client", ...): a hand-written WebSocket client.
+          regex: '^(\w+\.)*(patch(\.object|\.multiple)?|setattr|configure_mock)\('
+          has:
+            kind: string
+            regex: '^\w*["'']([\w.]*\.)?((abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription|ping)|get_websocket_client|websocket_manager(\.\w+)?|get_client|httpx_client|HomeAssistantClient(\.\w+)?|HomeAssistantWebSocketClient(\.\w+)?)(\.(return_value|side_effect))?["'']$'
+            stopBy: end
+        # MagicMock(**{"get_states.return_value": [...]})
+        - kind: string
+          regex: '^\w*["'']([\w.]*\.)?(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription|ping)\.(return_value|side_effect)["'']$'
+        # The transport under the client: client.httpx_client = ..., or a
+        # mock transport that types in Core's HTTP reply.
+        - kind: assignment
+          regex: '^[^=]*\.httpx_client(\.\w+)*\s*(:[^=]+)?=[^=]'
         - kind: call
-          regex: '^(mock\.)?patch\(\s*["''][^"'']*(get_websocket_client|websocket_manager)["'']'
-    # A failure Core cannot be made to give in a unit test stays replaceable:
-    # the statement sets a side_effect that raises one of the client's own
-    # errors, and nothing else. A return_value never qualifies.
+          regex: '^(httpx\.)?MockTransport\('
+    # One replacement stays: making the client give no answer at all, which
+    # Core cannot be made to do in a unit test. The statement sets a
+    # side_effect that raises a transport error and nothing else. An error
+    # reply (HomeAssistantAPIError, HomeAssistantCommandError) is Core's answer
+    # and comes from Core.
     - not:
-        regex: 'side_effect\s*=\s*(HomeAssistant\w*(Error|Timeout|NotSent)|TimeoutError|asyncio\.TimeoutError|ConnectionError|ConnectionResetError|OSError)\b[^\[\]{}]*$'
+        regex: 'side_effect\s*=\s*([\w.]+\.)?(HomeAssistantConnectionError|HomeAssistantCommandNotSent|HomeAssistantCommandTimeout|WebSocketException|ConnectionClosed\w*|TimeoutError|ConnectionError|ConnectionResetError|OSError|ConnectError|ConnectTimeout|ReadTimeout|ReadError|TimeoutException|NetworkError|TransportError|RemoteProtocolError)\b[^\[\]{}]*$'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
@@ -324,8 +342,9 @@ message: |
   returns a hand-written reply (or a hand-written client class) asserts against
   a guess of what Core does. Take the `core_client` fixture (or
   `component_core_client`) and pass it where the tool takes its client: every
-  REST and WebSocket reply is then Core's own. The one replacement left is a
-  failure Core cannot be made to give, raised as the client's own exception:
+  REST and WebSocket reply is then Core's own, error replies included. The one
+  replacement left is the client getting no answer at all (a dropped
+  connection, a timeout), raised as a `side_effect`:
   `client.send_websocket_message = AsyncMock(side_effect=HomeAssistantConnectionError(...))`.
   See tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core".
 severity: error

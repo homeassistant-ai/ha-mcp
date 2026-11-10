@@ -1,0 +1,20 @@
+# The real-Core checks on the unit and app tests (tests/AGENTS.md, "Unit Tests
+# Run on Real Home Assistant Core") are not switched off line by line. A
+# suppression comment exempts a test without it appearing on any list.
+id: no-stand-in-suppressions
+language: python
+rule:
+  kind: comment
+  regex: 'ast-grep-ignore|noqa:[^#]*\bSLF|noqa\s*($|#)|mypy:\s*(ignore-errors|disable-error-code)|type:\s*ignore(\s*$|\s+#|\[[^\]]*\b(assignment|attr-defined|misc)\b)'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+ignores: []
+message: |
+  Do not switch a real-Core check off for one line or one file.
+  `ast-grep-ignore`, `noqa: SLF001`, a bare `noqa`, `mypy: ignore-errors`, a
+  bare `type: ignore` and a `type: ignore` for a Core object's declared type
+  (`assignment`, `attr-defined`, `misc`) each exempt a test from a check without
+  listing it. Write the test against real Core instead. See tests/AGENTS.md,
+  "Unit Tests Run on Real Home Assistant Core".
+severity: error

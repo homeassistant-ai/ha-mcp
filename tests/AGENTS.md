@@ -145,39 +145,50 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   for Home Assistant (the in-process server, an upstream), another integration
   through Core's `mock_integration`, and one function or constant on a real
   Core module when the test needs an answer Core cannot be made to give in a
-  unit test (a failure, a URL, another Core version's shape). The client is
-  replaced only to raise such a failure, as one of its own exceptions
-  (`AsyncMock(side_effect=HomeAssistantConnectionError(...))`). Raise Core's
-  real exceptions.
+  unit test (a failure, a URL, another Core version's shape). Raise Core's
+  real exceptions. A client method is replaced for one thing only: the client
+  getting no answer at all (a dropped connection, a timeout), as
+  `AsyncMock(side_effect=HomeAssistantConnectionError(...))`. An error reply
+  (a 404, a rejected command) is an answer, and comes from Core.
 - An integration whose requirements are not installed with Core (`cloud`,
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Six ast-grep rules refuse these in the source: a hand-made `hass` under any
-name, or a placeholder in `hass.data` (`rules/no-hand-made-hass.yml`), a fake
-Core object class (`rules/no-fake-core-objects.yml`), an import of the old
-shared fakes (`rules/no-shared-core-fakes.yml`), `patch.dict(sys.modules, ...)`
-or an assignment of a Core module name in `sys.modules`
-(`rules/no-core-module-stand-ins.yml`), a client method that returns a typed-in
-reply or a hand-written client class (`rules/no-hand-made-core-replies.yml`),
-and an import from another test module, from the old fake-client helpers, or
-the `mock_client` fixture, each of which hands a file someone else's fake
-client (`rules/no-shared-fake-clients.yml`).
-`src/unit/test_core_reply_rules.py` keeps the last two rules' lists exact: a
-listed file that no longer violates fails it. `tests/core_stand_in_guard.py` checks
-`sys.modules` after every test body and fails a test whose stand-in module is
-still there, which covers `monkeypatch` swaps and computed names; it cannot see
-a swap the test has already undone, which is why the fourth rule exists. Test
-files written before the unit tests ran on real Core are listed in the rules'
-`ignores` and in the guard. Converting such a file removes it from the lists;
-no file is ever added to them.
-Fast Checks compares every list here with the pull request's base
-(`scripts/stand_in_lists_ratchet.py`) and fails on an added entry, so a new
-test cannot be exempted. A list grows only when its ast-grep rule is widened
-in the same pull request.
+Seven ast-grep rules refuse these in the source: a hand-made `hass`, also as
+`mock_hass`, `hass_mock` or `self.hass`, or a placeholder put into `hass.data`
+(`rules/no-hand-made-hass.yml`), a fake Core object class
+(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
+(`rules/no-shared-core-fakes.yml`), `patch.dict(sys.modules, ...)` or an
+assignment of a Core module name in `sys.modules`
+(`rules/no-core-module-stand-ins.yml`), a replaced client method, client or
+HTTP transport, or a hand-written client class
+(`rules/no-hand-made-core-replies.yml`), an import from another test module or
+from the old fake-client helpers, or the `mock_client` fixture, each of which
+hands a file someone else's fake client (`rules/no-shared-fake-clients.yml`),
+and a comment that switches one of these checks off for a line or a file
+(`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
+bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
+`assignment`, `attr-defined` or `misc`).
+`tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
+fails a test whose stand-in module is still there, which covers `monkeypatch`
+swaps and computed names; it cannot see a swap the test has already undone,
+which is why the fourth rule exists.
 
-Two more checks run on these trees, with the same kind of list and the same
-rule for it:
+Test files written before a check are listed with it: in the rule's `ignores`
+and in the guard. Converting a file removes it from the lists.
+`src/unit/test_core_reply_rules.py` keeps the lists of the hass, reply,
+shared-client and suppression rules exact: a listed file that no longer
+violates fails it, as does a violating file that is not listed.
+
+A new test is never listed. Fast Checks compares every list with the pull
+request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
+is not in the base appears on one, whatever else the pull request changes. A
+file that is in the base may be added only by the pull request that creates the
+check or changes what its ast-grep rule matches, because a wider rule matches
+older files. The script also fails a rule that is removed, renamed or made to
+scan fewer files.
+
+Two more checks run on these trees, each with a list under the same rules:
 
 - Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private
   member access. Setting a private attribute on a Core object forces a state
@@ -185,10 +196,15 @@ rule for it:
   user reaches: go through the public command or tool.
   `test_core_reply_rules.py` keeps these lists exact too.
 - mypy checks both trees against Core's real types
-  (`uv run mypy tests/src/unit/ tests/addon/`), so a `None` or a placeholder
-  where Core declares a type is an error. Tests need no annotations. The files
-  written before the check are the `ignore_errors` modules under `tests.*` in
-  `pyproject.toml`.
+  (`uv run python scripts/mypy_tests_exact.py`). A `None` or a placeholder
+  assigned where Core declares a type is an error wherever mypy knows the
+  object's type: an object the test builds, or a fixture the test annotates.
+  An unannotated fixture parameter is `Any` and mypy checks nothing done to
+  it, so annotate the Core fixtures a test takes (`hass: HomeAssistant`,
+  `core_client: HomeAssistantClient`). The files written before the check are
+  the `ignore_errors` modules under `tests.` in `pyproject.toml`; the script
+  runs mypy without that list and fails on an error in an unlisted module and
+  on a listed module that has none left.
 
 The plugin enforces, for every test:
 

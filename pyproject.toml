@@ -163,12 +163,13 @@ module = ["voluptuous", "voluptuous.*"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]
-# The unit and app (add-on) tests are checked against Core's real types, so a
-# Core object forced into a state Core never produces is a type error. Tests
-# need not be annotated (AGENTS.md, Code Conventions), so an untyped test and
-# a helper returning Any are fine. A test also imports things mypy cannot
-# resolve (a script loaded by path, a library without stubs); that says
-# nothing about Core's types, so those two codes are off here.
+# The unit and app (add-on) tests are checked against Core's real types: a
+# value Core's declared type does not allow is an error where mypy knows the
+# object's type. An untyped test and a helper returning Any are allowed
+# (AGENTS.md, Code Conventions), and an untyped fixture parameter is Any, which
+# mypy does not check. A test also imports things mypy cannot resolve (a
+# script loaded by path, a library without stubs); that says nothing about
+# Core's types, so those two codes are off here.
 module = ["tests.*"]
 disallow_untyped_defs = false
 warn_return_any = false
@@ -176,8 +177,9 @@ disable_error_code = ["import-not-found", "import-untyped"]
 
 [[tool.mypy.overrides]]
 # Test files written before mypy ran on the tests (and the E2E helpers they
-# import). Fixing one removes it from this list; no module is ever added
-# (tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core").
+# import). scripts/mypy_tests_exact.py keeps this list exact: fixing a module
+# removes it, and no new module is added (tests/AGENTS.md, "Unit Tests Run on
+# Real Home Assistant Core").
 module = [
     "tests.addon.test_addon_startup",
     "tests.addon.test_addon_structure",

@@ -7,12 +7,16 @@ rule:
     - pattern: hass = SimpleNamespace($$$)
     - pattern: MagicMock($$$, name="hass", $$$)
     - pattern: Mock($$$, name="hass", $$$)
-    # The same stand-in under another name (mock_hass, fake_hass).
+    # The same stand-in under another name (mock_hass, hass_mock, self.hass).
     - kind: assignment
-      regex: '^\w+_hass\s*=\s*(Magic|NonCallable)?Mock\('
+      regex: '^(self\.)?(\w+_hass|hass_(mock|fake|stub|double))\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|SimpleNamespace)\('
+    - kind: assignment
+      regex: '^self\.hass\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|SimpleNamespace)\('
     # A placeholder where a Core object lives in hass.data.
     - kind: assignment
-      regex: '^hass\.data\[[^\]]+\]\s*=\s*(object\(\)|(Magic|NonCallable|Async)?Mock\(|SimpleNamespace\()'
+      regex: '^(self\.)?\w*hass\w*\.data(\[[^\]]+\])+\s*=\s*(object\(\)|(Async|Magic|NonCallable|NonCallableMagic)?Mock\(|SimpleNamespace\()'
+    - kind: call
+      regex: '^(self\.)?\w*hass\w*\.data\.setdefault\([^,]+,\s*(object\(\)|(Async|Magic|NonCallable|NonCallableMagic)?Mock\(|SimpleNamespace\()'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"

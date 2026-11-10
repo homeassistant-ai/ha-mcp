@@ -13,6 +13,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tokenize
+import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +23,14 @@ import pytest
 import yaml
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
 _REPO = Path(__file__).resolve().parents[3]
 _RULES = _REPO / "rules"
 _REPLIES = "no-hand-made-core-replies"
 _SHARED = "no-shared-fake-clients"
 _HASS = "no-hand-made-hass"
+_SUPPRESSIONS = "no-stand-in-suppressions"
 
 
 def _ast_grep() -> str:
@@ -84,9 +89,39 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             id="hand-written-client-class",
         ),
         pytest.param(
+            "class Client:\n"
+            '    get_states = AsyncMock(return_value=[{"state": "on"}])\n',
+            id="client-class-attribute",
+        ),
+        pytest.param(
             'with patch.object(client, "_request", AsyncMock(return_value={})):\n'
             "    pass\n",
             id="patch-object",
+        ),
+        pytest.param(
+            'mocker.patch.object(client, "get_states", return_value=[])\n',
+            id="mocker-patch-object",
+        ),
+        pytest.param(
+            'monkeypatch.setattr(client, "get_states", AsyncMock(return_value=[]))\n',
+            id="monkeypatch-setattr",
+        ),
+        pytest.param(
+            'setattr(client, "call_service", AsyncMock(return_value=[]))\n',
+            id="setattr",
+        ),
+        pytest.param(
+            'with patch("ha_mcp.client.rest_client.HomeAssistantClient.get_states") as m:\n'
+            "    m.return_value = []\n",
+            id="patched-method-by-path",
+        ),
+        pytest.param(
+            'client.configure_mock(**{"get_states.return_value": []})\n',
+            id="configure-mock",
+        ),
+        pytest.param(
+            'client = MagicMock(**{"get_states.return_value": []})\n',
+            id="return-value-named-in-a-dict-key",
         ),
         pytest.param(
             'with patch("ha_mcp.tools.x.get_websocket_client", AsyncMock(return_value=ws)):\n'
@@ -94,8 +129,36 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             id="patched-websocket-client",
         ),
         pytest.param(
+            'monkeypatch.setattr("ha_mcp.tools.x.get_websocket_client", connect)\n',
+            id="monkeypatched-websocket-client",
+        ),
+        pytest.param(
+            "client.httpx_client.request = AsyncMock(return_value=Response(200, json={}))\n",
+            id="replaced-http-transport",
+        ),
+        pytest.param(
+            "transport = httpx.MockTransport(lambda request: httpx.Response(200))\n",
+            id="mock-transport",
+        ),
+        pytest.param(
             'ws.send_command = AsyncMock(return_value={"success": False, "error": "no"})\n',
             id="typed-in-error-reply",
+        ),
+        pytest.param(
+            "ws.subscribe_events = AsyncMock(return_value=7)\n",
+            id="websocket-client-method",
+        ),
+        pytest.param(
+            "client.get_entity_state = AsyncMock(\n"
+            '    side_effect=HomeAssistantAPIError("Not found", status_code=404)\n'
+            ")\n",
+            id="typed-in-http-error",
+        ),
+        pytest.param(
+            "client.send_websocket_message = AsyncMock(\n"
+            '    side_effect=HomeAssistantCommandError("Command failed: no", "not_found")\n'
+            ")\n",
+            id="typed-in-command-error",
         ),
         pytest.param(
             "client.send_websocket_message = AsyncMock(\n"
@@ -138,17 +201,25 @@ def test_a_typed_in_core_reply_is_refused(source: str, tmp_path: Path) -> None:
             id="timeout",
         ),
         pytest.param(
+            'with patch.object(client, "get_states", side_effect=OSError("reset")):\n'
+            "    pass\n",
+            id="patched-to-give-no-answer",
+        ),
+        pytest.param(
             "async def test_it(core_client):\n"
             '    reply = await core_client.send_websocket_message({"type": "ping"})\n'
             '    assert reply["success"]\n',
             id="real-client-call",
         ),
+        pytest.param(
+            "class TestStartup:\n    async def test_connection(self, core_client):\n"
+            "        assert await core_client.test_connection()\n",
+            id="test-named-like-a-client-method",
+        ),
     ],
 )
-def test_a_real_reply_or_a_raised_failure_is_allowed(
-    source: str, tmp_path: Path
-) -> None:
-    """The fixture, and a failure Core cannot give, stay usable."""
+def test_a_real_reply_or_no_answer_is_allowed(source: str, tmp_path: Path) -> None:
+    """The fixture, and a client that gets no answer, stay usable."""
     assert not _flagged(_REPLIES, source, tmp_path)
 
 
@@ -159,6 +230,26 @@ def test_a_real_reply_or_a_raised_failure_is_allowed(
             "from .test_tools_traces import _make_pooled_client\n",
             True,
             id="helper-from-a-test-module",
+        ),
+        pytest.param(
+            "from ..test_tools_traces import _make_pooled_client\n",
+            True,
+            id="helper-from-a-parent-test-module",
+        ),
+        pytest.param(
+            "from . import test_tools_traces as traces\n",
+            True,
+            id="test-module-imported-whole",
+        ),
+        pytest.param(
+            "import tests.src.unit.test_tools_traces\n",
+            True,
+            id="test-module-imported-by-path",
+        ),
+        pytest.param(
+            "from tests.addon.test_webhook_proxy import make_proxy\n",
+            True,
+            id="helper-from-an-app-test-module",
         ),
         pytest.param(
             "from ._logbook_fallback import fallback_client\n",
@@ -173,9 +264,15 @@ def test_a_real_reply_or_a_raised_failure_is_allowed(
         pytest.param(
             "from ._component_core import ws_call\n", False, id="stand-in-free-helper"
         ),
+        pytest.param(
+            "from aiohttp import test_utils\n", False, id="library-test-utilities"
+        ),
+        pytest.param(
+            "from tests.test_constants import TEST_TOKEN\n", False, id="constants"
+        ),
     ],
 )
-def test_a_borrowed_fake_client_is_refused(
+def test_only_a_borrowed_fake_client_is_refused(
     source: str, refused: bool, tmp_path: Path
 ) -> None:
     """Importing a fake client from a grandfathered file does not dodge the rule."""
@@ -186,52 +283,120 @@ def test_a_borrowed_fake_client_is_refused(
     ("source", "refused"),
     [
         pytest.param("mock_hass = MagicMock()\n", True, id="renamed-hass"),
+        pytest.param("mock_hass = AsyncMock()\n", True, id="async-mock"),
+        pytest.param("hass_mock = MagicMock()\n", True, id="suffixed-name"),
+        pytest.param(
+            "fake_hass: MagicMock = MagicMock()\n", True, id="annotated-assignment"
+        ),
+        pytest.param(
+            "class Case:\n    def setup_method(self):\n        self.hass = MagicMock()\n",
+            True,
+            id="attribute-on-the-test-class",
+        ),
         pytest.param(
             "hass.data[DATA_TRACE_STORE] = object()\n", True, id="placeholder-store"
+        ),
+        pytest.param(
+            "hass.data[DOMAIN][KEY] = MagicMock()\n", True, id="nested-placeholder"
+        ),
+        pytest.param(
+            "hass.data.setdefault(DATA_TRACE_STORE, object())\n",
+            True,
+            id="placeholder-by-setdefault",
         ),
         pytest.param("hass.data[DOMAIN] = {}\n", False, id="own-domain-data"),
     ],
 )
-def test_a_stand_in_under_another_name_is_refused(
+def test_only_a_stand_in_for_hass_is_refused(
     source: str, refused: bool, tmp_path: Path
 ) -> None:
-    """A Core stand-in is refused whatever it is called or wherever it is put."""
+    """A Core stand-in is refused under another name or put into ``hass.data``."""
     assert _flagged(_HASS, source, tmp_path) is refused
 
 
+@pytest.mark.parametrize(
+    ("source", "refused"),
+    [
+        pytest.param(
+            "# ast-grep-ignore: no-hand-made-core-replies\nclient.get_states = fake\n",
+            True,
+            id="ast-grep-ignore",
+        ),
+        pytest.param("trace._state = None  # noqa: SLF001\n", True, id="noqa-slf001"),
+        pytest.param("# ruff: noqa\n", True, id="file-wide-noqa"),
+        pytest.param("# mypy: ignore-errors\n", True, id="mypy-ignore-errors"),
+        pytest.param("entry.options = None  # type: ignore\n", True, id="bare-ignore"),
+        pytest.param(
+            "entry.options = None  # type: ignore[assignment]\n",
+            True,
+            id="ignored-core-type",
+        ),
+        pytest.param("x = 1  # noqa: E501\n", False, id="unrelated-noqa"),
+        pytest.param(
+            "tool(limit='x')  # type: ignore[arg-type]\n", False, id="wrong-argument"
+        ),
+    ],
+)
+def test_only_a_suppressed_real_core_check_is_refused(
+    source: str, refused: bool, tmp_path: Path
+) -> None:
+    """A comment cannot switch a real-Core check off for a line or a file."""
+    assert _flagged(_SUPPRESSIONS, source, tmp_path) is refused
+
+
+def _regexes(node: Any) -> Iterator[str]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "regex":
+                yield value
+            else:
+                yield from _regexes(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _regexes(value)
+
+
 def _method_lists() -> list[set[str]]:
+    """The client-method names in each pattern of the rule that lists them."""
     rule = yaml.safe_load((_RULES / f"{_REPLIES}.yml").read_text(encoding="utf-8"))
-    alternatives = rule["rule"]["all"][0]["any"][:4]
-    assert [alternative["kind"] for alternative in alternatives] == [
-        "assignment",
-        "keyword_argument",
-        "function_definition",
-        "call",
-    ]
     lists = []
-    for alternative in alternatives:
-        groups = re.findall(r"\(([a-z_|]+)\)", alternative["regex"])
-        method_groups = [group for group in groups if "send_websocket_message" in group]
-        assert len(method_groups) == 1, alternative["regex"]
-        lists.append(set(method_groups[0].split("|")))
+    for regex in _regexes(rule["rule"]["all"][0]):
+        groups = [
+            group
+            for group in re.findall(r"\(([a-z_|]+)\)", regex)
+            if "send_websocket_message" in group
+        ]
+        if groups:
+            assert len(groups) == 1, regex
+            lists.append(set(groups[0].split("|")))
+    # Assignment, class attribute, keyword, method definition, a name in a
+    # call's string, a name in a dict key.
+    assert len(lists) == 6, lists
     return lists
 
 
-def test_every_client_method_is_covered_by_the_rule() -> None:
-    """A method added to the client cannot be mocked without the lint seeing it."""
-    public = {
+def _public_coroutines(cls: type) -> set[str]:
+    return {
         name
-        for name, _ in inspect.getmembers(
-            HomeAssistantClient, inspect.iscoroutinefunction
-        )
+        for name, _ in inspect.getmembers(cls, inspect.iscoroutinefunction)
         if not name.startswith("_")
-    } - {"close"}
+    }
+
+
+def test_every_client_method_is_covered_by_the_rule() -> None:
+    """A new public async method of either client is in every pattern."""
+    public = (
+        _public_coroutines(HomeAssistantClient)
+        | _public_coroutines(HomeAssistantWebSocketClient)
+    ) - {"close", "connect", "disconnect"}
 
     for covered in _method_lists():
-        assert public <= covered, sorted(public - covered)
+        # A test class may name a test ``test_connection``.
+        missing = public - covered - {"test_connection"}
+        assert not missing, sorted(missing)
 
 
-@pytest.mark.parametrize("rule", [_REPLIES, _SHARED])
+@pytest.mark.parametrize("rule", [_REPLIES, _SHARED, _HASS, _SUPPRESSIONS])
 def test_the_grandfather_list_is_exactly_the_files_that_still_violate(
     rule: str, tmp_path: Path
 ) -> None:
@@ -252,13 +417,35 @@ def test_the_grandfather_list_is_exactly_the_files_that_still_violate(
     }
 
 
+def test_no_unlisted_test_suppresses_ast_grep() -> None:
+    """``ast-grep-ignore`` can hide a line from the scan itself, so read the comments."""
+    config = yaml.safe_load(
+        (_RULES / f"{_SUPPRESSIONS}.yml").read_text(encoding="utf-8")
+    )
+    listed = set(config["ignores"])
+
+    def suppresses(path: Path) -> bool:
+        with tokenize.open(path) as source:
+            return any(
+                token.type == tokenize.COMMENT and "ast-grep-ignore" in token.string
+                for token in tokenize.generate_tokens(source.readline)
+            )
+
+    suppressing = {
+        path.relative_to(_REPO).as_posix()
+        for tree in ("tests/src/unit", "tests/addon")
+        for path in (_REPO / tree).rglob("*.py")
+        if suppresses(path)
+    }
+
+    assert suppressing <= listed, sorted(suppressing - listed)
+
+
 @pytest.mark.parametrize("tree", ["tests/src/unit", "tests/addon"])
 def test_the_private_access_list_is_exactly_the_files_that_still_violate(
     tree: str,
 ) -> None:
     """A file cleaned of private access leaves the list; none is parked on it."""
-    import tomllib
-
     config = tomllib.loads((_REPO / tree / "ruff.toml").read_text(encoding="utf-8"))
     listed = set(config["lint"]["extend-per-file-ignores"])
     ruff = shutil.which("ruff", path=str(Path(sys.executable).parent)) or shutil.which(

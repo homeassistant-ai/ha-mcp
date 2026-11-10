@@ -7,19 +7,17 @@ client the server ships, talking REST and WebSocket to Core's own API.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantClient
 from ha_mcp.tools.tools_zones import ZoneTools
 
 
 async def test_rest_read_returns_the_state_core_holds(
-    hass: HomeAssistant, core_client: Any
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """A REST read through the client is Core's state, not a typed-in dict."""
     hass.states.async_set("light.kitchen", "on", {"brightness": 128})
@@ -31,7 +29,9 @@ async def test_rest_read_returns_the_state_core_holds(
 
 
 async def test_websocket_command_is_answered_by_core(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry, core_client: Any
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
 ) -> None:
     """A WebSocket command through the client gets Core's registry row."""
     assert await async_setup_component(hass, "config", {})
@@ -45,7 +45,9 @@ async def test_websocket_command_is_answered_by_core(
     assert reply["result"]["unique_id"] == "uid-1"
 
 
-async def test_cores_refusal_surfaces_as_the_clients_error(core_client: Any) -> None:
+async def test_cores_refusal_surfaces_as_the_clients_error(
+    core_client: HomeAssistantClient,
+) -> None:
     """Core's own 404 reaches the caller, so no failure reply is typed in."""
     with pytest.raises(HomeAssistantAPIError) as exc_info:
         await core_client.get_entity_state("light.missing")
@@ -54,7 +56,7 @@ async def test_cores_refusal_surfaces_as_the_clients_error(core_client: Any) -> 
 
 
 async def test_component_commands_answer_on_the_component_fixture(
-    component_core_client: Any,
+    component_core_client: HomeAssistantClient,
 ) -> None:
     """The component variant serves ``ha_mcp_tools/*`` from the real handlers."""
     reply = await component_core_client.send_websocket_message(
@@ -65,16 +67,17 @@ async def test_component_commands_answer_on_the_component_fixture(
 
 
 async def test_plain_fixture_is_an_install_without_the_component(
-    core_client: Any,
+    core_client: HomeAssistantClient,
 ) -> None:
     """Without the component Core rejects its commands, as on a real install."""
     reply = await core_client.send_websocket_message({"type": "ha_mcp_tools/info"})
 
     assert reply["success"] is False
+    assert reply["error_code"] == "unknown_command"
 
 
 async def test_a_tool_runs_on_the_fixture_end_to_end(
-    hass: HomeAssistant, core_client: Any
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """A real tool lists a zone Core stored, with no mocked reply in between."""
     assert await async_setup_component(hass, "config", {})

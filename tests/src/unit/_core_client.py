@@ -7,15 +7,24 @@ listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
+    from ha_mcp.client.rest_client import HomeAssistantClient
 
 
 @pytest.fixture
 async def core_client(
-    hass: Any, aiohttp_client: Any, hass_access_token: str, socket_enabled: None
-) -> Any:
+    hass: HomeAssistant,
+    aiohttp_client: Any,
+    hass_access_token: str,
+    socket_enabled: None,
+) -> AsyncIterator[HomeAssistantClient]:
     """The server's own Home Assistant client, connected to the real ``hass``.
 
     A tool test passes this where a tool takes its client, so every REST and
@@ -39,12 +48,17 @@ async def core_client(
     try:
         yield client
     finally:
-        await websocket_manager.disconnect()
-        await client.close()
+        # Nested, so a failed disconnect cannot leave the HTTP client open.
+        try:
+            await websocket_manager.disconnect()
+        finally:
+            await client.close()
 
 
 @pytest.fixture
-async def component_core_client(hass: Any, core_client: Any) -> Any:
+async def component_core_client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
     """``core_client`` on a ``hass`` that also answers ``ha_mcp_tools/*``."""
     from custom_components.ha_mcp_tools import websocket_api
 
