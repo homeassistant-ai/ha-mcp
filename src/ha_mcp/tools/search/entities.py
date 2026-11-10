@@ -67,15 +67,16 @@ _MEMBERSHIP_FIELDS: tuple[str, ...] = ("is_group", "member_entity_ids")
 # attribute). Only the component can ask Core for it, so a record carries it
 # on the component path alone.
 _COMPOSED_NAME_FIELD = "name"
-# A search that cannot see the composed name knows an entity by its id, legacy
-# friendly_name and aliases, so a miss may be one a current component finds.
+# A search without a current component sees less (an entity only by its id,
+# legacy friendly_name and aliases), so a search that finds nothing may be one
+# the component would have answered.
 _NO_COMPONENT_EMPTY_SEARCH_HINT = (
     "No ha_mcp_tools component detected; for full search functionality, "
     "install it via HACS (the Marketplace on Home Assistant 2026.11+)."
 )
 _OLD_COMPONENT_EMPTY_SEARCH_HINT = (
-    "The installed ha_mcp_tools component predates search by the name Home "
-    "Assistant shows; for full search functionality, update it."
+    "The installed ha_mcp_tools component is out of date; for full search "
+    "functionality, update it."
 )
 _COMPOSED_NAME_UNAVAILABLE = (
     "name was requested, but the ha_mcp_tools component did not serve this "
@@ -96,15 +97,15 @@ def _composed_name_notes(
     name_served: bool,
     component: ComponentNaming,
     name_requested: bool,
-    empty_query_search: bool,
+    nothing_found: bool,
 ) -> list[str]:
-    """Warnings for a search that could not use Core's composed name.
+    """Warnings for a search that ran without a current component.
 
     ``name_served`` is true when a component that composes names answered;
-    nothing is missing then. Otherwise a requested ``name`` and an empty result
-    each say what is in the way: no component (or none that answered), or one
-    that predates composed names. An empty result the legacy path served while
-    a current component is installed carries no hint.
+    nothing is missing then. Otherwise a requested ``name`` and a search that
+    found nothing each say what is in the way: no component (or none that
+    answered), or one that is out of date. A search the legacy path served
+    while a current component is installed carries no hint.
     """
     if name_served:
         return []
@@ -115,7 +116,7 @@ def _composed_name_notes(
             if component == "outdated"
             else _COMPOSED_NAME_UNAVAILABLE
         )
-    if empty_query_search and component != "current":
+    if nothing_found and component != "current":
         notes.append(
             _OLD_COMPONENT_EMPTY_SEARCH_HINT
             if component == "outdated"

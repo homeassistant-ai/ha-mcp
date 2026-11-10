@@ -25,16 +25,20 @@ class TestComposedNameWithoutTheComponent(_SearchToolFixture):
         assert any("composed name" in w for w in data.get("warnings", []))
 
     @pytest.mark.asyncio
-    async def test_an_empty_search_says_the_component_is_missing(self, search_tool):
-        data = await search_tool(query="no entity is called this")
+    async def test_a_search_that_finds_nothing_says_the_component_is_missing(
+        self, search_tool
+    ):
+        data = await search_tool(query="nothing is called this")
 
-        assert data["entity_total_matches"] == 0
+        assert data["count"] == 0
         assert any(
             "No ha_mcp_tools component detected" in w for w in data.get("warnings", [])
         )
 
     @pytest.mark.asyncio
-    async def test_a_search_with_results_carries_no_component_hint(self, search_tool):
+    async def test_a_search_that_finds_something_carries_no_component_hint(
+        self, search_tool
+    ):
         data = await search_tool(query="light")
 
         assert data["entities"]
@@ -49,7 +53,7 @@ def test_a_component_that_predates_composed_names_is_told_apart_from_none() -> N
         name_served=False,
         component="outdated",
         name_requested=True,
-        empty_query_search=True,
+        nothing_found=True,
     )
 
     assert len(notes) == 2
@@ -64,7 +68,7 @@ def test_an_empty_search_with_a_current_component_carries_no_hint() -> None:
             name_served=False,
             component="current",
             name_requested=False,
-            empty_query_search=True,
+            nothing_found=True,
         )
         == []
     )

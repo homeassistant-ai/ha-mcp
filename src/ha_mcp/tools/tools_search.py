@@ -448,8 +448,10 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             name_served=component_response is not None and naming == "current",
             component=naming,
             name_requested=_COMPOSED_NAME_FIELD in (parsed_result_fields or ()),
-            empty_query_search=bool(req.query_text)
-            and response.get("entity_total_matches") == 0,
+            nothing_found=bool(req.query_text)
+            and not response.get("count")
+            and not response.get("entity_total_matches")
+            and not response.get("config_total_matches"),
         )
         if notes:
             response.setdefault("warnings", []).extend(notes)
