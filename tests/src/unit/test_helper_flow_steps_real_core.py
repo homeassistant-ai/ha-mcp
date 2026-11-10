@@ -264,6 +264,7 @@ async def test_an_open_form_names_the_later_forms_and_the_last_one_none(
     )
 
     assert [form["step_id"] for form in first["later_forms"]] == ["presets"]
+    assert "config list" in first["note"]
     assert last["step_id"] == "presets"
     assert "later_forms" not in last
     assert "more_forms" not in last

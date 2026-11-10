@@ -201,14 +201,24 @@ async def describe_form(
 
 _LATER_FORMS_NOTE = (
     "later_forms are the steps Home Assistant's flow declares after this one. "
-    "A config list answers this form and later ones in one call, one object "
-    "per form. A form marked fields_depend_on_answers is built from the "
-    "earlier answers and is returned by the call that answers the form "
-    "before it; one marked only_for_some_answers is shown for some answers."
+    "A form marked fields_depend_on_answers is built from the earlier answers "
+    "and is returned by the call that answers the form before it; one marked "
+    "only_for_some_answers is shown for some answers."
 )
 _LATER_FORMS_EDIT_NOTE = (
     " A later form's current values are shown when the flow reaches it."
 )
+
+
+def with_list_hint(response: dict[str, Any]) -> dict[str, Any]:
+    """Say, on a ha_config_set_helper form that has later forms, that its
+    ``config`` takes their answers too."""
+    if "later_forms" in response:
+        response["note"] += (
+            " A config list answers this form and later ones in one call, one "
+            "object per form."
+        )
+    return response
 
 
 def _later_form(
@@ -527,7 +537,7 @@ async def describe_helper(
                 helper_type=helper_type,
             )
         described = await _describe_simple(client, helper_type, helper_id)
-    return {"helper_type": helper_type, **described}
+    return {"helper_type": helper_type, **with_list_hint(described)}
 
 
 async def describe_helper_response(
