@@ -345,6 +345,15 @@ def mock_client():
         return client
 
 
+@pytest.fixture
+def no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No component describes a flow's declared steps, for a test whose client
+    is a test double: a form then says only what its own step reports."""
+    from ha_mcp.tools.config_helpers import describe
+
+    monkeypatch.setattr(describe, "flow_outline", AsyncMock(return_value=None))
+
+
 @pytest.fixture(autouse=True)
 def opened_flows(
     monkeypatch: pytest.MonkeyPatch,

@@ -13,6 +13,8 @@ from ha_mcp.read_only import read_only_request
 from ha_mcp.tools import config_entry_flow_introspect
 from ha_mcp.tools.config_helpers import describe as mod
 
+pytestmark = pytest.mark.usefixtures("no_flow_outline")
+
 _SCHEDULE_CORE = [
     {"type": "string", "lengthMin": 1, "name": "name", "required": True},
     {"name": "monday", "required": False, "optional": True},  # opaque validator
@@ -34,13 +36,6 @@ def _menu(options: list[str]) -> dict[str, Any]:
 @pytest.fixture
 def client() -> AsyncMock:
     return AsyncMock()
-
-
-@pytest.fixture(autouse=True)
-def _no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No component describes the flow's steps: only the step itself says
-    whether more forms follow."""
-    monkeypatch.setattr(mod, "flow_outline", AsyncMock(return_value=None))
 
 
 @pytest.fixture

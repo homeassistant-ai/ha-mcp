@@ -9,6 +9,8 @@ import pytest
 
 from ha_mcp.tools.flow_translations import fetch_flow_strings, flow_text
 
+pytestmark = pytest.mark.usefixtures("no_flow_outline")
+
 _ABORT = "component.sun.config.abort.single_instance_allowed"
 _NOT_SUPPORTED = "component.demo.config.abort.not_supported"
 
