@@ -94,6 +94,13 @@ class TestFormatDetailedTrace:
         with pytest.raises(ToolError, match="Unknown trace section"):
             _format_detailed_trace("automation.test", "r1", _trace(), sections="action")
 
+    def test_metadata_sections_are_rejected(self) -> None:
+        """success and unique_id are not valid section requests."""
+        with pytest.raises(ToolError, match="Unknown trace section"):
+            _format_detailed_trace("automation.test", "r1", _trace(), sections="success")
+        with pytest.raises(ToolError, match="Unknown trace section"):
+            _format_detailed_trace("automation.test", "r1", _trace(), sections="unique_id")
+
     def test_logbook_section_adds_logbook_fields(self) -> None:
         logbook = TraceLogbook(
             [{"name": "Light"}],

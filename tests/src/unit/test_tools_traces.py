@@ -688,3 +688,31 @@ class TestTraceFetchPooledClient:
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
         assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_sections_without_run_is_rejected(self):
+        """sections is only meaningful when a run is resolved."""
+        client = _make_pooled_client(_dispatch())
+        tools = TraceTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_automation_traces(
+                entity_id="automation.test", sections="conditions"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_detailed_without_run_is_rejected(self):
+        """detailed=True is only meaningful when a run is resolved."""
+        client = _make_pooled_client(_dispatch())
+        tools = TraceTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_automation_traces(
+                entity_id="automation.test", detailed=True
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

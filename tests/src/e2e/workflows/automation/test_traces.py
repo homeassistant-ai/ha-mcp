@@ -1029,3 +1029,42 @@ class TestGetAutomationTracesNegativeInputs:
             {"entity_id": "sensor.some_entity"},
         )
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_sections_rejected_without_resolved_run(
+        self, mcp_client: Any
+    ) -> None:
+        """sections is invalid in list mode."""
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_failure(
+            "ha_get_automation_traces",
+            {"domain": "automation", "sections": "conditions"},
+        )
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_detailed_rejected_without_resolved_run(
+        self, mcp_client: Any
+    ) -> None:
+        """detailed is invalid in list mode."""
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_failure(
+            "ha_get_automation_traces",
+            {"domain": "automation", "detailed": True},
+        )
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_item_only_empty_list_returns_warning(
+        self, mcp_client: Any
+    ) -> None:
+        """A domain+item_id list with no traces returns a top-level warning."""
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"domain": "automation", "item_id": "nonexistent_item_task2_e2e"},
+        )
+
+        assert result["success"] is True
+        assert result["trace_count"] == 0
+        assert "warnings" in result
+        assert any(
+            "No traces found" in warning for warning in result["warnings"]
+        )

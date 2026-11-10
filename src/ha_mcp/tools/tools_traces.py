@@ -379,6 +379,23 @@ class TraceTools:
             ) = await _resolve_trace_target(
                 self._client, entity_id, domain, item_id, context_id, run_id
             )
+            if resolved_run_id is None and (sections is not None or detailed):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "sections and detailed require a resolved run",
+                        context={
+                            "resolved_run_id": resolved_run_id,
+                            "sections": sections,
+                            "detailed": detailed,
+                        },
+                        suggestions=[
+                            "Pass run_id to select a specific trace",
+                            "Pass context_id to resolve a run",
+                            "Omit sections and detailed when listing traces",
+                        ],
+                    )
+                )
 
             logger.debug(
                 f"ha_get_automation_traces starting: id={entity_id or '<domain>'} "
@@ -527,6 +544,7 @@ class TraceTools:
         offset: int,
         order: Literal["newest", "oldest"],
         ctx: Context | None,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         """List recent traces, attaching diagnostics when none are stored."""
         message: dict[str, Any] = {"type": "trace/list", "domain": domain}
@@ -541,6 +559,12 @@ class TraceTools:
             )
 
         traces_data = result.get("result", [])
+        list_warnings = list(warnings) if warnings is not None else []
+        if not traces_data and item_id is not None and entity_id is None:
+            list_warnings.append(
+                f"No traces found for {domain}/{item_id}; "
+                "the item_id may be incorrect or the automation/script has not run."
+            )
 
         if not traces_data and entity_id is not None:
             await safe_progress(
@@ -561,6 +585,7 @@ class TraceTools:
                 domain=domain,
                 offset=offset,
                 order=order,
+                warnings=list_warnings,
             )
 
         await safe_progress(
@@ -576,6 +601,7 @@ class TraceTools:
             domain=domain,
             offset=offset,
             order=order,
+            warnings=list_warnings,
         )
 
 
@@ -658,6 +684,7 @@ def _format_trace_list(
     domain: str | None = None,
     offset: int = 0,
     order: Literal["newest", "oldest"] = "newest",
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Format trace list for AI consumption.
 
@@ -715,25 +742,24 @@ def _format_trace_list(
     if diagnostics is not None and len(traces) == 0:
         result["diagnostics"] = diagnostics
 
+    if warnings:
+        result["warnings"] = list(warnings)
+
     return result
 
 
-_TRACE_SECTION_KEYS = frozenset(
+_TRACE_METADATA_KEYS = frozenset(
     {
-        "config",
-        "trace",
-        "blueprint_inputs",
-        "context",
-        "error",
-        "state",
-        "script_execution",
-        "timestamp",
-        "unique_id",
-        "last_step",
+        "success",
+        "run_id",
         "domain",
         "item_id",
-        "not_triggered",
-        "logbook",
+        "entity_id",
+        "warnings",
+        "logbook_entries",
+        "logbook_transport",
+        "logbook_total",
+        "logbook_truncated",
     }
 )
 
@@ -774,7 +800,7 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
     requested = _requested_sections(sections)
     if not requested:
         return result
-    known = _TRACE_SECTION_KEYS | set(result)
+    known = (set(result) - _TRACE_METADATA_KEYS) | {"logbook"}
     unknown = sorted(requested - known)
     if unknown:
         raise_tool_error(
@@ -788,14 +814,7 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
                 ],
             )
         )
-    keep = requested | {
-        "success",
-        "entity_id",
-        "domain",
-        "item_id",
-        "run_id",
-        "warnings",
-    }
+    keep = requested | _TRACE_METADATA_KEYS
     if "logbook" in requested:
         keep |= {
             "logbook_entries",
