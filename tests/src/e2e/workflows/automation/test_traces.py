@@ -533,7 +533,7 @@ action:
         event_context_id = event_data["context_id"]
         assert event_context_id is not None
 
-        await wait_for_tool_result(
+        auto_traces = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": automation_id},
@@ -542,7 +542,7 @@ action:
             poll_interval=0.5,
             description="automation trace after shared context event",
         )
-        await wait_for_tool_result(
+        script_traces = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": script_entity_id},
@@ -551,20 +551,24 @@ action:
             poll_interval=0.5,
             description="script trace after shared context event",
         )
+        auto_run_id = auto_traces["traces"][0]["run_id"]
+        script_run_id = script_traces["traces"][0]["run_id"]
 
         by_context_data = await mcp.call_tool_success(
             "ha_get_automation_traces",
             {"context_id": event_context_id},
         )
 
-        assert by_context_data["context_match"] in ("trace", "parent")
+        selected_run_id = by_context_data["run_id"]
+        assert selected_run_id in {auto_run_id, script_run_id}
         assert "context_other_matches" in by_context_data
         other = by_context_data["context_other_matches"]
-        assert len(other) == 1
-        assert other[0]["domain"] in ("automation", "script")
-        assert other[0]["run_id"]
-        assert other[0]["item_id"]
-        assert other[0]["match"] in ("trace", "parent")
+        other_run_ids = {m["run_id"] for m in other}
+        expected_other = {auto_run_id, script_run_id} - {selected_run_id}
+        assert other_run_ids == expected_other, (
+            f"expected other matches {expected_other}, got {other_run_ids}; "
+            f"selected={selected_run_id}, automation={auto_run_id}, script={script_run_id}"
+        )
 
     async def test_trace_storage_disabled_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory
