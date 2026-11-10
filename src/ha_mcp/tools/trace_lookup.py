@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
+from ..client.rest_client import HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 from .log_sources_logbook import LogbookLogSourceMixin
@@ -131,7 +132,7 @@ async def resolve_global_context(
     contexts = result.get("result")
     entry = contexts.get(context_id) if isinstance(contexts, dict) else None
     if not isinstance(entry, dict) or not entry.get("run_id"):
-        return None
+        return await _resolve_global_parent_context(client, context_id)
     return ContextTraceMatch(
         str(entry["run_id"]),
         "trace",
@@ -141,6 +142,122 @@ async def resolve_global_context(
         None,
         entry.get("domain"),
         entry.get("item_id"),
+    )
+
+
+async def _global_trace_rows(
+    client: Any,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Collect trace/list rows across both trace domains."""
+    rows: list[dict[str, Any]] = []
+    scan_errors: list[str] = []
+    for domain in ("automation", "script"):
+        try:
+            result = await client.send_websocket_message(
+                {"type": "trace/list", "domain": domain}
+            )
+        except HomeAssistantError as err:
+            scan_errors.append(f"{domain}: {err}")
+            continue
+        if not result.get("success"):
+            scan_errors.append(
+                f"{domain}: {result.get('error') or 'trace/list failed'}"
+            )
+            continue
+        entries = result.get("result")
+        if not isinstance(entries, list):
+            scan_errors.append(f"{domain}: trace/list returned no row list")
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("run_id"):
+                continue
+            item_id = entry.get("item_id")
+            if not isinstance(item_id, str) or not item_id:
+                continue
+            row = dict(entry)
+            row["_domain"] = domain
+            rows.append(row)
+    return rows, scan_errors
+
+
+async def _scan_global_parent(
+    client: Any,
+    context_id: str,
+    rows: list[dict[str, Any]],
+    truncated: bool,
+    scan_errors: list[str],
+) -> ContextTraceMatch | None:
+    """Walk the bounded global rows, preferring a real run over a diagnostic."""
+    scanned = 0
+    parent_match: tuple[str, dict[str, Any], str, str] | None = None
+    fallback_match: tuple[str, dict[str, Any], str, str] | None = None
+    for trace in rows:
+        scanned += 1
+        domain = str(trace["_domain"])
+        item_id = str(trace["item_id"])
+        run_id = str(trace["run_id"])
+        trace_data = await _read_candidate_context(
+            client,
+            domain,
+            item_id,
+            run_id,
+            scan_errors,
+            have_match=parent_match is not None or fallback_match is not None,
+        )
+        if trace_data is _SCAN_ABORTED:
+            break
+        if trace_data is None:
+            continue
+        kind = _match_kind(trace_data.get("context"), context_id)
+        if kind == "trace":
+            return ContextTraceMatch(
+                run_id,
+                "trace",
+                scanned,
+                truncated,
+                tuple(scan_errors),
+                trace_data,
+                domain,
+                item_id,
+            )
+        if kind != "parent":
+            continue
+        candidate = (run_id, trace_data, domain, item_id)
+        if trace.get("not_triggered"):
+            if fallback_match is None:
+                fallback_match = candidate
+            continue
+        if parent_match is None:
+            parent_match = candidate
+    selected = parent_match or fallback_match
+    if selected is None:
+        return None
+    run_id, trace_data, domain, item_id = selected
+    return ContextTraceMatch(
+        run_id,
+        "parent",
+        scanned,
+        truncated,
+        tuple(scan_errors),
+        trace_data,
+        domain,
+        item_id,
+    )
+
+
+async def _resolve_global_parent_context(
+    client: Any, context_id: str
+) -> ContextTraceMatch | None:
+    """Scan every stored item for a parent context, bounded like the per-item scan."""
+    rows, scan_errors = await _global_trace_rows(client)
+    rows.sort(key=_trace_start, reverse=True)
+    truncated = len(rows) > PARENT_CONTEXT_SCAN_LIMIT
+    return await _scan_global_parent(
+        client,
+        context_id,
+        rows[:PARENT_CONTEXT_SCAN_LIMIT],
+        truncated,
+        scan_errors,
     )
 
 

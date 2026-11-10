@@ -280,6 +280,47 @@ class TestTraceContextLookup:
         assert contexts_message == {"type": "trace/contexts"}
 
     @pytest.mark.asyncio
+    async def test_context_only_parent_resolves_through_global_scan(self):
+        """No entity_id: the bounded global scan matches a parent context."""
+        detail = {
+            "run_id": "r1",
+            "state": "stopped",
+            "trace": {},
+            "context": {"id": "own-1", "parent_id": "parent-1"},
+        }
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                if message["domain"] == "automation":
+                    return {
+                        "success": True,
+                        "result": [
+                            {
+                                "run_id": "r1",
+                                "domain": "automation",
+                                "item_id": "uid_1",
+                                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                            }
+                        ],
+                    }
+                return {"success": True, "result": []}
+            if mtype == "trace/get":
+                return {"success": True, "result": detail}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await TraceTools(client).ha_get_automation_traces(
+            context_id="parent-1"
+        )
+
+        assert result["entity_id"] == "automation.uid_1"
+        assert result["run_id"] == "r1"
+        assert result["context_match"] == "parent"
+        assert result["context_scanned"] == 1
+
+    @pytest.mark.asyncio
     async def test_domain_only_lists_across_items(self):
         """No entity_id: trace/list runs for the whole domain."""
         list_result = {
