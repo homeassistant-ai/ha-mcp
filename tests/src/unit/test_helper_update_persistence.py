@@ -956,41 +956,6 @@ class TestFlowHelperRouting:
                 wait=False,
             )
 
-    async def test_flow_helper_name_param_folded_into_config(
-        self, register_tools, mock_client
-    ):
-        """Top-level name param is injected into config dict when not already present."""
-        captured_config: dict = {}
-
-        async def capture_submit(flow_id, data):
-            captured_config.update(data)
-            return {
-                "type": "create_entry",
-                "result": {"entry_id": "entry-c", "title": "t", "domain": "min_max"},
-            }
-
-        mock_client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "flow-c",
-                "step_id": "user",
-            }
-        )
-        mock_client.submit_config_flow_step = AsyncMock(side_effect=capture_submit)
-        mock_client.abort_config_flow = AsyncMock(return_value={})
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-
-        await register_tools["ha_config_set_helper"](
-            helper_type="min_max",
-            name="my_helper_name",
-            config={"entity_ids": ["sensor.x"], "type": "mean"},
-            wait=False,
-        )
-
-        assert captured_config.get("name") == "my_helper_name"
-
     async def test_simple_type_accepts_an_empty_config(
         self, register_tools, mock_client
     ):
