@@ -80,7 +80,7 @@ async def test_own_context_match_returns_core_extended_trace(
 
 
 @pytest.mark.asyncio
-async def test_parent_match_selects_newest_across_real_and_diagnostic(
+async def test_parent_match_prefers_real_run_over_newer_diagnostic(
     hass: HomeAssistant,
 ) -> None:
     older = _trace(
@@ -109,11 +109,11 @@ async def test_parent_match_selects_newest_across_real_and_diagnostic(
     )
 
     assert result["match"] == "parent"
-    assert result["run_id"] == "diag"
+    assert result["run_id"] == "newer"
     assert result["scanned"] == 3
     assert result["other_matches"] == [
         {"domain": "script", "item_id": "uid_1", "run_id": "older", "match": "parent"},
-        {"domain": "script", "item_id": "uid_1", "run_id": "newer", "match": "parent"},
+        {"domain": "script", "item_id": "uid_1", "run_id": "diag", "match": "parent"},
     ]
 
 

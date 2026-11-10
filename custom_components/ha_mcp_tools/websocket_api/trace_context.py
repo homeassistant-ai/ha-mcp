@@ -77,6 +77,11 @@ def _tie_break_key(
     return (match_order, domain_order, item_id)
 
 
+def _trace_is_real(trace: Any) -> bool:
+    """True for a real run; False for a not-triggered diagnostic trace."""
+    return not getattr(trace, "not_triggered", False)
+
+
 def _trace_context_payload(
     hass: HomeAssistant,
     msg: dict[str, Any],
@@ -87,7 +92,8 @@ def _trace_context_payload(
 
     One context id can match several runs (for example, an automation and the
     script it calls share ``context.id``/``parent_id``). All matches are
-    collected, then the newest ``timestamp.start`` is selected. Ties break
+    collected. A real run is preferred over a not-triggered diagnostic; among
+    traces of the same kind the newest ``timestamp.start`` wins. Ties break
     toward own-context matches, then automations, then ascending ``item_id``.
     The unselected matches are returned as ``other_matches``.
     """
@@ -113,8 +119,10 @@ def _trace_context_payload(
     if not matches:
         return _empty_result(scanned=scanned)
 
-    newest_start = max(_trace_start(t) for t, _, _, _ in matches)
-    candidates = [m for m in matches if _trace_start(m[0]) == newest_start]
+    real_matches = [m for m in matches if _trace_is_real(m[0])]
+    pool = real_matches if real_matches else matches
+    newest_start = max(_trace_start(t) for t, _, _, _ in pool)
+    candidates = [m for m in pool if _trace_start(m[0]) == newest_start]
     selected = min(candidates, key=_tie_break_key)
     trace, domain, item_id, match = selected
     other_matches = [

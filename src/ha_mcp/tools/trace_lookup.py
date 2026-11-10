@@ -305,7 +305,7 @@ async def resolve_global_context(
         except Exception as err:  # noqa: BLE001
             scan_errors.append(f"global context scan failed: {err}")
             scan_matches, scanned, truncated = [], 0, False
-        run_id, _trace_data, entry_domain, entry_item_id, _kind = direct_match
+        run_id, _trace_data, entry_domain, entry_item_id, _kind, _not_triggered = direct_match
         return await _resolve_with_direct_match(
             client,
             run_id,
@@ -338,7 +338,7 @@ async def _global_direct_match(
     context_id: str,
     entry: Any,
     requested_domain: Literal["automation", "script"] | None,
-) -> tuple[str, dict[str, Any] | None, str | None, str | None, str] | None:
+) -> tuple[str, dict[str, Any] | None, str | None, str | None, str, bool] | None:
     """Return the direct-map identity for a global context.
 
     The actual trace data is read later by ``_resolve_with_direct_match`` so
@@ -368,6 +368,7 @@ async def _global_direct_match(
         str(entry_domain) if entry_domain else None,
         str(entry_item_id) if entry_item_id else None,
         "trace",
+        False,
     )
 
 
@@ -376,7 +377,7 @@ async def _resolve_with_direct_match(
     direct_run_id: str,
     direct_domain: str | None,
     direct_item_id: str | None,
-    scan_matches: list[tuple[str, dict[str, Any] | None, str, str, str]],
+    scan_matches: list[tuple[str, dict[str, Any] | None, str, str, str, bool]],
     scanned: int,
     truncated: bool,
     scan_errors: list[str],
@@ -407,12 +408,13 @@ async def _resolve_with_direct_match(
             direct_trace_data = None
 
     if direct_trace_data is not None:
-        direct_match: tuple[str, dict[str, Any] | None, str | None, str | None, str] = (
+        direct_match: tuple[str, dict[str, Any] | None, str | None, str | None, str, bool] = (
             direct_run_id,
             direct_trace_data,
             direct_domain,
             direct_item_id,
             "trace",
+            bool(direct_trace_data.get("not_triggered")),
         )
         all_matches = _deduplicated_matches(scan_matches, direct_match)
         selected = _select_trace_match(all_matches, scanned, truncated, scan_errors)
@@ -427,7 +429,7 @@ async def _resolve_with_direct_match(
     # Do not also list it as an other match if the scan happened to include it.
     other_matches = tuple(
         {"domain": str(d), "item_id": str(i), "run_id": r, "match": k}
-        for r, _td, d, i, k in scan_matches
+        for r, _td, d, i, k, _nt in scan_matches
         if d is not None and i is not None and r != direct_run_id
     )
     return ContextTraceMatch(
@@ -486,10 +488,10 @@ async def _scan_global_parent(
     context_id: str,
     rows: list[dict[str, Any]],
     scan_errors: list[str],
-) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str]], int]:
+) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str, bool]], int]:
     """Collect all matching stored traces across the bounded global rows."""
     scanned = 0
-    matches: list[tuple[str, dict[str, Any] | None, str, str, str]] = []
+    matches: list[tuple[str, dict[str, Any] | None, str, str, str, bool]] = []
     for trace in rows:
         scanned += 1
         domain = str(trace["_domain"])
@@ -509,7 +511,7 @@ async def _scan_global_parent(
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
         if kind in ("trace", "parent"):
-            matches.append((run_id, trace_data, domain, item_id, kind))
+            matches.append((run_id, trace_data, domain, item_id, kind, bool(trace.get("not_triggered"))))
 
     return matches, scanned
 
@@ -539,7 +541,7 @@ async def _collect_global_parent_matches(
     client: Any,
     context_id: str,
     domain: Literal["automation", "script"] | None = None,
-) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str]], int, bool, list[str], list[dict[str, Any]]]:
+) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str, bool]], int, bool, list[str], list[dict[str, Any]]]:
     """Return all global matches without selecting or raising."""
     rows, scan_errors = await _global_trace_rows(client, domain)
     rows.sort(key=_trace_start, reverse=True)
@@ -735,7 +737,7 @@ async def _collect_parent_context_matches(
     domain: str,
     item_id: str,
     context_id: str,
-) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str]], int, bool, list[str]]:
+) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str, bool]], int, bool, list[str]]:
     """Return all per-item matches without selecting or raising."""
     result = await client.send_websocket_message(
         {"type": "trace/list", "domain": domain, "item_id": item_id}
@@ -765,10 +767,10 @@ async def _scan_for_context(
     context_id: str,
     candidates: list[dict[str, Any]],
     scan_errors: list[str],
-) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str]], int]:
+) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str, bool]], int]:
     """Collect all matching stored traces for the requested context id."""
     scanned = 0
-    matches: list[tuple[str, dict[str, Any] | None, str, str, str]] = []
+    matches: list[tuple[str, dict[str, Any] | None, str, str, str, bool]] = []
     for trace in candidates:
         scanned += 1
         run_id = str(trace["run_id"])
@@ -786,23 +788,23 @@ async def _scan_for_context(
             continue
         kind = _match_kind(trace_data.get("context"), context_id)
         if kind in ("trace", "parent"):
-            matches.append((run_id, trace_data, domain, item_id, kind))
+            matches.append((run_id, trace_data, domain, item_id, kind, bool(trace.get("not_triggered"))))
 
     return matches, scanned
 
 
 def _deduplicated_matches(
-    scan_matches: list[tuple[str, dict[str, Any] | None, str, str, str]],
-    direct_match: tuple[str, dict[str, Any] | None, str | None, str | None, str] | None,
-) -> list[tuple[str, dict[str, Any] | None, str | None, str | None, str]]:
+    scan_matches: list[tuple[str, dict[str, Any] | None, str, str, str, bool]],
+    direct_match: tuple[str, dict[str, Any] | None, str | None, str | None, str, bool] | None,
+) -> list[tuple[str, dict[str, Any] | None, str | None, str | None, str, bool]]:
     """Combine scan matches with a direct map entry, keeping scanned trace data."""
-    matches: list[tuple[str, dict[str, Any] | None, str | None, str | None, str]] = list(scan_matches)
+    matches: list[tuple[str, dict[str, Any] | None, str | None, str | None, str, bool]] = list(scan_matches)
     if direct_match is None:
         return matches
-    run_id, trace_data, domain, item_id, kind = direct_match
+    run_id, trace_data, domain, item_id, kind, not_triggered = direct_match
     key = (run_id, domain, item_id)
-    if not any((r, d, i) == key for r, _td, d, i, _k in matches):
-        matches.append((run_id, trace_data, domain, item_id, kind))
+    if not any((r, d, i) == key for r, _td, d, i, _k, _nt in matches):
+        matches.append((run_id, trace_data, domain, item_id, kind, not_triggered))
     return matches
 
 
@@ -849,31 +851,38 @@ async def _fetch_selected_trace_data(
 
 
 def _select_trace_match(
-    matches: Sequence[tuple[str, dict[str, Any] | None, str | None, str | None, str]],
+    matches: Sequence[tuple[str, dict[str, Any] | None, str | None, str | None, str, bool]],
     scanned: int,
     truncated: bool,
     scan_errors: list[str],
 ) -> ContextTraceMatch | None:
-    """Select the newest match and list the rest with the component rule."""
+    """Select the newest match and list the rest with the component rule.
+
+    A real run is preferred over a not-triggered diagnostic. Among traces of
+    the same kind, the newest ``timestamp.start`` wins, with ties broken toward
+    own-context matches, then automations, then ascending ``item_id``.
+    """
     if not matches:
         return None
 
-    def _start_key(match: tuple[str, dict[str, Any] | None, str | None, str | None, str]) -> str:
-        _run_id, trace_data, _domain, _item_id, _kind = match
+    def _start_key(match: tuple[str, dict[str, Any] | None, str | None, str | None, str, bool]) -> str:
+        _run_id, trace_data, _domain, _item_id, _kind, _not_triggered = match
         return _trace_start_only(trace_data)
 
     def _tie_break_key(
-        match: tuple[str, dict[str, Any] | None, str | None, str | None, str],
+        match: tuple[str, dict[str, Any] | None, str | None, str | None, str, bool],
     ) -> tuple[int, int, str | None]:
-        _run_id, _trace_data, domain, item_id, kind = match
+        _run_id, _trace_data, domain, item_id, kind, _not_triggered = match
         match_order = 0 if kind == "trace" else 1
         domain_order = 0 if domain == "automation" else 1
         return (match_order, domain_order, item_id)
 
-    newest_start = max(_start_key(m) for m in matches)
-    candidates = [m for m in matches if _start_key(m) == newest_start]
+    real_matches = [m for m in matches if not m[5]]
+    pool = real_matches if real_matches else matches
+    newest_start = max(_start_key(m) for m in pool)
+    candidates = [m for m in pool if _start_key(m) == newest_start]
     selected = min(candidates, key=_tie_break_key)
-    run_id, trace_data, domain, item_id, kind = selected
+    run_id, trace_data, domain, item_id, kind, _not_triggered = selected
     other_matches = tuple(
         {
             "domain": str(d),
@@ -881,7 +890,7 @@ def _select_trace_match(
             "run_id": r,
             "match": k,
         }
-        for r, _td, d, i, k in matches
+        for r, _td, d, i, k, _nt in matches
         if (r != run_id or d != domain or i != item_id) and d is not None and i is not None
     )
     return ContextTraceMatch(

@@ -33,8 +33,8 @@ def _context_client(*, contexts=None, traces=None, details=None):
 
 class TestResolveContextTrace:
     @pytest.mark.asyncio
-    async def test_own_context_wins_without_scanning(self):
-        """A trace's own context id resolves from trace/contexts alone."""
+    async def test_own_context_wins_and_scan_is_allowed_for_other_matches(self):
+        """A trace's own context id is selected and the scan still aggregates others."""
         client = _context_client(
             contexts={
                 "ctx-1": {
@@ -51,11 +51,12 @@ class TestResolveContextTrace:
         assert match.match == "trace"
         assert match.scanned == 0
         assert match.truncated is False
+        assert match.other_matches == ()
         sent_types = [
             call.args[0]["type"]
             for call in client.send_websocket_message.await_args_list
         ]
-        assert sent_types == ["trace/contexts"]
+        assert sent_types == ["trace/contexts", "trace/list", "trace/get"]
 
     @pytest.mark.asyncio
     async def test_parent_context_finds_newest_matching_trace(self):
