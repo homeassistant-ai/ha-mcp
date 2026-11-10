@@ -220,7 +220,7 @@ class TraceTools:
             Field(
                 description=(
                     "Automation or script entity_id. Omit when resolving a "
-                    "context-only lookup or listing a whole domain."
+                    "context-only lookup."
                 ),
                 default=None,
             ),
@@ -320,6 +320,9 @@ class TraceTools:
         automation or script (its stored_traces setting), so older runs are
         not available.
 
+        Do not use this tool for general log history or recorder statistics;
+        use `ha_get_logs` for logs and `ha_get_history` for history/statistics.
+
         USAGE MODES:
         1. List recent traces for one entity (omit run_id and context_id), or
            across a domain with domain="automation"/"script" and no entity_id.
@@ -336,13 +339,11 @@ class TraceTools:
            selects the newest matching run and reports `context_match` as
            `trace` or `parent`. Additional runs that share the same context
            id are listed in `context_other_matches`. With entity_id, a parent
-           context can be scanned. Without entity_id, Core's global
-           trace/contexts map resolves the run's own context.
+           context can be scanned; without entity_id, the component bridge or
+           bounded public scan still resolves a parent context across all stored
+           runs.
            ha_get_automation_traces(context_id="01J...")
         4. Add the run's logbook: detailed=True or sections="logbook".
-
-        Do not use this tool for general log history or recorder statistics;
-        use `ha_get_logs` for logs and `ha_get_history` for history/statistics.
 
         RESPONSE FIELDS:
         - A detail response is Core's extended `trace/get` dict: `config`,
@@ -353,7 +354,8 @@ class TraceTools:
           lookup returns Core's `domain`/`item_id` instead of inventing one.
         - `context_match` is `trace` or `parent`; `context_scanned`,
           `context_scan_truncated` and `context_scan_errors` describe the
-          public fallback scan.
+          scan, whether it ran through the component bridge or the public
+          fallback.
         - `logbook_entries`, `logbook_transport`, `logbook_total` and
           `logbook_truncated` describe the run's logbook rows.
         """
@@ -370,6 +372,17 @@ class TraceTools:
                         ],
                     )
                 )
+
+            logger.debug(
+                f"ha_get_automation_traces starting: id={entity_id or '<domain>'} "
+                f"run_id={run_id or '<list>'} context_id={context_id or '<none>'}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=3,
+                message="resolving trace target",
+            )
             (
                 entity_id,
                 domain_name,
@@ -396,17 +409,6 @@ class TraceTools:
                         ],
                     )
                 )
-
-            logger.debug(
-                f"ha_get_automation_traces starting: id={entity_id or '<domain>'} "
-                f"run_id={run_id or '<list>'} context_id={context_id or '<none>'}",
-            )
-            await safe_progress(
-                ctx,
-                progress=0,
-                total=3,
-                message="resolving trace target",
-            )
 
             # Every trace command below is a single request/response with no
             # subscription or streaming, so the shared pooled WebSocket owns the
@@ -720,11 +722,9 @@ def _format_trace_list(
     else:
         window = ordered[offset : offset + limit]
 
-    formatted_traces = []
-    for trace in window:
-        # Pass Core's short dict through unchanged instead of projecting a
-        # field allowlist; native keys such as script_execution stay as-is.
-        formatted_traces.append(dict(trace))
+    # Pass Core's short dict through unchanged instead of projecting a
+    # field allowlist; native keys such as script_execution stay as-is.
+    formatted_traces = [dict(trace) for trace in window]
 
     result: dict[str, Any] = {
         "success": True,

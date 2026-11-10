@@ -969,9 +969,9 @@ dimension. What it covers:
   When such a key belongs to a hidden script, scene or automation — including
   a renamed one whose key no longer matches its entity_id — the
   `ha_config_get_*` / `ha_config_set_*` / `ha_config_remove_*` call, a
-  `ha_get_automation_traces` call for `script.<storage key>`, or a
-  `ha_call_service` with `domain: script` and that key as `service`, is
-  concealed as not-found too. A script or automation body that calls
+  `ha_get_automation_traces` call for `script.<storage key>` or with `domain`
+  and `item_id` naming a hidden script or automation, or a `ha_call_service`
+  with `domain: script` and that key as `service`, is concealed as not-found too. A script or automation body that calls
   `script.<storage key>`, a raw `trace/*` command or result naming the key,
   and an `ha_read_file` / `ha_config_get_yaml` read of a file that defines a
   hidden item are refused. A file defines one through a top-level key of

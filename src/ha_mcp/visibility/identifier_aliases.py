@@ -84,8 +84,8 @@ class IdentifierAliases:
         """Whether a trace's ``item_id`` is a hidden entity's storage key.
 
         Traces are keyed by the registry ``unique_id``; an object ID is not a
-        trace key, so a visible script whose object ID matches a hidden
-        script's old name must not be concealed.
+        trace key, so a hidden script's old name that matches a visible
+        script's object ID must not be concealed.
         """
         key = value.strip()
         return key in self.storage_keys.get(domain, frozenset())

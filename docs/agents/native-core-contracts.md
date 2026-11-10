@@ -100,15 +100,6 @@ component-absent fallbacks — a `device_id` request needs the WebSocket path
 there because REST has no device filter, and a bridge timeout surfaces rather
 than re-running the recorder query on another transport.
 
-When a Core store contains a relationship its public API does not index,
-prefer a component command that scans the live store in process and returns the
-record's native serialized form. Keep the public API as the explicit
-component-absent fallback, bounded, and report the bound and unreadable rows
-instead of presenting a partial scan as complete. The trace store's
-parent-context lookup is one instance of this pattern: the run's parent id lives
-only inside the stored trace, while the public context map indexes the run's
-own context.
-
 `ha_restart` forwards Core's restart schema (`safe_mode`) and leaves the
 refusals to Core. The embedded server is the exception: it replies before the
 restart fires, so a Core refusal would reach nobody. There it reads what Core
