@@ -412,9 +412,9 @@ dev = [
     # --sync-lock). Both stay on the Core version of the
     # e2e image (tests/test_constants.py); Renovate bumps all three together.
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    "homeassistant==2026.11.0",
+    "homeassistant==2026.11.1",
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    "pytest-homeassistant==2026.11.0",
+    "pytest-homeassistant==2026.11.1",
     # Test infrastructure imports the SHARED websockets directly (the HAOS
     # runtime harness, the image bake, wait_helpers) to talk to Home
     # Assistant's own WebSocket API — that is test tooling driving HA, not
