@@ -76,7 +76,7 @@ def form_submission(
         if not isinstance(name, str):
             continue
         declared.add(name)
-        given = values.get(name, MISSING)
+        given: Any = values.get(name, MISSING)
         nested = field.get("schema")
         if isinstance(nested, list) and (given is MISSING or isinstance(given, dict)):
             required = bool(field.get("required"))

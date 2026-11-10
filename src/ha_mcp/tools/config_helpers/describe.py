@@ -51,6 +51,7 @@ _SELECTOR_KEYS = (
     "device_class",
     "mode",
     "filter",
+    "read_only",
 )
 _SERIALIZED_KEYS = ("valueMin", "valueMax", "lengthMin", "lengthMax", "allow_none")
 

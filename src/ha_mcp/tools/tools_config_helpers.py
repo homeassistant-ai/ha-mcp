@@ -693,11 +693,11 @@ class HelperConfigTools:
                     f"these keys: {_SIMPLE_CONFIG_KEYS_DESCRIPTION} "
                     "FLOW types and config_subentry: the answers to the form "
                     "the flow is at, under the form's own field names (a "
-                    "section's fields nested under the section's name). A "
-                    "field you omit is sent as the form shows it (its "
-                    "`current` value), a field set to null is left empty, and "
-                    "Home Assistant validates the rest. Omit config to get "
-                    "the form without answering it."
+                    "section's fields nested under the section's name). On an "
+                    "update a field you omit is sent as the form shows it "
+                    "(its `current` value); a field set to null is left "
+                    "empty. Home Assistant validates the answer. Omit config "
+                    "to get the form without answering it."
                 ),
                 default=None,
             ),

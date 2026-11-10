@@ -248,7 +248,6 @@ async def test_restore_puts_back_differing_options_then_the_enabled_state(
     update.assert_awaited_once()
     assert update.await_args.kwargs == {
         "expected_domain": "demo",
-        "keep_current_values": False,
         "fixed_options": {"int": 42},
     }
     assert [m["type"] for m in sent] == [

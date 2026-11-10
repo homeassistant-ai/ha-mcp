@@ -44,11 +44,10 @@ def _flow_answers(
 ) -> dict[str, Any] | None:
     """The call's answer to a form: ``config``, with ``name`` as its ``name``
     field when it sets none. ``None`` answers no form."""
-    if config == "":
-        config = None
-    if isinstance(config, str):
+    parsed: Any = None if config == "" else config
+    if isinstance(parsed, str):
         try:
-            config = parse_json_param(config, "config")
+            parsed = parse_json_param(parsed, "config")
         except ValueError as err:
             raise_tool_error(
                 create_error_response(
@@ -57,17 +56,17 @@ def _flow_answers(
                     context={**context, "parameter": "config"},
                 )
             )
-    if config is None:
+    if parsed is None:
         return None
-    if not isinstance(config, dict):
+    if not isinstance(parsed, dict):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"config must be an object, got {type(config).__name__}",
+                f"config must be an object, got {type(parsed).__name__}",
                 context={**context, "parameter": "config"},
             )
         )
-    answers = dict(config)
+    answers = dict(parsed)
     if name is not None and name.strip() and "name" not in answers:
         answers["name"] = name
     return answers
@@ -255,14 +254,14 @@ async def _handle_flow_helper(
 
     result = step.get("result")
     result = result if isinstance(result, dict) else {}
-    entry_id = result.get("entry_id") if action == "create" else target.entry_id
+    saved_id = result.get("entry_id") if action == "create" else target.entry_id
     title = result.get("title", step.get("title"))
-    entities, warnings = await _wait_for_flow_entities(client, entry_id, action, wait)
+    entities, warnings = await _wait_for_flow_entities(client, saved_id, action, wait)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
 
     extras: dict[str, Any] = {
         "method": "config_flow",
-        "entry_id": entry_id,
+        "entry_id": saved_id,
         "title": title,
         "entity_ids": entity_ids,
     }
@@ -276,7 +275,7 @@ async def _handle_flow_helper(
     response = _helper_response(
         action,
         helper_type,
-        data={"entry_id": entry_id, "title": title},
+        data={"entry_id": saved_id, "title": title},
         message=f"{helper_type} helper {action}d successfully",
         warnings=warnings,
         **extras,

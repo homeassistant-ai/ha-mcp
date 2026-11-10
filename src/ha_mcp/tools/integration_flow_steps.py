@@ -146,9 +146,10 @@ def _require_opened(target: FlowTarget, flow_id: str) -> None:
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Flow {flow_id!r} is not a {target.kind} flow ha-mcp opened "
-                "for this call: a flow continues or ends only with the domain "
-                "or entry_id (and reconfigure=True) it was opened with. "
-                "Nothing was sent to the flow",
+                "for this call: a flow continues or ends only with the "
+                "arguments that named its target when it was opened (domain "
+                "or helper_type, entry_id or helper_id, reconfigure, "
+                "subentry_type and subentry_id). Nothing was sent to the flow",
                 suggestions=[
                     "Start the flow again without flow_id; an ha-mcp restart "
                     "forgets the flows it opened. A flow left open ends when "

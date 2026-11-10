@@ -39,6 +39,7 @@ from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ._core_client import core_backed_client
 
 _SOURCES = ["sensor.a", "sensor.b"]
+_MIN_MAX = {"name": "Lowest", "entity_ids": _SOURCES, "type": "min"}
 _THERMOSTAT = {
     "name": "Office",
     "ac_mode": False,
@@ -55,11 +56,6 @@ async def tools(
         yield HelperConfigTools(client)
         # An entry's setup or reload outlives the call that caused it.
         await hass.async_block_till_done()
-
-
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    body: dict[str, Any] = json.loads(str(exc_info.value))
-    return body
 
 
 def _options(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
@@ -107,7 +103,7 @@ async def test_a_call_without_config_returns_cores_form_and_saves_nothing(
     created = await tools.ha_config_set_helper(
         helper_type="min_max",
         flow_id=shown["flow_id"],
-        config={"name": "Lowest", "entity_ids": _SOURCES},
+        config=dict(_MIN_MAX),
     )
 
     assert _options(hass, created["entry_id"])["entity_ids"] == _SOURCES
@@ -172,19 +168,17 @@ async def test_a_null_empties_an_option(
 async def test_a_key_the_form_lacks_is_refused_by_core_and_the_flow_stays_open(
     hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:
-    answer = {"name": "Lowest", "entity_ids": _SOURCES}
-
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_helper(
-            helper_type="min_max", config={**answer, "bogus": 1}
+            helper_type="min_max", config={**_MIN_MAX, "bogus": 1}
         )
 
-    error = _error(exc_info)
+    error = json.loads(str(exc_info.value))
     assert "bogus" in error["error"]["message"]
     assert hass.config_entries.async_entries("min_max") == []
 
     created = await tools.ha_config_set_helper(
-        helper_type="min_max", flow_id=error["flow_id"], config=answer
+        helper_type="min_max", flow_id=error["flow_id"], config=dict(_MIN_MAX)
     )
     assert _options(hass, created["entry_id"])["entity_ids"] == _SOURCES
 
@@ -198,7 +192,7 @@ async def test_a_form_core_rejects_is_an_error_that_saves_nothing(
             config={**_THERMOSTAT, "min_temp": 30, "max_temp": 10},
         )
 
-    error = _error(exc_info)
+    error = json.loads(str(exc_info.value))
     assert "base" in error["errors"]
     assert error["flow_id"]
     assert hass.config_entries.async_entries("generic_thermostat") == []

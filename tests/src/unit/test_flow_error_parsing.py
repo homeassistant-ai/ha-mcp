@@ -17,17 +17,14 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.tools import integration_flow_steps
 from ha_mcp.tools.config_entry_flow_errors import (
     FlowRef,
     _parse_flow_api_error,
     raise_form_errors,
 )
 from ha_mcp.tools.config_helpers.flow import _handle_set_config_subentry
-from ha_mcp.tools.integration_flow_steps import (
-    FlowTarget,
-    _opened_flows,
-    drive_flow,
-)
+from ha_mcp.tools.integration_flow_steps import FlowTarget, drive_flow
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -54,7 +51,7 @@ async def _drive(
 ) -> Any:
     """One step-driver call; with ``flow_id`` the flow counts as opened."""
     if flow_id is not None:
-        _opened_flows[flow_id] = target.anchor
+        integration_flow_steps._opened_flows[flow_id] = target.anchor
     return await drive_flow(
         client,
         target,

@@ -180,7 +180,7 @@ class _OptionsFlowProgress:
         self.apply_status = "unknown"
         try:
             submit = submit_fn or client.submit_options_flow_step
-            result = await asyncio.wait_for(
+            result: dict[str, Any] = await asyncio.wait_for(
                 submit(flow_id, payload), timeout=_SUBMIT_TIMEOUT_S
             )
         except HomeAssistantAuthError:
