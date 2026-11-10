@@ -137,11 +137,6 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
             "This item has no registry unique_id, so Core has no key under "
             "which to store a trace (common for YAML automations without an id)."
         )
-    if diagnostics.get("entity_enabled") is False and domain == "automation":
-        return (
-            "This automation is disabled (state off). automation.trigger can "
-            "still execute it and record a trace."
-        )
     if diagnostics.get("loaded") is False:
         return (
             "Core reports this automation is not loaded. Check its validation "
@@ -152,6 +147,11 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
         return (
             f"The {domain} is unavailable, so Home Assistant cannot run it. "
             "Check the integration that provides it and the Home Assistant logs."
+        )
+    if domain == "automation" and diagnostics.get("entity_state") == "off":
+        return (
+            "This automation is disabled (state off). automation.trigger can "
+            "still execute it and record a trace."
         )
     return (
         "No stored trace is available yet. Run the automation/script once, "

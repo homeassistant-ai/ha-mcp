@@ -452,10 +452,14 @@ action:
             {"domain": "automation", "limit": 50},
         )
         row = next(
-            trace
-            for trace in domain_list["traces"]
-            if trace["run_id"] == by_context_data["run_id"]
+            (
+                trace
+                for trace in domain_list["traces"]
+                if trace["run_id"] == by_context_data["run_id"]
+            ),
+            None,
         )
+        assert row is not None, "the new run is missing from the newest 50 runs"
         by_item = await mcp.call_tool_success(
             "ha_get_automation_traces",
             {

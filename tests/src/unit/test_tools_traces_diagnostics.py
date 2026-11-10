@@ -97,6 +97,21 @@ class TestGatherDiagnostics:
         assert "automation.trigger" in result["suggestion"]
 
     @pytest.mark.asyncio
+    async def test_unavailable_automation_is_not_called_disabled(self) -> None:
+        """An unavailable entity cannot be triggered, so say that instead."""
+        client = _client({"state": "unavailable", "attributes": {}})
+        result = await _diagnostics(
+            client,
+            entity={"unique_id": "uid_1"},
+            loaded=True,
+        )
+
+        assert result["entity_state"] == "unavailable"
+        assert "unavailable" in result["suggestion"].lower()
+        assert "disabled" not in result["suggestion"].lower()
+        assert "automation.trigger" not in result["suggestion"]
+
+    @pytest.mark.asyncio
     async def test_typo_entity_is_not_found(self) -> None:
         client = _client(None)
         result = await _diagnostics(client, entity=None, loaded=None)

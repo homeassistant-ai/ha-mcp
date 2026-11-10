@@ -424,13 +424,9 @@ class TraceTools:
                 )
                 if context_match is not None:
                     _add_context_match(detail, context_id, context_match)
-                if deduplicate is not None:
-                    detail.setdefault("warnings", []).append(
-                        "`deduplicate` is deprecated and has no effect; Core's "
-                        "raw step variables are returned unchanged."
-                    )
+                _add_deduplicate_warning(detail, deduplicate)
                 return detail
-            return await self._fetch_trace_list(
+            result = await self._fetch_trace_list(
                 domain_name,
                 item_id,
                 entity_id,
@@ -439,6 +435,8 @@ class TraceTools:
                 order=order,
                 ctx=ctx,
             )
+            _add_deduplicate_warning(result, deduplicate)
+            return result
 
         except ToolError:
             raise
@@ -488,7 +486,12 @@ class TraceTools:
             if not result.get("success"):
                 _raise_trace_ws_failure(
                     result.get("error", "Failed to retrieve trace"),
-                    {"entity_id": entity_id, "run_id": run_id},
+                    {
+                        "entity_id": entity_id,
+                        "domain": domain,
+                        "item_id": item_id,
+                        "run_id": run_id,
+                    },
                 )
             trace_data = result.get("result", {})
 
@@ -496,7 +499,7 @@ class TraceTools:
         logbook: TraceLogbook | None = None
         # An explicit section list decides on its own: detailed=True must not
         # spend a slow recorder query on rows the caller then filters out.
-        if "logbook" in requested or (detailed and not sections):
+        if "logbook" in requested or (detailed and not requested):
             logbook = await fetch_trace_logbook(self._client, trace_data)
         await safe_progress(ctx, progress=3, total=3, message="formatting trace")
         formatted = _format_detailed_trace(
@@ -532,7 +535,7 @@ class TraceTools:
         if not result.get("success"):
             _raise_trace_ws_failure(
                 result.get("error", "Failed to list traces"),
-                {"entity_id": entity_id, "domain": domain},
+                {"entity_id": entity_id, "domain": domain, "item_id": item_id},
             )
 
         traces_data = result.get("result", [])
@@ -729,6 +732,18 @@ _TRACE_SECTION_KEYS = frozenset(
         "logbook",
     }
 )
+
+
+_DEDUPLICATE_WARNING = (
+    "`deduplicate` is deprecated and has no effect; Core's raw step "
+    "variables are returned unchanged."
+)
+
+
+def _add_deduplicate_warning(result: dict[str, Any], deduplicate: bool | None) -> None:
+    """Tell a caller that the retired deduplication no longer applies."""
+    if deduplicate is not None:
+        result.setdefault("warnings", []).append(_DEDUPLICATE_WARNING)
 
 
 def _format_detailed_trace(

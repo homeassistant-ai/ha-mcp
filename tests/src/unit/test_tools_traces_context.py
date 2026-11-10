@@ -7,7 +7,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_traces import TraceTools
-from ha_mcp.tools.trace_lookup import ContextTraceMatch
+from ha_mcp.tools.trace_lookup import ContextTraceMatch, TraceLogbook
 
 from .test_tools_traces import _dispatch, _make_pooled_client
 
@@ -468,6 +468,181 @@ class TestTraceContextLookup:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_domain_scoped_context_resolves_the_direct_map(self):
+        """domain is validated against the run's own context entry."""
+        detail_result = {
+            "success": True,
+            "result": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {},
+                "context": {"id": "ctx-1"},
+            },
+        }
+        context_result = {
+            "success": True,
+            "result": {
+                "ctx-1": {
+                    "run_id": "r1",
+                    "domain": "automation",
+                    "item_id": "uid_1",
+                }
+            },
+        }
+        client = _make_pooled_client(
+            _dispatch(detail_result=detail_result, context_result=context_result)
+        )
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            context_id="ctx-1", domain="automation"
+        )
+
+        assert result["context_match"] == "trace"
+        assert result["domain"] == "automation"
+        assert result["item_id"] == "uid_1"
+
+    @pytest.mark.asyncio
+    async def test_item_and_context_resolves_inside_that_item(self):
+        """domain+item_id+context_id scans one Core trace key."""
+        detail_result = {
+            "success": True,
+            "result": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {},
+                "context": {"id": "own-1", "parent_id": "parent-1"},
+            },
+        }
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "run_id": "r1",
+                            "item_id": "uid_1",
+                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+                        }
+                    ],
+                }
+            if mtype == "trace/get":
+                return {"success": True, "result": detail_result["result"]}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+        result = await TraceTools(client).ha_get_automation_traces(
+            domain="automation", item_id="uid_1", context_id="parent-1"
+        )
+
+        assert result["context_match"] == "parent"
+        assert result["item_id"] == "uid_1"
+        contexts_message = next(
+            call.args[0]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "trace/contexts"
+        )
+        assert contexts_message == {
+            "type": "trace/contexts",
+            "domain": "automation",
+            "item_id": "uid_1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_item_only_lists_that_trace_key(self):
+        """domain+item_id lists one item's runs."""
+        list_result = {
+            "success": True,
+            "result": [
+                {
+                    "run_id": "r1",
+                    "item_id": "uid_1",
+                    "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+                }
+            ],
+        }
+        client = _make_pooled_client(_dispatch(list_result=list_result))
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            domain="automation", item_id="uid_1"
+        )
+
+        assert result["trace_count"] == 1
+        assert "entity_id" not in result
+        list_message = next(
+            call.args[0]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "trace/list"
+        )
+        assert list_message == {
+            "type": "trace/list",
+            "domain": "automation",
+            "item_id": "uid_1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_all_connection_failures_are_connection_failed(self):
+        """Both domains failing on transport is not reported as no such run."""
+
+        def _d(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {}}
+            if mtype == "trace/list":
+                return {"success": False, "error": "connection closed"}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_d)
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(context_id="parent-1")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_list_warns_when_deduplicate_is_passed(self):
+        """The retired parameter is audible on list calls too."""
+        list_result = {"success": True, "result": []}
+        client = _make_pooled_client(_dispatch(list_result=list_result))
+
+        result = await TraceTools(client).ha_get_automation_traces(
+            entity_id="automation.test", deduplicate=False
+        )
+
+        assert any("deduplicate" in warning for warning in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_whitespace_sections_with_detailed_fetches_logbook(self):
+        """detailed=True still fetches logbook for a whitespace section string."""
+        detail_result = {
+            "success": True,
+            "result": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {},
+                "context": {"id": "ctx-1"},
+                "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+            },
+        }
+        client = _make_pooled_client(_dispatch(detail_result=detail_result))
+        logbook = TraceLogbook([{"name": "Light"}], "component", [], 1, False)
+
+        with patch(
+            "ha_mcp.tools.tools_traces.fetch_trace_logbook",
+            AsyncMock(return_value=logbook),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test",
+                run_id="r1",
+                sections="   ",
+                detailed=True,
+            )
+
+        assert result["logbook_entries"] == [{"name": "Light"}]
 
     @pytest.mark.asyncio
     async def test_run_id_without_entity_id_is_rejected(self):

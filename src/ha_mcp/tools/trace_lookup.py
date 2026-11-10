@@ -283,6 +283,12 @@ async def _resolve_global_parent_context(
         scan_errors,
     )
     if match is None:
+        if (
+            not rows
+            and scan_errors
+            and all(is_connection_error_message(error) for error in scan_errors)
+        ):
+            _raise_trace_ws_failure("; ".join(scan_errors), {"context_id": context_id})
         _raise_global_context_not_found(context_id, scanned, truncated, scan_errors)
     return match
 
