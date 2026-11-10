@@ -81,10 +81,12 @@ class Base:
         return listed.stdout.split()
 
     def has(self, path: str) -> bool:
-        listed = self._git("ls-tree", "--name-only", self.commit, "--", path)
+        """Whether ``path`` is a file at the base; a directory is not one."""
+        listed = self._git("ls-tree", self.commit, "--", path)
         if listed.returncode != 0:
             raise RuntimeError(f"cannot look up {path} at the base: {listed.stderr}")
-        return bool(listed.stdout.strip())
+        # "<mode> <type> <object>\t<path>"
+        return any(line.split()[1] == "blob" for line in listed.stdout.splitlines())
 
     def text(self, path: str) -> str | None:
         """``path`` at the base, or None when it did not exist there."""

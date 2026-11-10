@@ -128,6 +128,15 @@ def _listed(rule: str, entry: str) -> str:
         ),
         pytest.param(
             {
+                _RULE_PATH: _listed(_RULE, "tests/src/unit").replace(
+                    "kind: assignment", "kind: call"
+                )
+            },
+            "lists the new file tests/src/unit",
+            id="whole-directory-listed-while-the-rule-is-widened",
+        ),
+        pytest.param(
+            {
                 _RULE_PATH: _listed(_RULE, _CLEAN).replace(
                     "message: refused", "message: no"
                 )
