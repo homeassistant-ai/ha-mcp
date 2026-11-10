@@ -17,6 +17,7 @@ half) still returns the byte-identical legacy result.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -101,6 +102,10 @@ class RoutingClient:
         devices: list[dict[str, Any]] | None = None,
         entities: list[dict[str, Any]] | None = None,
         entries: list[dict[str, Any]] | None = None,
+        *,
+        linked_reply: dict[str, Any] | None = None,
+        splits: dict[str, Any] | None = None,
+        splits_reply: dict[str, Any] | None = None,
     ) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
@@ -111,6 +116,11 @@ class RoutingClient:
         )
         self._entries_reply: dict[str, Any] | None = None
         self._entities = list(entities or [])
+        self._linked_reply = linked_reply or {
+            "success": True,
+            "result": {"linked_devices": []},
+        }
+        self._splits_reply = splits_reply or {"success": True, "result": splits or {}}
         self.device_list_calls = 0
         self.entity_list_calls = 0
         self.entity_get_calls = 0
@@ -118,7 +128,9 @@ class RoutingClient:
     async def get_config(self) -> dict[str, Any]:
         return {"time_zone": "UTC"}
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self, msg: dict[str, Any], **_kwargs: Any
+    ) -> dict[str, Any]:
         msg_type = msg.get("type")
         if msg_type == "config_entries/get":
             return self._entries_reply or {"success": True, "result": self._entries}
@@ -142,6 +154,10 @@ class RoutingClient:
             if row is None:
                 return {"success": False, "error": "not found"}
             return {"success": True, "result": row}
+        if msg_type == "config/device_registry/list_linked_devices":
+            return self._linked_reply
+        if msg_type == "config/device_registry/list_composite_splits":
+            return self._splits_reply
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -199,7 +215,7 @@ async def test_single_lookup_served_by_component() -> None:
         resp = await get_device(device_id="dev-1")
 
     assert resp["success"] is True
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # Core's row passes through: the user's name next to the integration's.
     assert resp["device"]["name_by_user"] == "Kitchen"
     assert resp["device"]["name"] == "Device dev-1"
@@ -212,7 +228,7 @@ async def test_single_lookup_served_by_component() -> None:
     # The device's entity list came from the join — the whole entity registry
     # was never dumped.
     assert resp["entity_count"] == 1
-    assert resp["entities"][0]["entity_id"] == "sensor.kitchen"
+    assert resp["device"]["entities"][0]["entity_id"] == "sensor.kitchen"
     assert client.entity_list_calls == 0
 
 
@@ -241,7 +257,8 @@ async def test_child_component_result_preserves_effective_area_and_ownership() -
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="child-1")
 
-    assert resp["device"]["area_id"] == "office"
+    assert resp["device"]["effective_area_id"] == "office"
+    assert resp["device"]["area_id"] is None
     assert resp["device"]["config_entry_id"] == "cfg-child"
     assert resp["device"]["parent_device_id"] == "parent-1"
     assert "config_entries" not in resp["device"]
@@ -267,7 +284,7 @@ async def test_entity_id_lookup_resolves_then_device_get() -> None:
         resp = await get_device(entity_id="light.lr")
 
     assert resp["success"] is True
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     assert resp["queried_by"] == "entity_id"
     # Device resolved via one targeted entity read; no registry was dumped.
     assert client.entity_get_calls == 1
@@ -318,7 +335,7 @@ async def test_entities_half_absent_falls_back_to_legacy() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # Both registries were read from the legacy path so the entity list survives.
     assert client.device_list_calls == 1
     assert client.entity_list_calls == 1
@@ -347,6 +364,124 @@ async def test_summary_list_uses_device_list_and_skips_entities() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summary_list_is_compact_and_full_keeps_cores_row() -> None:
+    """A summary list row carries the main fields of Core's row, a full one
+    all of it plus the device's entity rows, so no field is out of reach."""
+    dev = _raw_device("d1", parent_device_id=None, primary_config_entry="cfg-1")
+    client = RoutingClient(
+        devices=[dev], entities=[_entity_row("sensor.d1", "d1") | {"hidden_by": None}]
+    )
+    get_device = _build_get_device(client)
+
+    summary = (await get_device())["devices"][0]
+    full = (await get_device(detail_level="full"))["devices"][0]
+
+    # The fields the detail_level description names.
+    assert {
+        "id",
+        "name",
+        "name_by_user",
+        "manufacturer",
+        "model",
+        "area_id",
+        "effective_area_id",
+        "disabled_by",
+        "parent_device_id",
+        "via_device_id",
+        "integration_type",
+    } <= set(summary)
+    shared = summary.keys() & dev.keys()
+    assert {k: summary[k] for k in shared} == {k: dev[k] for k in shared}
+    # The bulky parts of the row stay out of a summary.
+    assert not {"identifiers", "connections", "config_entries"} & set(summary)
+    assert {k: full[k] for k in dev} == dev
+    assert full["entities"] == [_entity_row("sensor.d1", "d1") | {"hidden_by": None}]
+
+
+def _refusal(code: str, error: str) -> dict[str, Any]:
+    return {"success": False, "error": f"Command failed: {error}", "error_code": code}
+
+
+@pytest.mark.asyncio
+async def test_single_lookup_lists_linked_devices() -> None:
+    """The single lookup carries Core's linked devices (the device page's
+    Linked devices card). Core before 2026.8 has no such command: the lookup
+    answers without the field and says why; any other refusal fails it."""
+    ok = {"success": True, "result": {"linked_devices": ["dev-2"]}}
+    resp = await _build_get_device(
+        RoutingClient(devices=[_raw_device("dev-1")], linked_reply=ok)
+    )(device_id="dev-1")
+    assert resp["device"]["linked_devices"] == ["dev-2"]
+
+    old_core = _refusal("unknown_command", "Unknown command.")
+    resp = await _build_get_device(
+        RoutingClient(devices=[_raw_device("dev-1")], linked_reply=old_core)
+    )(device_id="dev-1")
+    assert "linked_devices" not in resp["device"]
+    assert any("before 2026.8" in w for w in resp["warnings"])
+
+    refused = _refusal("not_found", "Device not found")
+    with pytest.raises(ToolError) as excinfo:
+        await _build_get_device(
+            RoutingClient(devices=[_raw_device("dev-1")], linked_reply=refused)
+        )(device_id="dev-1")
+    error = json.loads(str(excinfo.value))
+    assert (
+        error["error"]["message"] == "Failed to read linked devices: Device not found"
+    )
+    assert error["ha_error_code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_split_composite_id_names_the_devices_that_replaced_it() -> None:
+    """An id Core retired by splitting a composite device is not found, and
+    the error carries Core's ``split_ids`` and ``primary_id`` for it."""
+    client = RoutingClient(
+        devices=[_raw_device("new-a"), _raw_device("new-b")],
+        splits={"composite": {"split_ids": ["new-a", "new-b"], "primary_id": None}},
+    )
+    get_device = _build_get_device(client)
+
+    with pytest.raises(ToolError) as excinfo:
+        await get_device(device_id="composite")
+    error = json.loads(str(excinfo.value))
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert (error["split_ids"], error["primary_id"]) == (["new-a", "new-b"], None)
+    assert "split_ids" in error["error"]["suggestion"]
+
+    with pytest.raises(ToolError) as excinfo:
+        await get_device(device_id="ghost")
+    error = json.loads(str(excinfo.value))
+    assert "split_ids" not in error
+    assert "split_ids" not in error["error"]["suggestion"]
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected"),
+    [
+        ("unknown_command", "RESOURCE_NOT_FOUND"),
+        ("unauthorized", "SERVICE_CALL_FAILED"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_split_read_degrades_only_on_core_without_it(
+    error_code: str, expected: str
+) -> None:
+    """Core before 2026.8 split nothing, so an unknown command leaves a plain
+    not-found; any other refusal of the split read fails the call, since the
+    id may be one Home Assistant split."""
+    client = RoutingClient(
+        devices=[_raw_device("new-a")],
+        splits_reply=_refusal(error_code, "refused"),
+    )
+    with pytest.raises(ToolError) as excinfo:
+        await _build_get_device(client)(device_id="composite")
+    error = json.loads(str(excinfo.value))
+    assert error["error"]["code"] == expected
+    assert "split_ids" not in error
+
+
+@pytest.mark.asyncio
 async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
     """The old ``device_list`` capability cannot authorize child-aware results.
 
@@ -371,7 +506,7 @@ async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device()
 
-    assert {row["device_id"] for row in resp["devices"]} == {
+    assert {row["id"] for row in resp["devices"]} == {
         "parent-1",
         "child-1",
     }
@@ -400,7 +535,7 @@ async def test_area_filter_matches_child_through_parent_effective_area() -> None
     with patch_ws(ws, component_devices):
         resp = await get_device(area_id="office")
 
-    assert {row["device_id"] for row in resp["devices"]} == {
+    assert {row["id"] for row in resp["devices"]} == {
         "parent-1",
         "child-1",
     }
@@ -422,7 +557,7 @@ async def test_capsless_component_uses_legacy_registries() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # Both registries came from the legacy WS path.
     assert client.device_list_calls == 1
     assert not _device_get_calls(ws)
@@ -482,12 +617,12 @@ async def test_integration_comes_from_owning_config_entry() -> None:
         deconz = await get_device(integration="deconz")
         unifi = await get_device(integration="unifi")
 
-    assert [d["device_id"] for d in esp["devices"]] == ["esp"]
+    assert [d["id"] for d in esp["devices"]] == ["esp"]
     assert esp["devices"][0]["integration_type"] == "esphome"
-    assert [d["device_id"] for d in bt["devices"]] == ["bt"]
+    assert [d["id"] for d in bt["devices"]] == ["bt"]
     assert by_identifier["devices"] == []
-    assert [d["device_id"] for d in shelly["devices"]] == ["prim"]
-    assert [d["device_id"] for d in deconz["devices"]] == ["old"]
+    assert [d["id"] for d in shelly["devices"]] == ["prim"]
+    assert [d["id"] for d in deconz["devices"]] == ["old"]
     assert unifi["devices"] == []
 
 
@@ -502,10 +637,17 @@ async def test_z2m_bridge_found_by_identifier_and_mqtt_filter_keeps_z2m() -> Non
     z2m = {"config_entries": ["e-mqtt"], "config_entry_id": "e-mqtt"}
     client = RoutingClient(
         devices=[
-            _raw_device("bulb", identifiers=[["mqtt", "zigbee2mqtt_0x0001"]], **z2m),
+            _raw_device(
+                "bulb",
+                name="kitchen_bulb",
+                name_by_user="Kitchen bulb (HA name)",
+                identifiers=[["mqtt", "zigbee2mqtt_0x0001"]],
+                **z2m,
+            ),
             _raw_device(
                 "coord",
                 name="Coordinator",
+                name_by_user="Zigbee hub (HA name)",
                 identifiers=[["mqtt", "zigbee2mqtt_bridge_0x00ff"]],
                 **z2m,
             ),
@@ -519,12 +661,19 @@ async def test_z2m_bridge_found_by_identifier_and_mqtt_filter_keeps_z2m() -> Non
         mqtt_list = await get_device(integration="mqtt")
 
     assert z2m_list["bridge"] == {
-        "device_id": "coord",
+        "id": "coord",
         "name": "Coordinator",
         "ieee_address": "0x00ff",
     }
-    assert z2m_list["devices"][0]["integration_type"] == "zigbee2mqtt"
-    assert {d["device_id"] for d in mqtt_list["devices"]} == {"bulb", "coord"}
+    rows = {d["id"]: d for d in z2m_list["devices"]}
+    assert rows["bulb"]["integration_type"] == "zigbee2mqtt"
+    # Zigbee2MQTT's topics follow the name it gave the device, never the one
+    # set in Home Assistant; the bridge has no device topic.
+    assert rows["bulb"]["friendly_name"] == "kitchen_bulb"
+    assert rows["bulb"]["mqtt_topic_hint"] == "zigbee2mqtt/kitchen_bulb/..."
+    assert "mqtt_topic_hint" not in rows["coord"]
+    assert "friendly_name" not in rows["coord"]
+    assert {d["id"] for d in mqtt_list["devices"]} == {"bulb", "coord"}
 
 
 @pytest.mark.asyncio
@@ -647,7 +796,7 @@ async def test_unknown_command_falls_back_and_invalidates_caps() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # The component command was tried, failed unknown_command → legacy full list.
     assert client.device_list_calls == 1
     # Caps were invalidated (dropped from the cache) so the next call re-probes.
@@ -674,7 +823,7 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
         resp = await get_device(device_id="dev-1")
 
     # The legacy registries served the byte-identical device + entity list.
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     assert client.device_list_calls == 1
     assert client.entity_list_calls == 1
     assert resp["entity_count"] == 1
@@ -703,7 +852,7 @@ async def test_ws_establish_failure_falls_back_without_invalidating_caps() -> No
     ):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     assert client.device_list_calls == 1
     assert client.entity_list_calls == 1
     assert resp["entity_count"] == 1

@@ -111,10 +111,11 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
 # registry invariant checks), or that have no escape-hatch-appropriate use case
 # (`config/core/update` rewrites the installation's location/timezone/currency/
 # lat-long). Both raw WebSocket surfaces enforce it through `raw_ws_refusal()`
-# below, so they stay in lockstep. Registry deletion command names differ on
-# HA Core: device deletion is `remove` (`remove_config_entry` before Core
-# 2026.9) and entity deletion is `remove` (not `delete`) -- ha_remove_device /
-# ha_remove_entity emit those.
+# below, so they stay in lockstep. Registry deletion on HA Core is `remove`
+# (not `delete`) for devices and entities; ha_remove_device / ha_remove_entity
+# emit it. Device `remove_config_entry` stays blocked: every Core that has it
+# removes devices through it, as the only command before 2026.9 and as a
+# deprecated alias of `remove` until Core drops it in 2027.9.
 BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",

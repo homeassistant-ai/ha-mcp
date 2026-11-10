@@ -327,6 +327,21 @@ class TestIdentifierResolversFailLoud:
         assert await getattr(client, method)(identifier) == expected
 
 
+def _linked_devices_then(reply: Any) -> Any:
+    """A ``send_websocket_message`` that answers the single-device lookup's
+    linked-devices read and gives every enrichment read ``reply`` (raised when
+    it is an exception)."""
+
+    async def send(msg: dict[str, Any], **_kwargs: Any) -> Any:
+        if msg["type"] == "config/device_registry/list_linked_devices":
+            return {"success": True, "result": {"linked_devices": []}}
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    return send
+
+
 class TestDeviceEnrichmentReportsSkips:
     """Radio enrichment is best-effort, but a device answered without
     ``radio_metrics`` because the transport died must not look like a device
@@ -347,13 +362,13 @@ class TestDeviceEnrichmentReportsSkips:
     async def test_dead_transport_names_the_skipped_enrichment(self) -> None:
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
+            side_effect=_linked_devices_then(HomeAssistantConnectionError("ws gone"))
         )
 
         with patch(
             "ha_mcp.tools.tools_registry._get_device_info",
             return_value={
-                "device_id": "dev-1",
+                "id": "dev-1",
                 "integration_type": "zha",
                 "ieee_address": "aa:bb",
             },
@@ -372,13 +387,15 @@ class TestDeviceEnrichmentReportsSkips:
     async def test_healthy_enrichment_adds_no_warning(self) -> None:
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": [{"ieee": "aa:bb", "lqi": 200}]}
+            side_effect=_linked_devices_then(
+                {"success": True, "result": [{"ieee": "aa:bb", "lqi": 200}]}
+            )
         )
 
         with patch(
             "ha_mcp.tools.tools_registry._get_device_info",
             return_value={
-                "device_id": "dev-1",
+                "id": "dev-1",
                 "integration_type": "zha",
                 "ieee_address": "aa:bb",
             },
@@ -547,14 +564,14 @@ class TestReviewRoundTwoGaps:
 
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
+            side_effect=_linked_devices_then(HomeAssistantConnectionError("ws gone"))
         )
         device = {"id": "dev-1", "name": "Node", "identifiers": [], "connections": []}
 
         with patch(
             "ha_mcp.tools.tools_registry._get_device_info",
             return_value={
-                "device_id": "dev-1",
+                "id": "dev-1",
                 "integration_type": integration_type,
                 "node_id": 7,
             },

@@ -69,7 +69,10 @@ def _entries_reply(device: dict) -> dict:
 
 
 def _mock_client_with_device(device: dict, ws_responses: dict | None = None):
-    """Create a mock client that returns the given device from registry list."""
+    """Create a mock client that returns the given device from registry list.
+
+    A ``ws_responses`` value that is an exception is raised instead.
+    """
     mock_client = MagicMock()
 
     async def mock_ws(msg, **kwargs):
@@ -86,9 +89,15 @@ def _mock_client_with_device(device: dict, ws_responses: dict | None = None):
         if msg_type == "config/entity_registry/list":
             return {"success": True, "result": []}
 
+        if msg_type == "config/device_registry/list_linked_devices":
+            return {"success": True, "result": {"linked_devices": []}}
+
         # Custom responses for enrichment calls
         if ws_responses and msg_type in ws_responses:
-            return ws_responses[msg_type]
+            reply = ws_responses[msg_type]
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
 
         return {"success": False, "error": f"Unknown type: {msg_type}"}
 
@@ -221,31 +230,21 @@ class TestEnrichmentGracefulDegradation:
             identifiers=[["zha", "00:11:22:33:44:55:66:77"]],
         )
 
-        call_count = 0
-
-        async def mock_ws(msg, **kwargs):
-            nonlocal call_count
-            msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
-            if msg_type == "config_entries/get":
-                return _entries_reply(device)
-            if msg_type == "config/device_registry/list":
-                return {"success": True, "result": [device]}
-            if msg_type == "config/entity_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "zha/devices":
-                call_count += 1
-                raise TimeoutError("Connection timed out")
-            return {"success": False}
-
-        mock_client = MagicMock()
-        mock_client.send_websocket_message = AsyncMock(side_effect=mock_ws)
+        mock_client = _mock_client_with_device(
+            device, {"zha/devices": TimeoutError("Connection timed out")}
+        )
 
         captured = _register_and_capture(mock_client)
         result = await captured["ha_get_device"](device_id="test_device_123")
 
         assert result["success"] is True
         assert "radio_metrics" not in result["device"]
-        assert call_count == 1  # Enrichment was attempted
+        zha_reads = [
+            call
+            for call in mock_client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "zha/devices"
+        ]
+        assert len(zha_reads) == 1  # Enrichment was attempted
 
     @pytest.mark.asyncio
     async def test_zwave_enrichment_oserror_still_returns_device(self):
@@ -254,20 +253,9 @@ class TestEnrichmentGracefulDegradation:
             identifiers=[["zwave_js", "3232323232-5"]],
         )
 
-        async def mock_ws(msg, **kwargs):
-            msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
-            if msg_type == "config_entries/get":
-                return _entries_reply(device)
-            if msg_type == "config/device_registry/list":
-                return {"success": True, "result": [device]}
-            if msg_type == "config/entity_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "zwave_js/node_status":
-                raise OSError("Network unreachable")
-            return {"success": False}
-
-        mock_client = MagicMock()
-        mock_client.send_websocket_message = AsyncMock(side_effect=mock_ws)
+        mock_client = _mock_client_with_device(
+            device, {"zwave_js/node_status": OSError("Network unreachable")}
+        )
 
         captured = _register_and_capture(mock_client)
         result = await captured["ha_get_device"](device_id="test_device_123")
@@ -275,3 +263,31 @@ class TestEnrichmentGracefulDegradation:
         assert result["success"] is True
         assert "node_status" not in result["device"]
         assert result["device"]["node_id"] == "5"  # Parsing still works
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain", "command", "warning"),
+    [
+        ("zha", "zha/devices", "ZHA radio metrics unavailable: busy"),
+        ("zwave_js", "zwave_js/node_status", "Z-Wave node status unavailable: busy"),
+        (
+            "matter",
+            "matter/node_diagnostics",
+            "Matter node diagnostics unavailable: busy",
+        ),
+    ],
+)
+async def test_radio_refusal_warning_drops_the_client_prefix(domain, command, warning):
+    """A refused radio read warns with Core's own error text."""
+    ident = {"zha": "00:11:22:33:44:55:66:77", "zwave_js": "3232323232-5"}
+    device = _make_device(identifiers=[[domain, ident.get(domain, "node-1")]])
+    mock_client = _mock_client_with_device(
+        device, {command: {"success": False, "error": "Command failed: busy"}}
+    )
+
+    result = await _register_and_capture(mock_client)["ha_get_device"](
+        device_id="test_device_123"
+    )
+
+    assert warning in result["warnings"]

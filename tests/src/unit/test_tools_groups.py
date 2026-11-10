@@ -221,6 +221,7 @@ class TestSetGroup:
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "invalid slug group.lights (try group_lights)" in error["message"]
         assert "Command failed" not in error["message"]
+        assert json.loads(str(exc_info.value))["ha_error_code"] == "invalid_format"
         # Core's "try group_lights" names a different group.
         assert "Drop the 'group.' prefix: object_id='lights'" in error["suggestion"]
 

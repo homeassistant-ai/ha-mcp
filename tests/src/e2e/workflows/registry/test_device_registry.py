@@ -1,22 +1,13 @@
 """
 Device Registry E2E Tests
 
-Tests for the device registry management tools:
-- ha_get_device: List all devices with optional filtering
-- ha_get_device: Get device details including entities
-- ha_set_device: Set device properties (name, area, disabled, labels)
-- ha_remove_device: Remove orphaned devices
-
-Key test scenarios:
-- List devices and verify structure
-- Get device details with entities
-- Set device name (note: does NOT cascade to entities)
-- Filter devices by area and manufacturer
-- Handle non-existent devices
+ha_get_device (list, filters, single lookup with entities, unknown ids) and
+ha_remove_device (unknown id, Core's refusal). ha_set_device's own tests live
+in test_device_update.py; the rename/entity-id independence test and the
+child-area test here call it as a step.
 """
 
 import logging
-from typing import Any
 
 import pytest
 
@@ -25,7 +16,6 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
-from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +106,7 @@ async def _error_log_lines_since(mcp_client, baseline_total: int) -> list[str]:
     """Read only the bounded newest window added since a line-count boundary."""
     current_total = await _error_log_total(mcp_client)
     assert current_total >= baseline_total, (
-        "Error-log history rotated during the child-device read assertion"
+        "Error-log history rotated while the test read it"
     )
     new_line_count = current_total - baseline_total
     new_log_lines: list[str] = []
@@ -179,13 +169,13 @@ class TestDeviceList:
         # If devices exist, verify structure
         if devices:
             device = devices[0]
-            expected_fields = ["device_id", "name", "manufacturer", "model"]
+            expected_fields = ["id", "name", "manufacturer", "model"]
             for field in expected_fields:
                 assert field in device, f"Device missing field: {field}"
             # Summary mode should not include entities
             assert "entities" not in device, "Summary mode should omit entities"
             logger.info(
-                f"Sample device: {device.get('name')} ({device.get('device_id')[:8]}...)"
+                f"Sample device: {device.get('name')} ({device.get('id')[:8]}...)"
             )
 
     async def test_list_devices_filter_by_area(self, mcp_client):
@@ -218,8 +208,8 @@ class TestDeviceList:
             "area filter appears to be ignored"
         )
         for device in filter_data["devices"]:
-            assert device.get("area_id") == "living_room", (
-                f"Device {device.get('name')} has area {device.get('area_id')}, expected living_room"
+            assert device.get("effective_area_id") == "living_room", (
+                f"Device {device.get('name')} is in {device.get('effective_area_id')}, expected living_room"
             )
 
         empty_result = await mcp_client.call_tool(
@@ -312,8 +302,8 @@ class TestDeviceList:
         assert data2["offset"] == 2
 
         # Pages should not overlap
-        ids1 = {d["device_id"] for d in data1["devices"]}
-        ids2 = {d["device_id"] for d in data2["devices"]}
+        ids1 = {d["id"] for d in data1["devices"]}
+        ids2 = {d["id"] for d in data2["devices"]}
         assert ids1.isdisjoint(ids2), "Pages should not overlap"
 
         logger.info("Device pagination test passed")
@@ -336,6 +326,22 @@ class TestDeviceList:
 
         logger.info("Device full detail test passed")
 
+    async def test_integration_filter_follows_the_owning_config_entry(self, mcp_client):
+        """demo's Notifier carries a ``notify`` identifier but belongs to demo's
+        config entry: ``integration="demo"`` lists it as ``integration_type``
+        demo, and ``integration="notify"`` does not list it."""
+        async with MCPAssertions(mcp_client) as mcp:
+            demo = await mcp.call_tool_success(
+                "ha_get_device", {"integration": "demo", "limit": 200}
+            )
+            notify = await mcp.call_tool_success(
+                "ha_get_device", {"integration": "notify", "limit": 200}
+            )
+        notifiers = [d for d in demo["devices"] if d["name"] == "Notifier"]
+        assert len(notifiers) == 1, demo
+        assert notifiers[0]["integration_type"] == "demo", notifiers
+        assert notifiers[0]["id"] not in {d["id"] for d in notify["devices"]}, notify
+
 
 @pytest.mark.registry
 class TestDeviceGet:
@@ -356,7 +362,7 @@ class TestDeviceGet:
             logger.info("No devices found, skipping get device test")
             pytest.skip("No devices in test environment")
 
-        device_id = list_data["devices"][0]["device_id"]
+        device_id = list_data["devices"][0]["id"]
         logger.info(f"Getting details for device: {device_id}")
 
         # Get device details
@@ -368,15 +374,16 @@ class TestDeviceGet:
 
         assert get_data.get("success"), f"Failed to get device: {get_data}"
         assert "device" in get_data, "Response should contain device details"
-        assert "entities" in get_data, "Response should contain entities list"
         assert "entity_count" in get_data, "Response should contain entity_count"
 
         device = get_data["device"]
-        assert device.get("device_id") == device_id, "Device ID mismatch"
+        assert "entities" in device, "Device should contain its entities"
+        assert "linked_devices" in device, "Device should list its linked devices"
+        assert device.get("id") == device_id, "Device ID mismatch"
 
         # Verify device structure
         expected_fields = [
-            "device_id",
+            "id",
             "name",
             "manufacturer",
             "model",
@@ -392,8 +399,8 @@ class TestDeviceGet:
         )
 
         # Log entities if present
-        if get_data.get("entities"):
-            for entity in get_data["entities"][:3]:
+        if device.get("entities"):
+            for entity in device["entities"][:3]:
                 logger.info(f"  - Entity: {entity.get('entity_id')}")
 
     async def test_get_device_nonexistent(self, mcp_client):
@@ -471,9 +478,12 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
             await mcp_client.call_tool("ha_get_device", {"device_id": child_id})
         )
         assert single.get("success") is True, single
-        assert single["device"]["device_id"] == child_id
-        assert single["device"]["area_id"] == "living_room"
+        assert single["device"]["id"] == child_id
+        # The child keeps no area of its own and sits in its parent's.
+        assert single["device"]["area_id"] is None
+        assert single["device"]["effective_area_id"] == "living_room"
         assert single["device"]["config_entry_id"]
+        assert single["device"]["integration_type"] == "kitchen_sink"
 
         area_list = parse_mcp_result(
             await mcp_client.call_tool(
@@ -481,7 +491,7 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
             )
         )
         assert area_list.get("success") is True, area_list
-        assert child_id in {row["device_id"] for row in area_list["devices"]}
+        assert child_id in {row["id"] for row in area_list["devices"]}
 
         if baseline_total_lines is not None:
             deprecated_component_lines = [
@@ -521,270 +531,6 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
 
 
 @pytest.mark.registry
-class TestDeviceSet:
-    """Test ha_set_device functionality."""
-
-    async def test_update_device_name(self, mcp_client):
-        """
-        Test: Update device display name (name_by_user)
-
-        IMPORTANT: This does NOT cascade to entities - they keep their original entity_ids.
-        """
-        logger.info("Testing device name update")
-
-        # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_get_device", {})
-        list_data = parse_mcp_result(list_result)
-        assert list_data.get("success"), f"Failed to list devices: {list_data}"
-
-        if not list_data.get("devices"):
-            logger.info("No devices found, skipping update test")
-            pytest.skip("No devices in test environment")
-
-        device = list_data["devices"][0]
-        device_id = device["device_id"]
-        original_name = device.get("name")
-        test_name = "Test Device Name E2E"
-        logger.info(f"Updating device {device_id} name: {original_name} -> {test_name}")
-
-        # Update device name
-        update_result = await mcp_client.call_tool(
-            "ha_set_device",
-            {
-                "device_id": device_id,
-                "name": test_name,
-            },
-        )
-        update_data = parse_mcp_result(update_result)
-
-        assert update_data.get("success"), f"Failed to update device: {update_data}"
-        assert "note" in update_data, "Response should include note about entity rename"
-        logger.info(f"Device name updated. Note: {update_data.get('note')}")
-
-        # Verify update was applied
-        assert "device_entry" in update_data, "Response should contain device_entry"
-        updated_entry = update_data["device_entry"]
-        # Check name_by_user (the user-defined name) or fallback to name
-        actual_name = updated_entry.get("name_by_user") or updated_entry.get("name")
-        assert actual_name == test_name, (
-            f"Name not updated: expected '{test_name}', got '{actual_name}'"
-        )
-
-        # Restore original name (or clear custom name)
-        logger.info("Restoring original device name")
-        restore_result = await mcp_client.call_tool(
-            "ha_set_device",
-            {
-                "device_id": device_id,
-                "name": "",  # Clear custom name
-            },
-        )
-        restore_data = parse_mcp_result(restore_result)
-        assert restore_data.get("success"), f"Failed to restore name: {restore_data}"
-        logger.info("Device name restored")
-
-    async def test_update_device_labels(self, mcp_client):
-        """
-        Test: Update device labels
-
-        Labels must exist in Home Assistant's label registry before they can
-        be assigned — unknown label IDs are rejected instead of being stored
-        as dangling references (issue #2159) — so the test creates its labels
-        first and removes them afterwards.
-        """
-        logger.info("Testing device labels update")
-
-        # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_get_device", {})
-        list_data = parse_mcp_result(list_result)
-        assert list_data.get("success"), f"Failed to list devices: {list_data}"
-
-        if not list_data.get("devices"):
-            logger.info("No devices found, skipping labels test")
-            pytest.skip("No devices in test environment")
-
-        device_id = list_data["devices"][0]["device_id"]
-
-        # Capture the original labels so cleanup restores the device exactly.
-        detail_result = await mcp_client.call_tool(
-            "ha_get_device", {"device_id": device_id}
-        )
-        detail_data = parse_mcp_result(detail_result)
-        assert detail_data.get("success"), f"Failed to get device: {detail_data}"
-        original_labels = detail_data.get("device", {}).get("labels", [])
-
-        # Create the labels this test assigns. Creation happens inside the
-        # cleanup guard so a failed second create still removes the first.
-        test_labels = []
-        try:
-            for label_name in ("Device E2E Label A", "Device E2E Label B"):
-                create_result = await mcp_client.call_tool(
-                    "ha_config_set_label", {"name": label_name}
-                )
-                create_data = parse_mcp_result(create_result)
-                assert create_data.get("success"), (
-                    f"Failed to create label: {create_data}"
-                )
-                test_labels.append(create_data["label_id"])
-            logger.info(f"Updating device {device_id} labels: {test_labels}")
-
-            # Update device labels
-            update_result = await mcp_client.call_tool(
-                "ha_set_device",
-                {
-                    "device_id": device_id,
-                    "labels": test_labels,
-                },
-            )
-            update_data = parse_mcp_result(update_result)
-
-            assert update_data.get("success"), f"Failed to update labels: {update_data}"
-            updated_labels = update_data.get("device_entry", {}).get("labels", [])
-            assert sorted(updated_labels) == sorted(test_labels), (
-                f"Labels not applied: {update_data}"
-            )
-            logger.info(f"Labels applied: {updated_labels}")
-
-            # Clear labels (set to empty)
-            logger.info("Clearing device labels")
-            clear_result = await mcp_client.call_tool(
-                "ha_set_device",
-                {
-                    "device_id": device_id,
-                    "labels": [],
-                },
-            )
-            clear_data = parse_mcp_result(clear_result)
-            assert clear_data.get("success"), f"Failed to clear labels: {clear_data}"
-            logger.info("Labels cleared")
-        finally:
-            # Restore the device's original labels even when an assertion
-            # above fails, then drop the labels this test created.
-            with CleanupSteps() as cleanup:
-                with cleanup.step():
-                    await MCPAssertions(mcp_client).call_tool_success(
-                        "ha_set_device",
-                        {"device_id": device_id, "labels": original_labels},
-                    )
-                for label_id in test_labels:
-                    with cleanup.step():
-                        await safe_call_tool(
-                            mcp_client, "ha_config_remove_label", {"label_id": label_id}
-                        )
-
-    async def test_update_device_no_changes(self, mcp_client):
-        """
-        Test: Calling update with no parameters should fail
-        """
-        logger.info("Testing device update with no changes")
-
-        # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_get_device", {})
-        list_data = parse_mcp_result(list_result)
-        assert list_data.get("success"), f"Failed to list devices: {list_data}"
-
-        if not list_data.get("devices"):
-            pytest.skip("No devices in test environment")
-
-        device_id = list_data["devices"][0]["device_id"]
-
-        # Update with no parameters
-        update_data = await safe_call_tool(
-            mcp_client,
-            "ha_set_device",
-            {"device_id": device_id},
-        )
-
-        assert not update_data.get("success"), "Update with no changes should fail"
-        error = update_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "no updates" in error_msg.lower(), (
-            f"Error should mention no updates: {update_data}"
-        )
-        logger.info("No-changes update correctly rejected")
-
-    async def test_update_device_nonexistent(self, mcp_client):
-        """
-        Test: Updating a non-existent device should fail gracefully
-        """
-        logger.info("Testing update non-existent device")
-
-        update_data = await safe_call_tool(
-            mcp_client,
-            "ha_set_device",
-            {
-                "device_id": "definitely_not_a_real_device_id_12345",
-                "name": "Test Name",
-            },
-        )
-
-        assert not update_data.get("success"), (
-            "Updating non-existent device should fail"
-        )
-        logger.info(
-            f"Non-existent device update correctly rejected: {update_data.get('error')}"
-        )
-
-
-async def _device_for_entity(mcp_client: Any, entity_id: str) -> dict[str, Any]:
-    data = parse_mcp_result(
-        await mcp_client.call_tool("ha_get_device", {"entity_id": entity_id})
-    )
-    assert data.get("success"), f"Failed to resolve device of {entity_id}: {data}"
-    return data["device"]
-
-
-@pytest.mark.registry
-class TestDeviceSetBlankAndQuoteOnlyValues:
-    """Issue #2585: clients that cannot send ``''`` send ``'""'`` or ``' '``.
-
-    Wiring checks against real HA; the value table lives in the unit tests.
-    Each test uses a demo device no other e2e test touches and restores it.
-    """
-
-    async def test_quote_only_name_is_not_stored(self, mcp_client: Any) -> None:
-        name = '""'
-        device = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
-        device_id = device["device_id"]
-        original = device.get("name_by_user")
-        try:
-            async with MCPAssertions(mcp_client) as mcp:
-                data = await mcp.call_tool_failure(
-                    "ha_set_device", {"device_id": device_id, "name": name}
-                )
-            assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
-
-            after = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
-            assert after.get("name_by_user") == original, after
-        finally:
-            with CleanupSteps() as cleanup, cleanup.step():
-                await MCPAssertions(mcp_client).call_tool_success(
-                    "ha_set_device", {"device_id": device_id, "name": original or ""}
-                )
-
-    async def test_whitespace_name_clears_custom_name(self, mcp_client: Any) -> None:
-        device = await _device_for_entity(mcp_client, "number.small_range")
-        device_id = device["device_id"]
-        original = device.get("name_by_user")
-        try:
-            async with MCPAssertions(mcp_client) as mcp:
-                await mcp.call_tool_success(
-                    "ha_set_device", {"device_id": device_id, "name": "E2E 2585"}
-                )
-                data = await mcp.call_tool_success(
-                    "ha_set_device", {"device_id": device_id, "name": " "}
-                )
-            assert data["device_entry"]["name_by_user"] is None, data
-        finally:
-            with CleanupSteps() as cleanup, cleanup.step():
-                await MCPAssertions(mcp_client).call_tool_success(
-                    "ha_set_device", {"device_id": device_id, "name": original or ""}
-                )
-
-
-@pytest.mark.registry
 class TestDeviceRemove:
     """Test ha_remove_device functionality."""
 
@@ -812,9 +558,38 @@ class TestDeviceRemove:
         )
         logger.info("Non-existent device removal correctly rejected")
 
-    # Note: We don't test actual device removal in E2E tests
-    # because we don't want to remove real devices from the test environment.
-    # The ha_remove_device tool is primarily for orphaned devices.
+    async def test_remove_device_refusal_comes_from_cores_remove_command(
+        self, mcp_client
+    ):
+        """demo refuses to remove its devices, so this removes nothing. Core's
+        refusal reaches the caller in Core's words, and Core logged no
+        deprecation warning: the tool sent ``remove``, not the deprecated
+        ``remove_config_entry``, which answers with the same refusal. The log
+        check tells the two apart only on Core 2026.9 and later, which log
+        the deprecation."""
+        async with MCPAssertions(mcp_client) as mcp:
+            found = await mcp.call_tool_success(
+                "ha_get_device", {"entity_id": "notify.notifier"}
+            )
+        notifier = found["device"]
+        baseline_total_lines = await _error_log_total(mcp_client)
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_remove_device", {"device_id": notifier["id"]}
+            )
+        assert data["error"]["message"] == (
+            "Failed to remove device: Config entry does not support device removal"
+        ), data
+        deprecation_lines = [
+            line
+            for line in await _error_log_lines_since(mcp_client, baseline_total_lines)
+            if "remove_config_entry is deprecated" in line
+        ]
+        assert deprecation_lines == []
+
+    # A successful removal is not tested here: it would remove a device from
+    # the shared test environment.
 
 
 @pytest.mark.registry
@@ -834,7 +609,7 @@ async def test_device_registry_workflow(mcp_client):
 
     # 2. If devices exist, get details for first one
     if list_data.get("devices"):
-        device_id = list_data["devices"][0]["device_id"]
+        device_id = list_data["devices"][0]["id"]
         device_name = list_data["devices"][0]["name"]
 
         get_result = await mcp_client.call_tool(
@@ -875,7 +650,7 @@ async def test_device_entity_independence(mcp_client):
     for device in list_data["devices"]:
         get_result = await mcp_client.call_tool(
             "ha_get_device",
-            {"device_id": device["device_id"]},
+            {"device_id": device["id"]},
         )
         get_data = parse_mcp_result(get_result)
         if get_data.get("success") and get_data.get("entity_count", 0) > 0:
@@ -886,8 +661,8 @@ async def test_device_entity_independence(mcp_client):
         pytest.skip("No devices with entities in test environment")
 
     device = device_with_entities["device"]
-    entities = device_with_entities["entities"]
-    device_id = device["device_id"]
+    entities = device["entities"]
+    device_id = device["id"]
     original_entity_ids = [e["entity_id"] for e in entities]
 
     logger.info(f"Testing with device: {device['name']} ({len(entities)} entities)")
@@ -912,7 +687,7 @@ async def test_device_entity_independence(mcp_client):
     get_data = parse_mcp_result(get_result)
     assert get_data.get("success"), f"Failed to get device after rename: {get_data}"
 
-    new_entity_ids = [e["entity_id"] for e in get_data.get("entities", [])]
+    new_entity_ids = [e["entity_id"] for e in get_data["device"]["entities"]]
     assert set(new_entity_ids) == set(original_entity_ids), (
         f"Entity IDs should NOT change when device is renamed. "
         f"Original: {original_entity_ids}, New: {new_entity_ids}"
@@ -935,31 +710,10 @@ async def test_device_entity_independence(mcp_client):
 
 @pytest.mark.registry
 class TestDeviceGetNegativeInputs:
-    """
-    A2 negative-input tests for ha_get_device's single-device lookup mode.
-
-    Covers the nonexistent-device_id failure path. Existing tests in this
-    file exercise the list mode, area/manufacturer filters, and the
-    update/remove flows, but never call ha_get_device with a device_id
-    that is absent from the device registry.
-
-    Methodology: source-verified against tools_registry.py. When the
-    requested device_id is not present in the device registry list,
-    raise_tool_error is invoked with ErrorCode.RESOURCE_NOT_FOUND and the
-    message "Device not found: ..." (devices live in the device registry,
-    addressed by device_id UUID — not entities, so RESOURCE_NOT_FOUND is
-    the correct category per #1297).
-    """
+    """ha_get_device with a device_id absent from the device registry."""
 
     async def test_get_device_nonexistent_device_id(self, mcp_client):
-        """
-        Test: ha_get_device(device_id="<nonexistent>") returns a structured
-        error with code RESOURCE_NOT_FOUND, not success=True.
-
-        Source path: tools_registry.py — single-device lookup branch returns
-        RESOURCE_NOT_FOUND when the device_id is absent from
-        config/device_registry/list.
-        """
+        """An unknown device_id fails with RESOURCE_NOT_FOUND and a suggestion."""
         data = await safe_call_tool(
             mcp_client,
             "ha_get_device",

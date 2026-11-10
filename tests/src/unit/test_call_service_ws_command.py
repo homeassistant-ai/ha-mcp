@@ -13,6 +13,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_service import ServiceTools
+from ha_mcp.tools.util_helpers import BLOCKED_WS_WRITE_COMMANDS, raw_ws_refusal
 
 
 def _make_tools(send_websocket_message_return: dict | None = None) -> ServiceTools:
@@ -235,28 +236,11 @@ class TestWsCommandBlockedWriteCommands:
         "command",
         [
             "lovelace/config/save",
-            "lovelace/dashboards/delete",
-            "config/entity_registry/remove",
-            "config/device_registry/remove",
-            "config/core/update",
             "LOVELACE/CONFIG/SAVE",
-            # Resource writes carry the same wrapping-tool guards (#2060):
-            # auto-backup, the #1072 YAML-misroute rejection, the inline
-            # size cap and the data:-URL routing guard.
-            "lovelace/resources/create",
-            "lovelace/resources/update",
-            "lovelace/resources/delete",
-        ],
-        ids=[
-            "lovelace_config_save",
-            "lovelace_dashboards_delete",
-            "config_entity_registry_remove",
-            "config_device_registry_remove",
-            "config_core_update",
-            "case_variant",
-            "lovelace_resources_create",
-            "lovelace_resources_update",
-            "lovelace_resources_delete",
+            # ha_remove_device / ha_remove_entity's own commands.
+            "config/device_registry/remove",
+            "config/device_registry/remove_config_entry",
+            "config/entity_registry/remove",
         ],
     )
     async def test_blocked_write_command_rejected(self, command):
@@ -268,6 +252,15 @@ class TestWsCommandBlockedWriteCommands:
         message = str(excinfo.value)
         assert "dedicated tool guards with backups and conflict checks" in message
         tools._client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize("command", sorted(BLOCKED_WS_WRITE_COMMANDS))
+def test_every_blocklisted_command_is_refused(command):
+    """Every entry of BLOCKED_WS_WRITE_COMMANDS is refused by raw_ws_refusal,
+    which ha_call_service's ws_command and Code Mode's ws_send both ask; the
+    test above checks the ws_command wiring, and the E2E suite checks ws_send's
+    with config/core/update and lovelace/config/save."""
+    assert raw_ws_refusal(command) is not None
 
 
 class TestWsCommandReservedEnvelopeKeys:

@@ -78,6 +78,7 @@ def _matter_device(device_id: str = "m1"):
 
 
 _MATTER_ENTRIES = {"success": True, "result": [{"entry_id": "e1", "domain": "matter"}]}
+_NO_LINKED_DEVICES = {"success": True, "result": {"linked_devices": []}}
 
 _DIAG = {
     "node_id": 1,
@@ -108,6 +109,7 @@ class TestMatterEnrichment:
                 "config_entries/get": _MATTER_ENTRIES,
                 "config/device_registry/list": {"success": True, "result": [device]},
                 "config/entity_registry/list": {"success": True, "result": []},
+                "config/device_registry/list_linked_devices": _NO_LINKED_DEVICES,
                 "matter/node_diagnostics": {"success": True, "result": _DIAG},
             }
         )
@@ -134,6 +136,7 @@ class TestMatterEnrichment:
                 "config_entries/get": _MATTER_ENTRIES,
                 "config/device_registry/list": {"success": True, "result": [device]},
                 "config/entity_registry/list": {"success": True, "result": []},
+                "config/device_registry/list_linked_devices": _NO_LINKED_DEVICES,
                 "matter/node_diagnostics": boom,
             }
         )

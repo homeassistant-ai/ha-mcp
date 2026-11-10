@@ -136,6 +136,13 @@ class TestSetDeviceCoreAnswers:
         [
             ("not_found", "Device not found", "RESOURCE_NOT_FOUND"),
             ("not_allowed", "Cannot update a composite device", "SERVICE_CALL_FAILED"),
+            # Core before 2026.9 answers an unknown id this way.
+            ("unknown_error", "Unknown error", "SERVICE_CALL_FAILED"),
+            (
+                "invalid_format",
+                "expected str for dictionary value",
+                "VALIDATION_INVALID_PARAMETER",
+            ),
         ],
     )
     async def test_core_refusal_keeps_its_code(self, tools, code, message, expected):
@@ -152,3 +159,8 @@ class TestSetDeviceCoreAnswers:
         assert error_data["error"]["code"] == expected
         assert message in error_data["error"]["message"]
         assert error_data["ha_error_code"] == code
+        # Only an unknown device, or Core's answer to one before 2026.9, gets
+        # pointed at ha_get_device; for any other refusal Core's message says
+        # what is wrong.
+        suggests_lookup = "ha_get_device" in json.dumps(error_data["error"])
+        assert suggests_lookup == (code in ("not_found", "unknown_error"))

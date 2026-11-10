@@ -74,6 +74,7 @@ class RoutingClient:
         core_has_remove: bool = True,
         remove_reply: dict[str, Any] | None = None,
         refused_entries: frozenset[str] = frozenset(),
+        splits: dict[str, Any] | None = None,
     ) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
@@ -82,6 +83,7 @@ class RoutingClient:
         self._core_has_remove = core_has_remove
         self._remove_reply = remove_reply or {"success": True, "result": None}
         self._refused_entries = refused_entries
+        self._splits = splits or {}
         self.device_list_calls = 0
         self.remove_calls: list[str] = []
         self.remove_config_entry_calls: list[str] = []
@@ -111,6 +113,8 @@ class RoutingClient:
                     "error_code": "home_assistant_error",
                 }
             return {"success": True, "result": None}
+        if msg_type == "config/device_registry/list_composite_splits":
+            return {"success": True, "result": self._splits}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -315,6 +319,33 @@ async def test_body_not_found_falls_back_to_list_for_suggestions() -> None:
     )
     # The legacy device list served the not-found suggestion.
     assert client.device_list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_split_composite_id_names_the_devices_that_replaced_it() -> None:
+    """An id Core retired by splitting a composite device is not found, and
+    the error carries Core's ``split_ids`` and ``primary_id`` for it; nothing
+    is removed."""
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_result={"device": None},
+    )
+    split = {"split_ids": ["new-a", "new-b"], "primary_id": "new-a"}
+    client = RoutingClient(
+        devices=[_raw_device("new-a"), _raw_device("new-b")],
+        splits={"composite": split, "other-composite": {"split_ids": ["x"]}},
+    )
+    remove_device = _build_remove_device(client)
+
+    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
+        await remove_device(device_id="composite")
+
+    error = json.loads(str(excinfo.value))
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert error["split_ids"] == ["new-a", "new-b"]
+    assert error["primary_id"] == "new-a"
+    assert client.remove_calls == []
 
 
 # --- auto-backup capture read routing (_fetch_device) ---------------------------

@@ -75,9 +75,12 @@ class TestDeviceSeam:
         return updated
 
     @pytest.mark.asyncio
-    async def test_get_device_transform_from_real_component(
+    async def test_get_device_keeps_cores_device_and_entity_rows(
         self, hass: HomeAssistant, dev: dr.DeviceEntry
     ) -> None:
+        """A field of Core's device row or of its entities' registry rows that
+        the single lookup drops, renames or rewrites fails here; the lookup
+        reads neither registry whole."""
         entity_registry = er.async_get(hass)
         sensor = entity_registry.async_get_or_create(
             "sensor", "zha", "kitchen-temp", device_id=dev.id
@@ -101,10 +104,10 @@ class TestDeviceSeam:
         # the device_get seam); serve it an empty result so it is a graceful no-op.
         base_send = client.send_websocket_message
 
-        async def _send(msg: Any) -> dict[str, Any]:
+        async def _send(msg: Any, **kwargs: Any) -> dict[str, Any]:
             if msg.get("type") == "zha/devices":
                 return {"success": True, "result": []}
-            return await base_send(msg)
+            return await base_send(msg, **kwargs)
 
         client.send_websocket_message = _send  # type: ignore[assignment]
         ws = _real_component_ws(hass)
@@ -116,9 +119,9 @@ class TestDeviceSeam:
         info = resp["device"]
         # Read out of Core's dict_repr; integration_type is the domain the
         # client's config_entries/get answer gives the owning entry.
-        assert info["device_id"] == dev.id
+        assert info["id"] == dev.id
         assert (info["name"], info["name_by_user"]) == ("Kitchen Sensor", "Kitchen")
-        assert info["area_id"] == "kitchen"
+        assert info["area_id"] == info["effective_area_id"] == "kitchen"
         assert info["labels"] == ["important"]
         assert info["config_entry_id"] == "cfg-1"
         assert info["integration_type"] == "zha"
@@ -126,23 +129,27 @@ class TestDeviceSeam:
         # The device's entity list came from the include_entities join over the REAL
         # component output — the whole device AND entity registries were never dumped.
         assert resp["entity_count"] == 3
-        assert {e["entity_id"] for e in resp["entities"]} == {
+        assert "entities" not in resp
+        assert client.device_list_calls == 0
+        assert client.entity_list_calls == 0
+
+        # The entities are Core's registry rows as the component reads them
+        # (config/entity_registry/list's shape), disabled_by and all.
+        raw = wsapi._do_device_get(
+            hass, {"device_id": dev.id, "include_entities": True}
+        )
+        assert {k: info[k] for k in raw["device"]} == raw["device"]
+        assert sorted(info["entities"], key=lambda e: e["entity_id"]) == sorted(
+            raw["entities"], key=lambda e: e["entity_id"]
+        )
+        by_entity = {e["entity_id"]: e for e in info["entities"]}
+        assert set(by_entity) == {
             sensor.entity_id,
             update.entity_id,
             disabled.entity_id,
         }
-        assert client.device_list_calls == 0
-        assert client.entity_list_calls == 0
-
-        # Pin the RAW entity-row shape the component emits (config/entity_registry/list
-        # parity, device_id carried) so the join survives byte-for-byte across the seam.
-        raw = wsapi._do_device_get(
-            hass, {"device_id": dev.id, "include_entities": True}
-        )
-        raw_row = next(e for e in raw["entities"] if e["entity_id"] == sensor.entity_id)
-        assert raw_row["device_id"] == dev.id
-        assert raw_row["platform"] == "zha"
-        assert raw_row["name"] == "Kitchen Temp"
+        assert by_entity[sensor.entity_id]["name"] == "Kitchen Temp"
+        assert by_entity[disabled.entity_id]["disabled_by"] == "user"
 
     @pytest.mark.asyncio
     async def test_core_2026_9_child_device_is_retained_with_effective_area(
@@ -152,9 +159,10 @@ class TestDeviceSeam:
 
         The row has no direct ``area_id`` and names its owner only in
         ``config_entry_id`` (no ``primary_config_entry``, no ``config_entries``).
-        The public ``area_id`` carries Core's effective parent-derived area and
-        ``integration_type`` the owning entry's domain, while the raw component
-        record keeps ``parent_device_id`` and its own empty ``area_id``.
+        ``area_id`` stays the child's own empty one in the list, the single
+        lookup and the raw component record, ``effective_area_id`` carries
+        Core's parent-derived area and ``integration_type`` the owning entry's
+        domain.
         """
         MockConfigEntry(domain="hue", entry_id="cfg-hue").add_to_hass(hass)
         registry = dr.async_get(hass)
@@ -179,10 +187,11 @@ class TestDeviceSeam:
             listed = await get_device()
             single = await get_device(device_id=child.id)
 
-        by_id = {row["device_id"]: row for row in listed["devices"]}
+        by_id = {row["id"]: row for row in listed["devices"]}
         assert set(by_id) == {parent.id, child.id}
-        assert by_id[child.id]["area_id"] == "office"
-        assert single["device"]["area_id"] == "office"
+        for row in (by_id[child.id], single["device"]):
+            assert (row["area_id"], row["effective_area_id"]) == (None, "office")
+            assert row["parent_device_id"] == parent.id
         assert single["device"]["integration_type"] == "hue"
         raw = wsapi._do_device_list(hass, {})["devices"]
         raw_child = next(row for row in raw if row["id"] == child.id)
@@ -190,9 +199,12 @@ class TestDeviceSeam:
         assert raw_child["area_id"] is None
 
     @pytest.mark.asyncio
-    async def test_remove_device_from_real_component(
+    async def test_remove_device_looks_up_cores_row_without_a_registry_dump(
         self, hass: HomeAssistant, dev: dr.DeviceEntry, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The removal finds the device through the component's ``device_get``
+        and sends Core's ``remove`` for its id; a lookup that misreads the
+        component's row, or falls back to the whole device list, fails here."""
         settings = MagicMock()
         settings.enable_auto_backup = False
         monkeypatch.setattr(
@@ -211,9 +223,11 @@ class TestDeviceSeam:
         assert client.device_list_calls == 0
 
     @pytest.mark.asyncio
-    async def test_resolve_ieee_from_real_component(
+    async def test_resolve_ieee_reads_the_zha_identifier_of_cores_row(
         self, hass: HomeAssistant, dev: dr.DeviceEntry
     ) -> None:
+        """``_resolve_ieee`` takes the IEEE address from the ``identifiers`` of
+        the row the component serves; a changed shape of that field fails here."""
         client = ZigbeeRoutingClient()
         ws = _real_component_ws(hass)
         with patch_ws(ws, component_devices):

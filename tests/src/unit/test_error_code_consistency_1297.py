@@ -190,9 +190,7 @@ class TestDeviceLookupMissingReturnsResourceNotFound:
     async def test_get_device_missing_id_surfaces_resource_not_found(
         self, mock_ws_client
     ):
-        # device_registry/list (a small set, so the first-10 ``available_device_ids``
-        # parity with the labels/categories sites is pinned, KP13 review #2),
-        # entity_registry/list, then config_entries/get.
+        # Device list (few rows: pins available_device_ids), entities, entries, splits.
         mock_ws_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {
@@ -201,6 +199,7 @@ class TestDeviceLookupMissingReturnsResourceNotFound:
                 },
                 {"success": True, "result": []},  # entity_registry/list
                 {"success": True, "result": []},  # config_entries/get
+                {"success": True, "result": {}},  # list_composite_splits
             ]
         )
         captured = _register_registry_tools_and_capture(mock_ws_client)
@@ -222,10 +221,11 @@ class TestDeviceLookupMissingReturnsResourceNotFound:
     async def test_remove_device_missing_id_surfaces_resource_not_found(
         self, mock_ws_client
     ):
+        rows = [{"id": "dev-existing-1"}, {"id": "dev-existing-2"}]
         mock_ws_client.send_websocket_message = AsyncMock(
-            return_value={
+            side_effect=lambda msg, **_: {
                 "success": True,
-                "result": [{"id": "dev-existing-1"}, {"id": "dev-existing-2"}],
+                "result": {} if msg["type"].endswith("composite_splits") else rows,
             }
         )
         captured = _register_registry_tools_and_capture(mock_ws_client)

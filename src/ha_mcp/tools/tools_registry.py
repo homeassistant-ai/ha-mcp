@@ -21,6 +21,7 @@ from ..utils.device_registry_semantics import (
 )
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
+from .component_api import UNKNOWN_COMMAND_CODE
 from .component_devices import (
     fetch_device_list_via_component,
     fetch_device_via_component,
@@ -36,10 +37,10 @@ from .helpers import (
     clearable_value,
     exception_to_structured_error,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
-    ws_failure_code,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -141,27 +142,38 @@ async def _entry_domains(client: Any) -> dict[str, str]:
     if not result.get("success"):
         # Without the domains every integration read would come back empty,
         # a negative answer the caller could not tell from a real one.
-        raise_tool_error(
-            create_error_response(
-                ws_failure_code(result),
-                f"Failed to read config entries: {_core_message(result)}",
-                context={"ha_error_code": result.get("error_code")},
-            )
-        )
+        raise_core_refusal("Failed to read config entries", result)
     return {e["entry_id"]: e["domain"] for e in result.get("result") or []}
 
 
-def _core_message(result: dict[str, Any]) -> str:
-    """Core's error message without the client's ``Command failed:`` prefix."""
-    return str(result.get("error")).removeprefix("Command failed: ")
+# HA-MCP's response-size policy for a ``summary`` list, not a copy of a Core
+# rule: the fields of Core's device row that say who the device is, where it
+# sits and what it hangs off. ``full`` and a single-device lookup return the
+# whole row, so every field stays reachable.
+_SUMMARY_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "name_by_user",
+        "manufacturer",
+        "model",
+        "area_id",
+        "disabled_by",
+        "parent_device_id",
+        "via_device_id",
+    }
+)
 
 
-def _get_device_info(device: dict[str, Any], domains: dict[str, str]) -> dict[str, Any]:
-    """Core's device row with ``id`` renamed to ``device_id``, plus integration
-    and radio hints.
+def _get_device_info(
+    device: dict[str, Any], domains: dict[str, str], summary: bool = False
+) -> dict[str, Any]:
+    """Core's device row (in a summary, only its ``_SUMMARY_FIELDS``) plus the
+    effective area, the owning integration and radio hints.
 
-    ``area_id`` is the effective area: a child device without its own area sits
-    in its parent's, as Core resolves it.
+    ``area_id`` is the device's own area; ``effective_area_id`` is the one Core
+    places it in, where a child device without its own area sits in its
+    parent's.
     """
     ieee_address, is_z2m, zwave_node_id = _extract_zigbee_info(
         device.get("identifiers") or []
@@ -170,17 +182,24 @@ def _get_device_info(device: dict[str, Any], domains: dict[str, str]) -> dict[st
         device.get("connections") or [], ieee_address
     )
     integration_type = "zigbee2mqtt" if is_z2m else _entry_domain(device, domains)
+    if summary:
+        row = {k: v for k, v in device.items() if k in _SUMMARY_FIELDS}
+    else:
+        row = {k: v for k, v in device.items() if k != EFFECTIVE_AREA_MARKER}
     device_info: dict[str, Any] = {
-        "device_id": device.get("id"),
-        **{k: v for k, v in device.items() if k not in ("id", EFFECTIVE_AREA_MARKER)},
-        "area_id": device.get(EFFECTIVE_AREA_MARKER, device.get("area_id")),
+        **row,
+        "effective_area_id": device.get(EFFECTIVE_AREA_MARKER, device.get("area_id")),
         "integration_type": integration_type,
     }
 
     if ieee_address:
         device_info["ieee_address"] = ieee_address
-    if is_z2m:
-        friendly_name = device.get("name_by_user") or device.get("name")
+    if is_z2m and not _is_z2m_bridge(device):
+        # Core's ``name`` is the friendly name Zigbee2MQTT discovered the device
+        # with, and its topics use it; ``name_by_user`` stays in Home Assistant.
+        # The bridge publishes under ``<base_topic>/bridge/...``, not its name,
+        # so it gets no hint.
+        friendly_name = device.get("name")
         device_info["friendly_name"] = friendly_name
         device_info["mqtt_topic_hint"] = f"zigbee2mqtt/{friendly_name}/..."
     if integration_type == "zha" and ieee_address:
@@ -196,7 +215,8 @@ def _get_device_info(device: dict[str, Any], domains: dict[str, str]) -> dict[st
 def _build_entity_maps(
     all_entities: list[dict[str, Any]], need_full: bool
 ) -> tuple[dict[str, str], dict[str, list[dict[str, Any]]]]:
-    """Build entity→device and device→entities lookup maps.
+    """Build entity→device and device→entities lookup maps; the entities are
+    Core's entity-registry rows.
 
     device_to_entities is only populated when need_full is True; building it for
     every list-mode request would be wasteful when only entity→device lookup is needed.
@@ -209,13 +229,7 @@ def _build_entity_maps(
         if eid and did:
             entity_to_device[eid] = did
             if need_full:
-                device_to_entities.setdefault(did, []).append(
-                    {
-                        "entity_id": eid,
-                        "name": e.get("name") or e.get("original_name"),
-                        "platform": e.get("platform"),
-                    }
-                )
+                device_to_entities.setdefault(did, []).append(e)
     return entity_to_device, device_to_entities
 
 
@@ -248,12 +262,7 @@ async def _strict_entity_rows(client: Any) -> list[dict[str, Any]]:
         {"type": "config/entity_registry/list"}
     )
     if not entity_result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to access entity registry: {entity_result.get('error', 'Unknown error')}",
-            )
-        )
+        raise_core_refusal("Failed to access entity registry", entity_result)
     return list(entity_result.get("result", []))
 
 
@@ -267,12 +276,7 @@ async def _legacy_device_rows(client: Any) -> list[dict[str, Any]]:
         {"type": "config/device_registry/list"}
     )
     if not list_result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
-            )
-        )
+        raise_core_refusal("Failed to access device registry", list_result)
     return list(list_result.get("result", []))
 
 
@@ -396,6 +400,44 @@ async def _single_device_and_entities(
     return all_devices, device_to_entities
 
 
+_UNKNOWN_COMMAND = frozenset({UNKNOWN_COMMAND_CODE})
+
+
+async def _raise_device_not_found(
+    client: Any, device_id: str, all_rows: list[dict[str, Any]]
+) -> NoReturn:
+    """Report an unknown device id. A composite id Home Assistant 2026.8 split
+    into one device per config entry gets Core's ``split_ids`` and
+    ``primary_id``, the map the frontend's device pickers re-point such an id
+    with; Core before 2026.8 has no such command and split nothing."""
+    context: dict[str, Any] = {
+        "device_id": device_id,
+        "available_device_ids": [d.get("id") for d in all_rows[:10] if d.get("id")],
+    }
+    suggestions = ["Use ha_get_device() to find valid device IDs"]
+    splits = await client.send_websocket_message(
+        {"type": "config/device_registry/list_composite_splits"},
+        expected_error_codes=_UNKNOWN_COMMAND,
+    )
+    if not splits.get("success") and splits.get("error_code") != UNKNOWN_COMMAND_CODE:
+        raise_core_refusal("Failed to read composite device splits", splits, context)
+    if split := (splits.get("result") or {}).get(device_id):
+        context.update(split)
+        suggestions = [
+            "Home Assistant split this device into one device per config entry: "
+            "use one of split_ids; primary_id, when not null, is the device that "
+            "took over its former primary config entry"
+        ]
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"Device not found: {device_id}",
+            suggestions=suggestions,
+            context=context,
+        )
+    )
+
+
 async def _lookup_device_for_remove(client: Any, device_id: str) -> dict[str, Any]:
     """Return the raw device row for ``ha_remove_device``; raise if it does not exist.
 
@@ -411,20 +453,7 @@ async def _lookup_device_for_remove(client: Any, device_id: str) -> dict[str, An
     all_rows = await _legacy_device_rows(client)
     device = next((d for d in all_rows if d.get("id") == device_id), None)
     if device is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Device not found: {device_id}",
-                suggestions=["Use ha_get_device() to find valid device IDs"],
-                context={
-                    "device_id": device_id,
-                    "available_device_ids": [
-                        d.get("id") for d in all_rows[:10] if d.get("id")
-                    ],
-                },
-            )
-        )
-        return {}  # unreachable: raise_tool_error always raises
+        await _raise_device_not_found(client, device_id, all_rows)
     return device
 
 
@@ -439,24 +468,29 @@ async def _get_single_device_result(
     """Return the full-detail single-device response dict."""
     device = next((d for d in all_devices if d.get("id") == device_id), None)
     if not device:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Device not found: {device_id}",
-                suggestions=["Use ha_get_device() to find valid device IDs"],
-                context={
-                    "device_id": device_id,
-                    "available_device_ids": [
-                        d.get("id") for d in all_devices[:10] if d.get("id")
-                    ],
-                },
-            )
-        )
-        return {}  # unreachable: raise_tool_error always raises
+        await _raise_device_not_found(client, device_id, all_devices)
 
     device_info = _get_device_info(device, domains)
     device_info["entities"] = device_to_entities.get(device_id, [])
     warnings: list[str] = []
+
+    # The device page's Linked devices card: devices of other config entries
+    # sharing an identifier or connection (none for a child). Core 2026.8+.
+    linked = await client.send_websocket_message(
+        {"type": "config/device_registry/list_linked_devices", "device_id": device_id},
+        expected_error_codes=_UNKNOWN_COMMAND,
+    )
+    if linked.get("success"):
+        device_info["linked_devices"] = linked["result"]["linked_devices"]
+    elif linked.get("error_code") == UNKNOWN_COMMAND_CODE:
+        warnings.append(
+            "Linked devices not listed: Home Assistant before 2026.8 has no "
+            "config/device_registry/list_linked_devices"
+        )
+    else:
+        raise_core_refusal(
+            "Failed to read linked devices", linked, {"device_id": device_id}
+        )
 
     if device_info.get("integration_type") == "zha" and device_info.get("ieee_address"):
         await enrich_zha_metrics(client, device_info, warnings)
@@ -465,12 +499,10 @@ async def _get_single_device_result(
     if device_info.get("integration_type") == "matter":
         await enrich_matter_diagnostics(client, device_id, device_info, warnings)
 
-    entities = device_info.get("entities", [])
     response: dict[str, Any] = {
         "success": True,
         "device": device_info,
-        "entities": entities,  # Also at top level for backward compatibility
-        "entity_count": len(entities),
+        "entity_count": len(device_info["entities"]),
         "queried_by": "entity_id" if entity_id else "device_id",
         "queried_entity_id": entity_id,
     }
@@ -499,7 +531,7 @@ def _filter_devices(
         device_man = (device.get("manufacturer") or "").lower()
         if manufacturer_lower and manufacturer_lower not in device_man:
             continue
-        device_info = _get_device_info(device, domains)
+        device_info = _get_device_info(device, domains, detail_level == "summary")
         # "mqtt" also matches Zigbee2MQTT devices, whose entry is MQTT's.
         if integration_lower and integration_lower not in (
             device_info["integration_type"],
@@ -526,8 +558,8 @@ def _add_integration_hints(
         bridge = next((d for d in all_devices if _is_z2m_bridge(d)), None)
         if bridge:
             result["bridge"] = {
-                "device_id": bridge.get("id"),
-                "name": bridge.get("name_by_user") or bridge.get("name"),
+                "id": bridge.get("id"),
+                "name": bridge.get("name"),
                 "ieee_address": _extract_zigbee_info(bridge["identifiers"])[0],
             }
         result["usage_hint"] = (
@@ -594,29 +626,6 @@ def _list_devices_result(
 
     _add_integration_hints(result, integration_lower, all_devices)
     return result
-
-
-def _raise_core_refusal(
-    action: str,
-    device_id: str,
-    result: dict[str, Any],
-    suggestions: list[str],
-    **context: Any,
-) -> NoReturn:
-    """Raise Core's refusal of a device write with its message; Core's code is
-    kept as ``ha_error_code``."""
-    raise_tool_error(
-        create_error_response(
-            ws_failure_code(result),
-            f"Failed to {action} device: {_core_message(result)}",
-            suggestions=suggestions,
-            context={
-                "device_id": device_id,
-                "ha_error_code": result.get("error_code"),
-                **context,
-            },
-        )
-    )
 
 
 class RegistryTools:
@@ -693,11 +702,16 @@ class RegistryTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                _raise_core_refusal(
-                    "update",
-                    device_id,
+                # An unknown id: Core 2026.9+ answers not_found, older Core
+                # an unknown_error.
+                unknown = result.get("error_code") in ("not_found", "unknown_error")
+                raise_core_refusal(
+                    "Failed to update device",
                     result,
-                    ["Verify the device_id exists using ha_get_device()"],
+                    {"device_id": device_id},
+                    ["Verify the device_id exists using ha_get_device()"]
+                    if unknown
+                    else None,
                 )
             return {
                 "success": True,
@@ -756,7 +770,11 @@ class RegistryTools:
         area_id: Annotated[
             str | None,
             Field(
-                description="Filter devices by area ID (e.g., 'living_room')",
+                description=(
+                    "Filter devices by area ID (e.g., 'living_room'); matches "
+                    "effective_area_id, so a child device without an area of "
+                    "its own matches its parent's"
+                ),
                 default=None,
             ),
         ] = None,
@@ -789,9 +807,11 @@ class RegistryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': each device's registry row with integration and radio "
-                    "hints. 'full': in list mode also include each device's entities. "
-                    "Single-device lookups ignore it."
+                    "'summary': the main fields of each device's registry row "
+                    "(id, names, manufacturer, model, areas, disabled_by, parent "
+                    "and via device) with integration and radio hints. 'full': "
+                    "the whole registry row with the same hints, plus the "
+                    "device's entity-registry rows."
                 ),
             ),
         ] = "summary",
@@ -808,7 +828,7 @@ class RegistryTools:
         - By integration: ha_get_device(integration="zigbee2mqtt")
         - Full details in list: ha_get_device(detail_level="full", limit=10)
 
-        **Single device lookup (always full detail):**
+        **Single device lookup (Core's whole row, its entity rows and, on Core 2026.8+, linked_devices):**
         - By device_id: ha_get_device(device_id="abc123")
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
@@ -1012,10 +1032,10 @@ class RegistryTools:
             device = await _lookup_device_for_remove(self._client, device_id)
             result = await self._client.send_websocket_message(
                 {"type": "config/device_registry/remove", "device_id": device_id},
-                expected_error_codes=frozenset({"unknown_command"}),
+                expected_error_codes=_UNKNOWN_COMMAND,
             )
             detached: list[str] = []
-            if result.get("error_code") == "unknown_command":
+            if result.get("error_code") == UNKNOWN_COMMAND_CODE:
                 # Core before 2026.9 has no ``remove``; its predecessor detaches
                 # one entry at a time, and before 2026.8 a device can have several.
                 # A refusal stops the loop; entries detached before it stay so.
@@ -1031,16 +1051,18 @@ class RegistryTools:
                         break
                     detached.append(entry_id)
             if not result.get("success"):
-                _raise_core_refusal(
-                    "remove",
-                    device_id,
+                context: dict[str, Any] = {"device_id": device_id}
+                if detached:
+                    context["detached_config_entries"] = detached
+                raise_core_refusal(
+                    "Failed to remove device",
                     result,
+                    context,
                     [
                         "If the integration does not support removing devices, "
                         "disable the device instead: "
                         "ha_set_device(device_id=..., disabled_by='user')",
                     ],
-                    **({"detached_config_entries": detached} if detached else {}),
                 )
             return {
                 "success": True,
