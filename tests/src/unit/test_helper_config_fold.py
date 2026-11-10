@@ -660,6 +660,7 @@ async def test_a_long_choice_list_is_counted_not_spelled_out_in_the_description(
 
     assert "choice_7" not in rendered
     assert "40" in rendered
+    assert "describe=True" in rendered
 
 
 class TestCatalogTransform:

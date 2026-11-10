@@ -68,7 +68,10 @@ def render_core_keys(schemas: dict[str, Any]) -> str:
         )
         if fields:
             lines.append(f"{helper_type}: {', '.join(map(_render_field, fields))}.")
-    return " ".join(lines)
+    return (
+        f"{' '.join(lines)} ha_config_list_helpers(helper_type, describe=True) "
+        "lists a type's fields with every choice."
+    )
 
 
 class ComponentHelperSchemaTransform(Transform):
