@@ -1075,7 +1075,7 @@ class TestComplexHelperCaptureRestore:
             assert restored is not None, f"schedule {helper_id} missing: {listed}"
             for day in ("monday", "tuesday", "wednesday"):
                 assert [(r["from"], r["to"]) for r in restored.get(day, [])] == [
-                    (r["from"], r["to"]) for r in original[day]
+                    (r["from"], r["to"]) for r in original["config"][day]
                 ], day
 
             # Delete the snapshot.

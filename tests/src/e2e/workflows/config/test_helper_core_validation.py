@@ -127,8 +127,12 @@ class TestHomeAssistantJudgesStorageHelperFields:
                         "helper_id": entity_id,
                     },
                 )
-                fields = {f["name"]: f for f in described["fields"]}
-                assert fields["options"]["current"] == ["a", "b", "c"]
+                if described["source"] == "unavailable":  # a lane without the component
+                    kept = described["stored"]["options"]
+                else:
+                    fields = {f["name"]: f for f in described["fields"]}
+                    kept = fields["options"]["current"]
+                assert kept == ["a", "b", "c"]
             finally:
                 await safe_call_tool(
                     mcp_client,
