@@ -380,7 +380,7 @@ async def test_a_flow_not_opened_for_the_calls_anchor_is_refused(
     client = _client()
     with pytest.raises(ToolError) as exc_info:
         await _drive(client, target, opened=False, flow_id="f1", **call)
-    assert "opened for this call's target" in _error(exc_info)["error"]["message"]
+    assert "of this call's target" in _error(exc_info)["error"]["message"]
     client._request.assert_not_awaited()
     client.submit_config_flow_step.assert_not_awaited()
     client.submit_options_flow_step.assert_not_awaited()

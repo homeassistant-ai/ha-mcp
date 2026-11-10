@@ -189,8 +189,8 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"Flow {flow_id!r} is not a {target.kind} flow opened for this "
-            "call's target: a flow continues or ends only with the arguments "
+            f"Flow {flow_id!r} was not opened as the {target.kind} flow of "
+            "this call's target: a flow continues or ends only with the arguments "
             "that named its target when it was opened (domain or "
             "helper_type, entry_id or helper_id, reconfigure, subentry_type "
             "and subentry_id). Nothing was sent to the flow",
