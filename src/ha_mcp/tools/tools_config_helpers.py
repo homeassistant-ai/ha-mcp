@@ -805,8 +805,11 @@ class HelperConfigTools:
                 # Home Assistant validates the fields itself (#2632).
                 name, icon, fields = storage_fields(helper_type, config, name, icon)
                 # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
+                unchecked = None
                 if action == "create":
-                    await _check_name_collision(self._client, helper_type, name)
+                    unchecked = await _check_name_collision(
+                        self._client, helper_type, name
+                    )
 
                 try:
                     labels = parse_string_list_param(labels, "labels")
@@ -828,7 +831,7 @@ class HelperConfigTools:
                 )
 
                 if action == "create":
-                    return await _execute_create_simple_helper(
+                    created = await _execute_create_simple_helper(
                         self._client,
                         helper_type,
                         name,
@@ -840,6 +843,9 @@ class HelperConfigTools:
                         MandatoryBPS,
                         fields,
                     )
+                    if unchecked:
+                        created.setdefault("warnings", []).append(unchecked)
+                    return created
 
                 if action != "update":
                     raise_tool_error(

@@ -146,33 +146,45 @@ def helpers_named(
 ) -> dict[str, Any]:
     """The helpers of ``domain`` a new one named ``name`` would be numbered
     after: those whose id, or whose name, Core's ``slugify`` turns into the
-    same id. Ids are storage ids, or config entry ids for a flow helper.
+    same id. Ids are storage ids, or config entry ids for a flow helper;
+    ``yaml_ids`` are the ones defined in YAML, which no storage write reaches.
     """
     from homeassistant.util import slugify
 
     slug = slugify(name)
     owner = collection_owner(hass, domain) if domain in SIMPLE_HELPER_TYPES else None
     if owner is None:
-        ids = [
-            entry.entry_id
-            for entry in hass.config_entries.async_entries(domain)
-            if slugify(entry.title) == slug
-        ]
-        return {"slug": slug, "ids": ids}
-    ids = []
-    for item in owner.storage_collection.async_items():
-        item_id, item_name = item["id"], item.get("name")
-        # A tag's name is the registry's, as Core's own tag listing reads it.
-        if item_name is None and (
-            entity_id := _entity_id_for(registry, domain, item_id)
-        ):
-            entry = registry.async_get(entity_id)
-            item_name = entry and (entry.name or entry.original_name)
-        if item_id == slug or (
-            isinstance(item_name, str) and slugify(item_name) == slug
-        ):
-            ids.append(item_id)
-    return {"slug": slug, "ids": ids}
+        entries = hass.config_entries.async_entries(domain)
+        return {
+            "slug": slug,
+            "ids": [e.entry_id for e in entries if slugify(e.title) == slug],
+        }
+    stored = owner.storage_collection
+    # person lists its YAML people beside the stored ones, as person/list does.
+    in_yaml = getattr(stored, "yaml_collection", None)
+    ids: list[str] = []
+    yaml_ids: list[str] = []
+    for found, items in (
+        (ids, stored.async_items()),
+        (yaml_ids, in_yaml.async_items() if in_yaml else ()),
+    ):
+        for item in items:
+            item_id, item_name = item["id"], item.get("name")
+            # A tag's name is the registry's, as Core's own tag listing reads it.
+            if item_name is None and (
+                entity_id := _entity_id_for(registry, domain, item_id)
+            ):
+                entry = registry.async_get(entity_id)
+                item_name = entry and (entry.name or entry.original_name)
+            if item_id == slug or (
+                isinstance(item_name, str) and slugify(item_name) == slug
+            ):
+                found.append(item_id)
+    # Core generates a new id with this manager, which also holds the ids of
+    # the type's YAML helpers: an id taken there and not stored is YAML's.
+    if slug not in ids + yaml_ids and stored.id_manager.has_id(slug):
+        yaml_ids.append(slug)
+    return {"slug": slug, "ids": ids + yaml_ids, "yaml_ids": yaml_ids}
 
 
 def read_item(

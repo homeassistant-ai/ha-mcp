@@ -30,7 +30,7 @@ def mock_client():
 
 
 @pytest.fixture
-def register_tools(mock_client):
+def register_tools(mock_client, component_finds_no_duplicate):
     from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
     registered: dict[str, Any] = {}

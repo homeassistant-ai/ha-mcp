@@ -78,7 +78,7 @@ def capture_create() -> Iterator[_Captured]:
     captured = _Captured()
     with (
         patch.object(tch, "_execute_create_simple_helper", captured),
-        patch.object(tch, "_check_name_collision", AsyncMock()),
+        patch.object(tch, "_check_name_collision", AsyncMock(return_value=None)),
         patch.object(tch, "validate_registry_ids", AsyncMock()),
         patch.object(hc_typed, "fetch_helper_schemas", AsyncMock(return_value=None)),
     ):

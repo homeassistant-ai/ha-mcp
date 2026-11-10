@@ -99,9 +99,7 @@ def form_submission(
             if "action" in (field.get("selector") or {}):
                 reject_malformed_list_fields({name: given}, (name,), {"field": name})
             data[name] = given
-    data.update(
-        (key, value)
-        for key, value in values.items()
-        if key not in declared and value is not None
-    )
+    # A key the form lacks goes to Core as written, null included: a null
+    # empties a declared field only, and Core refuses the rest.
+    data.update((key, value) for key, value in values.items() if key not in declared)
     return data

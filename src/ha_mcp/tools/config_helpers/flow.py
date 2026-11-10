@@ -219,6 +219,7 @@ async def _handle_flow_helper(
         )
     # Bug 12: a new helper named like an existing one is refused before a
     # flow is opened, rather than created as a "_2" duplicate.
+    unchecked: str | None = None
     if action == "create":
         named_answer = next(
             (
@@ -231,7 +232,7 @@ async def _handle_flow_helper(
             {},
         )
         new_name = named_answer.get("name", name)
-        await _check_name_collision(
+        unchecked = await _check_name_collision(
             client, helper_type, new_name if isinstance(new_name, str) else None
         )
     # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config entry.
@@ -261,6 +262,8 @@ async def _handle_flow_helper(
     if step.get("type") in _OPEN_STEP_TYPES:
         response = await open_step_answer(client, target, flow_id, step)
         response.update(action=action, helper_type=helper_type)
+        if unchecked:
+            response.setdefault("warnings", []).append(unchecked)
         if registry_given:
             response.setdefault("warnings", []).append(
                 f"{', '.join(registry_given)} not applied yet: pass them "
@@ -275,6 +278,8 @@ async def _handle_flow_helper(
     # An options flow's result carries no title; the entry's own stands.
     title = result.get("title") or step.get("title") or target.title
     entities, warnings = await _wait_for_flow_entities(client, saved_id, action, wait)
+    if unchecked:
+        warnings.append(unchecked)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
 
     extras: dict[str, Any] = {

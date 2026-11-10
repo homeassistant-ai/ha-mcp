@@ -7,7 +7,7 @@ from typing import Any
 from ...client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
-from ..component_api import ask_component
+from ..component_api import COMPONENT_INSTALL_HINT, ask_component
 from ..component_registry_lookup import fetch_entities_for_config_entry_via_component
 from ..config_write_helpers import apply_entity_category
 from ..helpers import exception_to_structured_error, raise_tool_error
@@ -505,11 +505,19 @@ async def _enrich_helpers_with_current_registry(
     return []
 
 
+_NEAR_DUPLICATES_UNCHECKED = (
+    "Only a helper with exactly this name or id was looked for as a duplicate. "
+    "A name that differs only in case or punctuation is found with the "
+    "ha_mcp_tools component, and without it Home Assistant creates such a "
+    "helper numbered (..._2). " + COMPONENT_INSTALL_HINT
+)
+
+
 async def _check_name_collision(
     client: Any,
     helper_type: str,
     name: str | None,
-) -> None:
+) -> str | None:
     """Reject create requests whose name collides with an existing helper (Bug 12).
 
     HA's create endpoints auto-suffix duplicate names with `_2` / `_3` etc., so
@@ -519,17 +527,22 @@ async def _check_name_collision(
 
     Which names collide is Core's rule (its ``slugify``), so the component
     answers with Core's own function. Without the component only a helper
-    with exactly this name or id is found, and Core numbers a near-duplicate.
+    with exactly this name or id is found, and Core numbers a near-duplicate:
+    the returned warning says so, for the caller's response.
 
     Empty / missing / whitespace-only `name` is left to Core's name check.
     """
     if not name or not name.strip():
-        return
+        return None
     slug = None
+    in_yaml = False
+    unchecked: str | None = _NEAR_DUPLICATES_UNCHECKED
     named = await ask_component(client, "helpers_named", domain=helper_type, name=name)
     if named is not None and isinstance(named.get("ids"), list):
+        unchecked = None
         existing_id = named["ids"][0] if named["ids"] else None
         slug = named.get("slug")
+        in_yaml = existing_id in (named.get("yaml_ids") or [])
     # ha_config_set_helper checked the type: not storage means a helper flow.
     elif helper_type not in SIMPLE_HELPER_TYPES:
         existing_id = await _find_collision_in_flow_helpers(client, helper_type, name)
@@ -537,14 +550,23 @@ async def _check_name_collision(
         existing_id = await _find_collision_in_simple_helpers(client, helper_type, name)
 
     if existing_id is None:
-        return
+        return unchecked
 
+    different_name = "To create a separate helper, pick a different name" + (
+        f" (Home Assistant turns this one into {slug!r})." if slug else "."
+    )
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"A {helper_type} helper named {name!r} already exists "
-            f"(id: {existing_id!r}). Pass helper_id={existing_id!r} to update it, "
-            f"or use a different name to create a new helper.",
+            f"(id: {existing_id!r}). "
+            + (
+                "It is defined in YAML, which this tool does not edit; use a "
+                "different name to create a new helper."
+                if in_yaml
+                else f"Pass helper_id={existing_id!r} to update it, "
+                "or use a different name to create a new helper."
+            ),
             context=_simple_helper_error_context(
                 helper_type,
                 name=name,
@@ -556,11 +578,12 @@ async def _check_name_collision(
                 "name": name,
                 "existing_helper_id": existing_id,
             },
-            suggestions=[
+            suggestions=[different_name]
+            if in_yaml
+            else [
                 f"To update the existing helper, pass helper_id={existing_id!r} "
                 "(and omit `name`).",
-                "To create a separate helper, pick a different name"
-                + (f" (Home Assistant turns this one into {slug!r})." if slug else "."),
+                different_name,
             ],
         )
     )
