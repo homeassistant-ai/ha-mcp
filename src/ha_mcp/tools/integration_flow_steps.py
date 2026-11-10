@@ -76,6 +76,7 @@ class FlowTarget:
     entry_id: str | None = None
     subentry_type: str | None = None
     subentry_id: str | None = None
+    title: str | None = None
 
     @property
     def ref(self) -> FlowRef:
@@ -615,7 +616,13 @@ async def options_target(
                 context={"entry_id": entry_id, "domain": domain},
             )
         )
-    return FlowTarget("options", domain if isinstance(domain, str) else None, entry_id)
+    title = entry.get("title")
+    return FlowTarget(
+        "options",
+        domain if isinstance(domain, str) else None,
+        entry_id,
+        title=title if isinstance(title, str) else None,
+    )
 
 
 async def run_integration_step(

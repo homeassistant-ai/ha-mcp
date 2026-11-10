@@ -166,6 +166,7 @@ async def test_an_option_patch_keeps_the_options_it_leaves_out(
     )
 
     assert updated["action"] == "update"
+    assert updated["title"] == "Flow Probe"
     options = _options(hass, entry_id)
     assert options["state"] == "{{ 2 }}"
     assert options["unit_of_measurement"] == "W"

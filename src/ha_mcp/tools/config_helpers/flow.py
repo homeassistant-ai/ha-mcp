@@ -252,7 +252,8 @@ async def _handle_flow_helper(
     result = step.get("result")
     result = result if isinstance(result, dict) else {}
     saved_id = result.get("entry_id") if action == "create" else target.entry_id
-    title = result.get("title", step.get("title"))
+    # An options flow's result carries no title; the entry's own stands.
+    title = result.get("title") or step.get("title") or target.title
     entities, warnings = await _wait_for_flow_entities(client, saved_id, action, wait)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
 

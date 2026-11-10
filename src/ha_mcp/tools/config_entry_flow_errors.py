@@ -168,8 +168,9 @@ def _parse_flow_api_error(
 
 
 _FLOW_STILL_OPEN = (
-    "The flow is still open: answer the step again with flow_id, or end it "
-    "with flow_id and abort=True."
+    "The flow is still open: answer the step again with flow_id, giving the "
+    "whole answer (nothing from the rejected one is kept), or end it with "
+    "flow_id and abort=True."
 )
 
 
