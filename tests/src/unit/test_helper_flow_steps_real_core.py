@@ -156,6 +156,24 @@ async def test_a_call_without_config_returns_cores_form_and_saves_nothing(
     assert _options(hass, created["entry_id"])["entity_ids"] == _SOURCES
 
 
+async def test_a_name_given_on_a_later_call_is_checked_for_a_duplicate(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """A flow opened without config has no name to check yet. The call that
+    supplies one is refused like a first call would be, instead of creating
+    ``..._2`` beside the helper the caller meant."""
+    await tools.ha_config_set_helper(helper_type="min_max", config=dict(_MIN_MAX))
+    shown = await tools.ha_config_set_helper(helper_type="min_max")
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(
+            helper_type="min_max", flow_id=shown["flow_id"], config=dict(_MIN_MAX)
+        )
+
+    assert "already exists" in str(exc_info.value)
+    assert len(hass.config_entries.async_entries("min_max")) == 1
+
+
 async def test_a_later_form_is_answered_in_its_own_call(
     hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:
