@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Ponechat HA-MCP v jednom obchodě?",
-            "description": "HA-MCP je označen jako nainstalovaný z obou zdrojů ({records}). Obsahují stejnou integraci (druhý je starší distribuční zrcadlo). Marketplace v Home Assistant 2026.11 umožňuje, aby integraci vlastnil pouze jeden záznam, takže tam ji ani jeden nemůže aktualizovat; HACS ji sice stále aktualizuje, ale přechod na verzi 2026.11 by zanechal HA-MCP zaseknuté.\n\nKliknutím na Odeslat ponecháte **{keep}**, což je záznam ve výchozím katalogu, který nevyžaduje vlastní repozitář, a druhý záznam označíte jako nenainstalovaný. Nic se neodstraní: vaše položky, nastavení a soubory HA-MCP zůstanou přesně tak, jak jsou, a aktualizace se od této chvíle budou objevovat pod položkou {keep} jako obvykle."
+            "description": "HA-MCP je označen jako nainstalovaný z obou zdrojů ({records}). Obsahují stejnou integraci (druhý je distribuční zrcadlo, ze kterého pocházejí dřívější instalace). Obchod v Home Assistant 2026.11 umožňuje, aby integraci vlastnil pouze jeden záznam, takže tam ji ani jeden z nich nemůže aktualizovat; HACS ji sice stále aktualizuje, ale přechod na verzi 2026.11 by zanechal HA-MCP zaseknutý.\n\nOdesláním ponecháte **{keep}**, záznam ve výchozím katalogu, který nevyžaduje vlastní úložiště, a druhý záznam označíte jako nenainstalovaný. Nic se neodstraní: vaše položky, nastavení a soubory HA-MCP zůstanou přesně tak, jak jsou, a odteď se aktualizace budou zobrazovat pod {keep} jako obvykle."
           }
         },
         "abort": {

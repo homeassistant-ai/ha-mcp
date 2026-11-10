@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Ĉu konservi HA-MCP en unu vendeja listo?",
-            "description": "HA-MCP estas markita kiel instalita el ambaŭ {records}. Ili portas la saman integriĝon (la dua estas la pli malnova distribua spegulo). La vendejo en Home Assistant 2026.11 permesas al nur unu listo posedi integriĝon, do tie neniu el ili povas ĝisdatigi HA-MCP; HACS ankoraŭ ĝisdatigas, sed la ĝisdatigo al 2026.11 lasus HA-MCP blokita.\n\nSendado konservas **{keep}**, la liston en la defaŭlta katalogo kiu bezonas neniun propran deponejon, kaj markas la alian liston kiel ne instalitan. Nenio estas forviŝita: viaj HA-MCP-registroj, agordoj kaj dosieroj restas ekzakte kiel ili estas, kaj de nun ĝisdatigoj aperas sub {keep} kiel kutime."
+            "description": "HA-MCP estas markita instalita el ambaŭ {records}. Ili portas la saman integriĝon (la dua estas la distribua spegulo el kiu antaŭaj instaloj venis). La vendejo (Marketplace) en Home Assistant 2026.11 permesas ke nur unu listigo posedas integriĝon, do tie neniu el ili povas ĝisdatigi HA-MCP; HACS ankoraŭ ĝisdatigas, sed la ĝisdatigo al 2026.11 lasus HA-MCP blokita.\n\nSendado tenas **{keep}**, la listigon en la defaŭlta katalogo kiu ne bezonas propran deponejon, kaj markas la alian listigon kiel ne instalitan. Nenio estas forviŝita: viaj HA-MCP-eniroj, agordoj kaj dosieroj restas ekzakte kiel ili estas, kaj de nun ĝisdatigoj aperos sub {keep} kiel kutime."
           }
         },
         "abort": {
