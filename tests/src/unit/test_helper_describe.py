@@ -60,20 +60,22 @@ async def test_storage_helper_fields_come_from_core_when_component_present(
     assert result["source"] == "core_schema"
     fields = _fields(result)
     assert fields["name"]["required"] is True
-    # Core's schedule-day validator does not serialize; the static table types it.
+    # Core's schedule-day validator does not serialize; its hint types it.
     assert "type" in fields["monday"] and fields["monday"].get("description")
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
-async def test_storage_helper_without_component_falls_back_to_static_table(
+async def test_storage_helper_without_component_gets_no_made_up_field_list(
     client: AsyncMock,
 ) -> None:
-    """A no-component install still gets a usable field list."""
+    """Core has no command that lists a storage helper's fields: without the
+    component the answer says so instead of offering a list that can go stale."""
     result = await mod.describe_helper(client, "input_number")
 
-    assert result["source"] == "static_fallback"
-    assert "name" in _fields(result) and len(_fields(result)) > 1
+    assert result["source"] == "unavailable"
+    assert "fields" not in result
+    assert "ha_mcp_tools component" in result["note"]
 
 
 @pytest.mark.asyncio
@@ -360,7 +362,7 @@ async def test_read_only_still_describes_a_storage_helper_type(
     with read_only_request():
         result = await mod.describe_helper(client, "input_number")
 
-    assert result["source"] == "static_fallback"
+    assert result["source"] == "unavailable"
 
 
 @pytest.mark.asyncio

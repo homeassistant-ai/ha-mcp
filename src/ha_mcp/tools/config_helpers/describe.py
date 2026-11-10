@@ -3,9 +3,10 @@
 Flow-based helpers are described from the live config flow (or the options
 flow of an existing entry), which is what the HA UI renders. Storage helpers
 are described from Core's own create schema, served by the ``ha_mcp_tools``
-component (tools entry or embedded server entry). Without the component, the
-static ``SIMPLE_HELPER_SCHEMAS`` table is the fallback, and it also fills in
-the few fields whose Core validator does not serialize (e.g. schedule days).
+component (tools entry or embedded server entry). The few fields whose Core
+validator does not serialize (an icon, schedule days) get their value shape
+from ``UNTYPED_FIELD_HINTS``. Without the component Core offers no field list
+for a storage helper, and the response says so: Core validates the write.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from ..flow_translations import (
 )
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
-from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
+from .schemas import SIMPLE_HELPER_TYPES, untyped_field_hint
 
 # A select that also takes a custom value (units, device classes) lists
 # suggestions, so a long list is truncated: the first values show the format.
@@ -122,31 +123,17 @@ def compact_schema(schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [compact_field(f) for f in schema if isinstance(f, dict)]
 
 
-def _with_static_hints(
+def _with_untyped_hints(
     helper_type: str, core_fields: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Core's fields, typed from the static table where Core's validator is opaque."""
-    static = {f["name"]: f for f in SIMPLE_HELPER_SCHEMAS.get(helper_type, [])}
-    # Core's field order is arbitrary (schedule weekdays come back shuffled);
-    # follow the static table's order where it knows the field.
-    order = {name: i for i, name in enumerate(static)}
-
-    core_fields = sorted(
-        core_fields, key=lambda f: order.get(f.get("name", ""), len(order))
-    )
+    """Core's fields, in Core's order; one Core's serializer left without a
+    type gets the value shape from ``UNTYPED_FIELD_HINTS``."""
     merged = []
     for field in core_fields:
-        hint = static.get(field.get("name", ""))
-        opaque = "type" not in field and "selector" not in field
-        merged.append(
-            {
-                **field,
-                "selector": hint["selector"],
-                "description": hint.get("description"),
-            }
-            if opaque and hint
-            else field
-        )
+        hint = None
+        if "type" not in field and "selector" not in field:
+            hint = untyped_field_hint(helper_type, field.get("name", ""))
+        merged.append({**field, **hint} if hint else field)
     return merged
 
 
@@ -473,18 +460,7 @@ async def _describe_simple(
 ) -> dict[str, Any]:
     core = await fetch_helper_schemas(client)
     core_fields = (core or {}).get(helper_type, {}).get("create")
-    if core_fields:
-        out: dict[str, Any] = {
-            "source": "core_schema",
-            "fields": compact_schema(_with_static_hints(helper_type, core_fields)),
-        }
-    else:
-        out = {
-            "source": "static_fallback",
-            "fields": compact_schema(
-                [dict(f) for f in SIMPLE_HELPER_SCHEMAS.get(helper_type, [])]
-            ),
-        }
+    item = None
     if helper_id:
         item = await _stored_item(client, helper_type, helper_id)
         if item is None:
@@ -496,10 +472,29 @@ async def _describe_simple(
                     suggestions=[f"ha_config_list_helpers({helper_type!r}) lists them"],
                 )
             )
-        else:
-            for field in out["fields"]:
-                if field["name"] in item:
-                    field["current"] = item[field["name"]]
+    if not core_fields:
+        # Core has no command that lists a storage helper's fields.
+        out: dict[str, Any] = {
+            "source": "unavailable",
+            "note": (
+                f"Home Assistant's field list for {helper_type} is read "
+                "through the ha_mcp_tools component, which is not installed "
+                "or does not serve it. Send the fields under Home "
+                "Assistant's own names: it validates the write, and its "
+                "error names a wrong or missing field."
+            ),
+        }
+        if item is not None:
+            out["stored"] = item
+        return out
+    out = {
+        "source": "core_schema",
+        "fields": compact_schema(_with_untyped_hints(helper_type, core_fields)),
+    }
+    if item is not None:
+        for field in out["fields"]:
+            if field["name"] in item:
+                field["current"] = item[field["name"]]
     return out
 
 

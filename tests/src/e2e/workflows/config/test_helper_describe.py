@@ -3,7 +3,8 @@ E2E tests for ha_config_list_helpers(describe=True) (#2632).
 
 The field list comes from the running Home Assistant: a flow helper's config
 or options flow (with HA's own field help text), a storage helper's Core
-schema via the component, or the static table when no component is present.
+schema via the component. Without the component Core lists no fields for a
+storage helper, and an existing one is shown as Core stores it.
 """
 
 import logging
@@ -80,7 +81,8 @@ async def test_existing_flow_helper_reports_only_editable_fields_with_values(
 async def test_existing_storage_helper_reports_current_values(
     mcp_client, cleanup_tracker
 ):
-    """Holds with and without the component: Core schema or static fallback."""
+    """With the component the fields carry their current values; without it
+    Core's stored item is returned as it is."""
     created = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_config_set_helper",
@@ -98,5 +100,8 @@ async def test_existing_storage_helper_reports_current_values(
 
     data = await _describe(mcp_client, helper_type="input_number", helper_id=helper_id)
 
+    if data["source"] == "unavailable":  # a lane without the component
+        assert data["stored"]["max"] == 40, data
+        return
     currents = [f.get("current") for f in data["fields"] if "max" in f["name"]]
     assert currents == [40], data["fields"]

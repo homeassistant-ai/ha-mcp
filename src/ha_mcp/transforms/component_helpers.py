@@ -49,12 +49,12 @@ _NOTES = (
     "On input_* types `initial` — even false/0 — disables last-state restore and "
     "forces that value on every HA restart; counter `initial` is the starting "
     "value. input_text min/max are lengths. input_select options is a list. An "
-    "input_datetime created with neither has_date nor has_time gets both. timer "
+    "input_datetime needs has_date or has_time. timer "
     "duration is 'HH:MM:SS' or seconds. Schedule days are lists of "
     "{'from': 'HH:MM', 'to': 'HH:MM'} with an optional 'data' dict. zone radius "
     "is in meters; a passive zone doesn't trigger person state changes. person "
-    "device_trackers is a list of device_tracker entity IDs. Omit tag_id on "
-    "create to auto-generate it."
+    "device_trackers is a list of device_tracker entity IDs. Home Assistant "
+    "generates a tag_id omitted on create."
 )
 
 
@@ -92,7 +92,7 @@ def render_core_keys(schemas: dict[str, Any]) -> str:
 
 
 class ComponentHelperSchemaTransform(Transform):
-    """Swap the static helper key list for Core's.
+    """Put Core's helper key list into the ``config`` description.
 
     ``wait`` stays: flow helpers and a write that falls back to Core's
     commands still poll for the entity.

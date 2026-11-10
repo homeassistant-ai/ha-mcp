@@ -238,10 +238,7 @@ async def test_error_context_lists_cores_fields_when_served() -> None:
     finally:
         hc_schemas._CORE_HELPER_SCHEMAS.reset(token)
     assert context["data_schema"] == _CORE_SCHEMAS["input_number"]["create"]
-    assert (
-        hc_schemas._simple_helper_error_context("input_number")["data_schema"]
-        == (hc_schemas.SIMPLE_HELPER_SCHEMAS["input_number"])
-    )
+    assert "data_schema" not in hc_schemas._simple_helper_error_context("input_number")
 
 
 async def test_create_routes_through_component() -> None:
