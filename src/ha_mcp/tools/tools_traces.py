@@ -722,8 +722,8 @@ def _format_trace_list(
 
     formatted_traces = []
     for trace in window:
-        # Pass Core's short dict through instead of projecting a field
-        # allowlist; keep the concise execution alias for existing callers.
+        # Pass Core's short dict through unchanged instead of projecting a
+        # field allowlist; native keys such as script_execution stay as-is.
         formatted_traces.append(dict(trace))
 
     result: dict[str, Any] = {
