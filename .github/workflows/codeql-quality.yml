@@ -5,8 +5,10 @@ name: CodeQL Code Quality
 # ANY finding.
 #
 # Why the security suite is gated here too: GitHub default setup (the
-# Security tab) only analyzes master after merge and posts no blocking check
-# on PRs, so a PR can introduce security-query findings (e.g.
+# Security tab) does not block a merge. Its check is not a required one, it
+# skips pull requests from forks, and on this repository it covers GitHub
+# Actions and JavaScript/TypeScript but not Python. So a PR can introduce
+# security-query findings (e.g.
 # js/xss-through-dom) that surface as code-scanning alerts minutes after
 # merge — that is how alerts 33-40 landed. Running the same default
 # code-scanning suite in this gate catches them pre-merge.
@@ -53,13 +55,17 @@ name: CodeQL Code Quality
 # and the gate cannot verify allowlist entries for those duplicate findings.
 #
 # Languages gated (one step group each), both scanning the whole tree
-# (--source-root .):
-#   - python      vendored fixtures under tests/initial_test_state/ are dropped
-#                 by scripts/codeql_quality_gate.py's PATHS_IGNORE.
+# (--source-root .) except the vendored and fixture trees listed in
+# .github/codeql/codeql-config.yml, which the extractors do not walk:
+#   - python      still extracts a vendored module that first-party code
+#                 imports; the gate drops any finding there (PATHS_IGNORE).
 #   - javascript  scans the JS/TS family (.js/.mjs/.cjs/.ts/.tsx/.jsx) across the
 #                 whole tree — first-party src/, the Astro site's .mjs config,
-#                 and test JS; the same PATHS_IGNORE drops the vendored fixture
-#                 tree. (CodeQL does not extract .astro component scripts.)
+#                 and test JS. (CodeQL does not extract .astro component scripts.)
+#
+# The CodeQL CLI defaults to one thread and a small heap. Every create and
+# analyze step passes --threads=0 (all cores) and the --ram computed in the
+# install step.
 #
 # Why a custom workflow instead of GitHub's Code Quality page:
 #   - GitHub Code Quality (Preview) is gated to Team/Enterprise Cloud org plans;
@@ -138,6 +144,12 @@ jobs:
         run: |
           gh extensions install github/gh-codeql
           gh codeql set-version latest
+          # All memory but a reserve of 1 GiB plus 5% of what exceeds 8 GiB,
+          # the reserve github/codeql-action keeps.
+          total_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+          reserve_mb=$(( 1024 + (total_mb > 8192 ? (total_mb - 8192) / 20 : 0) ))
+          echo "CODEQL_GATE_RAM_MB=$(( total_mb - reserve_mb ))" >> "$GITHUB_ENV"
+          echo "cores=$(nproc) total_mb=$total_mb reserve_mb=$reserve_mb"
 
       - name: Create CodeQL database (python)
         timeout-minutes: 8
@@ -148,6 +160,9 @@ jobs:
             --language=python \
             --build-mode=none \
             --source-root . \
+            --codescanning-config=.github/codeql/codeql-config.yml \
+            --threads=0 \
+            --ram="$CODEQL_GATE_RAM_MB" \
             --overwrite
 
       - name: Analyze with python quality + security suites
@@ -160,6 +175,8 @@ jobs:
             codeql/python-queries:codeql-suites/python-code-scanning.qls \
             --format=sarif-latest \
             --output quality-python.sarif \
+            --threads=0 \
+            --ram="$CODEQL_GATE_RAM_MB" \
             --download
 
       - name: Upload SARIF artifact (python)
@@ -191,6 +208,9 @@ jobs:
             --language=javascript \
             --build-mode=none \
             --source-root . \
+            --codescanning-config=.github/codeql/codeql-config.yml \
+            --threads=0 \
+            --ram="$CODEQL_GATE_RAM_MB" \
             --overwrite
 
       - name: Analyze with javascript quality + security suites
@@ -204,6 +224,8 @@ jobs:
             codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls \
             --format=sarif-latest \
             --output quality-javascript.sarif \
+            --threads=0 \
+            --ram="$CODEQL_GATE_RAM_MB" \
             --download
 
       - name: Upload SARIF artifact (javascript)
