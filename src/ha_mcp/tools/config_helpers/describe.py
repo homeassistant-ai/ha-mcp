@@ -34,11 +34,10 @@ from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
 from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
 
-# A form's choices are shown in full up to this many, since the caller has to
-# answer from them (a statistics helper has 27 characteristics). Longer lists
-# (languages, countries) are truncated: the first values show the format, and
-# HA reports the full list if a value is rejected.
-MAX_OPTIONS = 60
+# A select that also takes a custom value (units, device classes) lists
+# suggestions, so a long list is truncated: the first values show the format.
+# A select whose answer must be one of its options is shown in full.
+MAX_OPTIONS = 12
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -58,7 +57,7 @@ _SELECTOR_KEYS = (
 _SERIALIZED_KEYS = ("valueMin", "valueMax", "lengthMin", "lengthMax", "allow_none")
 
 
-def _option_values(options: list[Any]) -> list[Any]:
+def _option_values(options: list[Any], *, suggestions: bool = False) -> list[Any]:
     values = [
         o[0]
         if isinstance(o, list | tuple)
@@ -67,7 +66,7 @@ def _option_values(options: list[Any]) -> list[Any]:
         else o
         for o in options
     ]
-    if len(values) <= MAX_OPTIONS:
+    if not suggestions or len(values) <= MAX_OPTIONS:
         return values
     return [*values[:MAX_OPTIONS], f"...{len(values) - MAX_OPTIONS} more"]
 
@@ -81,7 +80,9 @@ def _compact_selector(selector: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cfg.get("type"), str):
         out["input_type"] = cfg["type"]
     if isinstance(cfg.get("options"), list | tuple):
-        out["options"] = _option_values(cfg["options"])
+        out["options"] = _option_values(
+            cfg["options"], suggestions=bool(cfg.get("custom_value"))
+        )
     out.update({k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)})
     return out
 

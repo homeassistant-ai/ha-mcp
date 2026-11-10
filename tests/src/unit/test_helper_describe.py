@@ -469,17 +469,31 @@ async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-def test_long_select_lists_are_truncated_but_say_how_many_remain() -> None:
-    """A 175-unit dropdown must not flood a small model's context."""
+def test_long_suggestion_lists_are_truncated_but_say_how_many_remain() -> None:
+    """A 175-unit dropdown that also takes a custom value must not flood a
+    small model's context."""
+    units = [f"u{i}" for i in range(175)]
     field = {
         "name": "unit_of_measurement",
-        "selector": {"select": {"options": [f"u{i}" for i in range(175)]}},
+        "selector": {"select": {"options": units, "custom_value": True}},
     }
 
     options = mod.compact_field(field)["options"]
 
     assert len(options) <= mod.MAX_OPTIONS + 1
     assert str(175 - mod.MAX_OPTIONS) in options[-1]
+
+
+def test_a_select_that_must_be_answered_from_its_list_shows_every_choice() -> None:
+    """A statistics helper's 27 characteristics were cut to 12, which hid
+    ``mean`` from the agent choosing one."""
+    choices = [f"characteristic_{i}" for i in range(27)]
+    field = {
+        "name": "state_characteristic",
+        "selector": {"select": {"options": choices, "custom_value": False}},
+    }
+
+    assert mod.compact_field(field)["options"] == choices
 
 
 @pytest.mark.parametrize(
