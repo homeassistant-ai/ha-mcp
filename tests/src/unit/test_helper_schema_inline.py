@@ -191,6 +191,13 @@ class TestCheckNameCollisionSchemaAttach:
     regression flipping the if/else doesn't slip through.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_component(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No component answers: the collision is read from Core's listings."""
+        from ha_mcp.tools.config_helpers import registry
+
+        monkeypatch.setattr(registry, "ask_component", AsyncMock(return_value=None))
+
     @staticmethod
     async def _existing_collision_client(
         existing_id: str,
