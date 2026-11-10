@@ -1,8 +1,8 @@
 """Keep ha-mcp's own integration on the one store repository that owns it.
 
 Two repositories carry the ``ha_mcp_tools`` component: the main repository,
-which the default catalog lists, and the legacy distribution mirror earlier
-installs came from. Both extract to ``custom_components/ha_mcp_tools``. The
+which the default catalog lists, and the distribution mirror earlier installs
+came from. Both extract to ``custom_components/ha_mcp_tools``. The
 Marketplace (Home Assistant 2026.11+) refuses to install a repository whose
 integration another installed repository owns. HACS never checked, so a
 download of the second repository on Home Assistant 2026.10 or older left both
