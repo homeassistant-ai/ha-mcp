@@ -252,6 +252,19 @@ integration's entry is matched on its title, its config is withheld as
 `options_withheld: custom_integration` (the component's own marker), and the
 result is `partial`.
 
+Home Assistant's flows (config, options, reconfigure, subentry) are answered
+one step per tool call, as the frontend's dialog runs them: the tool returns
+Core's step (a form's fields with Core's help text, or a menu's options) and
+its `flow_id`, takes that one step's answer, and returns Core's next step
+(`integration_flow_steps`). Do not pack a flow's steps into one payload or
+walk it on the server: which step follows, what a form declares and what is
+valid are Core's to say, so a key a form does not declare is sent and refused
+by Core. The one thing the dialog does that Core does not is post back the
+values an edit form shows; Core drops a stored optional value a submit leaves
+out, so a submit to an options or reconfigure form goes over those values
+(`config_entry_flow_form`). A backup restore is the exception: it replays a
+stored snapshot into the flow's forms and is verified by readback.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative

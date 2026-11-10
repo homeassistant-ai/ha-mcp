@@ -69,8 +69,9 @@ def _reject_flow_params_on_storage_helper(
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"{', '.join(given)} apply only to flow helpers and config "
-            f"subentries; helper_type='{helper_type}' is written in one call.",
+            f"{', '.join(given)} {'applies' if len(given) == 1 else 'apply'} "
+            "only to flow helpers and config subentries; "
+            f"helper_type='{helper_type}' is written in one call.",
             context=_simple_helper_error_context(
                 helper_type, inapplicable_params=given
             ),

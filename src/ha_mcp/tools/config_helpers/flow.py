@@ -246,9 +246,9 @@ async def _handle_flow_helper(
         response.update(action=action, helper_type=helper_type)
         if registry_given:
             response.setdefault("warnings", []).append(
-                f"{', '.join(registry_given)} not applied: the helper's "
-                "entities exist once the flow finishes. Pass them again with "
-                "the call that finishes it."
+                f"{', '.join(registry_given)} not applied yet: pass them "
+                "again with the call that finishes the flow, which applies "
+                "them to the helper's entities."
             )
         return response
 
