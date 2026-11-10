@@ -14,6 +14,7 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..client.rest_client import HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -491,14 +492,15 @@ class TraceTools:
         if "logbook" in requested or (detailed and not requested):
             try:
                 logbook = await fetch_trace_logbook(self._client, trace_data)
-            except ToolError as err:
+            except (ToolError, HomeAssistantError) as err:
                 # The run's trace is already in hand; a recorder/logbook
                 # failure must not discard it.
-                logbook = TraceLogbook(
-                    [],
-                    None,
-                    [f"logbook unavailable: {extract_tool_error_message(err)}"],
+                message = (
+                    extract_tool_error_message(err)
+                    if isinstance(err, ToolError)
+                    else str(err)
                 )
+                logbook = TraceLogbook([], None, [f"logbook unavailable: {message}"])
         await safe_progress(ctx, progress=3, total=3, message="formatting trace")
         formatted = _format_detailed_trace(
             entity_id,

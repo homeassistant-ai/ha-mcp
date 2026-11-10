@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_lookup import ContextTraceMatch, TraceLogbook
 
@@ -781,7 +782,14 @@ class TestTraceContextLookup:
         assert result["logbook_entries"] == [{"name": "Light"}]
 
     @pytest.mark.asyncio
-    async def test_logbook_failure_keeps_the_trace_with_a_warning(self):
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ToolError("logbook timed out"),
+            HomeAssistantConnectionError("REST logbook unavailable"),
+        ],
+    )
+    async def test_logbook_failure_keeps_the_trace_with_a_warning(self, error):
         """A failed optional logbook read must not discard the trace."""
         detail_result = {
             "success": True,
@@ -796,7 +804,7 @@ class TestTraceContextLookup:
 
         with patch(
             "ha_mcp.tools.tools_traces.fetch_trace_logbook",
-            AsyncMock(side_effect=ToolError("logbook timed out")),
+            AsyncMock(side_effect=error),
         ):
             result = await TraceTools(client).ha_get_automation_traces(
                 entity_id="automation.test",

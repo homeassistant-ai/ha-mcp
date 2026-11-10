@@ -1856,7 +1856,6 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/entity_lookup",
     "ha_mcp_tools/registries",
     "ha_mcp_tools/call_event",
-    "ha_mcp_tools/trace_context",
 ]
 
 # Required fields per command, so the admin gate and wrappers reach the handler.
@@ -1868,11 +1867,9 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     # exposure, list mode: registries resolve empty, so the probe stays pure.
     "ha_mcp_tools/entity_lookup": {"unique_id": "x"},
     "ha_mcp_tools/registries": {"registries": []},
-    # registry_lookup now REQUIRES a target (entity_ids or config_entry_id) —
-    # a neither-present request raises HomeAssistantError (issue #1813 M2).
+    # registry_lookup REQUIRES a target; neither-present raises (issue #1813 M2).
     "ha_mcp_tools/registry_lookup": {"entity_ids": ["light.x"]},
     "ha_mcp_tools/call_event": {"event_type": "probe_event"},
-    "ha_mcp_tools/trace_context": {"context_id": "probe_context"},
     # config_entries / system_snapshot need no required params.
 }
 
