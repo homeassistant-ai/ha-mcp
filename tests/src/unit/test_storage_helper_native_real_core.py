@@ -132,10 +132,11 @@ async def test_a_name_core_would_number_after_an_existing_helper_is_refused(
     [
         ("person", [{"id": "pat1", "name": "Yaml Pat"}], "yaml pat"),
         ("input_boolean", {"yaml_flag": None}, "Yaml Flag"),
+        ("zone", [], "Home"),
     ],
-    ids=["name of a YAML person", "id of a YAML input_boolean"],
+    ids=["a YAML person", "a YAML input_boolean", "Core's own home zone"],
 )
-async def test_a_helper_defined_in_yaml_is_found_as_a_duplicate(
+async def test_a_helper_that_is_not_stored_is_found_as_a_duplicate(
     hass: HomeAssistant,
     hass_ws_client: Any,
     hass_client: Any,
@@ -143,8 +144,9 @@ async def test_a_helper_defined_in_yaml_is_found_as_a_duplicate(
     yaml: Any,
     name: str,
 ) -> None:
-    """Core numbers a new helper after one defined in YAML too, and a YAML
-    helper is not among the stored ones."""
+    """Core numbers a new helper's entity after any entity of that id. One
+    defined in YAML, or the home zone Core makes itself, is not among the
+    stored helpers."""
     assert await async_setup_component(hass, domain, {domain: yaml})
     before = hass.states.async_entity_ids(domain)
 
@@ -157,7 +159,7 @@ async def test_a_helper_defined_in_yaml_is_found_as_a_duplicate(
             )
 
     message = json.loads(str(exc_info.value))["error"]["message"]
-    assert "already exists" in message and "YAML" in message
+    assert "already exists" in message and "not a stored helper" in message
     assert hass.states.async_entity_ids(domain) == before
 
 
