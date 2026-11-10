@@ -2483,12 +2483,18 @@
   {
     "name": "ha_get_automation_traces",
     "title": "Get Automation Traces",
-    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed, any errors, and variable values during\nexecution. Home Assistant keeps only the most recent runs of each\nautomation or script (its stored_traces setting), so older runs are\nnot available.\n\nUSAGE MODES:\n1. List recent traces (omit run_id and context_id): returns Core's\n   short dicts unchanged. Use `offset` to page deeper when `has_more`\n   is true.\n   ha_get_automation_traces(\"automation.motion_light\")\n2. Get a detailed trace (provide run_id): returns Core's extended trace\n   dict unchanged, including config, raw step trace, context, errors\n   and variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n3. Resolve a trace by context (provide context_id): the response\n   reports `context_match` as `trace` or `parent`.\n   ha_get_automation_traces(\"automation.motion_light\", context_id=\"01J...\")\n4. Add the run's logbook: detailed=True or sections=\"logbook\".\n\nDo not use this tool for general log history or recorder statistics;\nuse `ha_get_logs` for logs and `ha_get_history` for history/statistics.\n\nRESPONSE FIELDS:\n- A detail response is Core's extended `trace/get` dict: `config`,\n  `trace`, `context`, `timestamp`, `state`, `error`,\n  `script_execution`, `blueprint_inputs` and any run-specific fields.\n- `success`, `entity_id` and `run_id` identify the response.\n- `context_match` is `trace` or `parent`; `context_scanned`,\n  `context_scan_truncated` and `context_scan_errors` describe the\n  public fallback scan.\n- `logbook_entries`, `logbook_transport`, `logbook_total` and\n  `logbook_truncated` describe the run's logbook rows.",
+    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed, any errors, and variable values during\nexecution. Home Assistant keeps only the most recent runs of each\nautomation or script (its stored_traces setting), so older runs are\nnot available.\n\nUSAGE MODES:\n1. List recent traces for one entity (omit run_id and context_id), or\n   across a domain with domain=\"automation\"/\"script\" and no entity_id.\n   Use `offset` to page deeper when `has_more` is true.\n   ha_get_automation_traces(\"automation.motion_light\")\n   ha_get_automation_traces(domain=\"automation\")\n2. Get a detailed trace (provide run_id): returns Core's extended trace\n   dict unchanged, including config, raw step trace, context, errors\n   and variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n3. Resolve a trace by context (provide context_id): the response\n   reports `context_match` as `trace` or `parent`. With entity_id, a\n   parent context can be scanned. Without entity_id, Core's global\n   trace/contexts map resolves the run's own context.\n   ha_get_automation_traces(context_id=\"01J...\")\n4. Add the run's logbook: detailed=True or sections=\"logbook\".\n\nDo not use this tool for general log history or recorder statistics;\nuse `ha_get_logs` for logs and `ha_get_history` for history/statistics.\n\nRESPONSE FIELDS:\n- A detail response is Core's extended `trace/get` dict: `config`,\n  `trace`, `context`, `timestamp`, `state`, `error`,\n  `script_execution`, `blueprint_inputs` and any run-specific fields.\n- `success`, `entity_id` (or `domain` for a domain list) and `run_id`\n  identify the response.\n- `context_match` is `trace` or `parent`; `context_scanned`,\n  `context_scan_truncated` and `context_scan_errors` describe the\n  public fallback scan.\n- `logbook_entries`, `logbook_transport`, `logbook_total` and\n  `logbook_truncated` describe the run's logbook rows.",
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "str",
-          "description": "Automation or script entity_id (e.g., 'automation.motion_light' or 'script.morning_routine')"
+          "type": "str | None",
+          "description": "Automation or script entity_id. Omit when resolving a context-only lookup or listing a whole domain.",
+          "default": null
+        },
+        "domain": {
+          "type": "Literal['automation', 'script'] | None",
+          "description": "List recent traces across every automation or script when entity_id is omitted.",
+          "default": null
         },
         "run_id": {
           "type": "str | None",
@@ -2532,10 +2538,7 @@
           "description": "Order traces are returned in. 'newest' returns most-recent first; 'oldest' returns chronological-first.",
           "default": "newest"
         }
-      },
-      "required": [
-        "entity_id"
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": true,

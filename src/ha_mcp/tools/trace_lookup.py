@@ -28,6 +28,8 @@ class ContextTraceMatch:
     truncated: bool
     scan_errors: tuple[str, ...] = ()
     trace_data: dict[str, Any] | None = None
+    domain: str | None = None
+    item_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,37 @@ async def resolve_context_trace(
         return ContextTraceMatch(str(run_id), "trace", 0, False)
 
     return await _resolve_parent_context(client, domain, item_id, context_id)
+
+
+async def resolve_global_context(
+    client: Any, context_id: str
+) -> ContextTraceMatch | None:
+    """Resolve a context against Core's global trace/contexts map.
+
+    Core accepts ``trace/contexts`` without domain/item and returns every
+    stored run's own context. A parent-only context still needs an entity_id
+    for the bounded per-item scan.
+    """
+    result = await client.send_websocket_message({"type": "trace/contexts"})
+    if not result.get("success"):
+        _raise_trace_ws_failure(
+            result.get("error", "Failed to resolve trace context"),
+            {"context_id": context_id},
+        )
+    contexts = result.get("result")
+    entry = contexts.get(context_id) if isinstance(contexts, dict) else None
+    if not isinstance(entry, dict) or not entry.get("run_id"):
+        return None
+    return ContextTraceMatch(
+        str(entry["run_id"]),
+        "trace",
+        0,
+        False,
+        (),
+        None,
+        entry.get("domain"),
+        entry.get("item_id"),
+    )
 
 
 def _raise_context_not_found(

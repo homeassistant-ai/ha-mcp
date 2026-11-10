@@ -242,6 +242,100 @@ class TestTraceContextLookup:
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_context_only_resolves_through_global_contexts(self):
+        """No entity_id: the global trace/contexts map finds the run."""
+        detail_result = {
+            "success": True,
+            "result": {
+                "run_id": "r1",
+                "state": "stopped",
+                "trace": {},
+                "context": {"id": "ctx-1"},
+            },
+        }
+        context_result = {
+            "success": True,
+            "result": {
+                "ctx-1": {
+                    "run_id": "r1",
+                    "domain": "automation",
+                    "item_id": "uid_1",
+                }
+            },
+        }
+        client = _make_pooled_client(
+            _dispatch(detail_result=detail_result, context_result=context_result)
+        )
+
+        result = await TraceTools(client).ha_get_automation_traces(context_id="ctx-1")
+
+        assert result["entity_id"] == "automation.uid_1"
+        assert result["run_id"] == "r1"
+        assert result["context_match"] == "trace"
+        contexts_message = next(
+            call.args[0]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "trace/contexts"
+        )
+        assert contexts_message == {"type": "trace/contexts"}
+
+    @pytest.mark.asyncio
+    async def test_domain_only_lists_across_items(self):
+        """No entity_id: trace/list runs for the whole domain."""
+        list_result = {
+            "success": True,
+            "result": [
+                {
+                    "run_id": "r1",
+                    "domain": "automation",
+                    "item_id": "one",
+                    "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
+                },
+                {
+                    "run_id": "r2",
+                    "domain": "automation",
+                    "item_id": "two",
+                    "timestamp": {"start": "2026-11-08T16:01:00+00:00"},
+                },
+            ],
+        }
+        client = _make_pooled_client(_dispatch(list_result=list_result))
+
+        result = await TraceTools(client).ha_get_automation_traces(domain="automation")
+
+        assert result["domain"] == "automation"
+        assert "entity_id" not in result
+        assert result["trace_count"] == 2
+        list_message = next(
+            call.args[0]
+            for call in client.send_websocket_message.await_args_list
+            if call.args[0].get("type") == "trace/list"
+        )
+        assert list_message == {"type": "trace/list", "domain": "automation"}
+
+    @pytest.mark.asyncio
+    async def test_run_id_without_entity_id_is_rejected(self):
+        client = _make_pooled_client(_dispatch())
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(run_id="r1")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_selector_is_rejected(self):
+        client = _make_pooled_client(_dispatch())
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces()
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_context_lookup_transport_failure_is_classified(self):
         """A dead transport during trace/contexts reports CONNECTION_FAILED."""
         client = _make_pooled_client(

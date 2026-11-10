@@ -33,9 +33,138 @@ from .trace_lookup import (
     _trace_start,
     fetch_trace_logbook,
     resolve_context_trace,
+    resolve_global_context,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_trace_request(
+    entity_id: str | None,
+    domain: Literal["automation", "script"] | None,
+    context_id: str | None,
+    run_id: str | None,
+) -> None:
+    """Validate the selector combination before any trace command."""
+    if entity_id is not None:
+        validate_identifier_not_empty(
+            entity_id,
+            "entity_id",
+            suggestions=[
+                "Pass an automation.* or script.* entity_id",
+                "Omit entity_id with domain to list across a domain",
+            ],
+        )
+    if context_id is not None:
+        validate_identifier_not_empty(
+            context_id,
+            "context_id",
+            suggestions=[
+                "Pass the trace's own `context.id` or the triggering "
+                + "event/service context id",
+                "Omit context_id to list recent traces",
+            ],
+            context={"entity_id": entity_id},
+        )
+    if entity_id is None and run_id is not None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "entity_id is required with run_id",
+                context={"run_id": run_id},
+                suggestions=[
+                    "Pass the automation/script entity_id with run_id",
+                    "Use context_id alone to resolve a run",
+                ],
+            )
+        )
+    if entity_id is None and context_id is None and domain is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Pass entity_id, domain, or context_id",
+                suggestions=[
+                    "Pass an entity_id for one automation/script",
+                    "Pass domain='automation' or 'script' to list across a domain",
+                    "Pass context_id to resolve a run without an entity_id",
+                ],
+            )
+        )
+
+
+def _entity_domain(entity_id: str) -> Literal["automation", "script"]:
+    if entity_id.startswith("automation."):
+        return "automation"
+    if entity_id.startswith("script."):
+        return "script"
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Invalid entity_id format: {entity_id}",
+            details="Entity ID must start with 'automation.' or 'script.'",
+            context={"entity_id": entity_id},
+        )
+    )
+
+
+async def _resolve_trace_target(
+    client: Any,
+    entity_id: str | None,
+    domain: Literal["automation", "script"] | None,
+    context_id: str | None,
+    run_id: str | None,
+) -> tuple[str | None, str, str | None, str | None, ContextTraceMatch | None]:
+    """Resolve selectors to entity/domain/item/run and optional context match."""
+    _validate_trace_request(entity_id, domain, context_id, run_id)
+    context_match: ContextTraceMatch | None = None
+    resolved_run_id = run_id
+    item_id: str | None = None
+    domain_name: str = domain or "automation"
+    if entity_id is not None:
+        entity_domain = _entity_domain(entity_id)
+        if domain is not None and domain != entity_domain:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "domain does not match entity_id",
+                    context={"entity_id": entity_id, "domain": domain},
+                )
+            )
+        domain_name = entity_domain
+        object_id = entity_id.split(".", 1)[1]
+        item_id = await _resolve_trace_item_id(client, entity_id, object_id)
+        if context_id is not None:
+            context_match = await resolve_context_trace(
+                client, domain_name, item_id, context_id
+            )
+            resolved_run_id = context_match.run_id
+    elif context_id is not None:
+        context_match = await resolve_global_context(client, context_id)
+        if context_match is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"No trace found for context: {context_id}",
+                    context={"context_id": context_id},
+                    suggestions=[
+                        "Pass entity_id to scan a specific item's parent context",
+                        "Use the run's own context id, or pass entity_id",
+                    ],
+                )
+            )
+        if not context_match.domain or not context_match.item_id:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    "The context resolved without a domain/item",
+                    context={"context_id": context_id},
+                )
+            )
+        domain_name = context_match.domain
+        item_id = context_match.item_id
+        entity_id = f"{domain_name}.{item_id}"
+        resolved_run_id = context_match.run_id
+    return entity_id, domain_name, item_id, resolved_run_id, context_match
 
 
 class TraceTools:
@@ -53,11 +182,25 @@ class TraceTools:
     async def ha_get_automation_traces(
         self,
         entity_id: Annotated[
-            str,
+            str | None,
             Field(
-                description="Automation or script entity_id (e.g., 'automation.motion_light' or 'script.morning_routine')"
+                description=(
+                    "Automation or script entity_id. Omit when resolving a "
+                    "context-only lookup or listing a whole domain."
+                ),
+                default=None,
             ),
-        ],
+        ] = None,
+        domain: Annotated[
+            Literal["automation", "script"] | None,
+            Field(
+                description=(
+                    "List recent traces across every automation or script when "
+                    "entity_id is omitted."
+                ),
+                default=None,
+            ),
+        ] = None,
         run_id: Annotated[
             str | None,
             Field(
@@ -133,17 +276,20 @@ class TraceTools:
         not available.
 
         USAGE MODES:
-        1. List recent traces (omit run_id and context_id): returns Core's
-           short dicts unchanged. Use `offset` to page deeper when `has_more`
-           is true.
+        1. List recent traces for one entity (omit run_id and context_id), or
+           across a domain with domain="automation"/"script" and no entity_id.
+           Use `offset` to page deeper when `has_more` is true.
            ha_get_automation_traces("automation.motion_light")
+           ha_get_automation_traces(domain="automation")
         2. Get a detailed trace (provide run_id): returns Core's extended trace
            dict unchanged, including config, raw step trace, context, errors
            and variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
         3. Resolve a trace by context (provide context_id): the response
-           reports `context_match` as `trace` or `parent`.
-           ha_get_automation_traces("automation.motion_light", context_id="01J...")
+           reports `context_match` as `trace` or `parent`. With entity_id, a
+           parent context can be scanned. Without entity_id, Core's global
+           trace/contexts map resolves the run's own context.
+           ha_get_automation_traces(context_id="01J...")
         4. Add the run's logbook: detailed=True or sections="logbook".
 
         Do not use this tool for general log history or recorder statistics;
@@ -153,7 +299,8 @@ class TraceTools:
         - A detail response is Core's extended `trace/get` dict: `config`,
           `trace`, `context`, `timestamp`, `state`, `error`,
           `script_execution`, `blueprint_inputs` and any run-specific fields.
-        - `success`, `entity_id` and `run_id` identify the response.
+        - `success`, `entity_id` (or `domain` for a domain list) and `run_id`
+          identify the response.
         - `context_match` is `trace` or `parent`; `context_scanned`,
           `context_scan_truncated` and `context_scan_errors` describe the
           public fallback scan.
@@ -173,38 +320,18 @@ class TraceTools:
                         ],
                     )
                 )
-            if context_id is not None:
-                context_id = validate_identifier_not_empty(
-                    context_id,
-                    "context_id",
-                    suggestions=[
-                        "Pass the trace's own `context.id` or the triggering "
-                        + "event/service context id",
-                        "Omit context_id to list recent traces",
-                    ],
-                    context={"entity_id": entity_id},
-                )
-
-            # Determine domain from entity_id
-            if entity_id.startswith("automation."):
-                domain = "automation"
-            elif entity_id.startswith("script."):
-                domain = "script"
-            else:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid entity_id format: {entity_id}",
-                        details="Entity ID must start with 'automation.' or 'script.'",
-                        context={"entity_id": entity_id},
-                    )
-                )
-
-            # Extract the object_id (part after the domain) as fallback
-            object_id = entity_id.split(".", 1)[1]
+            (
+                entity_id,
+                domain_name,
+                item_id,
+                resolved_run_id,
+                context_match,
+            ) = await _resolve_trace_target(
+                self._client, entity_id, domain, context_id, run_id
+            )
 
             logger.debug(
-                f"ha_get_automation_traces starting: id={entity_id} "
+                f"ha_get_automation_traces starting: id={entity_id or '<domain>'} "
                 f"run_id={run_id or '<list>'} context_id={context_id or '<none>'}",
             )
             await safe_progress(
@@ -222,18 +349,6 @@ class TraceTools:
             # surfaces as CONNECTION_FAILED, the same structured error the old
             # up-front connect check raised.
 
-            # Home Assistant stores traces by unique_id, not entity_id.
-            # We need to resolve entity_id -> unique_id via entity registry.
-            item_id = await _resolve_trace_item_id(self._client, entity_id, object_id)
-
-            resolved_run_id = run_id
-            context_match: ContextTraceMatch | None = None
-            if context_id is not None:
-                context_match = await resolve_context_trace(
-                    self._client, domain, item_id, context_id
-                )
-                resolved_run_id = context_match.run_id
-
             await safe_progress(
                 ctx,
                 progress=1,
@@ -243,9 +358,9 @@ class TraceTools:
 
             if resolved_run_id:
                 detail = await self._fetch_trace_detail(
-                    domain,
-                    item_id,
-                    entity_id,
+                    domain_name,
+                    item_id or "",
+                    entity_id or "",
                     resolved_run_id,
                     detailed=detailed,
                     sections=sections,
@@ -258,7 +373,7 @@ class TraceTools:
                     _add_context_match(detail, context_id, context_match)
                 return detail
             return await self._fetch_trace_list(
-                domain,
+                domain_name,
                 item_id,
                 entity_id,
                 limit=limit,
@@ -340,8 +455,8 @@ class TraceTools:
     async def _fetch_trace_list(
         self,
         domain: str,
-        item_id: str,
-        entity_id: str,
+        item_id: str | None,
+        entity_id: str | None,
         *,
         limit: int,
         offset: int,
@@ -349,23 +464,20 @@ class TraceTools:
         ctx: Context | None,
     ) -> dict[str, Any]:
         """List recent traces, attaching diagnostics when none are stored."""
-        result = await self._client.send_websocket_message(
-            {
-                "type": "trace/list",
-                "domain": domain,
-                "item_id": item_id,
-            }
-        )
+        message: dict[str, Any] = {"type": "trace/list", "domain": domain}
+        if item_id is not None:
+            message["item_id"] = item_id
+        result = await self._client.send_websocket_message(message)
 
         if not result.get("success"):
             _raise_trace_ws_failure(
                 result.get("error", "Failed to list traces"),
-                {"entity_id": entity_id},
+                {"entity_id": entity_id, "domain": domain},
             )
 
         traces_data = result.get("result", [])
 
-        if not traces_data:
+        if not traces_data and entity_id is not None:
             await safe_progress(
                 ctx,
                 progress=2,
@@ -381,6 +493,7 @@ class TraceTools:
                 traces_data,
                 limit,
                 diagnostics,
+                domain=domain,
                 offset=offset,
                 order=order,
             )
@@ -395,6 +508,7 @@ class TraceTools:
             entity_id,
             traces_data,
             limit,
+            domain=domain,
             offset=offset,
             order=order,
         )
@@ -469,22 +583,24 @@ async def _resolve_trace_item_id(
 
 
 def _format_trace_list(
-    entity_id: str,
+    entity_id: str | None,
     traces: list[dict[str, Any]],
     limit: int,
     diagnostics: dict[str, Any] | None = None,
     *,
+    domain: str | None = None,
     offset: int = 0,
     order: Literal["newest", "oldest"] = "newest",
 ) -> dict[str, Any]:
     """Format trace list for AI consumption.
 
     Args:
-        entity_id: The automation or script entity_id
+        entity_id: The automation or script entity_id, or None for a domain list
         traces: List of trace data from Home Assistant (sorted here by Core's
             start timestamp before paging)
         limit: Maximum number of traces to include
         diagnostics: Optional diagnostic information when traces are empty
+        domain: The requested domain for a domain-wide list
         offset: Number of traces to skip from the start of the requested order
         order: 'newest' (default) returns most-recent first; 'oldest' chronological
     """
@@ -512,7 +628,6 @@ def _format_trace_list(
 
     result: dict[str, Any] = {
         "success": True,
-        "entity_id": entity_id,
         "trace_count": len(formatted_traces),
         "total_available": len(traces),
         "offset": offset,
@@ -521,6 +636,10 @@ def _format_trace_list(
         "traces": formatted_traces,
         "hint": "Use run_id with this tool to get detailed trace information",
     }
+    if entity_id is not None:
+        result["entity_id"] = entity_id
+    if domain is not None:
+        result["domain"] = domain
 
     # Include diagnostics when traces are empty
     if diagnostics is not None and len(traces) == 0:

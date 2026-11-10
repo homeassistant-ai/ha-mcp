@@ -54,7 +54,7 @@ class TestAutomationTraces:
                 cleanup = await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": config_id},
+                    {"entity_id": config_id},
                 )
                 leftover_error = cleanup.get("error")
         assert automation_id, (
@@ -201,12 +201,7 @@ class TestAutomationTraces:
             condition_name="automation trace to be recorded",
         )
 
-        # Skip test if traces don't appear (timing issue, not a failure)
-        if not trace_appeared:
-            pytest.skip(
-                "Automation trace did not appear within timeout. "
-                "This may be a platform-specific timing issue."
-            )
+        assert trace_appeared, "Automation trace did not appear within timeout"
 
         # 4. Get traces for the automation
         traces_data = await MCPAssertions(mcp_client).call_tool_success(
@@ -273,6 +268,53 @@ class TestAutomationTraces:
                 f"Detailed trace verified: Found {len(actions)} raw action steps"
             )
 
+    async def test_logbook_rows_for_a_new_run(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
+        """A new run's logbook rows arrive through the component, not a script."""
+        create_config = test_data_factory.automation_config(
+            "Trace Logbook E2E",
+            trigger=[{"platform": "event", "event_type": "test_trace_logbook_event"}],
+            action=[{"delay": {"seconds": 0.1}}],
+        )
+        automation_id = await self._create_trace_automation(
+            mcp_client, cleanup_tracker, create_config
+        )
+        mcp = MCPAssertions(mcp_client)
+        await mcp.call_tool_success(
+            "ha_call_service",
+            {
+                "domain": "automation",
+                "service": "trigger",
+                "entity_id": automation_id,
+            },
+        )
+        traces = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={"entity_id": automation_id},
+            predicate=lambda data: data.get("trace_count", 0) > 0,
+            timeout=30,
+            description="logbook test trace",
+        )
+        run_id = traces["traces"][0]["run_id"]
+
+        detail = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={
+                "entity_id": automation_id,
+                "run_id": run_id,
+                "sections": "logbook",
+            },
+            predicate=lambda data: bool(data.get("logbook_entries")),
+            timeout=30,
+            poll_interval=1,
+            description="trace logbook rows",
+        )
+
+        assert detail["logbook_entries"], "the new run has no logbook rows"
+
     async def test_blueprint_trace_preserves_inputs_and_config(
         self, mcp_client, cleanup_tracker, test_data_factory
     ):
@@ -331,7 +373,7 @@ action:
                     await safe_call_tool(
                         mcp_client,
                         "ha_config_remove_automation",
-                        {"identifier": config_id},
+                        {"entity_id": config_id},
                     )
             assert automation_id, (
                 f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -416,7 +458,7 @@ action:
                 await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": config_id},
+                    {"entity_id": config_id},
                 )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -486,7 +528,7 @@ action:
                 await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": config_id},
+                    {"entity_id": config_id},
                 )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -553,7 +595,7 @@ action:
                 await safe_call_tool(
                     mcp_client,
                     "ha_config_remove_automation",
-                    {"identifier": config_id},
+                    {"entity_id": config_id},
                 )
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -732,12 +774,7 @@ action:
             condition_name="script trace to be recorded",
         )
 
-        # Skip test if traces don't appear (timing issue, not a failure)
-        if not trace_appeared:
-            pytest.skip(
-                "Script trace did not appear within timeout. "
-                "This may be a platform-specific timing issue (ARM)."
-            )
+        assert trace_appeared, "Script trace did not appear within timeout"
 
         # 4. Get traces for the script
         traces_data = await mcp.call_tool_success(
@@ -841,7 +878,7 @@ action:
                     await safe_call_tool(
                         mcp_client,
                         "ha_config_remove_automation",
-                        {"identifier": config_id},
+                        {"entity_id": config_id},
                     )
             assert automation_id, (
                 f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -862,18 +899,10 @@ action:
                 },
             )
 
-            last_state_error: dict[str, str] = {}
-
             async def _light_is_on() -> bool:
-                state = await safe_call_tool(
-                    mcp_client, "ha_get_state", {"entity_id": light_id}
+                state = await mcp.call_tool_success(
+                    "ha_get_state", {"entity_id": light_id}
                 )
-                if state.get("error"):
-                    # Keep polling: a transient read error is not an off state,
-                    # and the deadline's message reports the last one.
-                    last_state_error["error"] = str(state["error"])
-                    return False
-                last_state_error.pop("error", None)
                 return state.get("data", {}).get("state") == "on"
 
             light_is_on = await wait_for_condition(
@@ -883,11 +912,6 @@ action:
             )
             assert light_is_on, (
                 f"{light_id} never turned on; the not-triggered trace setup is invalid"
-                + (
-                    f" (last state error: {last_state_error['error']})"
-                    if last_state_error
-                    else ""
-                )
             )
 
             await mcp.call_tool_success(
