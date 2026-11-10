@@ -202,7 +202,8 @@ _LATER_FORMS_NOTE = (
     "A config list answers this form and later ones in one call, one object "
     "per form. A form marked fields_depend_on_answers is built from the "
     "earlier answers and is returned by the call that answers the form "
-    "before it; one marked only_for_some_answers is shown for some answers."
+    "before it; one marked may_follow is one Home Assistant can pick next from "
+    "the answers, and is not certain to be shown."
 )
 _LATER_FORMS_EDIT_NOTE = (
     " A later form's current values are shown when the flow reaches it."
@@ -229,7 +230,7 @@ def _later_form(
         if strings is not None and domain:
             _with_help(form["fields"], field_help(strings, domain, path, step_id))
     if not always:
-        form["only_for_some_answers"] = True
+        form["may_follow"] = True
     return form
 
 

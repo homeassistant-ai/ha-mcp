@@ -4,7 +4,6 @@ Storage-helper field values are validated by Home Assistant itself (see
 ``core_payload``); what remains here is the tool's own call shape.
 """
 
-import functools
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
@@ -15,7 +14,6 @@ from ..helpers import (
 from .schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
 
 
-@functools.cache
 def _helper_error_context(helper_type: str, **extra: Any) -> dict[str, Any]:
     """A call-shape error's context: a storage helper's carries its fields."""
     if helper_type in SIMPLE_HELPER_TYPES:

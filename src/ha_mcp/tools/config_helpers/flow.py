@@ -219,7 +219,7 @@ async def _handle_flow_helper(
         )
     # Bug 12: a new helper named like an existing one is refused before a
     # flow is opened, rather than created as a "_2" duplicate.
-    if action == "create" and flow_id is None:
+    if action == "create":
         named_answer = next(
             (
                 answer

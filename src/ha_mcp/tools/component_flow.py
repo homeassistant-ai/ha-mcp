@@ -40,7 +40,8 @@ def steps_after(
 ) -> list[tuple[dict[str, Any], bool]] | None:
     """The steps Core may show after ``step_id``, each with whether it always
     follows. Where Core picks the next step from the answers, every step not
-    yet passed is listed as a possible one. A step Core passes without
+    yet passed is listed as a candidate: the declaration does not say which
+    of them the callback can return. A step Core passes without
     showing a form is followed, not listed. ``None`` when the outline does not
     hold ``step_id`` (a reconfigure step is not part of it).
     """
