@@ -36,7 +36,6 @@ _GRANDFATHERED = frozenset(
         "tests/src/unit/test_component_ws_phase2_async.py",
         "tests/src/unit/test_config_flow.py",
         "tests/src/unit/test_custom_card_limits.py",
-        "tests/src/unit/test_webhook_proxy_liveness.py",
     }
 )
 
