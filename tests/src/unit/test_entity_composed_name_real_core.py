@@ -86,3 +86,26 @@ async def test_overview_lists_an_entity_under_the_name_home_assistant_shows(
     row = next(row for row in rows if row["entity_id"] == entity_id)
     assert row["name"] == composed
     assert row["friendly_name"] == friendly
+
+
+async def test_overview_does_not_repeat_a_name_home_assistant_shows_unchanged(
+    hass: HomeAssistant,
+) -> None:
+    entry = er.async_get(hass).async_get_or_create(
+        "sensor", "test", "plain", original_name="Plain"
+    )
+    hass.states.async_set(
+        entry.entity_id,
+        "1",
+        {"friendly_name": er.async_get_legacy_friendly_name(hass, entry)},
+    )
+    slices = _build_overview_slices(_do_overview(hass, {}))
+    assert slices is not None
+
+    overview = await SmartSearchTools(client=AsyncMock()).get_system_overview(
+        detail_level="full", prefetched_slices=slices.registry_slices
+    )
+
+    rows = overview["domain_stats"]["sensor"]["entities"]
+    row = next(row for row in rows if row["entity_id"] == entry.entity_id)
+    assert "name" not in row

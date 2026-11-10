@@ -1070,6 +1070,7 @@ class TestDashboardSearchTypesGate:
                 "dashboards",
                 "dashboards_doc_search",
                 "device_registry_child_semantics",
+                "entity_composed_name",
             ],
             "limits": {},
         }
@@ -1137,7 +1138,11 @@ class TestDashboardSearchTypesGate:
         dashboard used to raise. Pins the two fixes composed through
         ``ha_search``'s outer merge, not just each half in isolation."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
+        caps = {
+            **_CAPS_SEARCH,
+            "capabilities": [*_CAPS_SEARCH["capabilities"], "entity_composed_name"],
+        }
+        ws = make_ws("ha_mcp_tools/search", info_result=caps)
         client = ConfigNotFoundDashboardClient()
         ha_search = _build_ha_search(client)
 
