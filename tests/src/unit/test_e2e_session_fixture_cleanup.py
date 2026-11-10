@@ -47,7 +47,9 @@ _STAGED_ENV = (
 )
 
 
-class _FakeConfig:
+class _RequestConfigView:
+    """The ``request.config`` surface the fixture touches: ``stash`` only."""
+
     def __init__(self) -> None:
         self.stash: dict[Any, Any] = {}
 
@@ -56,7 +58,7 @@ class _FakeRequest:
     """Records finalizers the way pytest's ``FixtureRequest`` stores them."""
 
     def __init__(self) -> None:
-        self.config = _FakeConfig()
+        self.config = _RequestConfigView()
         self.finalizers: list[Any] = []
 
     def addfinalizer(self, func: Any) -> None:

@@ -10,12 +10,16 @@ Both are opt-in, so the property that matters as much as "the knob works" is
 that an unset knob changes nothing: a lane with no environment set must build
 the same container it always did. The assertions below therefore go through
 ``_build_ha_testcontainer`` and check the assembled mounts and entrypoint
-rather than the helpers' own return values, and no Docker daemon is involved —
-constructing a ``DockerContainer`` only records configuration. The
-``HA_E2E_BASE_HOST`` cases are the exception: that knob only selects a host, so
-they call the resolver directly. Asserting the session fixture's assembled
-``base_url`` would need a live Docker daemon, which this module deliberately
-avoids.
+rather than the helpers' own return values. No Docker daemon is involved:
+``DockerContainer`` builds its client on construction, so the client is
+replaced and the container only records configuration.
+
+``HA_E2E_BASE_HOST`` is the third knob and a different kind of setting: it
+selects only the host in the testcontainer's ``base_url``, so a containerized
+pytest process can reach the sibling container through the Docker host address
+instead of its own ``localhost``. Its resolution is asserted directly, without
+a container, and the fixture wiring is covered in
+``test_e2e_session_fixture_cleanup.py``.
 """
 
 from __future__ import annotations
@@ -26,13 +30,20 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+import testcontainers.core.container
 from testcontainers.core.container import DockerContainer
 
 from tests.src.e2e import _conftest_knobs, _conftest_testcontainer
 
 _WHEEL = "ha_mcp-9.9.9-py3-none-any.whl"
+
+
+@pytest.fixture(autouse=True)
+def _no_docker_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(testcontainers.core.container, "DockerClient", MagicMock())
 
 
 @pytest.fixture(autouse=True)
