@@ -778,6 +778,22 @@ Two things differ on the Marketplace in Home Assistant 2026.11:
   That refusal is expected, because one listing owns an integration. Keep the
   one you have.
 
+To switch anyway, reinstall: the Marketplace has no in-place move, and it will
+not uninstall a listing while an HA-MCP entry exists.
+
+1. Note the options you changed in the **HA-MCP Server** entry's Configure
+   dialog. To keep your connect URL, also copy the webhook secret (the part
+   after `/api/webhook/`) and, if you use direct port access, the
+   `/private_...` path.
+2. Delete every HA-MCP entry under **Settings → Devices & services**.
+3. In the store, uninstall `homeassistant-ai/ha-mcp-integration`, then remove
+   it from your custom repositories.
+4. Restart Home Assistant.
+5. Install **HA-MCP** from the catalog listing and restart again.
+6. Add the entries back. In the server entry's Configure dialog, re-enter your
+   options, with the copied values as **Custom webhook secret** and **Custom
+   direct-access path**. Without them the entry gets a new connect URL.
+
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
 **No.** The custom component's **HA-MCP Server** entry runs the whole ha-mcp server inside Home Assistant and is completely independent of the Home Assistant app. For remote access it registers its own built-in Home Assistant webhook, so you do not need the separate Webhook Proxy app either.

@@ -4,7 +4,7 @@ The main repository is already in the HACS and Marketplace default catalog.
 An external server can update before the store's next scheduled metadata
 refresh, leaving its paired integration update undiscovered. This optional
 startup nudge asks for fresh repository information sooner, for installed
-main-repository entries and existing legacy-mirror entries alike. It is not
+main-repository entries and existing mirror entries alike. It is not
 required for catalog installation and never installs an update itself.
 
 On startup, when the server version changed since the last recorded nudge (the
@@ -163,8 +163,8 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
         try:
             await send_hacs_repository_refresh(ws_client, str(repo["id"]), api)
         except Exception as err:  # noqa: BLE001
-            # Both entries read installed only when someone downloaded the
-            # mirror without removing the legacy record — HACS guards against
+            # Both entries read installed only when someone downloaded one
+            # repository on top of the other — HACS guards against
             # adding the same repository twice but not against two
             # repositories sharing a domain. Rare, but one failing must not
             # cost the other its refresh.

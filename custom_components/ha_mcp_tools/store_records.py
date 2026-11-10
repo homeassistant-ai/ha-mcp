@@ -1,8 +1,8 @@
 """Keep this integration on one store record (#2993).
 
 Two store repositories carry this integration: the main repository, listed in
-the default catalog, and the legacy distribution mirror earlier installs came
-from. Both extract to ``custom_components/ha_mcp_tools``. HACS let a download
+the default catalog, and the distribution mirror earlier installs came from.
+Both extract to ``custom_components/ha_mcp_tools``. HACS let a download
 of the second one land on top of the first, and the Marketplace in Home
 Assistant 2026.11 then refuses to update either record and refuses to
 uninstall either while any config entry of this domain exists. The store's own
