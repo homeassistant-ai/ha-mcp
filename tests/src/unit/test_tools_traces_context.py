@@ -494,7 +494,8 @@ class TestTraceContextLookup:
 
     @pytest.mark.asyncio
     async def test_component_unknown_command_falls_back_and_warns(self):
-        """An explicit unknown_command from the component falls back to the public scan."""
+        """An explicit unknown_command from the component falls back to the
+        public scan."""
         detail = {
             "run_id": "r1",
             "state": "stopped",
@@ -1216,7 +1217,8 @@ class TestTraceContextLookup:
 
     @pytest.mark.asyncio
     async def test_global_context_without_domain_item_is_resource_not_found(self):
-        """A global context hit lacking domain/item_id raises a structured tool error."""
+        """A global context hit lacking domain/item_id raises a structured tool
+        error."""
 
         def _d(mtype, message):
             if mtype == "trace/contexts":
@@ -1368,7 +1370,8 @@ class TestTraceResolverDirectMatches:
 
     @pytest.mark.asyncio
     async def test_per_item_no_direct_hit_trace_list_connection_error_is_classified(self):
-        """Without a direct hit, trace/list failure keeps its connection classification."""
+        """Without a direct hit, trace/list failure keeps its connection
+        classification."""
 
         def _d(mtype, message):
             if mtype == "trace/contexts":
@@ -1387,7 +1390,8 @@ class TestTraceResolverDirectMatches:
 
     @pytest.mark.asyncio
     async def test_direct_run_not_duplicated_in_other_matches(self):
-        """A direct run that also appears in the scan is not listed as an other match."""
+        """A direct run that also appears in the scan is not listed as an other
+        match."""
 
         def _d(mtype, message):
             if mtype == "trace/contexts":

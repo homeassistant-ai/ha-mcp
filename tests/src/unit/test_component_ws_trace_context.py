@@ -17,12 +17,14 @@ import voluptuous as vol
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.script.trace import ScriptTrace
 from homeassistant.components.trace import async_store_trace
-from homeassistant.components.trace.const import DATA_TRACE
-from homeassistant.components.trace.models import TraceBuckets
+from homeassistant.components.trace.const import (
+    DATA_TRACE,
+    DATA_TRACE_STORE,
+    DATA_TRACES_RESTORED,
+)
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers.trace import TraceElement
 from homeassistant.setup import async_setup_component
-from homeassistant.util.limited_size_dict import LimitedSizeDict
 
 from custom_components.ha_mcp_tools.websocket_api import trace_context
 from custom_components.ha_mcp_tools.websocket_api.schemas import (
@@ -55,11 +57,11 @@ def _trace(
 
 
 def _store(hass: HomeAssistant, key: str, *traces: AutomationTrace) -> None:
-    bucket = TraceBuckets(runs=LimitedSizeDict(), not_triggered=LimitedSizeDict())
+    """Store traces through Core's real trace helper keyed by ``key``."""
+    hass.data.setdefault(DATA_TRACE, {})
     for trace in traces:
-        target = bucket.not_triggered if trace.not_triggered else bucket.runs
-        target[trace.run_id] = trace
-    hass.data.setdefault(DATA_TRACE, {})[key] = bucket
+        trace.key = key
+        async_store_trace(hass, trace, stored_traces=5)
 
 
 @pytest.mark.asyncio
@@ -235,6 +237,15 @@ async def test_context_lookup_restores_saved_traces(hass: HomeAssistant) -> None
     await async_setup_component(hass, "trace", {})
     saved = _trace(run_id="r1", context_id="ctx-1")
     async_store_trace(hass, saved, stored_traces=5)
+
+    # Persist through Core's real store, then wipe the live buckets so prep
+    # must restore the trace instead of finding it already in memory.
+    store = hass.data[DATA_TRACE_STORE]
+    await store.async_save(
+        {saved.key: list(hass.data[DATA_TRACE][saved.key].all_traces())}
+    )
+    hass.data[DATA_TRACE] = {}
+    hass.data.pop(DATA_TRACES_RESTORED, None)
 
     result = await trace_context._trace_context_prep(hass, {})
 

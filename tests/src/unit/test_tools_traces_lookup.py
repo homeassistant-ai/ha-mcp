@@ -269,31 +269,31 @@ class TestResolveContextTrace:
 
     @pytest.mark.asyncio
     async def test_direct_map_prefers_real_run_over_newer_diagnostic(self):
-        """A direct-map diagnostic loses to a newer real run in the scan."""
+        """A direct own-context diagnostic loses to an older real parent run."""
+        # The diagnostic is the direct-map hit for ctx-1. The only scan row is a
+        # real run that names ctx-1 as its parent. The diagnostic is newer, but
+        # its ``not_triggered`` flag comes from the direct trace detail, not the
+        # scan row, so the real run must still win.
         traces = [
-            {
-                "run_id": "diagnostic",
-                "not_triggered": True,
-                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
-            },
             {
                 "run_id": "run",
                 "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
-            },
+            }
         ]
         details = {
             "diagnostic": {
                 "run_id": "diagnostic",
                 "not_triggered": True,
-                "context": {"id": "own-1", "parent_id": "parent-1"},
+                "context": {"id": "ctx-1"},
+                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
             },
             "run": {
                 "run_id": "run",
-                "context": {"id": "own-2", "parent_id": "parent-1"},
+                "context": {"id": "own-2", "parent_id": "ctx-1"},
             },
         }
         contexts = {
-            "parent-1": {
+            "ctx-1": {
                 "run_id": "diagnostic",
                 "domain": "automation",
                 "item_id": "uid",
@@ -304,7 +304,7 @@ class TestResolveContextTrace:
         )
 
         match = await resolve_context_trace(
-            client, "automation", "uid", "parent-1"
+            client, "automation", "uid", "ctx-1"
         )
 
         assert match.run_id == "run"
