@@ -270,13 +270,15 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
     stale = SimpleNamespace(homeassistant_url=stale_url, verify_ssl=True)
     monkeypatch.setattr(config, "_settings", stale)
     assert config.get_global_settings() is stale
-    pooled = dict(websocket_manager._clients)
-    last_used = dict(websocket_manager._last_used)
-    current_loop = websocket_manager._current_loop
+    # Replace the pool dicts instead of editing and restoring them by hand:
+    # Core's plugin gives every test a fresh event loop, so a pool carried into
+    # the next test would be bound to a loop that is already closed. The
+    # fixture clears whatever ``_clients`` it finds, and monkeypatch restores
+    # the original dicts untouched at teardown.
     stale_client = object()
-    websocket_manager._clients[
-        websocket_manager._pool_key(stale_url, stale_token, True)[2]
-    ] = stale_client
+    stale_key = websocket_manager._pool_key(stale_url, stale_token, True)[2]
+    monkeypatch.setattr(websocket_manager, "_clients", {stale_key: stale_client})
+    monkeypatch.setattr(websocket_manager, "_last_used", {stale_key: 0.0})
     assert websocket_manager.pooled_client(stale_url, stale_token, True) is stale_client
 
     fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
@@ -293,8 +295,3 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
         generator.close()
         for finalizer in request.finalizers:
             finalizer()
-        websocket_manager._clients.clear()
-        websocket_manager._clients.update(pooled)
-        websocket_manager._last_used.clear()
-        websocket_manager._last_used.update(last_used)
-        websocket_manager._current_loop = current_loop
