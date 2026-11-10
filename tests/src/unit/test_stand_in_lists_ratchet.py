@@ -239,6 +239,14 @@ def _listed(rule: str, entry: str) -> str:
             "mypy no longer reports assignment in tests",
             id="mypy-loosened-for-every-test",
         ),
+        pytest.param(
+            {
+                "pyproject.toml": '[tool.mypy]\ndisable_error_code = ["assignment"]\n\n'
+                + _PYPROJECT
+            },
+            "mypy no longer reports assignment in tests",
+            id="mypy-loosened-for-every-module",
+        ),
     ],
 )
 def test_an_exempted_test_is_reported(
@@ -341,4 +349,15 @@ def test_a_base_file_git_cannot_read_fails_instead_of_counting_as_absent(
     (repo / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
 
     with pytest.raises(RuntimeError, match="cannot read"):
+        ratchet.problems_since(repo, "HEAD")
+
+
+def test_a_guard_list_that_names_a_file_indirectly_fails(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    """A constant in the list would hide the file it stands for."""
+    guard = f'_NEW = "{_NEW}"\n' + _GUARD.replace("})", ", _NEW})")
+    repo = _pull_request(tmp_path, {_GUARD_PATH: guard})
+
+    with pytest.raises(ValueError, match="string literals"):
         ratchet.problems_since(repo, "HEAD")

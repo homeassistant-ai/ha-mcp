@@ -131,6 +131,13 @@ def _guard_entries(text: str) -> set[str]:
     value = values[0].value
     if value is None:
         raise ValueError(f"{GUARD} declares _GRANDFATHERED without a value")
+    # A name or an expression in the list would hide the file it stands for.
+    for node in ast.walk(value):
+        builds_set = isinstance(node, ast.Name) and node.id in ("frozenset", "set")
+        if not builds_set and not isinstance(
+            node, (ast.Call, ast.Set, ast.List, ast.Tuple, ast.Constant, ast.Load)
+        ):
+            raise ValueError(f"{GUARD} must list its files as string literals")
     return {
         constant.value
         for constant in ast.walk(value)
@@ -177,6 +184,10 @@ def _mypy_state(text: str) -> tuple[set[str], dict[str, Any], set[str]]:
             settings = {k: v for k, v in override.items() if k != "module"}
             continue
         exempt.update(m for m in modules if m == "tests" or m.startswith("tests."))
+    # A code disabled for every module is disabled for the tests too.
+    settings["disable_error_code"] = sorted(
+        {*settings.get("disable_error_code", []), *mypy.get("disable_error_code", [])}
+    )
     exclude = mypy.get("exclude", [])
     excluded = {
         pattern
