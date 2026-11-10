@@ -728,11 +728,11 @@ Yes. The component is required, but the tools are also gated by feature flags fo
 
 The split is deliberate: YAML *reads* sit behind the filesystem flag, and only YAML *edits* need `ENABLE_YAML_CONFIG_EDITING`.
 
-The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first read and accept the warning in its UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the legacy distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first read and accept the warning in its UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the `homeassistant-ai/ha-mcp-integration` distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
 
 ### The store says "The ha_mcp_tools directory belongs to …" and HA-MCP will not update
 
-Two store records, `homeassistant-ai/ha-mcp` and the legacy mirror
+Two store records, `homeassistant-ai/ha-mcp` and the distribution mirror
 `homeassistant-ai/ha-mcp-integration`, are both marked installed, and both own
 `custom_components/ha_mcp_tools`. HACS allowed a download of the second one on
 top of the first (older ha-mcp servers suggested exactly that); the Marketplace
@@ -760,6 +760,23 @@ either:
 A mirror install that was never doubled needs none of this: it keeps updating
 from the mirror. `ha_manage_hacs` now routes a download of either repository to
 the one that is installed.
+
+### Do I need to move from `homeassistant-ai/ha-mcp-integration` to the catalog listing?
+
+**No.** The main repository became the default way to install so that HA-MCP
+could be listed in the default catalog. The `homeassistant-ai/ha-mcp-integration`
+mirror is still supported: it receives the same releases, and an install from
+it keeps updating from it.
+
+Two things differ on the Marketplace in Home Assistant 2026.11:
+
+- The mirror is a custom repository, so its background update checks need a
+  connected GitHub account and run every 48 hours. The catalog listing needs no
+  GitHub connection and refreshes every six hours.
+- The store lists HA-MCP twice, once per repository, and refuses to install the
+  second listing over the first ("The ha_mcp_tools directory belongs to …").
+  That refusal is expected, because one listing owns an integration. Keep the
+  one you have.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
