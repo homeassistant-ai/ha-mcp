@@ -182,6 +182,14 @@ async def resolve_context_trace(
     pretending the trace does not exist.
 
     """
+    component = await _component_context(client, context_id, domain, item_id)
+    if component is not None:
+        if component.match is None:
+            _raise_context_not_found(
+                context_id, domain, item_id, component.scanned, False, []
+            )
+        return component.match
+
     result = await client.send_websocket_message(
         {"type": "trace/contexts", "domain": domain, "item_id": item_id}
     )
@@ -197,13 +205,6 @@ async def resolve_context_trace(
     if run_id:
         return ContextTraceMatch(str(run_id), "trace", 0, False)
 
-    component = await _component_context(client, context_id, domain, item_id)
-    if component is not None:
-        if component.match is None:
-            _raise_context_not_found(
-                context_id, domain, item_id, component.scanned, False, []
-            )
-        return component.match
     return await _resolve_parent_context(client, domain, item_id, context_id)
 
 
@@ -218,6 +219,12 @@ async def resolve_global_context(
     stored run's own context. When that map has no entry, a bounded
     ``trace/list`` + ``trace/get`` scan matches the run's parent context.
     """
+    component = await _component_context(client, context_id, domain)
+    if component is not None:
+        if component.match is None:
+            _raise_global_context_not_found(context_id, component.scanned, False, [])
+        return component.match
+
     result = await client.send_websocket_message({"type": "trace/contexts"})
     if not result.get("success"):
         _raise_trace_ws_failure(
@@ -227,13 +234,6 @@ async def resolve_global_context(
     contexts = result.get("result")
     entry = contexts.get(context_id) if isinstance(contexts, dict) else None
     if not isinstance(entry, dict) or not entry.get("run_id"):
-        component = await _component_context(client, context_id, domain)
-        if component is not None:
-            if component.match is None:
-                _raise_global_context_not_found(
-                    context_id, component.scanned, False, []
-                )
-            return component.match
         return await _resolve_global_parent_context(client, context_id, domain)
     entry_domain = entry.get("domain")
     if domain is not None and entry_domain != domain:

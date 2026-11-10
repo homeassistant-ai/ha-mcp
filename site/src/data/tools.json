@@ -2522,7 +2522,7 @@
         },
         "detailed": {
           "type": "bool",
-          "description": "Include the run's logbook entries and context metadata.",
+          "description": "Include the run's logbook entries in the detail response.",
           "default": false
         },
         "sections": {

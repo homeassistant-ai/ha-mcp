@@ -276,7 +276,7 @@ class TraceTools:
         detailed: Annotated[
             bool,
             Field(
-                description="Include the run's logbook entries and context metadata.",
+                description="Include the run's logbook entries in the detail response.",
                 default=False,
             ),
         ] = False,
