@@ -1292,9 +1292,7 @@ class TestSetupEntrySurfaceFailures:
         h.async_add_executor_job = AsyncMock(side_effect=run_executor)
         return h
 
-    async def test_truncated_target_url_raises_config_entry_error(
-        self, mod, hass: MagicMock
-    ):
+    async def test_truncated_target_url_raises_config_entry_error(self, mod, hass):
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_ZZZZZZZ",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1312,9 +1310,7 @@ class TestSetupEntrySurfaceFailures:
         mock_session.assert_not_called()
         assert mod.DOMAIN not in hass.data
 
-    async def test_truncated_url_does_not_log_full_token(
-        self, mod, hass: MagicMock, caplog
-    ):
+    async def test_truncated_url_does_not_log_full_token(self, mod, hass, caplog):
         """A leaked secret in logs would be a silent regression of the masking."""
         secret_tail = "ZZZZZZZ_real_secret_value"
         proxy_config = {
@@ -1333,9 +1329,7 @@ class TestSetupEntrySurfaceFailures:
         assert secret_tail not in caplog.text
         assert "/private_********" in caplog.text
 
-    async def test_missing_target_url_raises_config_entry_error(
-        self, mod, hass: MagicMock
-    ):
+    async def test_missing_target_url_raises_config_entry_error(self, mod, hass):
         proxy_config = {"target_url": "", "webhook_id": "mcp_x"}
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
@@ -1349,9 +1343,7 @@ class TestSetupEntrySurfaceFailures:
         mock_register.assert_not_called()
         mock_session.assert_not_called()
 
-    async def test_missing_webhook_id_raises_config_entry_error(
-        self, mod, hass: MagicMock
-    ):
+    async def test_missing_webhook_id_raises_config_entry_error(self, mod, hass):
         proxy_config = {
             "target_url": "http://h:9583/private_aaaaaaaaaaaaaaaa",
             "webhook_id": "",
@@ -1372,7 +1364,7 @@ class TestSetupEntrySurfaceFailures:
         [RuntimeError("boom"), ValueError("duplicate webhook"), KeyError("not loaded")],
     )
     async def test_register_failure_closes_session_and_raises(
-        self, mod, hass: MagicMock, register_error
+        self, mod, hass, register_error
     ):
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
@@ -1399,7 +1391,7 @@ class TestSetupEntrySurfaceFailures:
         captured_session["s"].close.assert_awaited_once()
         assert mod.DOMAIN not in hass.data
 
-    async def test_corrupted_json_raises_config_entry_error(self, mod, hass: MagicMock):
+    async def test_corrupted_json_raises_config_entry_error(self, mod, hass):
         async def fake_executor(func, *args):
             raise json.JSONDecodeError("trailing garbage", "{ ", 2)
 
@@ -1414,9 +1406,7 @@ class TestSetupEntrySurfaceFailures:
         assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
         mock_register.assert_not_called()
 
-    async def test_unreadable_config_raises_config_entry_error(
-        self, mod, hass: MagicMock
-    ):
+    async def test_unreadable_config_raises_config_entry_error(self, mod, hass):
         async def fake_executor(func, *args):
             raise OSError("permission denied")
 
@@ -1431,7 +1421,7 @@ class TestSetupEntrySurfaceFailures:
         assert isinstance(exc_info.value.__cause__, OSError)
         mock_register.assert_not_called()
 
-    async def test_happy_path_registers_and_stores_data(self, mod, hass: MagicMock):
+    async def test_happy_path_registers_and_stores_data(self, mod, hass):
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1448,7 +1438,7 @@ class TestSetupEntrySurfaceFailures:
         assert hass.data[mod.DOMAIN]["target_url"] == proxy_config["target_url"]
         assert hass.data[mod.DOMAIN]["webhook_id"] == proxy_config["webhook_id"]
 
-    async def test_no_config_file_returns_true(self, mod, hass: MagicMock):
+    async def test_no_config_file_returns_true(self, mod, hass):
         """Fresh install: file-not-found is the one valid 'no config' state."""
         with patch.object(mod, "_read_config", return_value=None):
             result = await mod.async_setup_entry(hass, MagicMock())
@@ -1478,7 +1468,7 @@ class TestRelaySessionTimeout:
         h.async_add_executor_job = AsyncMock(side_effect=run_executor)
         return h
 
-    async def _setup_timeout(self, mod, hass: MagicMock):
+    async def _setup_timeout(self, mod, hass):
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1493,7 +1483,7 @@ class TestRelaySessionTimeout:
             await mod.async_setup_entry(hass, MagicMock())
         return mock_session.call_args.kwargs["timeout"]
 
-    async def test_wall_clock_total_bound(self, mod, hass: MagicMock):
+    async def test_wall_clock_total_bound(self, mod, hass):
         timeout = await self._setup_timeout(mod, hass)
         if _relay_total_unbounded():
             assert timeout.total is None
@@ -1502,7 +1492,7 @@ class TestRelaySessionTimeout:
             # source-derived predicate flips this branch off on promotion.
             assert timeout.total == 300
 
-    async def test_idle_and_connect_bounds_still_set(self, mod, hass: MagicMock):
+    async def test_idle_and_connect_bounds_still_set(self, mod, hass):
         timeout = await self._setup_timeout(mod, hass)
         assert timeout.sock_read == 300
         assert timeout.sock_connect == 10
@@ -1524,14 +1514,14 @@ class TestUnloadEntry:
         h.data = {}
         return h
 
-    async def test_unload_after_failed_setup_is_noop(self, mod, hass: MagicMock):
+    async def test_unload_after_failed_setup_is_noop(self, mod, hass):
         with patch.object(mod, "async_unregister") as mock_unreg:
             result = await mod.async_unload_entry(hass, MagicMock())
 
         assert result is True
         mock_unreg.assert_not_called()
 
-    async def test_unload_unregisters_and_closes_session(self, mod, hass: MagicMock):
+    async def test_unload_unregisters_and_closes_session(self, mod, hass):
         session = MagicMock()
         session.close = AsyncMock()
         hass.data[mod.DOMAIN] = {
@@ -1578,9 +1568,7 @@ class TestOAuthOffPreservesBehavior:
         h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         return h
 
-    async def test_setup_without_oauth_section_omits_oauth_key(
-        self, mod, hass: MagicMock
-    ):
+    async def test_setup_without_oauth_section_omits_oauth_key(self, mod, hass):
         """The OFF path must never add the "oauth" key (which arms the bearer
         gate). On stable that leaves exactly the legacy three keys; on dev the
         none-mode auto-approve fix (#1969) additionally serves discovery, so it
@@ -1613,9 +1601,7 @@ class TestOAuthOffPreservesBehavior:
             expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
-    async def test_setup_does_not_import_oauth_module_when_off(
-        self, mod, hass: MagicMock
-    ):
+    async def test_setup_does_not_import_oauth_module_when_off(self, mod, hass):
         """Confirms the lazy-import: the oauth submodule shouldn't be loaded on
         the OFF path — UNLESS the flavor ships none-mode auto-approve (dev,
         #1969), whose discovery deliberately reuses oauth's metadata views +
@@ -1644,7 +1630,7 @@ class TestOAuthOffPreservesBehavior:
             # Stable keeps the original lazy-import guarantee.
             assert oauth_submodule_name not in sys.modules
 
-    async def test_blank_creds_raises_config_entry_error(self, mod, hass: MagicMock):
+    async def test_blank_creds_raises_config_entry_error(self, mod, hass):
         """Blank creds in an oauth section signal a config bug — the user
         opted into auth, so silently disabling it would leave them with an
         unprotected endpoint they think is locked. Fail loudly instead."""
@@ -1735,9 +1721,7 @@ class TestDebugLogging:
             mod._WEBHOOK_LOGGER.setLevel(logging.NOTSET)
             mod._WEBHOOK_LOGGER_LEVEL_RAISED = False
 
-    async def test_debug_on_also_surfaces_has_webhook_logger(
-        self, mod, hass: MagicMock
-    ):
+    async def test_debug_on_also_surfaces_has_webhook_logger(self, mod, hass):
         """#2220: with the toggle on and NO inbound lines, the user still can't
         tell "request never arrived" from "arrived but nothing is registered
         for this id" — HA answers an empty 200 for an unregistered webhook and
@@ -1751,9 +1735,7 @@ class TestDebugLogging:
         await self._run_setup(mod, hass, debug=False)
         assert mod._WEBHOOK_LOGGER.level == logging.NOTSET
 
-    async def test_debug_toggle_never_lowers_an_explicit_user_level(
-        self, mod, hass: MagicMock
-    ):
+    async def test_debug_toggle_never_lowers_an_explicit_user_level(self, mod, hass):
         """A user who set DEBUG via HA's `logger:` config keeps it: we only
         ever raise a less-verbose logger, and only undo our own raise."""
         _require_webhook_logger(mod)
@@ -1764,7 +1746,7 @@ class TestDebugLogging:
 
         assert mod._WEBHOOK_LOGGER.level == logging.DEBUG
 
-    async def _run_setup(self, mod, hass: MagicMock, debug):
+    async def _run_setup(self, mod, hass, debug):
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1777,7 +1759,7 @@ class TestDebugLogging:
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
-    async def test_debug_off_omits_key(self, mod, hass: MagicMock):
+    async def test_debug_off_omits_key(self, mod, hass):
         """Toggle off (or absent) → no debug_logging key; hass.data shape is
         identical to the baseline, mirroring the oauth-off guarantee."""
         proxy_config = {
@@ -1802,7 +1784,7 @@ class TestDebugLogging:
             expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
-    async def test_debug_on_stores_flag(self, mod, hass: MagicMock):
+    async def test_debug_on_stores_flag(self, mod, hass):
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1933,21 +1915,19 @@ class TestDebugLogging:
 
         assert any("upstream responded 200" in r.getMessage() for r in caplog.records)
 
-    async def test_logger_raised_to_info_when_on_and_level_quiet(
-        self, mod, hass: MagicMock
-    ):
+    async def test_logger_raised_to_info_when_on_and_level_quiet(self, mod, hass):
         """debug on + effective level less verbose than INFO → raise to INFO."""
         mod._LOGGER.setLevel(logging.WARNING)
         await self._run_setup(mod, hass, True)
         assert mod._LOGGER.level == logging.INFO
 
-    async def test_logger_preserves_explicit_debug_when_on(self, mod, hass: MagicMock):
+    async def test_logger_preserves_explicit_debug_when_on(self, mod, hass):
         """debug on must NOT clobber a more-verbose user-set DEBUG."""
         mod._LOGGER.setLevel(logging.DEBUG)
         await self._run_setup(mod, hass, True)
         assert mod._LOGGER.level == logging.DEBUG
 
-    async def test_logger_reset_when_off_after_we_raised(self, mod, hass: MagicMock):
+    async def test_logger_reset_when_off_after_we_raised(self, mod, hass):
         """A debug on→off cycle undoes the INFO we raised (and only that)."""
         mod._LOGGER.setLevel(logging.WARNING)
         await self._run_setup(mod, hass, True)  # we raise to INFO + flag it
@@ -1955,14 +1935,14 @@ class TestDebugLogging:
         await self._run_setup(mod, hass, False)  # we undo our own raise
         assert mod._LOGGER.level == logging.NOTSET
 
-    async def test_logger_preserves_explicit_debug_when_off(self, mod, hass: MagicMock):
+    async def test_logger_preserves_explicit_debug_when_off(self, mod, hass):
         """debug off must NOT clobber a user's explicit `logger:` DEBUG — the
         default-config (toggle off) majority case."""
         mod._LOGGER.setLevel(logging.DEBUG)
         await self._run_setup(mod, hass, False)
         assert mod._LOGGER.level == logging.DEBUG
 
-    async def test_logger_preserves_explicit_info_when_off(self, mod, hass: MagicMock):
+    async def test_logger_preserves_explicit_info_when_off(self, mod, hass):
         """debug off must NOT clobber a user's explicit `logger:` INFO either —
         we only undo an INFO WE raised, never one the user set. No toggle is
         even involved here (the default-config case Patch76 flagged)."""
@@ -2420,7 +2400,7 @@ class TestOAuthSetupEntry:
         return h
 
     async def test_oauth_section_creates_provider_and_registers_views(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         # Pre-load the oauth module with a tmp secret file, then bind it as
         # mcp_proxy_init_<variant>.oauth so the integration's relative import
@@ -2466,9 +2446,7 @@ class TestOAuthSetupEntry:
         # so the sibling flavor refuses loudly instead of shadowing them.
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
 
-    async def test_provider_init_failure_unregisters_and_raises(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_provider_init_failure_unregisters_and_raises(self, hass, tmp_path):
         """When the OAuth provider can't be constructed (e.g. the signing key
         can't be loaded), the user explicitly opted into auth, so we refuse to
         start: raise ConfigEntryError AND tear down the webhook registered
@@ -2504,7 +2482,7 @@ class TestOAuthSetupEntry:
         assert mod.DOMAIN not in hass.data
 
     async def test_sibling_flavor_owns_oauth_routes_refuses_loudly(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """If the OTHER flavor already registered the root OAuth /authorize +
         /token views in this HA instance (the shared marker names its domain),
@@ -2543,7 +2521,7 @@ class TestOAuthSetupEntry:
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
 
     async def test_sibling_claims_routes_during_secret_load_refuses(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """TOCTOU guard: the pre-await owner check can pass (no owner yet) and
         the sibling flavor's concurrently-setting-up entry can then register
@@ -2628,7 +2606,7 @@ class TestOAuthRestartRepairTrigger:
         }
 
     async def test_oauth_enabled_mid_session_raises_restart_repair(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """Mid-session enable: the marker is written and the Repair issue is
         created; the clear path must NOT run."""
@@ -2652,9 +2630,7 @@ class TestOAuthRestartRepairTrigger:
         mock_clear.assert_not_called()
         mock_delete.assert_not_called()
 
-    async def test_oauth_enabled_during_boot_clears_marker(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_oauth_enabled_during_boot_clears_marker(self, hass, tmp_path):
         """Boot-time enable (views bind cleanly): the stale marker is cleared,
         the issue is deleted, and NO restart Repair is created."""
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
@@ -2678,7 +2654,7 @@ class TestOAuthRestartRepairTrigger:
         mock_create_issue.assert_not_called()
         mock_write.assert_not_called()
 
-    async def test_oauth_off_clears_marker(self, hass: MagicMock, tmp_path):
+    async def test_oauth_off_clears_marker(self, hass, tmp_path):
         """No oauth section: even mid-session (is_running True) this clears the
         stale marker/issue and never creates a restart Repair."""
         mod = _import_mcp_proxy()
@@ -2704,9 +2680,7 @@ class TestOAuthRestartRepairTrigger:
         mock_create_issue.assert_not_called()
         mock_write.assert_not_called()
 
-    async def test_same_flavor_reload_reuses_views_no_restart(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_same_flavor_reload_reuses_views_no_restart(self, hass, tmp_path):
         """Mid-session reload of OUR OWN entry with the SAME OAuth identity
         (route owner already == DOMAIN AND the bound-view fingerprint matches
         the current creds + signing key, is_running True): setup PROCEEDS
@@ -2782,7 +2756,7 @@ class TestOAuthRestartRepairTrigger:
         mock_write.assert_not_called()
 
     async def test_same_flavor_reload_creds_changed_raises_restart(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """Mid-session reload of OUR OWN entry after the OAuth creds/key were
         REGENERATED (route owner == DOMAIN but the bound-view fingerprint no
@@ -4524,7 +4498,7 @@ class TestAsyncSetupBootMarker:
         h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         return h
 
-    async def test_marker_present_creates_issue(self, hass: MagicMock, tmp_path):
+    async def test_marker_present_creates_issue(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         repairs = _bind_repairs(mod, tmp_path)
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "oauth_enabled"}')
@@ -4540,7 +4514,7 @@ class TestAsyncSetupBootMarker:
         assert call_args.args[2] == "oauth_restart_required"
         assert call_args.kwargs.get("is_fixable") is True
 
-    async def test_marker_absent_creates_no_issue(self, hass: MagicMock, tmp_path):
+    async def test_marker_absent_creates_no_issue(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         _bind_repairs(mod, tmp_path)  # marker redirected to tmp, never written
         from homeassistant.helpers import issue_registry
@@ -4574,7 +4548,7 @@ class TestRefreshRepairsService:
         if not hasattr(mod, "SERVICE_REFRESH_REPAIRS"):
             pytest.skip("flavor does not ship the refresh_repairs service yet")
 
-    async def test_service_registered_on_setup(self, hass: MagicMock, tmp_path):
+    async def test_service_registered_on_setup(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         self._skip_unless_shipped(mod)
         _bind_repairs(mod, tmp_path)
@@ -4584,9 +4558,7 @@ class TestRefreshRepairsService:
         assert args.args[0] == mod.DOMAIN
         assert args.args[1] == "refresh_repairs"
 
-    async def test_setup_dismisses_stale_update_notification(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_setup_dismisses_stale_update_notification(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         self._skip_unless_shipped(mod)
         _bind_repairs(mod, tmp_path)
@@ -4597,9 +4569,7 @@ class TestRefreshRepairsService:
             {"notification_id": mod.UPDATE_NOTIFICATION_ID},
         )
 
-    async def test_update_create_files_issue_immediately(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_update_create_files_issue_immediately(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         self._skip_unless_shipped(mod)
         _bind_repairs(mod, tmp_path)
@@ -4616,7 +4586,7 @@ class TestRefreshRepairsService:
         assert args.kwargs.get("is_fixable") is True
         assert args.kwargs.get("translation_key") == "update_restart_required"
 
-    async def test_oauth_create_is_marker_gated(self, hass: MagicMock, tmp_path):
+    async def test_oauth_create_is_marker_gated(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         self._skip_unless_shipped(mod)
         repairs = _bind_repairs(mod, tmp_path)
@@ -4638,7 +4608,7 @@ class TestRefreshRepairsService:
             == "oauth_restart_required"
         )
 
-    async def test_clear_action_deletes_issue(self, hass: MagicMock, tmp_path):
+    async def test_clear_action_deletes_issue(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         self._skip_unless_shipped(mod)
         _bind_repairs(mod, tmp_path)
@@ -4829,7 +4799,7 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         return h
 
-    async def test_registers_expected_oauth_endpoints(self, hass: MagicMock, tmp_path):
+    async def test_registers_expected_oauth_endpoints(self, hass, tmp_path):
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         mod = _import_mcp_proxy(preload_oauth=oauth)
         # Boot-time setup (is_running False) exercises the first-registration
@@ -4943,9 +4913,7 @@ class TestHaAuthMode:
 
     # ---- setup registers discovery and dev unified views, no root views ----
 
-    async def test_setup_registers_oauth_surface_and_marks_mode(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_setup_registers_oauth_surface_and_marks_mode(self, hass, tmp_path):
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         repairs = _bind_repairs(mod, tmp_path)
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
@@ -4993,7 +4961,7 @@ class TestHaAuthMode:
         mock_write.assert_not_called()
 
     async def test_ha_auth_wires_dcr_key_and_isolated_cimd_session(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """The dev parity surface persists DCR and isolates public lookups."""
         if not _dedicated_cimd_session():
@@ -5022,9 +4990,7 @@ class TestHaAuthMode:
         connector = session_factory.call_args_list[1].kwargs["connector"]
         assert connector.limit == 4
 
-    async def test_ha_auth_init_failure_unregisters_and_raises(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_ha_auth_init_failure_unregisters_and_raises(self, hass, tmp_path):
         """ha_auth mirror of the legacy provider-init-failure teardown: if
         register_metadata_views raises while enabling OAuth, the user opted into
         auth, so refuse to start — raise ConfigEntryError, tear down the webhook
@@ -5064,7 +5030,7 @@ class TestHaAuthMode:
         assert mod.DOMAIN not in hass.data
 
     async def test_setup_ignores_stray_public_base_url_host_derived(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """Fix 4 through async_setup_entry: a hand-edited ha_auth config that
         ALSO carries a stray top-level `public_base_url` (the key legacy writes
@@ -5107,7 +5073,7 @@ class TestHaAuthMode:
         # It genuinely served the ha_auth document (public client + CIMD).
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
 
-    async def test_reload_does_not_reregister_views(self, hass: MagicMock, tmp_path):
+    async def test_reload_does_not_reregister_views(self, hass, tmp_path):
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         _bind_repairs(mod, tmp_path)
         with (
@@ -5132,7 +5098,7 @@ class TestHaAuthMode:
         assert hass.data[oauth._METADATA_VIEWS_REGISTERED_KEY] is True
 
     async def test_ha_auth_setup_reports_restart_when_webhook_id_changed(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """A webhook id rotated mid-session raises the restart Repair.
 
@@ -5167,7 +5133,7 @@ class TestHaAuthMode:
         # ...and the recorded bound id stays the one the URLs actually carry.
         assert hass.data[oauth._METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY] == "mcp_test"
 
-    async def test_register_once_flag_survives_unload(self, hass: MagicMock, tmp_path):
+    async def test_register_once_flag_survives_unload(self, hass, tmp_path):
         """The register-once flags outlive the config-entry data they gate.
 
         HA cannot drop bound HTTP views until restart, so setup after unload
@@ -5215,7 +5181,7 @@ class TestHaAuthMode:
         }
 
     async def test_ha_auth_then_legacy_does_not_reregister_metadata(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """A live ha_auth -> legacy switch reuses the already-bound
         metadata views: legacy's register_views() routes them through the same
@@ -5250,7 +5216,7 @@ class TestHaAuthMode:
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_LEGACY
 
     async def test_legacy_then_ha_auth_only_adds_unbound_dcr_route(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """A switch reuses shared routes and adds only DCR when supported."""
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
@@ -5283,7 +5249,7 @@ class TestHaAuthMode:
             assert len(_oauth_view_calls(hass)) == 0
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_HA_AUTH
 
-    async def test_unknown_mode_raises(self, hass: MagicMock, tmp_path):
+    async def test_unknown_mode_raises(self, hass, tmp_path):
         mod = _import_mcp_proxy()
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
@@ -5305,7 +5271,7 @@ class TestHaAuthMode:
         session.close.assert_awaited_once()
         assert mod.DOMAIN not in hass.data
 
-    async def test_ambiguous_ha_auth_with_creds_raises(self, hass: MagicMock, tmp_path):
+    async def test_ambiguous_ha_auth_with_creds_raises(self, hass, tmp_path):
         """Hard mutual exclusion: mode ha_auth + legacy creds keys is ambiguous
         and must be refused, not guessed."""
         mod, _oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
@@ -5335,9 +5301,7 @@ class TestHaAuthMode:
         # The ResourceServer was never constructed and no view registered.
         assert not _oauth_view_calls(hass)
 
-    async def test_creds_without_mode_takes_legacy_path(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_creds_without_mode_takes_legacy_path(self, hass, tmp_path):
         """Back-compat pin: a creds-shaped section without a mode key is legacy,
         and the ha_auth module (auth_native) is NEVER imported for it."""
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
@@ -5366,9 +5330,7 @@ class TestHaAuthMode:
         # ha_auth's auth_native module must NOT be imported on the legacy path.
         assert auth_native_name not in sys.modules
 
-    async def test_off_path_imports_neither_oauth_nor_auth_native(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_off_path_imports_neither_oauth_nor_auth_native(self, hass, tmp_path):
         """The OAuth-off path must never import auth_native (ha_auth stays lazy).
         oauth stays lazy too UNLESS the flavor ships none-mode auto-approve
         (dev, #1969), whose off-path discovery deliberately reuses oauth's
@@ -6905,9 +6867,7 @@ class TestNoneAutoApproveMode:
 
     # ---- full setup registers the views + marks the mode ----
 
-    async def test_setup_registers_metadata_and_autoapprove_views(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_setup_registers_metadata_and_autoapprove_views(self, hass, tmp_path):
         mod, oauth, autoapprove, _an = _import_none_autoapprove_stack(tmp_path)
         repairs = _bind_repairs(mod, tmp_path)
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
@@ -6967,7 +6927,7 @@ class TestNoneAutoApproveMode:
         mock_write.assert_not_called()
 
     async def test_none_mode_rotation_raises_the_shared_restart_repair(
-        self, hass: MagicMock, tmp_path
+        self, hass, tmp_path
     ):
         """A rotation with OAuth OFF must raise the same restart Repair.
 
@@ -7013,9 +6973,7 @@ class TestNoneAutoApproveMode:
             "or a none-mode operator is told OAuth was enabled"
         )
 
-    async def test_setup_failure_fails_open_keeps_plain_proxy(
-        self, hass: MagicMock, tmp_path
-    ):
+    async def test_setup_failure_fails_open_keeps_plain_proxy(self, hass, tmp_path):
         """Unlike ha_auth/legacy, a none-mode auto-approve setup failure must NOT
         tear down the (intentionally unauthenticated) webhook — it just skips the
         discovery enhancement and keeps forwarding."""
@@ -7118,7 +7076,7 @@ class TestNoneAutoApproveMode:
         request.read.assert_awaited_once()
 
 
-def _oauth_view_calls(hass: MagicMock):
+def _oauth_view_calls(hass):
     """Keep OAuth surface assertions independent of the MCP forwarding route."""
     return [
         call

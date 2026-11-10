@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import (
     _PACKAGE_DIR_CACHE,
@@ -1521,7 +1520,7 @@ class TestExtraYamlKeysHandlers:
 
         saved: dict[str, list[str]] = {}
 
-        async def _save(hass: HomeAssistant, keys):
+        async def _save(hass, keys):
             saved["keys"] = keys
 
         monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)

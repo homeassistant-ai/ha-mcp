@@ -114,7 +114,7 @@ def patch_dashboards(monkeypatch):
     return _set
 
 
-def _run_dashboards(hass: HomeAssistant, msg):
+def _run_dashboards(hass: FakeHass, msg):
     extra = asyncio.run(wsapi._dashboards_prep(hass, msg))
     return wsapi._do_dashboards(hass, msg, **extra)
 

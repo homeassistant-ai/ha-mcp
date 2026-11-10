@@ -5,7 +5,6 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.core import HomeAssistant
 
 from . import test_webhook_proxy as proxy
 from .test_webhook_proxy import _webhook_proxy_variant  # noqa: F401
@@ -23,7 +22,7 @@ def catalog_webhook_supported() -> bool:
         return "CatalogWebhookView" in handle.read()
 
 
-def _catalog_view(mod, hass: HomeAssistant):
+def _catalog_view(mod, hass):
     mod.register_readonly_webhook(hass, "mcp_test", mod._handle_webhook)
     view = next(
         (

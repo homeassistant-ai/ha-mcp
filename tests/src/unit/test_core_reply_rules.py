@@ -366,7 +366,19 @@ def test_only_a_suppressed_real_core_check_is_refused(
             "async def test_it(hass: Any):\n    pass\n", True, id="annotated-any"
         ),
         pytest.param(
-            "def helper(core_client=None):\n    pass\n", True, id="default-value"
+            "async def test_it(core_client=None):\n    pass\n",
+            True,
+            id="default-value",
+        ),
+        pytest.param(
+            "@pytest.fixture\ndef zones(hass):\n    return hass\n",
+            True,
+            id="fixture-that-takes-a-fixture",
+        ),
+        pytest.param(
+            "def fake_settings(hass, entity_id):\n    return None\n",
+            False,
+            id="helper-given-what-its-caller-passes",
         ),
         pytest.param(
             "async def test_it(entity_registry, hass: HomeAssistant):\n    pass\n",

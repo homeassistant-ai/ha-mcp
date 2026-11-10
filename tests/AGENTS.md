@@ -170,8 +170,8 @@ and a comment that switches one of these checks off for a line or a file
 (`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
 bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
 `assignment`, `attr-defined` or `misc`). The eighth
-(`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture parameter with no
-annotation or typed `Any`; see the mypy check below.
+(`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
+fixture takes with no annotation or typed `Any`; see the mypy check below.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,

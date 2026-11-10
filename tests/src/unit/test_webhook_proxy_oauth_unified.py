@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from homeassistant.core import HomeAssistant
 
 from ._embedded_helpers import response_json
 
@@ -1575,7 +1574,7 @@ async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
 REVOKE_SURFACES = {"token-action": "/auth/token", "scoped-revoke": "/auth/revoke"}
 
 
-async def _post_revocation(autoapprove, hass: HomeAssistant, surface: str, token: str):
+async def _post_revocation(autoapprove, hass, surface: str, token: str):
     """POST ``token`` as a revocation at one of the two surfaces."""
     if surface == "token-action":
         return await autoapprove.AutoApproveTokenView(hass).post(

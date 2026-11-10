@@ -22,7 +22,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.core import HomeAssistant
 
 from ha_mcp.tools import (
     blueprint_sources,
@@ -917,7 +916,7 @@ class TestExposureSeam:
     def _patch(self, monkeypatch, settings_map):
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
 
-        def fake_settings(hass: HomeAssistant, entity_id):
+        def fake_settings(hass, entity_id):
             return settings_map.get(entity_id, {})
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
