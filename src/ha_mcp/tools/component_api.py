@@ -71,6 +71,11 @@ SUPPORTED_SCHEMA_VERSION = 1
 # independently, command presence alone cannot authorize the newer semantics.
 DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 
+# Additive flag on search and overview: entity rows carry the name Core
+# composes, and search matches on it. A component without it serves the legacy
+# friendly_name alone, and the server says so where that changes the answer.
+ENTITY_COMPOSED_NAME = "entity_composed_name"
+
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime

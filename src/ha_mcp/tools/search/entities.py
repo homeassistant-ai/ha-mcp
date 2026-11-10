@@ -7,7 +7,7 @@ entity search, and the enrichment methods of the search tool class.
 import asyncio
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from ...errors import create_validation_error
 from ...utils.device_registry_semantics import (
@@ -62,6 +62,69 @@ _ENRICHMENT_FIELDS: tuple[str, ...] = ("area", "floor", "labels", "aliases")
 _MEMBERSHIP_FIELDS: tuple[str, ...] = ("is_group", "member_entity_ids")
 
 
+# The name Home Assistant shows for the entity, composed by Core from the
+# parent device, device and entity names (friendly_name is the legacy state
+# attribute). Only the component can ask Core for it, so a record carries it
+# on the component path alone.
+_COMPOSED_NAME_FIELD = "name"
+# A search without a current component sees less (an entity only by its id,
+# legacy friendly_name and aliases), so a search that finds nothing may be one
+# the component would have answered.
+_NO_COMPONENT_EMPTY_SEARCH_HINT = (
+    "No ha_mcp_tools component detected; for full search functionality, "
+    "install it via HACS (the Marketplace on Home Assistant 2026.11+)."
+)
+_OLD_COMPONENT_EMPTY_SEARCH_HINT = (
+    "The installed ha_mcp_tools component is out of date; for full search "
+    "functionality, update it."
+)
+_COMPOSED_NAME_UNAVAILABLE = (
+    "name was requested, but the ha_mcp_tools component did not serve this "
+    "search and only it can ask Home Assistant for an entity's composed name; "
+    "the records carry friendly_name, the legacy name"
+)
+_COMPOSED_NAME_NEEDS_UPDATE = (
+    "name was requested, but the installed ha_mcp_tools component predates "
+    "composed names; update it. The records carry friendly_name, the legacy name"
+)
+
+
+ComponentNaming = Literal["absent", "outdated", "current"]
+
+
+def _composed_name_notes(
+    *,
+    name_served: bool,
+    component: ComponentNaming,
+    name_requested: bool,
+    nothing_found: bool,
+) -> list[str]:
+    """Warnings for a search that ran without a current component.
+
+    ``name_served`` is true when a component that composes names answered;
+    nothing is missing then. Otherwise a requested ``name`` and a search that
+    found nothing each say what is in the way: no component (or none that
+    answered), or one that is out of date. A search the legacy path served
+    while a current component is installed carries no hint.
+    """
+    if name_served:
+        return []
+    notes: list[str] = []
+    if name_requested:
+        notes.append(
+            _COMPOSED_NAME_NEEDS_UPDATE
+            if component == "outdated"
+            else _COMPOSED_NAME_UNAVAILABLE
+        )
+    if nothing_found and component != "current":
+        notes.append(
+            _OLD_COMPONENT_EMPTY_SEARCH_HINT
+            if component == "outdated"
+            else _NO_COMPONENT_EMPTY_SEARCH_HINT
+        )
+    return notes
+
+
 # Every field name result_fields= accepts — base record keys plus opt-in
 # enrichment and membership keys. Unknown names are rejected up front rather
 # than silently projecting to empty records.
@@ -69,6 +132,7 @@ _ALLOWED_RESULT_FIELDS: frozenset[str] = (
     frozenset(_ENTITY_RECORD_KEYS)
     | frozenset(_ENRICHMENT_FIELDS)
     | frozenset(_MEMBERSHIP_FIELDS)
+    | {_COMPOSED_NAME_FIELD}
 )
 
 

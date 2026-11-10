@@ -125,6 +125,10 @@ CAPABILITIES: list[str] = [
     # A flag on search: gates its additive result_fields request and generic
     # is_group/member_entity_ids response fields.
     "search_entity_membership",
+    # A flag on search and overview: an entity row carries the name Core
+    # composes (``name`` on a search record, ``full_name`` on an overview
+    # registry row) and search matches on it.
+    "entity_composed_name",
     "overview",
     "helpers_list",
     "states",
