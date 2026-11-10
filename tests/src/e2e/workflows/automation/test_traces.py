@@ -802,7 +802,7 @@ action:
         suffix = uuid.uuid4().hex[:8]
         light_id = await self._find_test_light_entity(mcp_client)
         automation_id = None
-        light_was_on = False
+        light_prior_state: str | None = None
         try:
             create_config = {
                 "alias": f"Trace Not Triggered {suffix}",
@@ -826,7 +826,7 @@ action:
             prior_light = await mcp.call_tool_success(
                 "ha_get_state", {"entity_id": light_id}
             )
-            light_was_on = (prior_light.get("data") or {}).get("state") == "on"
+            light_prior_state = (prior_light.get("data") or {}).get("state")
 
             await mcp.call_tool_success(
                 "ha_call_service",
@@ -902,14 +902,18 @@ action:
                             {"entity_id": automation_id},
                         )
                 with cleanup.step():
-                    if light_was_on:
-                        # The test turned the light off to force the state
+                    if light_prior_state in {"on", "off"}:
+                        # The test toggled the light to force the state
                         # trigger; put the instance back the way it was.
                         await MCPAssertions(mcp_client).call_tool_success(
                             "ha_call_service",
                             {
                                 "domain": "light",
-                                "service": "turn_on",
+                                "service": (
+                                    "turn_on"
+                                    if light_prior_state == "on"
+                                    else "turn_off"
+                                ),
                                 "entity_id": light_id,
                             },
                         )

@@ -87,7 +87,7 @@ class IdentifierAliases:
         trace key, so a visible script whose object ID matches a hidden
         script's old name must not be concealed.
         """
-        key = value.strip().removeprefix(f"{domain}.")
+        key = value.strip()
         return key in self.storage_keys.get(domain, frozenset())
 
 

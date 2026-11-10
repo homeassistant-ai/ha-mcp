@@ -112,6 +112,24 @@ async def test_parent_match_prefers_the_newest_real_run(
 
 
 @pytest.mark.asyncio
+async def test_missing_start_time_does_not_sort_as_newest(hass: HomeAssistant) -> None:
+    missing = _trace(run_id="missing", context_id="own-missing", parent_id="parent-1")
+    missing._timestamp_start = None
+    valid = _trace(
+        run_id="valid",
+        context_id="own-valid",
+        parent_id="parent-1",
+        start=_START,
+    )
+    _store(hass, "automation.uid_1", missing, valid)
+
+    result = trace_context._trace_context_payload(
+        hass, {"id": 1, "context_id": "parent-1"}, available=True
+    )
+
+    assert result["run_id"] == "valid"
+
+@pytest.mark.asyncio
 async def test_domain_and_item_filters_limit_the_scan(hass: HomeAssistant) -> None:
     automation = _trace(run_id="auto", context_id="own-auto", parent_id="parent-1")
     script = _trace(run_id="script", context_id="own-script", parent_id="parent-1")

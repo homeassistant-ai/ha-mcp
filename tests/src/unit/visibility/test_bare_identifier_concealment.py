@@ -127,6 +127,12 @@ class TestBareIdentifierConcealment:
                 id="trace-by-script-item-id",
             ),
             pytest.param(
+                "ha_get_automation_traces",
+                {"domain": "script", "item_id": "script.come_home"},
+                _entry("script.front_door", "script.come_home", "script"),
+                id="trace-item-id-that-starts-with-the-domain-prefix",
+            ),
+            pytest.param(
                 "ha_call_service",
                 {
                     "ws_command": "trace/get",

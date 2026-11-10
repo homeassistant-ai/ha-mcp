@@ -3,6 +3,7 @@
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal, NoReturn, cast
 
 from ..client.rest_client import HomeAssistantConnectionError, HomeAssistantError
@@ -671,9 +672,11 @@ async def fetch_trace_logbook(
     """Fetch the run's logbook through Core's own start/context query.
 
     The trace page asks Core for ``logbook/get_events`` with the trace's
-    start time and the run's context id, and no end time. The component's
-    ``ha_mcp_tools/logbook_events`` command runs the same processor in
-    process; REST is the explicit no-component fallback.
+    start time and the run's context id, and no end time (Core reads that as
+    now). The component's ``ha_mcp_tools/logbook_events`` command runs the same
+    processor in process; REST is the explicit no-component fallback. REST
+    defaults an omitted end to ``start + 1 day``, so the fallback sends now
+    explicitly to keep the same window.
     """
     context = trace.get("context")
     if not isinstance(context, dict):
@@ -704,6 +707,7 @@ async def fetch_trace_logbook(
         transport = "rest"
         entries = await client.get_logbook(
             start_time=start_time,
+            end_time=datetime.now(UTC).isoformat(),
             context_id=str(context_id),
         )
     if not isinstance(entries, list):

@@ -62,7 +62,9 @@ def _trace_start(trace: Any) -> str:
     """Return a sortable start timestamp from Core's short dict."""
     timestamp = trace.as_short_dict().get("timestamp") or {}
     start = timestamp.get("start")
-    return start.isoformat() if isinstance(start, datetime) else str(start)
+    if isinstance(start, datetime):
+        return start.isoformat()
+    return "" if start is None else str(start)
 
 
 def _trace_context_payload(

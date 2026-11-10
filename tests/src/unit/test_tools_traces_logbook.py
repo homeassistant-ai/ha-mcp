@@ -58,7 +58,8 @@ class TestFetchTraceLogbook:
         client.get_logbook.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_component_absent_uses_rest(self) -> None:
+    async def test_component_absent_uses_rest(self, freezer) -> None:
+        freezer.move_to("2026-11-08T16:05:00+00:00")
         client = _make_pooled_client(lambda mtype, message: {})
         client.get_logbook = AsyncMock(return_value=[{"name": "REST"}])
 
@@ -78,6 +79,7 @@ class TestFetchTraceLogbook:
         assert logbook.entries == [{"name": "REST"}]
         client.get_logbook.assert_awaited_once_with(
             start_time="2026-11-08T16:00:00+00:00",
+            end_time="2026-11-08T16:05:00+00:00",
             context_id="ctx-1",
         )
 
