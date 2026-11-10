@@ -25,8 +25,13 @@ ignores:
 message: no
 """
 _RUFF = '[lint.extend-per-file-ignores]\n"test_old.py" = ["SLF001"]\n'
+_RUFF_EMPTY = "[lint.extend-per-file-ignores]\n"
+# The ``tests.*`` override is what turns mypy on for the tests.
+_MYPY_EMPTY = (
+    '[[tool.mypy.overrides]]\nmodule = ["tests.*"]\ndisallow_untyped_defs = false\n'
+)
 _MYPY = (
-    "[[tool.mypy.overrides]]\n"
+    _MYPY_EMPTY + "[[tool.mypy.overrides]]\n"
     'module = ["tests.src.unit.test_old"]\n'
     "ignore_errors = true\n"
 )
@@ -76,6 +81,20 @@ def ratchet() -> ModuleType:
             {"tests/src/unit/test_new.py"},
             id="module-stand-in-guard",
         ),
+        pytest.param(
+            "tests/src/unit/ruff.toml",
+            _RUFF_EMPTY,
+            _RUFF,
+            {"test_old.py"},
+            id="emptied-private-access-list-regrows",
+        ),
+        pytest.param(
+            "pyproject.toml",
+            _MYPY_EMPTY,
+            _MYPY,
+            {"tests.src.unit.test_old"},
+            id="emptied-mypy-list-regrows",
+        ),
     ],
 )
 def test_a_new_test_parked_on_a_list_is_reported(
@@ -112,3 +131,8 @@ def test_a_shrinking_or_newly_created_list_is_allowed(
 ) -> None:
     """Converting a file, widening a rule and introducing a check all pass."""
     assert ratchet.added_entries(path, base, head) == set()
+
+
+def test_an_unreadable_base_fails_instead_of_passing(ratchet: ModuleType) -> None:
+    """A base commit git cannot read must not make every list look new."""
+    assert ratchet.main(["--base", "0" * 40]) == 2

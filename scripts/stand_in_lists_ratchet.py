@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -82,37 +83,60 @@ def _mypy_entries(text: str) -> set[str]:
     }
 
 
+def _mypy_checks_tests(text: str) -> bool:
+    """Whether mypy already ran on the tests, so the list already existed."""
+    overrides = tomllib.loads(text).get("tool", {}).get("mypy", {}).get("overrides", [])
+    return any("tests.*" in override.get("module", []) for override in overrides)
+
+
 def added_entries(path: str, base_text: str | None, head_text: str) -> set[str]:
-    """The entries ``path``'s list gained since the base, when that is refused."""
+    """The entries ``path``'s list gained since the base, when that is refused.
+
+    ``base_text`` is None only when the file did not exist at the base. A list
+    that existed there and is empty stays empty: only a list that is new may
+    start with entries.
+    """
     if path.startswith("rules/"):
         head, head_rule = _rule_parts(head_text)
         if base_text is None:
             return set()
         base, base_rule = _rule_parts(base_text)
         return set() if base_rule != head_rule else head - base
-    parse = (
-        _guard_entries
-        if path == GUARD
-        else _ruff_entries
-        if path in RUFF_FILES
-        else _mypy_entries
-    )
-    head = parse(head_text)
-    base = parse(base_text) if base_text is not None else set()
-    # An empty base list is a list that did not exist yet.
-    return head - base if base else set()
+    if path == PYPROJECT:
+        if base_text is None or not _mypy_checks_tests(base_text):
+            return set()
+        return _mypy_entries(head_text) - _mypy_entries(base_text)
+    if base_text is None:
+        return set()
+    parse = _guard_entries if path == GUARD else _ruff_entries
+    return parse(head_text) - parse(base_text)
 
 
-def _base_text(base: str, path: str) -> str | None:
-    proc = subprocess.run(
-        ["git", "show", f"{base}:{path}"],
+def _git(*args: str) -> subprocess.CompletedProcess[str]:
+    # A hook or a linked worktree sets GIT_DIR and friends, which would point
+    # git at another repository than this file's.
+    env = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    return subprocess.run(
+        ["git", *args],
         cwd=REPO,
+        env=env,
         capture_output=True,
         text=True,
         encoding="utf-8",
         check=False,
     )
-    return proc.stdout if proc.returncode == 0 else None
+
+
+def _base_text(base: str, path: str) -> str | None:
+    """``path`` at ``base``, or None when the file did not exist there."""
+    if _git("cat-file", "-e", f"{base}:{path}").returncode != 0:
+        return None
+    shown = _git("show", f"{base}:{path}")
+    if shown.returncode != 0:
+        raise RuntimeError(f"cannot read {path} at {base}: {shown.stderr.strip()}")
+    return shown.stdout
 
 
 def list_files() -> list[str]:
@@ -128,6 +152,11 @@ def main(argv: list[str] | None = None) -> int:
         "--base", required=True, help="commit to compare the lists with"
     )
     args = parser.parse_args(argv)
+
+    # An unreadable base would make every list look new and pass.
+    if _git("cat-file", "-e", f"{args.base}^{{commit}}").returncode != 0:
+        print(f"{args.base} is not a commit in this repository; fetch it first")
+        return 2
 
     failed = False
     for path in list_files():
