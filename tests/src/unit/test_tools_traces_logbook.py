@@ -152,7 +152,7 @@ class TestFetchTraceLogbook:
         assert logbook.warnings == ["The logbook reply was not a row list."]
 
     @pytest.mark.asyncio
-    async def test_rows_are_capped_and_deduplicated(self) -> None:
+    async def test_rows_are_capped(self) -> None:
         rows = [{"i": i} for i in range(LOGBOOK_ROW_LIMIT + 5)]
         rows.insert(1, {"i": 0})
         client = _component(rows)
@@ -170,7 +170,9 @@ class TestFetchTraceLogbook:
             logbook = await fetch_trace_logbook(client, _trace())
 
         assert len(logbook.entries) == LOGBOOK_ROW_LIMIT
-        assert logbook.total == LOGBOOK_ROW_LIMIT + 5
+        assert logbook.entries[0] == {"i": 0}
+        assert logbook.entries[1] == {"i": 0}
+        assert logbook.total == len(rows)
         assert logbook.truncated is True
 
     @pytest.mark.asyncio

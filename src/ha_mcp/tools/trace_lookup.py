@@ -1,6 +1,5 @@
 """Native context and logbook lookups for trace debugging."""
 
-import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -159,7 +158,7 @@ class TraceLogbook:
     """Logbook rows for one trace run."""
 
     entries: list[dict[str, Any]]
-    transport: Literal["component", "rest", "mixed"] | None
+    transport: Literal["component", "rest"] | None
     warnings: list[str]
     total: int = 0
     truncated: bool = False
@@ -984,16 +983,8 @@ async def fetch_trace_logbook(
             ["The logbook reply was not a row list."],
         )
 
-    merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in entries:
-        key = json.dumps(row, sort_keys=True, default=str)
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(row)
-    total = len(merged)
-    capped = merged[:LOGBOOK_ROW_LIMIT]
+    total = len(entries)
+    capped = entries[:LOGBOOK_ROW_LIMIT]
     return TraceLogbook(
         capped,
         transport,

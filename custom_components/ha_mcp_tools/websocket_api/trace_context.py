@@ -17,9 +17,7 @@ from typing import Any
 from homeassistant.components import websocket_api
 from homeassistant.components.trace.const import DATA_TRACE, DATA_TRACE_STORE
 from homeassistant.components.trace.util import async_restore_traces
-from homeassistant.components.trace.websocket_api import (
-    TRACE_DOMAINS as _TRACE_DOMAINS,
-)
+from homeassistant.components.trace.websocket_api import TRACE_DOMAINS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.json import ExtendedJSONEncoder
 
@@ -49,7 +47,7 @@ def _trace_buckets(
         if bucket is None:
             continue
         bucket_domain, _, bucket_item = key.partition(".")
-        if bucket_domain not in _TRACE_DOMAINS:
+        if bucket_domain not in TRACE_DOMAINS:
             continue
         if domain and bucket_domain != domain:
             continue

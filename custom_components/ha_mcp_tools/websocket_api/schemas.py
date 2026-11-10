@@ -7,6 +7,7 @@ from typing import Any
 import voluptuous as vol
 
 from ..const import CHANNEL_DEV, CHANNEL_STABLE
+from .trace_context import TRACE_DOMAINS
 from .constants import (
     ALL_SEARCH_TYPES,
     BLUEPRINT_DOMAINS,
@@ -53,7 +54,7 @@ def _trace_context_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_TRACE_CONTEXT,
         vol.Required("context_id"): str,
-        vol.Optional("domain"): vol.In(("automation", "script")),
+        vol.Optional("domain"): vol.In(TRACE_DOMAINS),
         vol.Optional("item_id"): str,
     }
 

@@ -724,10 +724,7 @@ def _format_trace_list(
     for trace in window:
         # Pass Core's short dict through instead of projecting a field
         # allowlist; keep the concise execution alias for existing callers.
-        trace_info = dict(trace)
-        if "script_execution" in trace_info:
-            trace_info["execution"] = trace_info["script_execution"]
-        formatted_traces.append(trace_info)
+        formatted_traces.append(dict(trace))
 
     result: dict[str, Any] = {
         "success": True,

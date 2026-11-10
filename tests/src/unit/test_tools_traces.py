@@ -259,7 +259,7 @@ class TestFormatTraceList:
         assert result["traces"][0]["error"] == "Service not found"
 
     def test_script_execution_field_included(self):
-        """Script traces include script_execution as execution field."""
+        """Script traces keep the native script_execution field."""
         traces = [
             {
                 "run_id": "123.456",
@@ -271,10 +271,11 @@ class TestFormatTraceList:
 
         result = _format_trace_list("script.test", traces, 10)
 
-        assert result["traces"][0]["execution"] == "finished"
+        assert result["traces"][0]["script_execution"] == "finished"
+        assert "execution" not in result["traces"][0]
 
     def test_list_preserves_core_short_dict_fields(self):
-        """Every field Core's trace/list returns reaches the caller."""
+        """Every field Core's trace/list returns reaches the caller unchanged."""
         core_trace = {
             "last_step": "action/0",
             "run_id": "r1",
@@ -292,7 +293,7 @@ class TestFormatTraceList:
 
         result = _format_trace_list("automation.test", [core_trace], 10)
 
-        assert result["traces"][0] == {**core_trace, "execution": "finished"}
+        assert result["traces"][0] == core_trace
 
     def test_list_orders_mixed_not_triggered_by_core_start_time(self):
         """Run and not-triggered traces page in Core's timestamp order."""
