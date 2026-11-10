@@ -17,13 +17,16 @@ from ...utilities.wait_helpers import wait_for_entity_registration
 logger = logging.getLogger(__name__)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def trace_entity_cleanup(mcp_client):
     """Yield a list that tracks automations/scripts created by trace tests.
 
     Every entry is a ``(domain, entity_id)`` tuple. At teardown each tracked
     automation/script is removed with the config tools so tests do not leak
-    entities on the shared HA instance.
+    entities on the shared HA instance. The fixture is per test: an entry a
+    test removes itself (a blueprint's automation, which must go before its
+    blueprint) is dropped from the list, and the teardown still covers the
+    rest.
     """
     created: list[tuple[str, str]] = []
     yield created

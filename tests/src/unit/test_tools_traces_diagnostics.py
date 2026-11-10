@@ -46,6 +46,7 @@ async def _diagnostics(
     assert details_args[1] == (lookup if domain == "automation" else None)
     assert details_args[2] == f"{domain}.test"
     assert details_kwargs["component_lookup"] is (domain == "automation")
+    assert details_kwargs["related_fallback"] is False
     client.send_websocket_message.assert_awaited_once_with(
         {"type": f"{domain}/config", "entity_id": f"{domain}.test"}
     )
@@ -265,3 +266,31 @@ class TestDiagnosticsResponseWarnings:
         assert any(
             "validation failed" in warning.lower() for warning in result["warnings"]
         )
+
+    @pytest.mark.asyncio
+    async def test_missing_component_warning_does_not_promise_related(self) -> None:
+        """The trace diagnostics read has no Related set to point at."""
+
+        def _diagnostic_dispatch(mtype: str, message: dict) -> dict:
+            if mtype == "config/entity_registry/get":
+                return {"success": True, "result": {"unique_id": "uid_1"}}
+            if mtype == "repairs/list_issues":
+                return {"success": True, "result": {"issues": []}}
+            if mtype == "automation/config":
+                return {"success": True, "result": {"config": {}}}
+            if mtype == "trace/list":
+                return {"success": True, "result": []}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_diagnostic_dispatch)
+        with patch(
+            "ha_mcp.tools.trace_diagnostics.automation_lookup",
+            AsyncMock(return_value=None),
+        ):
+            result = await TraceTools(client).ha_get_automation_traces(
+                entity_id="automation.test"
+            )
+
+        warnings = " ".join(result["warnings"])
+        assert "references are omitted" in warnings
+        assert "related holds" not in warnings

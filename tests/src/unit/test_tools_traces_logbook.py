@@ -6,7 +6,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
-from ha_mcp.tools.trace_lookup import LOGBOOK_ROW_LIMIT, fetch_trace_logbook
+from ha_mcp.tools.trace_logbook import LOGBOOK_ROW_LIMIT, fetch_trace_logbook
 
 from .test_tools_traces import _make_pooled_client
 

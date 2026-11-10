@@ -324,15 +324,12 @@ class TraceTools:
         use `ha_get_logs` for logs and `ha_get_history` for history/statistics.
 
         USAGE MODES:
-        1. List recent traces for one entity (omit run_id and context_id), or
-           across a domain with domain="automation"/"script" and no entity_id.
-           Use `offset` to page deeper when `has_more` is true.
+        1. List recent traces (omit run_id and context_id).
            ha_get_automation_traces("automation.motion_light")
            ha_get_automation_traces(domain="automation")
         2. Get a detailed trace (provide run_id): returns Core's extended trace
            dict unchanged, including config, raw step trace, context, errors
-           and variables. Use entity_id, or the domain and item_id from a list
-           row when no entity_id is available.
+           and variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
            ha_get_automation_traces(domain="automation", item_id="uid", run_id="...")
         3. Resolve a trace by context (provide context_id): the response
@@ -343,7 +340,6 @@ class TraceTools:
            bounded public scan still resolves a parent context across all stored
            runs.
            ha_get_automation_traces(context_id="01J...")
-        4. Add the run's logbook: detailed=True or sections="logbook".
 
         RESPONSE FIELDS:
         - A detail response is Core's extended `trace/get` dict: `config`,

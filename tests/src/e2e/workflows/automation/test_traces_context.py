@@ -192,17 +192,30 @@ action:
             assert "triggers" in detail_data["config"]
             assert "actions" in detail_data["config"]
         finally:
-            with CleanupSteps() as cleanup, cleanup.step():
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_manage_blueprints",
-                    {
-                        "action": "delete",
-                        "domain": "automation",
-                        "path": blueprint_path,
-                        "confirm": True,
-                    },
-                )
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    # Core refuses to delete a blueprint an automation still
+                    # uses, so the automation goes first.
+                    if automation_id is not None:
+                        await MCPAssertions(mcp_client).call_tool_success(
+                            "ha_config_remove_automation",
+                            {"entity_id": automation_id},
+                        )
+                        try:
+                            trace_entity_cleanup.remove(("automation", automation_id))
+                        except ValueError:
+                            pass
+                with cleanup.step():
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_manage_blueprints",
+                        {
+                            "action": "delete",
+                            "domain": "automation",
+                            "path": blueprint_path,
+                            "confirm": True,
+                        },
+                    )
 
     async def test_event_context_resolves_to_triggered_run(
         self, mcp_client, trace_entity_cleanup, test_data_factory

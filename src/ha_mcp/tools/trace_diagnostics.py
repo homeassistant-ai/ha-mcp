@@ -69,6 +69,7 @@ async def _gather_diagnostics(
         entity_id,
         warnings,
         component_lookup=domain == "automation",
+        related_fallback=False,
     )
     diagnostics["validation"] = validation
     diagnostics["references"] = references

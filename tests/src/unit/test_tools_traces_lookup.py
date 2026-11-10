@@ -60,6 +60,36 @@ class TestResolveContextTrace:
         assert sent_types == ["trace/contexts", "trace/list", "trace/get"]
 
     @pytest.mark.asyncio
+    async def test_direct_run_read_during_the_scan_is_not_fetched_twice(self):
+        """The scan's read of the direct run supplies its trace data."""
+        reads: list[str] = []
+        traces = [
+            {
+                "run_id": "r1",
+                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
+            }
+        ]
+        detail = {"run_id": "r1", "context": {"id": "ctx-1"}}
+
+        def _dispatch(mtype, message):
+            if mtype == "trace/contexts":
+                return {"success": True, "result": {"ctx-1": {"run_id": "r1"}}}
+            if mtype == "trace/list":
+                return {"success": True, "result": traces}
+            if mtype == "trace/get":
+                reads.append(message["run_id"])
+                return {"success": True, "result": detail}
+            return {"success": False, "error": f"unexpected {mtype}"}
+
+        client = _make_pooled_client(_dispatch)
+
+        match = await resolve_context_trace(client, "automation", "uid", "ctx-1")
+
+        assert match.run_id == "r1"
+        assert match.trace_data == detail
+        assert reads == ["r1"]
+
+    @pytest.mark.asyncio
     async def test_parent_context_finds_newest_matching_trace(self):
         """A triggering context resolves by the trace's parent_id."""
         traces = [
@@ -243,6 +273,8 @@ class TestResolveContextTrace:
 
         assert match.run_id == "run"
         assert match.match == "parent"
+        assert match.scanned == 2
+        assert any(other["run_id"] == "diagnostic" for other in match.other_matches)
 
     @pytest.mark.asyncio
     async def test_parent_context_falls_back_to_not_triggered(self):
@@ -521,44 +553,6 @@ class TestResolveGlobalContext:
         client = _context_client(contexts={}, traces=traces, details=details)
 
         match = await resolve_global_context(client, "parent-1", domain="automation")
-
-        assert match.run_id == "run"
-        assert match.match == "parent"
-        assert match.scanned == 2
-        assert any(other["run_id"] == "diagnostic" for other in match.other_matches)
-
-
-class TestNotTriggeredPreference:
-    """Shared selection rule: real runs win over not-triggered diagnostics."""
-
-    @pytest.mark.asyncio
-    async def test_public_path_prefers_real_run_over_newer_diagnostic(self):
-        """A newer not-triggered diagnostic does not beat a real run on the
-        public path."""
-        traces = [
-            {
-                "run_id": "diagnostic",
-                "not_triggered": True,
-                "timestamp": {"start": "2026-11-08T16:00:02+00:00"},
-            },
-            {
-                "run_id": "run",
-                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
-            },
-        ]
-        details = {
-            "diagnostic": {
-                "run_id": "diagnostic",
-                "context": {"id": "own-1", "parent_id": "parent-1"},
-            },
-            "run": {
-                "run_id": "run",
-                "context": {"id": "own-2", "parent_id": "parent-1"},
-            },
-        }
-        client = _context_client(contexts={}, traces=traces, details=details)
-
-        match = await resolve_context_trace(client, "automation", "uid", "parent-1")
 
         assert match.run_id == "run"
         assert match.match == "parent"
