@@ -233,11 +233,14 @@ async def resolve_context_trace(
     run_id = entry.get("run_id") if isinstance(entry, dict) else None
 
     scan_errors: list[str] = []
-    scan_matches, scanned, truncated, scan_errors = await _safe_collect_parent_context_matches(
-        client, domain, item_id, context_id, scan_errors
-    )
-
     if run_id:
+        try:
+            scan_matches, scanned, truncated, scan_errors = await _collect_parent_context_matches(
+                client, domain, item_id, context_id
+            )
+        except Exception as err:  # noqa: BLE001
+            scan_errors.append(f"parent context scan failed: {err}")
+            scan_matches, scanned, truncated = [], 0, False
         return await _resolve_with_direct_match(
             client,
             str(run_id),
@@ -249,6 +252,9 @@ async def resolve_context_trace(
             scan_errors,
         )
 
+    scan_matches, scanned, truncated, scan_errors = await _collect_parent_context_matches(
+        client, domain, item_id, context_id
+    )
     selected = _select_trace_match(scan_matches, scanned, truncated, scan_errors)
     if selected is None:
         _raise_context_not_found(
@@ -285,16 +291,19 @@ async def resolve_global_context(
     contexts = result.get("result")
     entry = contexts.get(context_id) if isinstance(contexts, dict) else None
 
-    scan_errors: list[str] = []
-    scan_matches, scanned, truncated, scan_errors, rows = await _safe_collect_global_parent_matches(
-        client, context_id, domain, scan_errors
-    )
-
     direct_match = await _global_direct_match(
-        client, context_id, entry, domain, scan_matches, scan_errors
+        context_id, entry, domain
     )
 
+    scan_errors: list[str] = []
     if direct_match is not None:
+        try:
+            scan_matches, scanned, truncated, scan_errors, _rows = await _collect_global_parent_matches(
+                client, context_id, domain
+            )
+        except Exception as err:  # noqa: BLE001
+            scan_errors.append(f"global context scan failed: {err}")
+            scan_matches, scanned, truncated = [], 0, False
         run_id, _trace_data, entry_domain, entry_item_id, _kind = direct_match
         return await _resolve_with_direct_match(
             client,
@@ -307,6 +316,9 @@ async def resolve_global_context(
             scan_errors,
         )
 
+    scan_matches, scanned, truncated, scan_errors, rows = await _collect_global_parent_matches(
+        client, context_id, domain
+    )
     selected = _select_trace_match(scan_matches, scanned, truncated, scan_errors)
     if selected is None:
         if (
@@ -322,14 +334,16 @@ async def resolve_global_context(
 
 
 async def _global_direct_match(
-    client: Any,
     context_id: str,
     entry: Any,
     requested_domain: Literal["automation", "script"] | None,
-    scan_matches: list[tuple[str, dict[str, Any] | None, str, str, str]],
-    scan_errors: list[str],
 ) -> tuple[str, dict[str, Any] | None, str | None, str | None, str] | None:
-    """Return the direct-map match for a global context, fetching its trace data."""
+    """Return the direct-map identity for a global context.
+
+    The actual trace data is read later by ``_resolve_with_direct_match`` so
+    that a scan failure can still return the direct hit without duplicating
+    the read.
+    """
     if not isinstance(entry, dict) or not entry.get("run_id"):
         return None
     entry_domain = entry.get("domain")
@@ -347,56 +361,13 @@ async def _global_direct_match(
                 ],
             )
         )
-    direct_trace_data: dict[str, Any] | None = None
-    if scan_matches and entry_domain and entry_item_id:
-        direct_trace_data = await _read_candidate_context(
-            client,
-            str(entry_domain),
-            str(entry_item_id),
-            str(entry["run_id"]),
-            scan_errors,
-            have_match=True,
-        )
-        if direct_trace_data is _SCAN_ABORTED:
-            direct_trace_data = None
     return (
         str(entry["run_id"]),
-        direct_trace_data,
+        None,
         str(entry_domain) if entry_domain else None,
         str(entry_item_id) if entry_item_id else None,
         "trace",
     )
-
-
-async def _safe_collect_parent_context_matches(
-    client: Any,
-    domain: str,
-    item_id: str,
-    context_id: str,
-    scan_errors: list[str],
-) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str]], int, bool, list[str]]:
-    """Run the per-item scan, recording the error and returning empty on failure."""
-    try:
-        return await _collect_parent_context_matches(
-            client, domain, item_id, context_id
-        )
-    except Exception as err:  # noqa: BLE001
-        scan_errors.append(f"parent context scan failed: {err}")
-        return [], 0, False, scan_errors
-
-
-async def _safe_collect_global_parent_matches(
-    client: Any,
-    context_id: str,
-    domain: Literal["automation", "script"] | None,
-    scan_errors: list[str],
-) -> tuple[list[tuple[str, dict[str, Any] | None, str, str, str]], int, bool, list[str], list[dict[str, Any]]]:
-    """Run the global scan, recording the error and returning empty on failure."""
-    try:
-        return await _collect_global_parent_matches(client, context_id, domain)
-    except Exception as err:  # noqa: BLE001
-        scan_errors.append(f"global context scan failed: {err}")
-        return [], 0, False, scan_errors, []
 
 
 async def _resolve_with_direct_match(
@@ -451,10 +422,12 @@ async def _resolve_with_direct_match(
     final_errors = list(scan_errors)
     if read_error:
         final_errors.append(read_error)
+    # When the direct trace data is unavailable the direct run is kept selected.
+    # Do not also list it as an other match if the scan happened to include it.
     other_matches = tuple(
         {"domain": str(d), "item_id": str(i), "run_id": r, "match": k}
         for r, _td, d, i, k in scan_matches
-        if d is not None and i is not None
+        if d is not None and i is not None and r != direct_run_id
     )
     return ContextTraceMatch(
         direct_run_id,
