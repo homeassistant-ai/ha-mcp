@@ -34,9 +34,11 @@ from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
 from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
 
-# Long select lists (units, device classes) are truncated: the first few
-# values show the format, and HA reports the full list if a value is rejected.
-MAX_OPTIONS = 12
+# A form's choices are shown in full up to this many, since the caller has to
+# answer from them (a statistics helper has 27 characteristics). Longer lists
+# (languages, countries) are truncated: the first values show the format, and
+# HA reports the full list if a value is rejected.
+MAX_OPTIONS = 60
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 

@@ -91,6 +91,28 @@ async def test_a_menu_helper_is_created_in_one_call(
     assert options["state"] == "{{ 1 }}"
 
 
+async def test_the_top_level_name_goes_only_to_a_form_that_asks_for_one(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """switch_as_x names its entity after the switch and has no name field:
+    a name passed with it must not be sent for Core to refuse."""
+    source = er.async_get(hass).async_get_or_create("switch", "test", "outlet")
+
+    named = await tools.ha_config_set_helper(
+        helper_type="min_max",
+        name="Lowest",
+        config={"entity_ids": _SOURCES, "type": "min"},
+    )
+    unnamed = await tools.ha_config_set_helper(
+        helper_type="switch_as_x",
+        name="Desk lamp",
+        config={"entity_id": source.entity_id, "target_domain": "light"},
+    )
+
+    assert _options(hass, named["entry_id"])["name"] == "Lowest"
+    assert _options(hass, unnamed["entry_id"])["entity_id"] == source.entity_id
+
+
 async def test_a_call_without_config_returns_cores_form_and_saves_nothing(
     hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:

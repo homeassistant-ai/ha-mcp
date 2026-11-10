@@ -540,9 +540,9 @@ class HelperConfigTools:
                 description=(
                     "Display name. Required to create a SIMPLE helper, optional "
                     "on its update. Creating a FLOW helper, it answers the "
-                    "form's `name` field when config sets none; a FLOW update "
-                    "does not use it (rename the entity with ha_set_entity). "
-                    "Not used by config_subentry."
+                    "form's `name` field when the form has one and config "
+                    "sets none; a FLOW update does not use it (rename the "
+                    "entity with ha_set_entity). Not used by config_subentry."
                 ),
                 default=None,
             ),

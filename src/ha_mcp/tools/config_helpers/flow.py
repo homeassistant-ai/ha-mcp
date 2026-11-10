@@ -40,10 +40,10 @@ _OPEN_STEP_TYPES = ("form", "menu")
 
 
 def _flow_answers(
-    config: str | dict[str, Any] | None, name: str | None, **context: Any
+    config: str | dict[str, Any] | None, **context: Any
 ) -> dict[str, Any] | None:
-    """The call's answer to a form: ``config``, with ``name`` as its ``name``
-    field when it sets none. ``None`` answers no form."""
+    """The call's answer to a form: ``config`` as an object. ``None`` answers
+    no form."""
     parsed: Any = None if config == "" else config
     if isinstance(parsed, str):
         try:
@@ -66,10 +66,7 @@ def _flow_answers(
                 context={**context, "parameter": "config"},
             )
         )
-    answers = dict(parsed)
-    if name is not None and name.strip() and "name" not in answers:
-        answers["name"] = name
-    return answers
+    return dict(parsed)
 
 
 async def _wait_for_flow_entities(
@@ -196,11 +193,10 @@ async def _handle_flow_helper(
     if abort:
         return await abort_open_flow(client, target, flow_id)
 
-    # The top-level name is the new helper's: an options form has no name
-    # field unless its integration declares one, which then goes in config.
-    answers = _flow_answers(
-        config, name if action == "create" else None, helper_type=helper_type
-    )
+    answers = _flow_answers(config, helper_type=helper_type)
+    # The top-level name is the new helper's: it answers a creation form's
+    # name field, and is left out of a form without one (switch_as_x).
+    named = action == "create" and name is not None and bool(name.strip())
     try:
         labels_list = parse_string_list_param(labels, "labels")
     except ValueError as e:
@@ -230,6 +226,7 @@ async def _handle_flow_helper(
         config=answers,
         menu_choice=menu_choice,
         start=start,
+        defaults={"name": name} if named else None,
     )
     registry_given = [
         param
@@ -347,7 +344,7 @@ async def _handle_set_config_subentry(
         subentry_id = validate_identifier_not_empty(
             subentry_id, "subentry_id", context=context
         )
-    answers = _flow_answers(config, None, **context)
+    answers = _flow_answers(config, **context)
 
     entry = await client.get_config_entry(entry_id)
     domain = entry.get("domain")

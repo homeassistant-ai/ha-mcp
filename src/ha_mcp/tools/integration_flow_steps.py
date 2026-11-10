@@ -220,11 +220,16 @@ def _menu_payload(
 
 
 def _form_payload(
-    target: FlowTarget, step: dict[str, Any], config: dict[str, Any], flow_id: str
+    target: FlowTarget,
+    step: dict[str, Any],
+    config: dict[str, Any],
+    flow_id: str,
+    defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The submit for one form: the caller's values, over the values an
     options or reconfigure form shows, as the HA dialog posts it (#2254).
-    Core's schema checks the rest."""
+    Core's schema checks the rest. ``defaults`` answers only the fields the
+    form declares and ``config`` leaves out."""
     if step.get("type") != "form":
         _refuse(
             f"The flow is at a {step.get('type')} step, which takes no config"
@@ -233,9 +238,11 @@ def _form_payload(
             step_id=step.get("step_id"),
             menu_options=menu_choices(step) if step.get("type") == "menu" else None,
         )
-    return form_submission(
-        step.get("data_schema"), config, keep_shown=target.edits_existing
-    )
+    schema = step.get("data_schema")
+    if defaults and isinstance(schema, list):
+        declared = {f.get("name") for f in schema if isinstance(f, dict)}
+        config = {**{k: v for k, v in defaults.items() if k in declared}, **config}
+    return form_submission(schema, config, keep_shown=target.edits_existing)
 
 
 async def submit_step(
@@ -246,6 +253,7 @@ async def submit_step(
     config: dict[str, Any] | None,
     menu_choice: str | None,
     current: dict[str, Any] | None = None,
+    defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Answer the step the flow is at and return Core's next answer, raw.
 
@@ -265,7 +273,7 @@ async def submit_step(
     if menu_choice is not None:
         payload = _menu_payload(current, menu_choice, flow_id)
     else:
-        payload = _form_payload(target, current, config or {}, flow_id)
+        payload = _form_payload(target, current, config or {}, flow_id, defaults)
     answer = await _submit_step(
         target.submit_fn(client),
         flow_id,
@@ -479,6 +487,7 @@ async def advance_flow(
     config: dict[str, Any] | None,
     menu_choice: str | None,
     start: Any,
+    defaults: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Answer one step of a flow; returns its ``flow_id`` and Core's answer.
 
@@ -487,6 +496,7 @@ async def advance_flow(
     one-form flow (or menu then form) finishes in this call. With ``flow_id``
     the step the flow is at is answered, or, with neither, read again. The
     answer is a form or menu (the flow is open) or the step that ended it.
+    ``defaults`` goes to the form ``config`` answers (see ``_form_payload``).
     """
     if config is not None:
         # Before a flow is opened for an answer that cannot be sent.
@@ -507,6 +517,7 @@ async def advance_flow(
                     config=values,
                     menu_choice=choice,
                     current=step,
+                    defaults=defaults,
                 )
                 step = await settle(client, target, flow_id, answer)
     elif config is None and menu_choice is None:
@@ -514,7 +525,12 @@ async def advance_flow(
         step = await settle(client, target, flow_id, answer)
     else:
         answer = await submit_step(
-            client, target, flow_id, config=config, menu_choice=menu_choice
+            client,
+            target,
+            flow_id,
+            config=config,
+            menu_choice=menu_choice,
+            defaults=defaults,
         )
         step = await settle(client, target, flow_id, answer)
     if step.get("type") not in ("form", "menu"):
