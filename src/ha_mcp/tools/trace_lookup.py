@@ -9,10 +9,6 @@ from ..client.rest_client import HomeAssistantConnectionError, HomeAssistantErro
 from ..errors import ErrorCode, create_error_response
 from .component_api import component_supports, get_component_caps, invalidate_caps
 from .helpers import raise_tool_error
-from .trace_logbook import (  # noqa: F401
-    TraceLogbook,
-    fetch_trace_logbook,
-)
 from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)

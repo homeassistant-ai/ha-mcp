@@ -4,7 +4,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_traces import _format_detailed_trace
-from ha_mcp.tools.trace_lookup import TraceLogbook
+from ha_mcp.tools.trace_logbook import TraceLogbook
 
 
 def _trace() -> dict:

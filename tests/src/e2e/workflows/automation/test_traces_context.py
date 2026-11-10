@@ -201,10 +201,9 @@ action:
                             "ha_config_remove_automation",
                             {"entity_id": automation_id},
                         )
-                        try:
-                            trace_entity_cleanup.remove(("automation", automation_id))
-                        except ValueError:
-                            pass
+                        cleanup_entry = ("automation", automation_id)
+                        if cleanup_entry in trace_entity_cleanup:
+                            trace_entity_cleanup.remove(cleanup_entry)
                 with cleanup.step():
                     await safe_call_tool(
                         mcp_client,

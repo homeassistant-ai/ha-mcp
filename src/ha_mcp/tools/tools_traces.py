@@ -27,13 +27,12 @@ from .helpers import (
 )
 from .tool_hints import read_only_hints
 from .trace_diagnostics import _gather_diagnostics
+from .trace_logbook import TraceLogbook, fetch_trace_logbook
 from .trace_lookup import (
     ContextTraceMatch,
-    TraceLogbook,
     _raise_trace_ws_failure,
     _requested_sections,
     _trace_start,
-    fetch_trace_logbook,
     resolve_context_trace,
     resolve_global_context,
 )

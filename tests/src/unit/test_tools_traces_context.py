@@ -8,10 +8,8 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_traces import TraceTools
-from ha_mcp.tools.trace_lookup import (
-    ContextTraceMatch,
-    TraceLogbook,
-)
+from ha_mcp.tools.trace_logbook import TraceLogbook
+from ha_mcp.tools.trace_lookup import ContextTraceMatch
 
 from .test_tools_traces import _dispatch, _make_pooled_client
 
