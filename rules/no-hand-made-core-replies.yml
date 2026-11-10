@@ -37,7 +37,7 @@ rule:
         # patch.object(websocket_manager, "get_client", ...): the place every
         # tool gets its WebSocket client from.
         - kind: call
-          regex: '^(\w+\.)*(patch\.object|setattr)\(\s*[\w.]*websocket_manager\s*,'
+          regex: '^(\w+\.)*(patch\.object|setattr)\(\s*[\w.]*websocket_manager\s*,\s*["'']get_client["'']'
         # The transport under the client: client.httpx_client = ...
         - kind: assignment
           regex: '^[^=]*\.httpx_client(\.\w+)*\s*(:[^=]+)?=[^=]'
