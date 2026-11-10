@@ -92,9 +92,7 @@ class TestFormatDetailedTrace:
 
     def test_unknown_section_is_rejected(self) -> None:
         with pytest.raises(ToolError, match="Unknown trace section"):
-            _format_detailed_trace(
-                "automation.test", "r1", _trace(), sections="action"
-            )
+            _format_detailed_trace("automation.test", "r1", _trace(), sections="action")
 
     def test_logbook_section_adds_logbook_fields(self) -> None:
         logbook = TraceLogbook(

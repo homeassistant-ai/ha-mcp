@@ -125,7 +125,7 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
         )
     if diagnostics.get("trace_storage_enabled") is False:
         return (
-            "Trace storage is disabled for this item (stored_traces: 0); "
+            f"Trace storage is disabled for this {domain} (stored_traces: 0); "
             "enable it in the automation/script trace settings."
         )
     if not diagnostics.get("trace_key_available"):

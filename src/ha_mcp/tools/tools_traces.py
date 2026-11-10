@@ -105,6 +105,7 @@ def _entity_domain(entity_id: str) -> Literal["automation", "script"]:
             context={"entity_id": entity_id},
         )
     )
+    raise AssertionError("unreachable")
 
 
 async def _resolve_trace_target(

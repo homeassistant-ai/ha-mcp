@@ -118,9 +118,9 @@ class TestAutomationTraces:
                     {"entity_id": automation_id, "run_id": run_id},
                 )
 
-            trigger_vars = detailed_data["trace"]["trigger/0"][0][
-                "changed_variables"
-            ]["trigger"]
+            trigger_vars = detailed_data["trace"]["trigger/0"][0]["changed_variables"][
+                "trigger"
+            ]
             assert trigger_vars["platform"] == "template"
             assert trigger_vars["from_state"] is None
             assert trigger_vars["to_state"] is None
@@ -404,7 +404,7 @@ action:
                 {
                     "entity_id": automation_id,
                     "run_id": traces_data["traces"][0]["run_id"],
-                    "sections": "config",
+                    "sections": "config,last_step,blueprint_inputs",
                 },
             )
 
