@@ -684,7 +684,7 @@ class HelperConfigTools:
             ),
         ] = None,
         config: Annotated[
-            dict[str, Any] | None,
+            dict[str, Any] | list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
                 description=(
@@ -696,8 +696,11 @@ class HelperConfigTools:
                     "section's fields nested under the section's name). On an "
                     "update a field you omit is sent as the form shows it "
                     "(its `current` value); a field set to null is left "
-                    "empty. Home Assistant validates the answer. Omit config "
-                    "to get the form without answering it."
+                    "empty. Home Assistant validates the answer. A flow with "
+                    "several forms can be answered in one call with a list: "
+                    "one object per form, in the order Home Assistant asks "
+                    "for them. Omit config to get the form without answering "
+                    "it."
                 ),
                 default=None,
             ),
@@ -720,9 +723,9 @@ class HelperConfigTools:
                 description=(
                     "Continue an open flow: the flow_id a previous call "
                     "returned, with the same helper_type and helper_id (or "
-                    "entry_id, subentry_type and subentry_id), until ha-mcp "
-                    "restarts. With config or menu_choice it answers the "
-                    "step; alone it returns the step again."
+                    "entry_id, subentry_type and subentry_id). With config "
+                    "or menu_choice it answers the step; alone it returns "
+                    "the step again."
                 ),
                 default=None,
             ),
@@ -792,7 +795,12 @@ class HelperConfigTools:
         returns the step again, and flow_id with abort=True ends the flow.
         Without flow_id a new flow starts: menu_choice answers its opening
         menu and config the form after it, so a one-form helper is created or
-        updated in one call; without config the call returns the form. A form
+        updated in one call; without config the call returns the form. A
+        helper with several forms (statistics, history_stats,
+        generic_thermostat, ...) takes one call per form, or one call in all
+        when config is a list with one object per form, in order: each is
+        sent to the form the flow is then at, and the call returns at the
+        first form Home Assistant rejects or once the answers run out. A form
         Home Assistant rejects is an error with Core's text, and the flow
         stays open to correct it. Nothing is saved until the flow finishes.
 
@@ -814,6 +822,7 @@ class HelperConfigTools:
         - template sensor: ha_config_set_helper(helper_type="template", menu_choice="sensor", config={"name": "Room Temp", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
         - group: ha_config_set_helper(helper_type="group", menu_choice="light", config={"name": "Kitchen Lights", "entities": ["light.a", "light.b"]})
         - see a form first: ha_config_set_helper(helper_type="statistics"), then answer it: ha_config_set_helper(helper_type="statistics", flow_id="...", config={...})
+        - several forms in one call: ha_config_set_helper(helper_type="statistics", config=[{"name": "Temp Mean", "entity_id": "sensor.temp"}, {"state_characteristic": "mean"}, {"sampling_size": 20}])
         - update one option: ha_config_set_helper(helper_type="group", helper_id="01HXYZ...", config={"hide_members": true})
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """

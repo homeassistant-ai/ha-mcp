@@ -259,7 +259,14 @@ its `flow_id`, takes that one step's answer, and returns Core's next step
 (`integration_flow_steps`). Do not pack a flow's steps into one payload or
 walk it on the server: which step follows, what a form declares and what is
 valid are Core's to say, so a key a form does not declare is sent and refused
-by Core. The one thing the dialog does that Core does not is post back the
+by Core. A caller that already knows a flow's forms may pass their answers as
+an ordered list: each is sent, unchanged, as the answer to the step the flow
+is then at, the call stops at the first one Core refuses, and no key is moved
+from one answer to another. A `flow_id` continues only the flow opened for
+the call's target; one the server no longer holds (it restarted) is bound by
+Core's own record of the flow, read through the component's
+`ha_mcp_tools/flow_record` bridge (capability `flow_record`), and refused
+without it. The one thing the dialog does that Core does not is post back the
 values an edit form shows; Core drops a stored optional value a submit leaves
 out, so a submit to an options or reconfigure form goes over those values
 (`config_entry_flow_form`). A backup restore is the exception: it replays a

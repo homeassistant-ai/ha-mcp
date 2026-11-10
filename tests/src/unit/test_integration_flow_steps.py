@@ -74,6 +74,10 @@ def _no_strings(monkeypatch: pytest.MonkeyPatch) -> None:
         return {key: f"text of {value}" for key, value in keys.items()}
 
     monkeypatch.setattr(integration_flow_steps, "describe_form", describe_form)
+    # No component: a flow is bound by the server's own list alone.
+    monkeypatch.setattr(
+        integration_flow_steps, "_core_flow_record", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(integration_flow_steps, "_flow_texts", flow_texts)
     monkeypatch.setattr(config_entry_flow_errors, "_flow_texts", flow_texts)
 
@@ -355,7 +359,7 @@ async def test_a_flow_not_opened_for_the_calls_anchor_is_refused(
     client = _client()
     with pytest.raises(ToolError) as exc_info:
         await _drive(client, target, opened=False, flow_id="f1", **call)
-    assert "flow ha-mcp opened for this call" in _error(exc_info)["error"]["message"]
+    assert "opened for this call's target" in _error(exc_info)["error"]["message"]
     client._request.assert_not_awaited()
     client.submit_config_flow_step.assert_not_awaited()
     client.submit_options_flow_step.assert_not_awaited()

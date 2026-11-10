@@ -25,6 +25,7 @@ from ..integration_flow_steps import (
     open_step_answer,
     options_target,
     start_setup_flow,
+    unsent_answers_warning,
 )
 from .registry import (
     _apply_registry_updates_to_entity,
@@ -40,9 +41,10 @@ _OPEN_STEP_TYPES = ("form", "menu")
 
 
 def _flow_answers(
-    config: str | dict[str, Any] | None, **context: Any
-) -> dict[str, Any] | None:
-    """The call's answer to a form: ``config`` as an object. ``None`` answers
+    config: str | dict[str, Any] | list[Any] | None, **context: Any
+) -> dict[str, Any] | list[dict[str, Any]] | None:
+    """The call's answers: ``config`` as an object (the form the flow is at)
+    or a list of objects (that form and the ones after it). ``None`` answers
     no form."""
     parsed: Any = None if config == "" else config
     if isinstance(parsed, str):
@@ -58,15 +60,23 @@ def _flow_answers(
             )
     if parsed is None:
         return None
+    if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+        return [dict(item) for item in parsed]
     if not isinstance(parsed, dict):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"config must be an object, got {type(parsed).__name__}",
+                "config must be an object, or a list of objects (one per "
+                f"form, in order), got {type(parsed).__name__}",
                 context={**context, "parameter": "config"},
             )
         )
     return dict(parsed)
+
+
+def _append_unsent(response: dict[str, Any], unsent: int) -> None:
+    if unsent:
+        response.setdefault("warnings", []).append(unsent_answers_warning(unsent))
 
 
 async def _wait_for_flow_entities(
@@ -163,7 +173,7 @@ async def _handle_flow_helper(
     helper_type: str,
     name: str | None,
     helper_id: str | None,
-    config: str | dict[str, Any] | None,
+    config: str | dict[str, Any] | list[Any] | None,
     area_id: str | None,
     labels: str | list[str] | None,
     category: str | None,
@@ -210,7 +220,17 @@ async def _handle_flow_helper(
     # Bug 12: a new helper named like an existing one is refused before a
     # flow is opened, rather than created as a "_2" duplicate.
     if action == "create" and flow_id is None:
-        new_name = (answers or {}).get("name", name)
+        named_answer = next(
+            (
+                answer
+                for answer in (
+                    [answers] if isinstance(answers, dict) else answers or []
+                )
+                if "name" in answer
+            ),
+            {},
+        )
+        new_name = named_answer.get("name", name)
         await _check_name_collision(
             client, helper_type, new_name if isinstance(new_name, str) else None
         )
@@ -219,7 +239,7 @@ async def _handle_flow_helper(
         client, area_id, labels_list, {"helpers": category}, fail_closed=True
     )
 
-    flow_id, step = await advance_flow(
+    flow_id, step, unsent = await advance_flow(
         client,
         target,
         flow_id=flow_id,
@@ -278,6 +298,7 @@ async def _handle_flow_helper(
         warnings=warnings,
         **extras,
     )
+    _append_unsent(response, unsent)
     _attach_helper_skill(response, MandatoryBPS)
     return response
 
@@ -315,7 +336,7 @@ async def _handle_set_config_subentry(
     entry_id: str | None,
     subentry_type: str | None,
     subentry_id: str | None,
-    config: dict[str, Any] | str | None,
+    config: dict[str, Any] | list[Any] | str | None,
     MandatoryBPS: bool,
     *,
     flow_id: str | None = None,
@@ -366,7 +387,7 @@ async def _handle_set_config_subentry(
         subentry_id=subentry_id,
     )
 
-    async def advance() -> tuple[str, dict[str, Any]]:
+    async def advance() -> tuple[str, dict[str, Any], int]:
         return await advance_flow(
             client,
             target,
@@ -377,14 +398,14 @@ async def _handle_set_config_subentry(
         )
 
     if subentry_id is not None:
-        flow_id, step = await advance()
+        flow_id, step, unsent = await advance()
     else:
         # Core's create result carries no subentry_id: the new one is the
         # difference in the parent's listing, so creates under one parent
         # finish one at a time.
         async with _SUBENTRY_CREATE_LOCKS[entry_id]:
             before = await _subentry_ids(client, entry_id)
-            flow_id, step = await advance()
+            flow_id, step, unsent = await advance()
             if before is not None and step.get("type") == "create_entry":
                 subentry_id = await _created_subentry_id(client, entry_id, before)
 
@@ -408,5 +429,6 @@ async def _handle_set_config_subentry(
         "flow_result": step,
         "message": f"Config subentry {operation} successfully",
     }
+    _append_unsent(response, unsent)
     _attach_helper_skill(response, MandatoryBPS)
     return response

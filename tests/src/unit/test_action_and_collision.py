@@ -378,6 +378,7 @@ class TestBug12NameCollisionFlowHelper:
                     "type": "create_entry",
                     "result": {"entry_id": "NEWENTRY", "title": "Brand New Sensor"},
                 },
+                0,
             ),
         ):
             result = await register_tools["ha_config_set_helper"](

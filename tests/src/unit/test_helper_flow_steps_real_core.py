@@ -58,6 +58,18 @@ async def tools(
         await hass.async_block_till_done()
 
 
+@pytest.fixture
+async def component_tools(
+    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+) -> AsyncIterator[HelperConfigTools]:
+    """``tools`` on an install with the ``ha_mcp_tools`` component."""
+    async with core_backed_client(
+        hass, hass_ws_client, hass_client, component=True
+    ) as client:
+        yield HelperConfigTools(client)
+        await hass.async_block_till_done()
+
+
 def _options(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
     entry = hass.config_entries.async_get_entry(entry_id)
     assert entry is not None
@@ -152,6 +164,126 @@ async def test_a_later_form_is_answered_in_its_own_call(
     options = _options(hass, created["entry_id"])
     assert options["heater"] == _THERMOSTAT["heater"]
     assert options["away_temp"] == 16
+
+
+async def test_a_list_answers_every_form_in_one_call(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """Each object of the list is the answer to the form the flow is then at."""
+    created = await tools.ha_config_set_helper(
+        helper_type="generic_thermostat",
+        config=[dict(_THERMOSTAT), {"away_temp": 16}],
+    )
+
+    options = _options(hass, created["entry_id"])
+    assert options["heater"] == _THERMOSTAT["heater"]
+    assert options["away_temp"] == 16
+
+
+async def test_a_refused_answer_of_a_list_leaves_the_flow_at_its_form(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """The answers before the refused one stand: the flow is continued from
+    the form Core refused, not started over."""
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(
+            helper_type="generic_thermostat",
+            config=[dict(_THERMOSTAT), {"bogus": 1}],
+        )
+
+    error = json.loads(str(exc_info.value))
+    assert "bogus" in error["error"]["message"]
+    assert hass.config_entries.async_entries("generic_thermostat") == []
+
+    created = await tools.ha_config_set_helper(
+        helper_type="generic_thermostat",
+        flow_id=error["flow_id"],
+        config={"away_temp": 16},
+    )
+    assert _options(hass, created["entry_id"])["heater"] == _THERMOSTAT["heater"]
+
+
+async def test_answers_the_flow_never_asked_for_are_reported(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """A one-form helper is created by the first answer: the caller is told
+    the second went nowhere instead of taking it as applied."""
+    created = await tools.ha_config_set_helper(
+        helper_type="min_max", config=[dict(_MIN_MAX), {"type": "max"}]
+    )
+
+    assert _options(hass, created["entry_id"])["type"] == "min"
+    assert any("before the last 1" in warning for warning in created["warnings"])
+
+
+async def test_a_flow_is_continued_after_the_server_forgot_it(
+    hass: HomeAssistant, component_tools: HelperConfigTools, opened_flows: Any
+) -> None:
+    """An ha-mcp restart empties its own list of open flows; Home Assistant
+    still holds the flow, and its record says what the flow is for."""
+    entry_id = await _template_sensor(component_tools)
+    create = await component_tools.ha_config_set_helper(helper_type="min_max")
+    update = await component_tools.ha_config_set_helper(
+        helper_type="template", helper_id=entry_id
+    )
+    opened_flows.clear()
+
+    created = await component_tools.ha_config_set_helper(
+        helper_type="min_max", flow_id=create["flow_id"], config=dict(_MIN_MAX)
+    )
+    await component_tools.ha_config_set_helper(
+        helper_type="template",
+        helper_id=entry_id,
+        flow_id=update["flow_id"],
+        config={"state": "{{ 2 }}"},
+    )
+
+    assert _options(hass, created["entry_id"])["entity_ids"] == _SOURCES
+    assert _options(hass, entry_id)["state"] == "{{ 2 }}"
+
+
+async def test_a_forgotten_flow_is_not_continued_for_another_target(
+    hass: HomeAssistant, component_tools: HelperConfigTools, opened_flows: Any
+) -> None:
+    """Core's record binds the flow as the server's own list did: a create
+    flow is not answered as the options flow of an existing helper."""
+    entry_id = await _template_sensor(component_tools)
+    shown = await component_tools.ha_config_set_helper(
+        helper_type="template", menu_choice="sensor"
+    )
+    opened_flows.clear()
+
+    with pytest.raises(ToolError):
+        await component_tools.ha_config_set_helper(
+            helper_type="template",
+            helper_id=entry_id,
+            flow_id=shown["flow_id"],
+            config={"name": "Other", "state": "{{ 3 }}"},
+        )
+    with pytest.raises(ToolError):
+        await component_tools.ha_config_set_helper(
+            helper_type="min_max", flow_id=shown["flow_id"], config=dict(_MIN_MAX)
+        )
+
+    assert len(hass.config_entries.async_entries("template")) == 1
+    assert hass.config_entries.async_entries("min_max") == []
+
+
+async def test_without_the_component_a_forgotten_flow_is_refused_unanswered(
+    hass: HomeAssistant, tools: HelperConfigTools, opened_flows: Any
+) -> None:
+    """Core's REST API does not say what a flow is for, so the answer is not
+    sent to a flow the server cannot bind to the call's target."""
+    shown = await tools.ha_config_set_helper(helper_type="min_max")
+    opened_flows.clear()
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(
+            helper_type="min_max", flow_id=shown["flow_id"], config=dict(_MIN_MAX)
+        )
+
+    assert "ha_mcp_tools component" in str(exc_info.value)
+    assert hass.config_entries.async_entries("min_max") == []
 
 
 async def test_an_option_patch_keeps_the_options_it_leaves_out(
@@ -413,4 +545,39 @@ async def test_a_subentry_is_created_and_then_reconfigured_as_a_patch(
     )
 
     assert updated["operation"] == "reconfigured"
+    assert parent_entry.subentries[subentry_id].data == {"state": 20, "unit": "W"}
+
+
+async def test_a_forgotten_subentry_flow_is_continued_for_its_own_subentry_only(
+    component_tools: HelperConfigTools,
+    parent_entry: MockConfigEntry,
+    opened_flows: Any,
+) -> None:
+    """A subentry's reconfigure flow is bound to that subentry by Core's
+    record: it is not answered as the flow that creates a new one."""
+    subentry = {
+        "helper_type": "config_subentry",
+        "entry_id": parent_entry.entry_id,
+        "subentry_type": "sensor",
+    }
+    created = await component_tools.ha_config_set_helper(
+        **subentry, config={"name": "Probe", "state": 15, "unit": "W"}
+    )
+    subentry_id = created["subentry_id"]
+    shown = await component_tools.ha_config_set_helper(
+        **subentry, subentry_id=subentry_id
+    )
+    opened_flows.clear()
+
+    with pytest.raises(ToolError):
+        await component_tools.ha_config_set_helper(
+            **subentry, flow_id=shown["flow_id"], config={"state": 99}
+        )
+    await component_tools.ha_config_set_helper(
+        **subentry,
+        subentry_id=subentry_id,
+        flow_id=shown["flow_id"],
+        config={"state": 20},
+    )
+
     assert parent_entry.subentries[subentry_id].data == {"state": 20, "unit": "W"}

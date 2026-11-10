@@ -1920,6 +1920,7 @@ class TestRegistrationAndAdminGate:
             wsapi.todo_items.WS_TODO_ITEM,  # test_component_todo_items.py
             wsapi.automation_config.WS_AUTOMATION_CONFIG,
             wsapi.config_references.WS_CONFIG_REFERENCES,  # its own test file
+            wsapi.flow_record.WS_FLOW_RECORD,  # test_component_flow_record.py
         }
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
 

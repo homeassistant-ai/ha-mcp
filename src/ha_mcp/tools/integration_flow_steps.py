@@ -3,8 +3,11 @@
 Adding an integration or a helper, changing an entry's options, reconfiguring
 an entry and setting a config subentry each run a Home Assistant flow. A call
 answers the step Home Assistant shows and returns the next one, with the
-``flow_id`` that continues it, as the HA UI does. A flow stays open between
-calls until Home Assistant finishes or aborts it, or the caller aborts it.
+``flow_id`` that continues it, as the HA UI does. A caller that already knows
+the forms may hand over their answers in order; each goes to the step the
+flow is then at, unchanged, and the call stops at the first one Core refuses.
+A flow stays open between calls until Home Assistant finishes or aborts it,
+or the caller aborts it.
 ``ha_set_integration`` and ``ha_config_set_helper`` both drive their flows
 through here.
 
@@ -23,8 +26,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
 
-from ..client.rest_client import HomeAssistantAPIError
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantCommandNotSent
 from ..errors import ErrorCode, create_error_response
+from .component_api import component_supports, get_component_caps, invalidate_caps
 from .config_entry_flow import (
     _reject_redaction_sentinels,
     config_entry_of_domain,
@@ -56,12 +60,16 @@ from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
 
-# Flows this server opened, flow_id -> FlowTarget.anchor. Home Assistant
-# reports neither a user flow's nor a reconfigure flow's source over REST or
-# WebSocket, so this binds each flow without the custom component: a flow_id
-# continues or ends only with the kind and anchor it was opened with.
-# An ha-mcp restart empties it.
+# Flows known to belong to a target, flow_id -> FlowTarget.anchor: a flow_id
+# continues or ends only with the kind and anchor it was opened with. Home
+# Assistant reports neither a user flow's nor a reconfigure flow's source over
+# REST or WebSocket, so a flow this server opened is recorded here. An ha-mcp
+# restart empties it; a flow_id it does not hold is looked up in Core's own
+# flow manager through the component (``_core_flow_record``).
 _opened_flows: dict[str, tuple[str, str | None]] = {}
+
+WS_FLOW_RECORD = "ha_mcp_tools/flow_record"
+FLOW_RECORD_CAPABILITY = "flow_record"
 
 
 @dataclass(frozen=True)
@@ -139,33 +147,93 @@ def _raise_flow_not_open(target: FlowTarget, flow_id: str) -> NoReturn:
     )
 
 
-def _require_opened(target: FlowTarget, flow_id: str) -> None:
-    """Refuse a flow this server did not open with the call's kind and anchor,
-    so a flow_id cannot carry one call's checks over to another flow."""
-    if _opened_flows.get(flow_id) != target.anchor:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Flow {flow_id!r} is not a {target.kind} flow ha-mcp opened "
-                "for this call: a flow continues or ends only with the "
-                "arguments that named its target when it was opened (domain "
-                "or helper_type, entry_id or helper_id, reconfigure, "
-                "subentry_type and subentry_id). Nothing was sent to the flow",
-                suggestions=[
-                    "Start the flow again without flow_id; an ha-mcp restart "
-                    "forgets the flows it opened. A flow left open ends when "
-                    "Home Assistant restarts."
-                ],
-                context={"flow_id": flow_id, "flow_kind": target.kind},
-            )
+async def _core_flow_record(
+    client: Any, target: FlowTarget, flow_id: str
+) -> dict[str, Any] | None:
+    """Core's record of ``flow_id`` in the flow manager of ``target``'s kind,
+    read by the component; ``None`` when no component can read it."""
+    if not component_supports(await get_component_caps(client), FLOW_RECORD_CAPABILITY):
+        return None
+    manager = {"options": "options", "subentry": "subentries"}.get(
+        target.kind, "config"
+    )
+    try:
+        reply = await client.send_websocket_message(
+            {"type": WS_FLOW_RECORD, "manager": manager, "flow_id": flow_id}
         )
+    except HomeAssistantCommandNotSent:
+        return None
+    if not reply.get("success"):
+        if reply.get("error_code") == "unknown_command":
+            invalidate_caps(client)
+        return None
+    record = reply.get("result")
+    return record if isinstance(record, dict) else None
+
+
+def _record_anchor(kind: str, record: dict[str, Any]) -> tuple[str, str | None] | None:
+    """The ``FlowTarget.anchor`` of the flow Core recorded, read as a flow of
+    ``kind``; ``None`` when it is not one (a discovery or reauth flow is not a
+    setup flow a caller started)."""
+    handler, source = record.get("handler"), record.get("source")
+    if kind == "subentry":
+        if not (isinstance(handler, list) and len(handler) == 2):
+            return None
+        return (kind, f"{handler[0]}/{handler[1]}/{record.get('subentry_id') or ''}")
+    if kind == "options":
+        return (kind, handler)
+    if kind == "reconfigure" and source == "reconfigure":
+        return (kind, record.get("entry_id"))
+    if kind == "setup" and source == "user":
+        return (kind, handler)
+    return None
+
+
+async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None:
+    """Refuse a flow that was not opened for the call's kind and anchor, so a
+    flow_id cannot carry one call's checks over to another flow. A flow this
+    server does not hold (it restarted) is the one Core's record says it is."""
+    if _opened_flows.get(flow_id) == target.anchor:
+        return
+    record = None
+    if flow_id not in _opened_flows:
+        record = await _core_flow_record(client, target, flow_id)
+        if record is not None:
+            if not record.get("found"):
+                _raise_flow_not_open(target, flow_id)
+            if _record_anchor(target.kind, record) == target.anchor:
+                _opened_flows[flow_id] = target.anchor
+                return
+    unreadable = record is None and flow_id not in _opened_flows
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Flow {flow_id!r} is not a {target.kind} flow opened for this "
+            "call's target: a flow continues or ends only with the arguments "
+            "that named its target when it was opened (domain or "
+            "helper_type, entry_id or helper_id, reconfigure, subentry_type "
+            "and subentry_id). Nothing was sent to the flow",
+            suggestions=[
+                "Start the flow again without flow_id."
+                + (
+                    " ha-mcp restarted since the flow was opened, and "
+                    "without a current ha_mcp_tools component it cannot read "
+                    "the flow's target from Home Assistant."
+                    if unreadable
+                    else ""
+                )
+                + " A flow left open ends when Home Assistant restarts."
+            ],
+            context={"flow_id": flow_id, "flow_kind": target.kind},
+        )
+    )
 
 
 async def read_step(client: Any, target: FlowTarget, flow_id: str) -> dict[str, Any]:
-    """GET the step of a flow this server opened for the call's anchor. Core
-    answers it by running the step again without input, so a lost answer is
-    classified like a submit's."""
-    _require_opened(target, flow_id)
+    """GET the step of a flow opened for the call's anchor. Core answers it
+    by running the step again without input, so a lost answer is classified
+    like a submit's."""
+    await _require_opened(client, target, flow_id)
     try:
         step = await _submit_step(
             lambda _flow_id, _payload: client._request("GET", target.url(flow_id)),
@@ -253,24 +321,15 @@ async def submit_step(
     *,
     config: dict[str, Any] | None,
     menu_choice: str | None,
-    current: dict[str, Any] | None = None,
+    current: dict[str, Any],
     defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Answer the step the flow is at and return Core's next answer, raw.
-
-    ``current`` is the step when the caller already holds it (just started);
-    otherwise it is read back. Input Core rejects (the form back with
-    ``errors``, or a 400) raises; the flow stays open to correct it.
+    """Answer ``current``, the step the flow is at, and return Core's next
+    answer, raw. Input Core rejects (the form back with ``errors``, or a 400)
+    raises; the flow stays open to correct it.
     """
     if config is not None:
         _reject_redaction_sentinels(config)
-        if menu_choice is not None:
-            _refuse(
-                "Pass menu_choice or config, not both: each answers one step",
-                flow_id=flow_id,
-            )
-    if current is None:
-        current = await read_step(client, target, flow_id)
     if menu_choice is not None:
         payload = _menu_payload(current, menu_choice, flow_id)
     else:
@@ -474,10 +533,18 @@ async def abort_open_flow(
     """End a flow this server opened for the call's anchor."""
     if flow_id is None:
         _refuse("abort=True needs the flow_id to end", flow_id=None)
-    _require_opened(target, flow_id)
+    await _require_opened(client, target, flow_id)
     aborted = await abort_step_flow(client, target, flow_id)
     _opened_flows.pop(flow_id, None)
     return aborted
+
+
+def unsent_answers_warning(unsent: int) -> str:
+    return (
+        f"The flow finished before the last {unsent} of the answers in config "
+        "were sent: Home Assistant asked for fewer forms than config answers. "
+        "Check the result."
+    )
 
 
 async def advance_flow(
@@ -485,58 +552,66 @@ async def advance_flow(
     target: FlowTarget,
     *,
     flow_id: str | None,
-    config: dict[str, Any] | None,
+    config: dict[str, Any] | list[dict[str, Any]] | None,
     menu_choice: str | None,
     start: Any,
     defaults: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Answer one step of a flow; returns its ``flow_id`` and Core's answer.
+) -> tuple[str, dict[str, Any], int]:
+    """Answer steps of a flow; returns its ``flow_id``, Core's last answer
+    and how many of ``config``'s answers were not sent.
 
-    Without ``flow_id`` the flow is started with ``start()``; ``menu_choice``
-    then answers its opening menu and ``config`` the form that follows, so a
-    one-form flow (or menu then form) finishes in this call. With ``flow_id``
-    the step the flow is at is answered, or, with neither, read again. The
-    answer is a form or menu (the flow is open) or the step that ended it.
-    ``defaults`` goes to the form ``config`` answers (see ``_form_payload``).
+    ``config`` answers the form the flow is at; a list answers that form and
+    the ones after it, one object each, in order. Every answer goes to Core
+    as the answer to the step the flow is then at, so an answer Core refuses
+    raises with the flow open at that step and the ones after it unsent.
+    Without ``flow_id`` the flow is started with ``start()`` and
+    ``menu_choice`` answers its opening menu before ``config`` the forms, so
+    a flow finishes in this call when ``config`` answers all of them. With
+    ``flow_id`` and neither, the step is read again. The answer is a form or
+    menu (the flow is open) or the step that ended it; answers are left over
+    only when the flow ended before they were used up.
+    ``defaults`` goes to the forms ``config`` answers (see ``_form_payload``).
     """
-    if config is not None:
+    answers = [config] if isinstance(config, dict) else list(config or [])
+    for values in answers:
         # Before a flow is opened for an answer that cannot be sent.
-        _reject_redaction_sentinels(config)
+        _reject_redaction_sentinels(values)
     if flow_id is None:
         step = await start()
         flow_id = _require_flow_id(step, target)
         _opened_flows[flow_id] = target.anchor
-        step = await settle(client, target, flow_id, step)
-        # menu_choice answers an opening menu first, then config the form.
-        for choice, values in ((menu_choice, None), (None, config)):
-            answered = choice is not None or values is not None
-            if answered and step.get("type") in ("form", "menu"):
-                answer = await submit_step(
-                    client,
-                    target,
-                    flow_id,
-                    config=values,
-                    menu_choice=choice,
-                    current=step,
-                    defaults=defaults,
-                )
-                step = await settle(client, target, flow_id, answer)
-    elif config is None and menu_choice is None:
-        answer = await read_step(client, target, flow_id)
-        step = await settle(client, target, flow_id, answer)
     else:
+        if menu_choice is not None and answers:
+            _refuse(
+                "Pass menu_choice or config, not both: with flow_id each "
+                "answers the step the flow is at",
+                flow_id=flow_id,
+            )
+        step = await read_step(client, target, flow_id)
+    step = await settle(client, target, flow_id, step)
+    pending: list[tuple[str | None, dict[str, Any] | None]] = [
+        (None, values) for values in answers
+    ]
+    if menu_choice is not None:
+        pending.insert(0, (menu_choice, None))
+    unsent = 0
+    for index, (choice, values) in enumerate(pending):
+        if step.get("type") not in ("form", "menu"):
+            unsent = len(pending) - index
+            break
         answer = await submit_step(
             client,
             target,
             flow_id,
-            config=config,
-            menu_choice=menu_choice,
+            config=values,
+            menu_choice=choice,
+            current=step,
             defaults=defaults,
         )
         step = await settle(client, target, flow_id, answer)
     if step.get("type") not in ("form", "menu"):
         _opened_flows.pop(flow_id, None)
-    return flow_id, step
+    return flow_id, step, unsent
 
 
 async def drive_flow(
@@ -552,7 +627,7 @@ async def drive_flow(
     """One ``ha_set_integration`` call on a setup, options or reconfigure flow."""
     if abort:
         return await abort_open_flow(client, target, flow_id)
-    flow_id, step = await advance_flow(
+    flow_id, step, unsent = await advance_flow(
         client,
         target,
         flow_id=flow_id,
@@ -560,9 +635,12 @@ async def drive_flow(
         menu_choice=menu_choice,
         start=start,
     )
-    if step.get("type") not in ("form", "menu"):
-        return _finished_response(target, step)
-    return await open_step_answer(client, target, flow_id, step)
+    if step.get("type") in ("form", "menu"):
+        return await open_step_answer(client, target, flow_id, step)
+    response = _finished_response(target, step)
+    if unsent:
+        response["warnings"] = [unsent_answers_warning(unsent)]
+    return response
 
 
 async def start_setup_flow(client: Any, domain: str) -> dict[str, Any]:
