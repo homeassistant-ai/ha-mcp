@@ -14,6 +14,7 @@ import pytest
 
 from ...utilities.assertions import (
     MCPAssertions,
+    looks_like_success,
     parse_mcp_result,
     safe_call_tool,
 )
@@ -41,22 +42,29 @@ async def trace_entity_cleanup(mcp_client):
     yield created
 
     logger.info(f"🧹 Cleaning up {len(created)} trace test entities")
+    failed: list[tuple[str, str]] = []
     for domain, entity_id in created:
         if domain == "automation":
-            await safe_call_tool(
+            result = await safe_call_tool(
                 mcp_client,
                 "ha_config_remove_automation",
                 {"entity_id": entity_id},
             )
+            if not looks_like_success(result):
+                failed.append((domain, entity_id))
         elif domain == "script":
             script_id = entity_id.split(".", 1)[-1]
-            await safe_call_tool(
+            result = await safe_call_tool(
                 mcp_client,
                 "ha_config_remove_script",
                 {"script_id": script_id},
             )
+            if not looks_like_success(result):
+                failed.append((domain, entity_id))
         else:
             logger.warning(f"⚠️ Unknown trace entity domain: {domain} {entity_id}")
+    if failed:
+        logger.warning(f"⚠️ Failed to remove {len(failed)} trace entities: {failed}")
 
 
 @pytest.mark.automation
@@ -87,6 +95,8 @@ class TestAutomationTraces:
                     "ha_config_remove_automation",
                     {"entity_id": config_id},
                 )
+                if not looks_like_success(remove_result):
+                    cleanup.append(("automation", config_id))
                 leftover_error = remove_result.get("error")
         assert automation_id, (
             f"ha_config_set_automation did not resolve an entity id: {create_data}"
@@ -98,12 +108,13 @@ class TestAutomationTraces:
         )
         cleanup.append(("automation", automation_id))
         if not await wait_for_entity_registration(mcp_client, automation_id):
-            cleanup.pop()
-            await safe_call_tool(
+            remove_result = await safe_call_tool(
                 mcp_client,
                 "ha_config_remove_automation",
                 {"entity_id": automation_id},
             )
+            if looks_like_success(remove_result):
+                cleanup.pop()
             raise AssertionError(f"{automation_id} never became queryable")
         return automation_id
 
@@ -206,24 +217,26 @@ class TestAutomationTraces:
         )
         logger.info("Triggered automation")
 
-        # Wait for trace to be recorded
+        # Wait for the new run to be recorded
         async def check_automation_traces():
             result = await mcp_client.call_tool(
                 "ha_get_automation_traces",
                 {"entity_id": automation_id},
             )
             data = parse_mcp_result(result)
-            return data.get("trace_count", 0) > 0
+            return any(
+                trace["run_id"] not in runs_before for trace in data.get("traces", [])
+            )
 
         logger.info("Waiting for automation trace to be recorded...")
-        trace_appeared = await wait_for_condition(
+        new_trace_appeared = await wait_for_condition(
             check_automation_traces,
             timeout=15,
             poll_interval=0.5,
-            condition_name="automation trace to be recorded",
+            condition_name="new automation trace to be recorded",
         )
 
-        assert trace_appeared, "Automation trace did not appear within timeout"
+        assert new_trace_appeared, "New automation trace did not appear within timeout"
 
         # 4. Get traces for the automation
         traces_data = await MCPAssertions(mcp_client).call_tool_success(
@@ -244,13 +257,11 @@ class TestAutomationTraces:
         )
         assert len(traces) > 0, "Traces list should not be empty"
 
-        # 6. Verify trace structure
-        first_trace = traces[0]
-        assert "run_id" in first_trace, "Trace should have run_id"
-        assert first_trace["run_id"] not in runs_before, (
-            "The selected run predates the manual trigger; it belongs to an "
-            "earlier run of this automation"
+        # 6. Verify trace structure for the run created by this trigger
+        first_trace = next(
+            trace for trace in traces if trace["run_id"] not in runs_before
         )
+        assert "run_id" in first_trace, "Trace should have run_id"
         assert "timestamp" in first_trace, "Trace should have timestamp"
         assert "state" in first_trace, "Trace should have state"
 
@@ -327,7 +338,9 @@ class TestAutomationTraces:
             mcp_client,
             tool_name="ha_get_automation_traces",
             arguments={"entity_id": automation_id},
-            predicate=lambda data: data.get("trace_count", 0) > 0,
+            predicate=lambda data: any(
+                trace["run_id"] not in runs_before for trace in data.get("traces", [])
+            ),
             timeout=30,
             description="logbook test trace",
         )
@@ -426,7 +439,10 @@ action:
                 mcp_client,
                 tool_name="ha_get_automation_traces",
                 arguments={"entity_id": automation_id},
-                predicate=lambda data: data.get("trace_count", 0) > 0,
+                predicate=lambda data: any(
+                    trace["run_id"] not in runs_before
+                    for trace in data.get("traces", [])
+                ),
                 timeout=15,
                 poll_interval=0.5,
                 description="blueprint automation trace",
@@ -1039,6 +1055,10 @@ action:
                 "ha_get_state", {"entity_id": light_id}
             )
             light_prior_state = (prior_light.get("data") or {}).get("state")
+            assert light_prior_state in {"on", "off"}, (
+                f"{light_id} has state {light_prior_state!r}; "
+                "test requires a light with a known on/off prior state"
+            )
 
             await mcp.call_tool_success(
                 "ha_call_service",
@@ -1115,9 +1135,7 @@ action:
                         {
                             "domain": "light",
                             "service": (
-                                "turn_on"
-                                if light_prior_state == "on"
-                                else "turn_off"
+                                "turn_on" if light_prior_state == "on" else "turn_off"
                             ),
                             "entity_id": light_id,
                         },
