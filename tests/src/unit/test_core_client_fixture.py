@@ -7,6 +7,8 @@ client the server ships, talking REST and WebSocket to Core's own API.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -82,10 +84,12 @@ async def test_a_tool_runs_on_the_fixture_end_to_end(
     """A real tool lists a zone Core stored, with no mocked reply in between."""
     assert await async_setup_component(hass, "config", {})
     assert await async_setup_component(hass, "zone", {})
+    # Core restores a deleted zone's registry entry by name (test design rule 6).
+    name = f"Office {uuid.uuid4().hex[:8]}"
     created = await core_client.send_websocket_message(
         {
             "type": "zone/create",
-            "name": "Office",
+            "name": name,
             "latitude": 52.5,
             "longitude": 13.4,
             "radius": 75,
@@ -95,6 +99,6 @@ async def test_a_tool_runs_on_the_fixture_end_to_end(
 
     result = await ZoneTools(core_client).ha_get_zone()
 
-    office = next(zone for zone in result["zones"] if zone["name"] == "Office")
+    office = next(zone for zone in result["zones"] if zone["name"] == name)
     assert office["latitude"] == 52.5
     assert office["radius"] == 75

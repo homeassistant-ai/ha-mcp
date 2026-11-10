@@ -33,10 +33,11 @@ uv run lefthook install    # Install git hooks
 uv run ruff format src/ tests/     # Format
 uv run ruff check --fix src/ tests/ # Lint
 uv run mypy src/                   # Type check
+uv run python scripts/mypy_tests_exact.py  # Type check the unit and app tests
 uv run ast-grep scan               # AST lint (error handling patterns)
 ```
 
-On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). When issue-intake files change, they also run the issue-intake tests; when settings UI, consent form or site files change, they run the JSDOM-based UI tests. On pull requests the **Fast Checks** CI job re-runs the lint, AST lint and type checks, plus `ruff format --check` on changed Python files, the `uv.lock` sync check, the HA-core constraint-alignment check, the docs-size check, and HACS and Hassfest validation. Unit tests run in the separate **Unit Tests** job.
+On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). When issue-intake files change, they also run the issue-intake tests; when settings UI, consent form or site files change, they run the JSDOM-based UI tests. On pull requests the **Fast Checks** CI job re-runs the lint, AST lint and type checks, plus `ruff format --check` on changed Python files, the `uv.lock` sync check, the HA-core constraint-alignment check, the docs-size check, the check that no test is exempted from the real-Core checks, and HACS and Hassfest validation. Unit tests run in the separate **Unit Tests** job.
 
 ## 🔄 Migrating from pre-commit to lefthook
 
