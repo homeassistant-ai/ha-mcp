@@ -7,7 +7,6 @@ from typing import Any
 import voluptuous as vol
 
 from ..const import CHANNEL_DEV, CHANNEL_STABLE
-from .trace_context import TRACE_DOMAINS
 from .constants import (
     ALL_SEARCH_TYPES,
     BLUEPRINT_DOMAINS,
@@ -44,6 +43,7 @@ from .constants import (
     WS_TEMPLATE_DIAGNOSE,
     WS_TRACE_CONTEXT,
 )
+from .trace_context import TRACE_DOMAINS
 
 
 def _info_schema() -> dict[Any, Any]:
