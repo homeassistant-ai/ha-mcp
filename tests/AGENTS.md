@@ -135,7 +135,7 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
 - No hand-written reply. What Core answers over REST or WebSocket (a state, a
   registry row, a command result, an error reply) comes from Core in the test,
   never from a dict typed into the test, a mocked client method or a fake
-  client class. A tool test takes `core_client` (`src/unit/conftest.py`): the
+  client class. A tool test takes `core_client` (`src/unit/_core_client.py`): the
   server's own client connected to the real `hass`. The test sets Core up
   (`hass.states.async_set`, `async_setup_component`, a registry fixture, a
   WebSocket command) and asserts on the tool's result.
@@ -171,6 +171,10 @@ a swap the test has already undone, which is why the fourth rule exists. Test
 files written before the unit tests ran on real Core are listed in the rules'
 `ignores` and in the guard. Converting such a file removes it from the lists;
 no file is ever added to them.
+Fast Checks compares every list here with the pull request's base
+(`scripts/stand_in_lists_ratchet.py`) and fails on an added entry, so a new
+test cannot be exempted. A list grows only when its ast-grep rule is widened
+in the same pull request.
 
 Two more checks run on these trees, with the same kind of list and the same
 rule for it:

@@ -1,7 +1,7 @@
 # A unit test that replaces the Home Assistant client and types in what Core
 # "answered" asserts against a guess of Core (#2752). The four stand-in rules
 # only see a faked Core object; this one sees the faked reply. Use the
-# `core_client` fixture (tests/src/unit/conftest.py): the server's own client
+# `core_client` fixture (tests/src/unit/_core_client.py): the server's own client
 # connected to the real `hass`.
 id: no-hand-made-core-replies
 language: python
