@@ -111,7 +111,12 @@ class TestGetLogsHoursBackReal:
     """hours_back sends the journal a realtime= Range through Supervisor."""
 
     async def test_host_entries_all_fall_inside_the_window(self, mcp_client) -> None:
-        """Supervisor formats host logs verbosely, so each entry's time is checkable."""
+        """The first page of a 1-hour window starts inside it.
+
+        Supervisor formats host logs verbosely, so each entry's time is
+        checkable. This checks the window's start only; that the page comes
+        from the journal and not Supervisor's tail is the next test's job.
+        """
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_success(
                 "ha_get_logs",
@@ -132,7 +137,40 @@ class TestGetLogsHoursBackReal:
         assert max(stamps) <= datetime.fromisoformat(result["read_at"]) + timedelta(
             minutes=1
         )
-        assert result["window_complete"] is True, result.get("warnings")
+
+    async def test_oldest_first_pages_reach_behind_the_newest_lines(
+        self, mcp_client
+    ) -> None:
+        """Pages of a whole-journal window start where only the journal can serve.
+
+        A dropped Range would return Supervisor's default tail of 100 lines; the
+                first page of a whole-journal window starts at the journal's oldest
+                entry instead, older than any of the newest 500 lines.
+        """
+        window = {
+            "source": "system_service",
+            "slug": "host",
+            "hours_back": 24 * 365,
+            "limit": 50,
+            "order": "oldest",
+        }
+        async with MCPAssertions(mcp_client) as mcp:
+            first = await mcp.call_tool_success("ha_get_logs", window)
+            second = await mcp.call_tool_success(
+                "ha_get_logs", {**window, "offset": first["next_offset"]}
+            )
+            tail = await mcp.call_tool_success(
+                "ha_get_logs",
+                {"source": "system_service", "slug": "host", "limit": 500},
+            )
+
+        assert first["has_more"] is True, first
+        assert first["next_offset"] == 50
+        assert second["log"] and second["log"] != first["log"]
+        first_stamps = _entry_times(first["log"])
+        tail_stamps = _entry_times(tail["log"])
+        assert first_stamps and tail_stamps
+        assert min(first_stamps) < min(tail_stamps)
 
     @pytest.mark.parametrize(
         ("source", "slug"),

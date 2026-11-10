@@ -109,6 +109,7 @@ def _collect_log_warnings(
     order: Literal["newest", "oldest"],
     offset: int | str,
     hours_back: int | None = None,
+    search: str | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     if source not in ("logbook", "supervisor", "system_service") and hours_back:
@@ -151,10 +152,18 @@ def _collect_log_warnings(
             "Parameter 'slug' only applies to source='supervisor' or "
             f"'system_service'; ignored for source='{source}'"
         )
-    if source not in ("logbook", "error_log", "fault_log") and offset:
+    if source in ("supervisor", "system_service") and offset:
+        if hours_back is None or order != "oldest" or search:
+            warnings.append(
+                f"Parameter 'offset' applies to source='{source}' only with "
+                "hours_back, order='oldest' and no search; ignored here"
+            )
+    elif source not in ("logbook", "error_log", "fault_log") and offset:
         warnings.append(
-            "Parameter 'offset' only applies to source='logbook', 'error_log' "
-            f"or 'fault_log'; ignored for source='{source}'"
+            "Parameter 'offset' only applies to source='logbook', 'error_log', "
+            "'fault_log', or 'supervisor'/'system_service' with hours_back and "
+            "order='oldest'; "
+            f"ignored for source='{source}'"
         )
     return warnings
 

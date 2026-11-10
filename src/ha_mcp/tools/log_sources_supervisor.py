@@ -16,7 +16,7 @@ from typing import Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
-from ..client.journal_window import read_logs_window, window_start
+from ..client.journal_window import read_logs_page, read_logs_window, window_start
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -26,6 +26,7 @@ from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import (
     DEFAULT_LOG_LIMIT,
+    MAX_LIMIT,
     SUPERVISOR_SEARCH_WINDOW_LINES,
     SYSTEM_SERVICE_SLUGS,
     _addon_auth_error_suggestions,
@@ -42,10 +43,60 @@ class SupervisorLogSourcesMixin:
 
     _client: Any
 
+    @staticmethod
+    def _window_call(
+        source: str, slug: str, hours_back: int, limit: int, offset: int
+    ) -> str:
+        """A copyable call reading the window oldest-first from ``offset``."""
+        return (
+            f"ha_get_logs(source={source!r}, slug={slug!r}, "
+            f"hours_back={hours_back}, order='oldest', limit={limit}, "
+            f"offset={offset})"
+        )
+
+    async def _journal_page(
+        self,
+        source: str,
+        slug: str,
+        path: str,
+        hours_back: int,
+        limit: int,
+        offset: int,
+        now: datetime | None,
+    ) -> dict[str, Any]:
+        """``limit`` entries of the window from its ``offset``-th, served by the journal."""
+        read_at = now or datetime.now(UTC)
+        since = window_start(read_at, hours_back)
+        page = await read_logs_page(self._client, path, since, offset, limit)
+        data: dict[str, Any] = {
+            "success": True,
+            "source": source,
+            "slug": slug,
+            "log": "\n".join(page.lines),
+            "total_lines": len(page.lines),
+            "returned_lines": len(page.lines),
+            "limit": limit,
+            "order": "oldest",
+            "offset": offset,
+            "hours_back": hours_back,
+            "window_start": since.isoformat(timespec="seconds"),
+            "read_at": read_at.isoformat(timespec="seconds"),
+            "window_complete": not page.has_more,
+            "has_more": page.has_more,
+        }
+        if page.has_more:
+            data["next_offset"] = offset + limit
+            data["pagination_hint"] = (
+                f"Showing entries {offset + 1}-{offset + limit} of the window. "
+                "To continue, use: "
+                + self._window_call(source, slug, hours_back, limit, offset + limit)
+            )
+        return data
+
     async def _journal_window(
         self, path: str, hours_back: int, now: datetime | None
-    ) -> tuple[list[str], dict[str, Any]]:
-        """The last ``hours_back`` hours of entries, and fields describing the read.
+    ) -> tuple[list[str], dict[str, Any], int]:
+        """The window's entries up to the cap, fields describing the read, and the cap.
 
         The journal selects the window (``realtime=`` Range) from its start
         to the journal's end; a window too large to read whole says so, so
@@ -65,22 +116,132 @@ class SupervisorLogSourcesMixin:
             fields["warnings"] = [
                 f"The {hours_back}-hour window holds more than {read.cap} "
                 f"entries; only the newest {read.cap} were read, so older "
-                "entries in the window are missing. Use a smaller hours_back."
+                "entries in the window are missing."
             ]
-        return read.lines, fields
+        return read.lines, fields, read.cap
 
-    async def _log_lines(
+    def _window_paging(
         self,
+        source: str,
+        slug: str,
+        fields: dict[str, Any],
+        cap: int,
+        unreturned: int,
+        limit: int,
+        search: str | None,
+    ) -> dict[str, Any]:
+        """``has_more`` and a hint for a whole-window read, which offset does not page."""
+        complete = fields["window_complete"]
+        hours_back = fields["hours_back"]
+        paging: dict[str, Any] = {"has_more": unreturned > 0 or not complete}
+        start = self._window_call(source, slug, hours_back, limit, 0)
+        if not complete and search:
+            paging["pagination_hint"] = (
+                f"Only the newest {cap} entries of the window were searched; "
+                "use a smaller hours_back to search the rest."
+            )
+        elif not complete:
+            paging["pagination_hint"] = (
+                f"The window holds more than {cap} entries; only the newest "
+                f"were read. To read it from its first entry, use: {start}"
+            )
+        elif unreturned and search:
+            paging["pagination_hint"] = (
+                f"{unreturned} more matching lines in this window; raise limit "
+                f"(max {MAX_LIMIT}) or narrow 'search'."
+            )
+        elif unreturned:
+            paging["pagination_hint"] = (
+                f"{unreturned} more lines in this window. To read it from its "
+                f"first entry, use: {start}"
+            )
+        return paging
+
+    async def _read_service_log(
+        self,
+        source: str,
+        slug: str,
         path: str,
+        limit: int | None,
+        search: str | None,
+        order: Literal["newest", "oldest"],
         hours_back: int | None,
+        offset: int,
         now: datetime | None,
-        read_tail: Callable[[], Awaitable[str]],
-    ) -> tuple[list[str], dict[str, Any]]:
-        """The newest lines from ``read_tail``, or the ``hours_back`` window."""
+        read_tail: Callable[[int], Awaitable[str]],
+    ) -> dict[str, Any]:
+        """The log of an app or system service, by one of three routes.
+
+        Without ``hours_back``: the newest lines, read through ``read_tail``
+        (Supervisor's tail, sized to ``limit`` or the search window). With
+        ``hours_back``, ``order="oldest"`` and no search: one page of the
+        window from its ``offset``-th entry, served by the journal, so any part
+        of the window can be reached. Otherwise with ``hours_back``: the whole
+        window (up to ``MAX_ENTRIES`` entries), searched, newest lines shown;
+        ``offset`` does not apply, and the hint points to the oldest-first
+        route for what is not shown.
+        """
+        effective_limit = _coerce_limit(
+            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+        )
+        if hours_back is not None and order == "oldest" and not search:
+            return await self._journal_page(
+                source, slug, path, hours_back, effective_limit, offset, now
+            )
+
+        window: dict[str, Any] = {}
+        cap = 0
         if hours_back is not None:
-            return await self._journal_window(path, hours_back, now)
-        log_text = await read_tail()
-        return (log_text.splitlines() if log_text else []), {}
+            lines, window, cap = await self._journal_window(path, hours_back, now)
+        else:
+            # Supervisor's /logs endpoints default to their last 100 lines,
+            # so the tail is sized to the caller's limit (found via #1721's
+            # e2e), or to the search window when filtering.
+            log_text = await read_tail(
+                max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
+                if search
+                else effective_limit
+            )
+            lines = log_text.splitlines() if log_text else []
+
+        filters_applied: dict[str, str] = {}
+        if search:
+            search_lower = search.lower()
+            lines = [ln for ln in lines if search_lower in ln.lower()]
+            filters_applied["search"] = search
+
+        total_lines = len(lines)
+        # The newest lines of what was read; 'order' sets their direction.
+        lines = lines[-effective_limit:]
+        if order == "newest":
+            lines = list(reversed(lines))
+
+        data: dict[str, Any] = {
+            "success": True,
+            "source": source,
+            "slug": slug,
+            "log": "\n".join(lines),
+            "total_lines": total_lines,
+            "returned_lines": len(lines),
+            "limit": effective_limit,
+            "order": order,
+        }
+        if filters_applied:
+            data["filters_applied"] = filters_applied
+        if hours_back is not None:
+            data.update(window)
+            data.update(
+                self._window_paging(
+                    source,
+                    slug,
+                    window,
+                    cap,
+                    total_lines - len(lines),
+                    effective_limit,
+                    search,
+                )
+            )
+        return data
 
     async def _get_supervisor_log(
         self,
@@ -89,68 +250,32 @@ class SupervisorLogSourcesMixin:
         search: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
         hours_back: int | None = None,
+        offset: int = 0,
         now: datetime | None = None,
     ) -> dict[str, Any]:
-        """Fetch app (add-on) container logs.
+        """Fetch app (add-on) container logs; the routes are ``_read_service_log``'s.
 
-        Delegates to ``HomeAssistantClient.get_addon_logs`` which branches on
-        ``is_running_in_addon()``: inside the app container hits Supervisor
-        directly at ``http://supervisor/addons/<slug>/logs`` (the HA-Core
-        proxy at ``/api/hassio/addons/<slug>/logs`` rejects the Supervisor
-        token there — see #1116); on non-addon installs falls back to the
-        HA-Core proxy. Both paths return ``text/plain``.
+        The tail goes through ``HomeAssistantClient.get_addon_logs``, and the
+        ``hours_back`` window through ``journal_window``; both branch on
+        ``is_running_in_addon()``: inside the app container they hit
+        Supervisor directly at ``http://supervisor/addons/<slug>/logs`` (the
+        HA-Core proxy at ``/api/hassio/addons/<slug>/logs`` rejects the
+        Supervisor token there — see #1116); on non-addon installs they use
+        the HA-Core proxy. Both return ``text/plain``.
         """
-        effective_limit = _coerce_limit(
-            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
-        )
-
-        # Request a journald window sized to the caller's limit —
-        # Supervisor's /logs endpoints default to their last-100-lines
-        # window, which silently capped any larger limit before ?lines=
-        # was plumbed through (found via #1721's e2e).
-        fetch_lines = (
-            max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
-            if search
-            else effective_limit
-        )
-
         try:
-            lines, window = await self._log_lines(
+            return await self._read_service_log(
+                "supervisor",
+                slug,
                 f"addons/{slug}",
+                limit,
+                search,
+                order,
                 hours_back,
+                offset,
                 now,
-                lambda: self._client.get_addon_logs(slug, lines=fetch_lines),
+                lambda lines: self._client.get_addon_logs(slug, lines=lines),
             )
-
-            filters_applied: dict[str, str] = {}
-
-            if search:
-                search_lower = search.lower()
-                lines = [ln for ln in lines if search_lower in ln.lower()]
-                filters_applied["search"] = search
-
-            total_lines = len(lines)
-            # Always take the most-recent window (the tail); 'order' controls
-            # only the display direction of that window.
-            lines = lines[-effective_limit:]
-            if order == "newest":
-                lines = list(reversed(lines))
-
-            data: dict[str, Any] = {
-                "success": True,
-                "source": "supervisor",
-                "slug": slug,
-                "log": "\n".join(lines),
-                "total_lines": total_lines,
-                "returned_lines": len(lines),
-                "limit": effective_limit,
-                "order": order,
-            }
-            if filters_applied:
-                data["filters_applied"] = filters_applied
-            data.update(window)
-
-            return data
 
         except ToolError:
             raise
@@ -317,68 +442,37 @@ class SupervisorLogSourcesMixin:
         search: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
         hours_back: int | None = None,
+        offset: int = 0,
         now: datetime | None = None,
     ) -> dict[str, Any]:
-        """Fetch HA system-service logs from Supervisor's per-service endpoint.
+        """Fetch HA system-service logs; the routes are ``_read_service_log``'s.
 
         ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the six Supervisor-managed
         services: supervisor, host, core, dns, audio, multicast).
         Caller (``ha_get_logs(source='system_service')``) validates against
-        ``SYSTEM_SERVICE_SLUGS`` before dispatch. Routed through
-        ``HomeAssistantClient._get_system_service_logs`` which gates on
+        ``SYSTEM_SERVICE_SLUGS`` before dispatch. The tail goes through
+        ``HomeAssistantClient._get_system_service_logs`` and the
+        ``hours_back`` window through ``journal_window``; both gate on
         ``is_running_in_addon()``: addon installs hit Supervisor directly at
         ``http://supervisor/<service>/logs`` (requires ``hassio_role: manager``
-        in the addon manifest), non-addon installs fall back to the HA Core
-        proxy at ``/api/hassio/<service>/logs`` (requires an admin LLA).
+        in the addon manifest), non-addon installs use the HA Core proxy at
+        ``/api/hassio/<service>/logs`` (requires an admin LLA).
         """
-        effective_limit = _coerce_limit(
-            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
-        )
-
-        fetch_lines = (
-            max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
-            if search
-            else effective_limit
-        )
-
         try:
-            lines, window = await self._log_lines(
+            return await self._read_service_log(
+                "system_service",
                 service,
+                service,
+                limit,
+                search,
+                order,
                 hours_back,
+                offset,
                 now,
-                lambda: self._client._get_system_service_logs(
-                    service, lines=fetch_lines
+                lambda lines: self._client._get_system_service_logs(
+                    service, lines=lines
                 ),
             )
-
-            filters_applied: dict[str, str] = {}
-            if search:
-                search_lower = search.lower()
-                lines = [ln for ln in lines if search_lower in ln.lower()]
-                filters_applied["search"] = search
-
-            total_lines = len(lines)
-            # Always take the most-recent window (the tail); 'order' controls
-            # only the display direction of that window.
-            lines = lines[-effective_limit:]
-            if order == "newest":
-                lines = list(reversed(lines))
-
-            data: dict[str, Any] = {
-                "success": True,
-                "source": "system_service",
-                "slug": service,
-                "log": "\n".join(lines),
-                "total_lines": total_lines,
-                "returned_lines": len(lines),
-                "limit": effective_limit,
-                "order": order,
-            }
-            if filters_applied:
-                data["filters_applied"] = filters_applied
-            data.update(window)
-
-            return data
 
         except ToolError:
             raise

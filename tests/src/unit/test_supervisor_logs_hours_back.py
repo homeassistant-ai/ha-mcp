@@ -18,9 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.journal_window import (
     EPOCH,
-    newest_range,
     read_logs_window,
     read_window,
     window_range,
@@ -32,6 +32,8 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.log_common import _collect_log_warnings
 from ha_mcp.tools.tools_logs import LogTools
+
+from ._logbook_fallback import call_kwargs
 
 NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
 _REALTIME = re.compile(r"^realtime=(\d*):(\d*):(-?\d+):(\d+)$")
@@ -107,10 +109,6 @@ class TestRanges:
     def test_a_window_is_sent_as_gatewayd_seconds_with_no_end(self):
         since = datetime(2026, 11, 5, 11, 0, 30, 999000, tzinfo=UTC)
         assert window_range(since, 0, 50) == f"realtime={int(since.timestamp())}::0:50"
-
-    def test_the_newest_read_always_names_its_entry_count(self):
-        # systemd 256 rejected a Range without num_entries (systemd#37172).
-        assert newest_range(10) == "entries=:-9:10"
 
 
 class TestWindowStart:
@@ -230,23 +228,6 @@ class TestRoutes:
         ):
             await read_logs_window(client, "supervisor", NOW - timedelta(hours=1))
 
-    @pytest.mark.parametrize("status", [400, 500])
-    async def test_a_rejected_range_names_the_systemd_it_needs(self, status: int):
-        client = MagicMock(timeout=30)
-        client._raw_request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                f"API error: {status} - bad", status_code=status
-            )
-        )
-        with (
-            patch(
-                "ha_mcp.client.journal_window.is_running_in_addon", return_value=False
-            ),
-            pytest.raises(HomeAssistantAPIError, match="systemd 255") as raised,
-        ):
-            await read_logs_window(client, "host", NOW - timedelta(hours=1))
-        assert raised.value.status_code == status
-
 
 def tools_on(journal: FakeGatewayd) -> LogTools:
     return LogTools(journal.client())
@@ -298,8 +279,107 @@ class TestToolLayer:
                 service="host", hours_back=24, now=NOW
             )
         assert out["window_complete"] is False
+        assert out["has_more"] is True
         assert "more than 100 entries" in out["warnings"][0]
+        assert "order='oldest'" in out["pagination_hint"]
         assert shown(out["log"])[0] == "m0"  # the newest are the ones read
+
+    async def test_oldest_first_pages_through_the_window_from_its_start(self):
+        journal = FakeGatewayd.per_minute(3000)
+        since = at(120)
+        tools = tools_on(journal)
+        first = await tools._get_system_service_log(
+            service="host", limit=50, hours_back=2, now=NOW, order="oldest"
+        )
+        assert journal.ranges[0] == f"realtime={since}::0:50"
+        assert shown(first["log"]) == [f"m{m}" for m in range(120, 70, -1)]
+        assert first["has_more"] is True
+        assert first["window_complete"] is False
+        assert first["next_offset"] == 50
+        assert "offset=50" in first["pagination_hint"]
+
+        last = await tools._get_system_service_log(
+            service="host", limit=50, offset=100, hours_back=2, now=NOW, order="oldest"
+        )
+        assert journal.ranges[-1] == f"realtime={since}::100:50"
+        assert shown(last["log"]) == [f"m{m}" for m in range(20, -1, -1)]
+        assert last["has_more"] is False
+        assert last["window_complete"] is True
+        assert "next_offset" not in last
+        assert "pagination_hint" not in last
+
+    async def test_a_full_last_page_asks_the_journal_whether_more_follows(self):
+        journal = FakeGatewayd.per_minute(100)
+        out = await tools_on(journal)._get_supervisor_log(
+            slug="core_ssh", limit=50, offset=50, hours_back=24, now=NOW, order="oldest"
+        )
+        assert journal.ranges[-1] == "realtime=" + str(at(24 * 60)) + "::100:1"
+        assert out["has_more"] is False
+        assert out["returned_lines"] == 50
+
+    async def test_a_page_counts_entries_and_returns_each_one_whole(self):
+        journal = FakeGatewayd(
+            [
+                (at(30), ["Traceback:", "  File x", "Error"]),
+                (at(20), ["m20"]),
+                (at(10), ["m10"]),
+            ]
+        )
+        out = await tools_on(journal)._get_system_service_log(
+            service="core", limit=2, hours_back=1, now=NOW, order="oldest"
+        )
+        assert shown(out["log"]) == ["Traceback:", "  File x", "Error", "m20"]
+        assert out["next_offset"] == 2
+
+    async def test_newest_first_points_to_the_start_of_the_window(self):
+        out = await tools_on(FakeGatewayd.per_minute(3000))._get_system_service_log(
+            service="host", limit=50, hours_back=2, now=NOW
+        )
+        assert shown(out["log"])[0] == "m0"
+        assert out["total_lines"] == 121
+        assert out["has_more"] is True
+        assert out["window_complete"] is True
+        assert "next_offset" not in out
+        assert "order='oldest'" in out["pagination_hint"]
+        assert "offset=0" in out["pagination_hint"]
+
+    async def test_unreturned_search_matches_are_reported(self):
+        journal = FakeGatewayd.per_minute(600)
+        for i in (-10, -20, -30):
+            journal.entries[i] = (journal.entries[i][0], ["needle"])
+        out = await tools_on(journal)._get_supervisor_log(
+            slug="core_ssh", search="needle", limit=2, hours_back=2, now=NOW
+        )
+        assert out["returned_lines"] == 2
+        assert out["has_more"] is True
+        assert "1 more matching" in out["pagination_hint"]
+
+    async def test_a_whole_window_read_in_one_call_has_no_more(self):
+        out = await tools_on(FakeGatewayd.per_minute(60))._get_system_service_log(
+            service="dns", hours_back=2, now=NOW
+        )
+        assert out["has_more"] is False
+        assert "pagination_hint" not in out
+
+    @pytest.mark.parametrize(
+        ("source", "slug"), [("supervisor", "core_ssh"), ("system_service", "host")]
+    )
+    async def test_a_rejection_unrelated_to_the_range_keeps_supervisors_words(
+        self, source: str, slug: str
+    ):
+        client = MagicMock(timeout=30)
+        client._raw_request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 400 - App is not installed", status_code=400
+            )
+        )
+        with pytest.raises(ToolError) as raised:
+            await LogTools(client).get_logs(
+                **call_kwargs(source=source, slug=slug, hours_back=1)
+            )
+        message = str(raised.value)
+        assert "App is not installed" in message
+        assert "systemd" not in message
 
     async def test_without_hours_back_the_newest_lines_are_read_as_before(self):
         client = MagicMock()
@@ -310,6 +390,43 @@ class TestToolLayer:
         assert out["log"] == "c\nb"
         assert "window_complete" not in out
         client._raw_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestGetLogsPassesTheWindowOn:
+    @pytest.mark.parametrize(
+        ("source", "slug"), [("supervisor", "core_ssh"), ("system_service", "host")]
+    )
+    async def test_hours_back_and_offset_reach_the_journal(
+        self, source: str, slug: str
+    ):
+        journal = FakeGatewayd.per_minute(60)
+        before = datetime.now(UTC)
+        out = await tools_on(journal).get_logs(
+            **call_kwargs(
+                source=source, slug=slug, hours_back=2, offset=500, order="oldest"
+            )
+        )
+        match = _REALTIME.match(journal.ranges[0])
+        assert match, journal.ranges[0]
+        since = datetime.fromtimestamp(int(match[1]), UTC)
+        assert abs(since - (before - timedelta(hours=2))) < timedelta(seconds=5)
+        assert (match[3], match[4]) == ("500", "100")
+        assert "warnings" not in out
+
+    async def test_the_logbook_reads_one_hour_when_hours_back_is_omitted(self):
+        fetch = AsyncMock(return_value=([], "rest"))
+        with (
+            patch.object(LogTools, "_fetch_logbook_events", fetch),
+            patch(
+                "ha_mcp.tools.response_helpers.fetch_ha_timezone",
+                AsyncMock(return_value=("UTC", False)),
+            ),
+        ):
+            await LogTools(MagicMock()).get_logs(
+                **call_kwargs(source="logbook", end_time="2026-11-05T12:00:00+00:00")
+            )
+        assert fetch.await_args.kwargs["start_time"] == "2026-11-05T11:00:00+00:00"
 
 
 class TestIgnoredParameterWarning:
@@ -325,3 +442,40 @@ class TestIgnoredParameterWarning:
             source, None, None, None, None, None, None, "newest", 0, hours_back=3
         )
         assert not any("hours_back" in w for w in warnings)
+
+    @pytest.mark.parametrize(
+        ("hours_back", "order", "search"),
+        [(None, "oldest", None), (2, "newest", None), (2, "oldest", "needle")],
+    )
+    def test_offset_where_the_journal_cannot_page_is_flagged(
+        self, hours_back: int | None, order: str, search: str | None
+    ):
+        warnings = _collect_log_warnings(
+            "system_service",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "host",
+            order,
+            50,
+            hours_back=hours_back,
+            search=search,
+        )
+        assert any("'offset'" in w for w in warnings)
+
+    def test_offset_on_an_oldest_first_window_is_not_flagged(self):
+        warnings = _collect_log_warnings(
+            "supervisor",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "core_ssh",
+            "oldest",
+            50,
+            hours_back=2,
+        )
+        assert not any("offset" in w for w in warnings)

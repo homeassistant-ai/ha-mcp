@@ -152,10 +152,16 @@ class LogTools(
                 search=search,
                 order=order,
                 hours_back=hours_back,
+                offset=numeric_offset,
             )
         assert slug is not None  # guaranteed by _validate_log_slug
         return await self._get_supervisor_log(
-            slug=slug, limit=limit, search=search, order=order, hours_back=hours_back
+            slug=slug,
+            limit=limit,
+            search=search,
+            order=order,
+            hours_back=hours_back,
+            offset=numeric_offset,
         )
 
     async def get_logs(
@@ -189,6 +195,7 @@ class LogTools(
             order,
             offset,
             hours_back=hours_back,
+            search=search,
         )
         structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
@@ -290,7 +297,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "are selected within it, and a record longer than it is cut "
                     "(header and last lines kept) with a warning naming how many "
                     "lines were cut. Does not apply to source='error_log' with "
-                    "structured=True."
+                    "structured=True. On a supervisor/system_service page read "
+                    "(see offset) it counts journal entries, and an entry can "
+                    "print several lines."
                 )
             ),
         ] = None,
@@ -314,8 +323,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Sort order for time-ordered sources (logbook, system, error_log, "
                     "supervisor, system_service, fault_log): 'newest' returns "
                     "most-recent first; 'oldest' returns chronological-first. For "
-                    "raw-text sources it sets the read direction of the most-recent "
-                    "window; fault_log orders whole crash blocks; error_log orders "
+                    "error_log, supervisor and system_service it sets the read "
+                    "direction of the newest lines read, except on a "
+                    "supervisor/system_service page read (see offset), which "
+                    "starts at the window's first entry. fault_log orders whole crash blocks; error_log orders "
                     "whole records and keeps each record's lines in place. Ignored "
                     "for source='logger', and for source='error_log' with "
                     "structured=True."
@@ -330,8 +341,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "How many hours back to read. Logbook (default 1), "
                     "supervisor and system_service. For the last two, only "
-                    "when given: the journal returns that window, and "
-                    "window_complete says whether all of it was read."
+                    "when given: the journal serves that window. limit still "
+                    "bounds one response; has_more says more of the window "
+                    "remains, window_complete whether the read reached its "
+                    "end, and offset pages through it (see offset)."
                 ),
             ),
         ] = None,
@@ -373,8 +386,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | str,
             Field(
                 description=(
-                    "Page deeper into source='logbook', 'error_log' and "
-                    "'fault_log' (ignored for other sources). On error_log it "
+                    "Page deeper into source='logbook', 'error_log', "
+                    "'fault_log', and supervisor/system_service on a page "
+                    "read: hours_back with order='oldest' and no search "
+                    "(ignored otherwise). A page read counts journal entries "
+                    "from the window's first entry, and its total_lines is "
+                    "the page's line count. On error_log it "
                     "counts raw log lines back from the newest entry, or is the "
                     "opaque token a previous page returned in 'next_offset' on "
                     "Supervisor/journald installs, which keeps paging exact "
@@ -462,9 +479,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Raw-text sources (error_log, supervisor, system_service) read a bounded
         window per call, so level/search filter and limit slice within that
-        window only; window_lines reports the size requested. Logbook
-        responses carry has_more plus a pagination_hint; error_log and fault_log
-        carry has_more with a next_offset to pass back while it stays true.
+        window only; window_lines reports the size requested. With hours_back,
+        supervisor and system_service read the journal's own time window
+        instead. Logbook and hours_back responses carry has_more plus a
+        pagination_hint; error_log, fault_log and supervisor/system_service
+        page reads carry has_more with a next_offset to pass back while it
+        stays true.
         """
         return await tools.get_logs(
             source=source,

@@ -1,13 +1,13 @@
 {
-  "reason": "Adds three inaddon_only E2E tests (tests/src/e2e/workflows/system/test_supervisor_inaddon.py, TestGetLogsHoursBackReal): hours_back on supervisor and system_service logs reads a realtime= journal window through Supervisor. They run on the inaddon lanes and skip at collection everywhere else.",
+  "reason": "Adds four inaddon_only E2E tests (tests/src/e2e/workflows/system/test_supervisor_inaddon.py, TestGetLogsHoursBackReal): hours_back on supervisor and system_service logs reads a realtime= journal window through Supervisor, paged oldest-first. They run on the inaddon lanes and skip at collection everywhere else.",
   "deltas": {
-    "container": 3,
-    "haos": 3,
-    "haos_stdio": 3,
-    "embedded": 3,
-    "haos_embedded": 3,
-    "container_no_tools": 3,
-    "embedded_no_tools": 3,
-    "haos_embedded_no_tools": 3
+    "container": 4,
+    "haos": 4,
+    "haos_stdio": 4,
+    "embedded": 4,
+    "haos_embedded": 4,
+    "container_no_tools": 4,
+    "embedded_no_tools": 4,
+    "haos_embedded_no_tools": 4
   }
 }
