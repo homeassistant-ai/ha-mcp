@@ -418,6 +418,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
                 else "outdated"
             )
         component_response: dict[str, Any] | None = None
+        component_answered = False
         mode_supported = component_supports(caps, "search_unified") or (
             bool(req.query_text) and not (req.area_filter or "").strip()
         )
@@ -435,7 +436,10 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
                 visibility,
             ) = await self._resolve_component_search_visibility(caps)
             if route_component:
-                component_response = await self._ha_search_via_component(
+                (
+                    component_response,
+                    component_answered,
+                ) = await self._ha_search_via_component(
                     req, ctx, visibility=visibility, caps=caps
                 )
 
@@ -445,7 +449,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             else await self._legacy_ha_search(req, ctx)
         )
         notes = _composed_name_notes(
-            name_served=component_response is not None and naming == "current",
+            name_served=component_answered and naming == "current",
             component=naming,
             name_requested=_COMPOSED_NAME_FIELD in (parsed_result_fields or ()),
             nothing_found=bool(req.query_text)
