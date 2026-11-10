@@ -101,13 +101,11 @@ def _build_datetime_create_params(
 ) -> dict[str, Any]:
     """Build the ha_config_set_helper params for an input_datetime helper."""
     config: dict[str, Any] = {}
-    # Set explicit date/time parameters (at least one required)
     if has_date:
         config["has_date"] = True
     if has_time:
         config["has_time"] = True
 
-    # Add appropriate initial values
     if has_date and has_time:
         config["initial"] = "2025-01-01 12:00:00"
     elif has_date:

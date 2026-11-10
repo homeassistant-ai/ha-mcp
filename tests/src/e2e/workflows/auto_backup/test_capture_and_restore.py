@@ -986,9 +986,7 @@ class TestComplexHelperCaptureRestore:
         suffix = uuid.uuid4().hex[:8]
         helper_id = f"e2e_sched_{suffix}"
 
-        # Original config — multiple days with multiple time ranges each.
-        # Picks days/times deterministically so the assertion on captured
-        # content has something concrete to check.
+        # Several days with several time ranges each, fixed for the assertions.
         original = {
             "helper_type": "schedule",
             "name": helper_id,
@@ -1015,9 +1013,7 @@ class TestComplexHelperCaptureRestore:
             # pre-edit fetch via ``schedule/list`` needs the entity present.
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
-            # Edit — shrink Monday, split Tuesday, drop Wednesday entirely.
-            # ``name`` is required by HA's schedule schema on every update
-            # (validator rejects the WS payload otherwise).
+            # Edit: shrink Monday, split Tuesday, drop Wednesday entirely.
             edited = {
                 "helper_type": "schedule",
                 "helper_id": helper_id,

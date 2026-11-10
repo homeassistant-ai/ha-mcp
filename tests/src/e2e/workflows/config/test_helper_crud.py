@@ -374,7 +374,6 @@ class TestInputNumberCRUD:
 
     async def test_input_number_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete input_number lifecycle with numeric settings."""
-        logger.info("Testing input_number full lifecycle")
 
         helper_name = "E2E Test Number"
 
@@ -426,7 +425,6 @@ class TestInputNumberCRUD:
 
     async def test_input_number_box_mode(self, mcp_client, cleanup_tracker):
         """Test creating input_number with box mode."""
-        logger.info("Testing input_number with box mode")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",
@@ -538,7 +536,6 @@ class TestInputTextCRUD:
 
     async def test_input_text_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete input_text lifecycle with text settings."""
-        logger.info("Testing input_text full lifecycle")
 
         helper_name = "E2E Test Text"
 
@@ -576,7 +573,6 @@ class TestInputTextCRUD:
 
     async def test_input_text_password_mode(self, mcp_client, cleanup_tracker):
         """Test creating input_text with password mode."""
-        logger.info("Testing input_text with password mode")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",
@@ -620,7 +616,6 @@ class TestInputDatetimeCRUD:
 
     async def test_input_datetime_date_only(self, mcp_client, cleanup_tracker):
         """Test creating input_datetime with date only."""
-        logger.info("Testing input_datetime date only")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",

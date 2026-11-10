@@ -37,8 +37,10 @@ def storage_fields(
             "storage helper is written in one call.",
         )
     # These address the WebSocket request (its command, the item to update),
-    # not a field of the item.
-    if reserved := sorted({"type", "id", f"{helper_type}_id"} & fields.keys()):
+    # not a field of the item. A tag's ``tag_id`` is the one that is both:
+    # Core's tag create takes it as a field.
+    addressing = {"type", "id"} | ({f"{helper_type}_id"} - {"tag_id"})
+    if reserved := sorted(addressing & fields.keys()):
         _reject(
             helper_type,
             f"config keys {', '.join(reserved)} address the request, not a "
