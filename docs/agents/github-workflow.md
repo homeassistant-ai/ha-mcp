@@ -321,6 +321,17 @@ checks still gate the update; a failed generator is an artifact error, not an
 accepted pin-only update. The credential-free vendoring fixture exercises the
 pinned Renovate executor for both generators.
 
+The dev group pins `homeassistant` and `pytest-homeassistant` to the e2e
+image's Core version (`tests/test_constants.py`). Both carry the image's
+`# renovate:` annotation, so the Core image update changes all three in one
+pull request. Its post-upgrade tasks run `uv lock`, which takes the new Core's
+requirement pins, then `scripts/check_ha_constraint_alignment.py --sync-lock`,
+which moves the runtime packages Core pins only in `package_constraints.txt`
+(pydantic, httpx). Fast Checks compare the lock with that file on every pull
+request (they warn instead when the file is unreachable). Dependabot ignores
+the runtime dependencies Core pins exactly, since a bump of one would only
+fail that check.
+
 Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
 updates, and for its ungrouped vulnerability-alert fixes. Ordinary major
 upgrades remain manual. This does not bypass creation schedules or release-age

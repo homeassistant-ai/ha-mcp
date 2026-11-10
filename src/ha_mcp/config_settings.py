@@ -543,7 +543,7 @@ class Settings(BaseSettings):
 
     # Redact Secrets — opt-in secret redaction (issue #2157). When on,
     # add-on option values whose schema entry carries ``format: password``
-    # and integration option fields marked with a password selector are
+    # and integration option fields marked secret or with a password selector are
     # replaced with set/empty sentinels, and any tool response is scrubbed
     # of secret values already seen while serving those surfaces (see
     # redaction.py). Off by default; no redaction runs while off, with one

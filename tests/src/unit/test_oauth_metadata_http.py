@@ -390,13 +390,6 @@ def test_as_documents_pin_the_claude_cimd_selection_contract():
     docs, 2026-08); every bearer-capable AS document must keep them, and every
     advertised endpoint must live under OAUTH_BASE (never core's /auth/*, never
     the root alias) so a client cache formed in any mode survives any switch."""
-    # Component modules need the lightweight HA/aiohttp fakes used by the
-    # existing embedded-component unit tests. Import them locally so the real
-    # FastMCP/aiohttp setup above remains intact for this file's HTTP tests.
-    from ._embedded_stubs import install
-
-    install()
-
     from custom_components.ha_mcp_tools import mcp_webhook
     from custom_components.ha_mcp_tools.const import OAUTH_BASE
 

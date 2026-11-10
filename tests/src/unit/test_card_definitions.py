@@ -19,9 +19,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import dashboard_card_describe as describe_mod
 from ha_mcp.tools.component_api import ComponentCaps
 
-# The sibling module installs the homeassistant.* stubs the component needs.
-importlib.import_module(".test_component_ws_search", __package__)
-
 cd = importlib.import_module("custom_components.ha_mcp_tools.card_definitions")
 dcw = importlib.import_module("custom_components.ha_mcp_tools.dashboard_cards_ws")
 

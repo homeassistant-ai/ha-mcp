@@ -10,9 +10,9 @@ One config flow serves two entry types under the shared domain:
   the port/auth/pip options flow, the tools entry gets a light informational
   options flow (an empty-schema ``tools_info`` step, nothing to configure yet).
 
-The HA framework methods (async_show_menu / async_show_form / async_create_entry
-/ ...) are stubbed on the flow instance so each routing decision is asserted
-directly.
+The flow classes are Core's real ``ConfigFlow`` / ``OptionsFlow``; the framework
+methods (async_show_menu / async_show_form / async_create_entry / ...) are
+replaced on the flow instance so each routing decision is asserted directly.
 """
 
 from __future__ import annotations
@@ -26,118 +26,15 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.helpers.selector import TextSelector, TextSelectorType
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-# --- Stub Home Assistant so the merged config_flow imports without HA installed.
-# config_flow subclasses ConfigFlow AND OptionsFlow, so both need real,
-# subclassable bases (a plain MagicMock attribute can't be subclassed).
-class _ConfigFlowResult(dict):
-    """Stand-in for homeassistant.config_entries.ConfigFlowResult."""
-
-
-class _ConfigFlowBase:
-    """Subclassable stand-in for ConfigFlow (absorbs the domain= kwarg)."""
-
-    def __init_subclass__(cls, **kwargs):
-        return None
-
-
-class _OptionsFlowBase:
-    """Subclassable stand-in for OptionsFlow (config_entry stays settable)."""
-
-
-_ce = MagicMock()
-_ce.ConfigFlow = _ConfigFlowBase
-_ce.OptionsFlow = _OptionsFlowBase
-_ce.ConfigFlowResult = _ConfigFlowResult
-_ce.ConfigEntry = MagicMock
-sys.modules["homeassistant.config_entries"] = _ce
-
-_core = MagicMock()
-_core.callback = lambda func: func  # identity so async_get_options_flow builds
-sys.modules["homeassistant.core"] = _core
-
-_ha_const = MagicMock()
-_ha_const.__version__ = "2026.8.0"
-sys.modules["homeassistant.const"] = _ha_const
-
-
-# Inert selector stand-ins: the options flow builds selectors, but these tests
-# hand user_input straight to the handler, so the selector never validates - it
-# only needs to construct (and expose .config for the schema-shape assertions
-# below).
-class _SelectSelectorConfig:
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-
-class _SelectSelector:
-    def __init__(self, config=None):
-        self.config = config
-
-    def __call__(self, value):
-        return value
-
-
-class _SelectSelectorMode:
-    DROPDOWN = "dropdown"
-    LIST = "list"
-
-
-class _TextSelectorConfig(_SelectSelectorConfig):
-    pass
-
-
-class _TextSelector(_SelectSelector):
-    pass
-
-
-class _TextSelectorType:
-    TEXT = "text"
-    URL = "url"
-    PASSWORD = "password"
-
-
-_sel = MagicMock()
-_sel.SelectSelector = _SelectSelector
-_sel.SelectSelectorConfig = _SelectSelectorConfig
-_sel.SelectSelectorMode = _SelectSelectorMode
-_sel.TextSelector = _TextSelector
-_sel.TextSelectorConfig = _TextSelectorConfig
-_sel.TextSelectorType = _TextSelectorType
-sys.modules["homeassistant.helpers.selector"] = _sel
-
-for _mod in [
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.persistent_notification",
-    "homeassistant.config",
-    "homeassistant.helpers",
-    "homeassistant.helpers.config_validation",
-    "homeassistant.helpers.storage",
-    "homeassistant.loader",
-]:
-    sys.modules.setdefault(_mod, MagicMock())
-
-# Determinism under pytest-xdist: peer unit files may register a MagicMock
-# voluptuous via sys.modules.setdefault, and whether that or the real package is
-# bound is import-order dependent. The options tests below inspect REAL vol.Schema
-# markers (marker.schema / marker.default()), so evict any stub — plus a cached
-# config_flow that may have bound it — so config_flow's own ``import voluptuous``
-# re-binds the real package (a hard dependency, always installed).
-for _name in [
-    n for n in sys.modules if n == "voluptuous" or n.startswith("voluptuous.")
-]:
-    del sys.modules[_name]
-sys.modules.pop("custom_components.ha_mcp_tools.config_flow", None)
-
-from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
-from custom_components.ha_mcp_tools import (  # noqa: E402
+from custom_components.ha_mcp_tools import config_flow as cf
+from custom_components.ha_mcp_tools import (
     config_flow_text as cft,
 )
-from custom_components.ha_mcp_tools import const  # noqa: E402
+from custom_components.ha_mcp_tools import const
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _make_flow() -> cf.HaMcpToolsConfigFlow:
@@ -155,9 +52,21 @@ def _make_flow() -> cf.HaMcpToolsConfigFlow:
     return flow
 
 
+class _OptionsFlowWithEntry(cf.HaMcpServerOptionsFlow):
+    """The server options flow holding its entry directly.
+
+    Core's ``OptionsFlow.config_entry`` looks the entry up in a running
+    ``ConfigEntries`` registry, which these synchronous tests do not start.
+    """
+
+    config_entry = None
+
+
 def _make_options_flow(*, options=None, data=None) -> cf.HaMcpServerOptionsFlow:
-    flow = cf.HaMcpServerOptionsFlow()
-    flow.config_entry = SimpleNamespace(options=options or {}, data=data or {})
+    flow = _OptionsFlowWithEntry()
+    flow.config_entry = SimpleNamespace(
+        entry_id="srv1", options=options or {}, data=data or {}
+    )
     # Bare hass with empty data: legacy_credentials_active() resolves False
     # (nothing bound) unless a test monkeypatches it.
     flow.hass = MagicMock(name="hass")
@@ -310,8 +219,8 @@ class TestServerOptionsFlow:
         }
         selector = validators[const.OPT_SECRET_PATH_OVERRIDE]
 
-        assert isinstance(selector, _TextSelector)
-        assert selector.config.type == _TextSelectorType.TEXT
+        assert isinstance(selector, TextSelector)
+        assert selector.config["type"] == TextSelectorType.TEXT
 
     def test_legacy_oauth_secret_is_explicit_plain_text_selector(self):
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
@@ -323,8 +232,8 @@ class TestServerOptionsFlow:
         }
         selector = validators[const.OPT_OAUTH_CLIENT_SECRET]
 
-        assert isinstance(selector, _TextSelector)
-        assert selector.config.type == _TextSelectorType.TEXT
+        assert isinstance(selector, TextSelector)
+        assert selector.config["type"] == TextSelectorType.TEXT
 
     @pytest.mark.parametrize(
         "field",

@@ -24,6 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp.tools import component_api, component_config_reads
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
@@ -37,8 +38,6 @@ from .test_component_ws_search import (
     FakeRegEntry,
     FakeServices,
     FakeState,
-    _exceptions_stub,
-    _StubHomeAssistantError,
     make_view,
     wsapi,
 )
@@ -210,11 +209,10 @@ class TestReferenceDataContract:
     def test_missing_target_registry_raises_instead_of_flagging_every_target(
         self, monkeypatch
     ) -> None:
-        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         view = make_view()
         view.floor = None
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
-        with pytest.raises(_StubHomeAssistantError):
+        with pytest.raises(HomeAssistantError):
             wsapi._do_reference_data(self._hass(), {"include_targets": True})
 
     def test_targets_are_advertised(self) -> None:

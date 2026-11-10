@@ -185,6 +185,21 @@
           "entry_removed": "A HA-MCP Server bejegyzés már nem létezik."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "A HA-MCP két áruházbeli bejegyzésből van telepítve",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Megtartja a HA-MCP-t az egyik áruházbeli bejegyzésben?",
+            "description": "A HA-MCP mindkettőből telepítettként van megjelölve: {records}. Ugyanazt az integrációt hordozzák (a második a régebbi terjesztési tükör). A Home Assistant 2026.11-es verziójában található Marketplace csak egyetlen bejegyzésnek engedi birtokolni az integrációt, így ott egyik sem tudja frissíteni a HA-MCP-t; a HACS továbbra is frissít, de a 2026.11-es verzióra való frissítés beragadva hagyná a HA-MCP-t.\n\nA Beküldés gomb megnyomásával a(z) **{keep}** marad meg (az alapértelmezett katalógusban lévő bejegyzés, amely nem igényel egyéni tárolót), a másik bejegyzést pedig nem telepítettként jelöli meg. Semmi sincs törölve: a HA-MCP bejegyzései, beállításai és fájljai pontosan úgy maradnak, ahogy vannak, és mostantól a frissítések a szokásos módon a(z) {keep} alatt jelennek meg."
+          }
+        },
+        "abort": {
+          "already_resolved": "A HA-MCP már csak egy áruházbeli bejegyzésből van telepítve; nincs mit javítani.",
+          "store_unavailable": "Az áruház (a HACS vagy a Marketplace) még nem töltődött be, így a bejegyzések nem ellenőrizhetők. Próbálja meg újra néhány perc múlva."
+        }
+      }
     }
   },
   "selector": {

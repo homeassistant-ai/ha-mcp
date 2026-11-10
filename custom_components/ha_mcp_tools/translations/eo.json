@@ -185,6 +185,21 @@
           "entry_removed": "La ero de la HA-MCP Server jam ekzistas ne plu."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP estas instalita el du vendejaj listoj",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Ĉu konservi HA-MCP en unu vendeja listo?",
+            "description": "HA-MCP estas markita kiel instalita el ambaŭ {records}. Ili portas la saman integriĝon (la dua estas la pli malnova distribua spegulo). La vendejo en Home Assistant 2026.11 permesas al nur unu listo posedi integriĝon, do tie neniu el ili povas ĝisdatigi HA-MCP; HACS ankoraŭ ĝisdatigas, sed la ĝisdatigo al 2026.11 lasus HA-MCP blokita.\n\nSendado konservas **{keep}**, la liston en la defaŭlta katalogo kiu bezonas neniun propran deponejon, kaj markas la alian liston kiel ne instalitan. Nenio estas forviŝita: viaj HA-MCP-registroj, agordoj kaj dosieroj restas ekzakte kiel ili estas, kaj de nun ĝisdatigoj aperas sub {keep} kiel kutime."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP estas instalita el unu vendeja listo nun; nenio korektenda.",
+          "store_unavailable": "La vendejo (HACS aŭ la vendejo) ankoraŭ ne estas ŝargita, do la listoj ne povas esti kontrolitaj. Provu denove post kelkaj minutoj."
+        }
+      }
     }
   },
   "selector": {

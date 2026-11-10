@@ -12,24 +12,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Mock the Home Assistant imports before importing the module
-sys.modules["voluptuous"] = MagicMock()
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.components"] = MagicMock()
-sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
-sys.modules["homeassistant.config"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-# setdefault (not =): other test modules stub homeassistant.core with a real
-# `callback` identity function that production closures rely on.
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
-sys.modules["homeassistant.helpers.storage"] = MagicMock()
-sys.modules["homeassistant.loader"] = MagicMock()
-
-import custom_components.ha_mcp_tools as component  # noqa: E402
-from custom_components.ha_mcp_tools import file_ops, file_post_action  # noqa: E402
-from custom_components.ha_mcp_tools.file_ops import (  # noqa: E402
+import custom_components.ha_mcp_tools as component
+from custom_components.ha_mcp_tools import file_ops, file_post_action
+from custom_components.ha_mcp_tools.file_ops import (
     _REFUSALS,
     _replace_file_sync,
     edit_file_sync,

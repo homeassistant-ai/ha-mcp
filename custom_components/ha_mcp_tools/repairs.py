@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Any, get_args
 
 import voluptuous as vol
-from homeassistant import data_entry_flow
-from homeassistant.components.repairs import RepairsFlow
+from homeassistant.components.repairs import RepairsFlow, RepairsFlowResult
 from homeassistant.core import HomeAssistant
 
 from . import server_credentials, store_records
@@ -28,13 +27,13 @@ class LegacyOAuthRestartRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Open the restart confirmation step."""
         return await self.async_step_confirm()
 
     async def async_step_confirm(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Restart Home Assistant after the user confirms the repair."""
         if user_input is not None:
             # Wait for HA to validate the config and schedule the restart. If the
@@ -60,13 +59,13 @@ class StoreRecordsRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Open the confirmation step."""
         return await self.async_step_confirm()
 
     async def async_step_confirm(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Keep the main repository's record and forget the other one."""
         records = store_records.conflicting_records(self.hass)
         if records is None:
@@ -99,13 +98,13 @@ class ServerTokenRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Open the token step."""
         return await self.async_step_token()
 
     async def async_step_token(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Store a working token and restart the server with it."""
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         if entry is None:
@@ -162,13 +161,13 @@ class ServerPackageRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Open the confirmation step."""
         return await self.async_step_confirm()
 
     async def async_step_confirm(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         """Request the reinstall, then restart Home Assistant to run it."""
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         if entry is None:

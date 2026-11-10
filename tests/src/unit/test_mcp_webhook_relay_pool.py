@@ -7,19 +7,15 @@ from unittest.mock import MagicMock
 
 from pytest import LogCaptureFixture
 
-from ._embedded_stubs import FakeSession, install, make_request
-
-# Install the HA / aiohttp stubs before importing the component (isort barrier).
-install()
-
-import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.mcp_webhook as mw
+from custom_components.ha_mcp_tools.const import (
     DATA_WEBHOOK_ID,
     SERVER_KEEPALIVE_SECONDS,
     WEBHOOK_AUTH_NONE,
 )
 
-from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg  # noqa: E402
+from ._embedded_helpers import FakeSession, make_request
+from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg
 
 
 async def test_relay_never_reuses_a_connection_the_server_has_closed(
@@ -31,6 +27,7 @@ async def test_relay_never_reuses_a_connection_the_server_has_closed(
     monkeypatch.setattr(
         mw.aiohttp, "ClientSession", lambda **kw: sessions.append(kw) or FakeSession()
     )
+    monkeypatch.setattr(mw.aiohttp, "TCPConnector", SimpleNamespace)
     hass = MagicMock(name="hass")
     hass.data = {}
     hass.config = SimpleNamespace(components={"webhook"})

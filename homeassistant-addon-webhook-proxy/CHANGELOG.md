@@ -2,6 +2,40 @@
 
 <!-- version list -->
 
+## v3.0.5 (2026-11-09)
+
+### Features
+
+- Serve `/catalog/full` and `/catalog/search` on the webhook URL, alone or
+  after `/readonly` (`/readonly/catalog/search`), to give a client a fixed tool
+  catalog: the full tool list, or ha-mcp's search tools. Uses the same webhook
+  secret and OAuth sign-in. Requires an MCP server that serves those endpoints.
+
+### Bug Fixes
+
+- `ha_auth` sign-in works when Home Assistant serves HTTPS itself: token and
+  revocation requests go to Core's own listener (its configured listen address,
+  or `127.0.0.1`) without verifying a certificate issued for Home Assistant's
+  hostname, instead of answering 503.
+
+### Documentation
+
+- Update the Claude.ai connector steps for its current form: **Settings** →
+  **Customize** (or **Plugins**) → **Add** → **Add custom connector**, then
+  **Continue** and keep the sign-in settings Claude detects. Add the Team or
+  Enterprise path through **Organization settings** → **Connectors**, and warn
+  that with OAuth off or in `legacy` mode every member who connects it gets the
+  server's Home Assistant access without signing in.
+- Add **Per-URL tool catalog** to the app documentation.
+
+### Maintenance
+
+- Take the Python base image through a `PYTHON_BASE` build argument (default
+  unchanged), so CI can build from Docker Hub when ECR Public rate-limits the
+  pull.
+- Match Home Assistant Core 2026.11's type annotations for the repairs flow,
+  the webhook handler and the protected-resource view. No behavior change.
+
 ## v3.0.4 (2026-10-10)
 
 ### Features

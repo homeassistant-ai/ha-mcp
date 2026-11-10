@@ -13,9 +13,9 @@ import os
 TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
 
 # LLAT for a seeded non-admin user (``system-users`` group). Used to
-# verify the admin gate on ``ha_mcp_tools.get_caller_token`` rejects
-# non-admin callers end-to-end. The user, refresh_token, and jwt_key
-# entries that back this JWT live alongside the admin entries in
+# verify end-to-end that HA core refuses non-admin callers of the
+# admin-only ``ha_mcp_tools`` services. The user, refresh_token, and
+# jwt_key entries that back this JWT live alongside the admin entries in
 # ``tests/initial_test_state/.storage/auth``.
 NON_ADMIN_TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIzNzkyOTc5YzdiYTdlNjAwMDU2NjJlMjJjNzgzOGNmOCIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.LGH1CMs-3ML7YkY14FctNiHSenDGLjjW8wAB_MlZ7VU"
 

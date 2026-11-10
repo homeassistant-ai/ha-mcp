@@ -55,7 +55,7 @@ from ._component_routing_helpers import (
     patch_ws,
     patch_ws_establish_failure,
 )
-from ._stub_helper_flows import STUB_HELPER_FLOWS
+from ._core_helper_flows import CORE_HELPER_FLOWS
 
 # person is the one storage type whose {type}/list does not return a flat list:
 # HA's PersonStorageCollectionWebsocket overrides the base ws_list_item to send
@@ -444,7 +444,7 @@ async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
     ``_legacy_helper_list("tag")``; its registry read then fails, and the
     degrade-open warning must reach the merged response rather than vanish.
     """
-    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | STUB_HELPER_FLOWS)
+    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | CORE_HELPER_FLOWS)
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -787,7 +787,7 @@ def _component_all_result() -> dict[str, Any]:
         ],
         "count": 2,
         "covered_types": sorted(
-            (SIMPLE_HELPER_TYPES - {"person", "tag"}) | STUB_HELPER_FLOWS
+            (SIMPLE_HELPER_TYPES - {"person", "tag"}) | CORE_HELPER_FLOWS
         ),
     }
 
@@ -868,7 +868,7 @@ async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
     monkeypatch.setattr(
         helper_flows,
         "_fetch_helper_flow_types",
-        AsyncMock(return_value=STUB_HELPER_FLOWS | {"my_custom_helper"}),
+        AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
     )
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
@@ -893,7 +893,7 @@ async def test_all_types_reads_the_helper_flows_afresh(
     monkeypatch.setattr(
         helper_flows,
         "_fetch_helper_flow_types",
-        AsyncMock(side_effect=[STUB_HELPER_FLOWS | {"gone_helper"}, STUB_HELPER_FLOWS]),
+        AsyncMock(side_effect=[CORE_HELPER_FLOWS | {"gone_helper"}, CORE_HELPER_FLOWS]),
     )
     client = RoutingClient()
     await helper_flows.helper_flow_types(client)
@@ -943,7 +943,7 @@ async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
     monkeypatch.setattr(
         helper_flows,
         "_fetch_helper_flow_types",
-        AsyncMock(return_value=STUB_HELPER_FLOWS | {"my_custom_helper"}),
+        AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
     )
     result = _component_all_result() | {"helper_flows_degraded": True}
     ws = make_ws(

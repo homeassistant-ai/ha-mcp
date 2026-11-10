@@ -71,7 +71,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: '3.13'
+        python-version: '3.14'
 
     # Both scripts use only the standard library. A push rejected as a
     # non-fast-forward means another merge landed after this checkout: its

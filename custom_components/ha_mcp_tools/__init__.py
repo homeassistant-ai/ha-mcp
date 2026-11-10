@@ -16,7 +16,7 @@ import posixpath
 import re
 import secrets
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from datetime import datetime
 from io import StringIO
 from pathlib import Path, PurePosixPath
@@ -34,6 +34,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import service as ha_service
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
@@ -104,9 +105,12 @@ SERVICE_LIST_LEGACY_BACKUPS = "list_legacy_backups"
 SERVICE_READ_LEGACY_BACKUP = "read_legacy_backup"
 
 # Caller-token auth (PR: restrict ha_mcp_tools.* to ha-mcp callers).
-# ha-mcp injects this field in every service-call payload; non-ha-mcp callers
-# (HA UI, automations, other integrations, the ha_call_service LLM bypass)
-# omit it and are rejected with a structured unauthorized response.
+# ha-mcp injects this field in every service call except the get_caller_token
+# bootstrap; non-ha-mcp callers (HA UI, automations, other integrations, the
+# ha_call_service LLM bypass) omit it. Non-admin users are already refused by
+# the admin-only service registration; admin and no-user-context callers
+# without the token are rejected with a structured unauthorized response by
+# every handler except that bootstrap.
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 _TOKEN_STORAGE_KEY = f"{DOMAIN}_auth"
 _TOKEN_STORAGE_VERSION = 1
@@ -220,7 +224,7 @@ SERVICE_DELETE_FILE_SCHEMA = vol.Schema(
 
 # get_caller_token is the bootstrap surface: ha-mcp does not know the token
 # yet on first run, so this service intentionally does NOT require the token
-# itself. HA's default admin-auth still applies to the service call.
+# itself. Like every service in this domain it is registered admin-only.
 SERVICE_GET_CALLER_TOKEN_SCHEMA = vol.Schema(
     {
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
@@ -228,11 +232,12 @@ SERVICE_GET_CALLER_TOKEN_SCHEMA = vol.Schema(
 )
 
 # get_allowed_paths / set_allowed_paths back the ha-mcp settings UI's custom
-# filesystem-directory editor (issues #1567, #1586). Both are caller-token +
-# admin gated. set_allowed_paths receives the FULL replacement list (mirrors how
-# disabled_packages_keys sends the whole set each call); the handler validates
-# and drops any entry that hits the deny floor, or that escapes the config dir
-# without being one of the fixed HAOS sibling-volume roots (#1586).
+# filesystem-directory editor (issues #1567, #1586). Both are caller-token
+# gated; the registration is admin-only. set_allowed_paths receives the FULL
+# replacement list (mirrors how disabled_packages_keys sends the whole set each
+# call); the handler validates and drops any entry that hits the deny floor, or
+# that escapes the config dir without being one of the fixed HAOS sibling-volume
+# roots (#1586).
 SERVICE_GET_ALLOWED_PATHS_SCHEMA = vol.Schema(
     {
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
@@ -247,10 +252,10 @@ SERVICE_SET_ALLOWED_PATHS_SCHEMA = vol.Schema(
 )
 
 # get_extra_yaml_keys / set_extra_yaml_keys back the component's own options
-# flow and the ha-mcp settings UI (#1887). Both are caller-token + admin gated,
-# matching the allowed-paths pair. set_extra_yaml_keys receives the FULL
-# replacement list; the handler strips whitespace/empties and drops any
-# YAML_KEY_DENYLIST member, reporting drops in ``rejected``.
+# flow and the ha-mcp settings UI (#1887). Both are caller-token gated, and the
+# registration is admin-only, like the allowed-paths pair. set_extra_yaml_keys
+# receives the FULL replacement list; the handler strips whitespace/empties and
+# drops any YAML_KEY_DENYLIST member, reporting drops in ``rejected``.
 SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA = vol.Schema(
     {
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
@@ -608,26 +613,6 @@ def _caller_token_ok(hass: HomeAssistant, call: ServiceCall) -> bool:
     if not isinstance(expected, str) or not isinstance(presented, str):
         return False
     return secrets.compare_digest(expected, presented)
-
-
-async def _caller_is_admin(hass: HomeAssistant, call: ServiceCall) -> bool:
-    """Return True if the caller is an admin user (or a no-user-context call).
-
-    HA's service registry has no built-in admin requirement — `Service`
-    has no admin flag, `async_call` performs no permission check, and
-    WS / REST `call_service` lack `@require_admin`. Gate explicitly here.
-
-    Calls without `context.user_id` (system-internal events) are treated
-    as trusted, matching HA's `async_admin_handler_factory` convention.
-    The supported deployment shapes all use admin tokens: addon's
-    SUPERVISOR_TOKEN maps to HA's `hassio_user`, which HA force-promotes
-    into `GROUP_ID_ADMIN` (hassio/__init__.py); standalone Docker/pip
-    deployments use a user-supplied admin LLAT.
-    """
-    if not call.context.user_id:
-        return True
-    user = await hass.auth.async_get_user(call.context.user_id)
-    return user is not None and bool(user.is_admin)
 
 
 def _is_within_config_dir(config_dir: Path, normalized: str) -> bool:
@@ -2251,7 +2236,7 @@ async def _apply_yaml_key_edit(
 
 def _build_edit_yaml_config_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[dict[str, Any]]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build and return the async handle_edit_yaml_config handler.
 
     Extracted to module level so it can be tested without registering
@@ -2714,7 +2699,7 @@ def _current_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
 
 def _build_list_files_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the handle_list_files service handler."""
     config_dir = Path(hass.config.config_dir)
 
@@ -2860,7 +2845,7 @@ async def _shape_read_file_response(
 
 def _build_read_file_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the handle_read_file service handler."""
     config_dir = Path(hass.config.config_dir)
 
@@ -2957,7 +2942,7 @@ def _build_read_file_handler(
 
 def _build_write_file_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the handle_write_file service handler."""
     config_dir = Path(hass.config.config_dir)
 
@@ -3032,7 +3017,7 @@ def _build_write_file_handler(
 
 def _build_delete_file_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the handle_delete_file service handler."""
     config_dir = Path(hass.config.config_dir)
 
@@ -3097,24 +3082,17 @@ def _build_delete_file_handler(
 
 def _build_get_caller_token_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the handle_get_caller_token service handler."""
 
     async def handle_get_caller_token(call: ServiceCall) -> ServiceResponse:
         """Return the caller-auth token to the ha-mcp bootstrap caller.
 
-        Admin-gated explicitly (see `_caller_is_admin`): HA's service
-        registry has no built-in admin requirement, so the gate prevents
-        a non-admin caller from bootstrapping the token. The supported
-        deployments (addon supervisor user, standalone admin LLAT) all
-        pass this gate.
+        Registered admin-only like every service in this domain (see
+        `_async_setup_tools_entry`), so a non-admin caller cannot bootstrap
+        the token. The supported deployments (addon supervisor user,
+        standalone admin LLAT) all pass this gate.
         """
-        if not await _caller_is_admin(hass, call):
-            return {
-                "success": False,
-                "error_code": "unauthorized",
-                "error": "ha_mcp_tools.get_caller_token requires admin auth.",
-            }
         domain_data = hass.data.get(DOMAIN)
         token = (
             domain_data.get(_HASS_DATA_TOKEN_KEY)
@@ -3170,26 +3148,19 @@ def _build_get_caller_token_handler(
 
 def _build_get_allowed_paths_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build the handle_get_allowed_paths service handler."""
 
-    async def handle_get_allowed_paths(call: ServiceCall) -> ServiceResponse:
+    async def handle_get_allowed_paths(call: ServiceCall) -> dict[str, Any]:
         """Return the user-configurable extra directories plus the built-in
         allowlists and the non-overridable deny floor (issue #1567).
 
         Backs the ha-mcp settings UI's custom filesystem-directory editor.
-        Caller-token + admin gated (matching get_caller_token): it reveals the
-        filesystem layout, so it is not a public read.
+        Caller-token gated on top of the admin-only registration: it reveals
+        the filesystem layout, so it is not a public read.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_GET_ALLOWED_PATHS, paths=[])
-        if not await _caller_is_admin(hass, call):
-            return {
-                "success": False,
-                "error_code": "unauthorized",
-                "error": "ha_mcp_tools.get_allowed_paths requires admin auth.",
-                "paths": [],
-            }
         return {
             "success": True,
             "paths": _current_extra_dirs(hass),
@@ -3203,10 +3174,10 @@ def _build_get_allowed_paths_handler(
 
 def _build_set_allowed_paths_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build the handle_set_allowed_paths service handler."""
 
-    async def handle_set_allowed_paths(call: ServiceCall) -> ServiceResponse:
+    async def handle_set_allowed_paths(call: ServiceCall) -> dict[str, Any]:
         """Replace the user-configurable extra directories (issues #1567, #1586).
 
         Receives the FULL replacement list. Each entry is validated and
@@ -3216,17 +3187,10 @@ def _build_set_allowed_paths_handler(
         sibling-volume roots (#1586 — see ``const.ALLOWED_VOLUME_ROOTS``) are
         accepted; any other absolute path is dropped. Persists to .storage AND
         updates hass.data so enforcement applies live with no HA restart.
-        Caller-token + admin gated.
+        Caller-token gated; the registration is admin-only.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_SET_ALLOWED_PATHS, paths=[])
-        if not await _caller_is_admin(hass, call):
-            return {
-                "success": False,
-                "error_code": "unauthorized",
-                "error": "ha_mcp_tools.set_allowed_paths requires admin auth.",
-                "paths": [],
-            }
         normalized, rejected = await _apply_allowed_paths(
             hass, call.data.get("paths", [])
         )
@@ -3246,27 +3210,20 @@ def _build_set_allowed_paths_handler(
 
 def _build_get_extra_yaml_keys_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build the handle_get_extra_yaml_keys service handler (#1887)."""
 
-    async def handle_get_extra_yaml_keys(call: ServiceCall) -> ServiceResponse:
+    async def handle_get_extra_yaml_keys(call: ServiceCall) -> dict[str, Any]:
         """Return the component-configured extra YAML write keys plus the
         non-overridable deny floor.
 
         Backs the component's own options flow and the ha-mcp settings UI, and
         is how the server reads this store to union it with its own
-        ``HA_MCP_EXTRA_YAML_KEYS``. Caller-token + admin gated, matching
-        get_allowed_paths.
+        ``HA_MCP_EXTRA_YAML_KEYS``. Caller-token gated; the registration is
+        admin-only.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_GET_EXTRA_YAML_KEYS, keys=[])
-        if not await _caller_is_admin(hass, call):
-            return {
-                "success": False,
-                "error_code": "unauthorized",
-                "error": "ha_mcp_tools.get_extra_yaml_keys requires admin auth.",
-                "keys": [],
-            }
         return {
             "success": True,
             "keys": _current_extra_yaml_keys(hass),
@@ -3278,26 +3235,20 @@ def _build_get_extra_yaml_keys_handler(
 
 def _build_set_extra_yaml_keys_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build the handle_set_extra_yaml_keys service handler (#1887)."""
 
-    async def handle_set_extra_yaml_keys(call: ServiceCall) -> ServiceResponse:
+    async def handle_set_extra_yaml_keys(call: ServiceCall) -> dict[str, Any]:
         """Replace the component-configured extra YAML write keys.
 
         Receives the FULL replacement list. Each entry is stripped and
         validated; blanks and ``YAML_KEY_DENYLIST`` members are dropped and
         reported in ``rejected``. Persists to .storage AND updates hass.data so
-        enforcement applies live with no HA restart. Caller-token + admin gated.
+        enforcement applies live with no HA restart. Caller-token gated; the
+        registration is admin-only.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_SET_EXTRA_YAML_KEYS, keys=[])
-        if not await _caller_is_admin(hass, call):
-            return {
-                "success": False,
-                "error_code": "unauthorized",
-                "error": "ha_mcp_tools.set_extra_yaml_keys requires admin auth.",
-                "keys": [],
-            }
         normalized, rejected = await _apply_extra_yaml_keys(
             hass, call.data.get("keys", [])
         )
@@ -3317,12 +3268,12 @@ def _build_set_extra_yaml_keys_handler(
 
 def _build_list_legacy_backups_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, dict[str, Any]]]:
     """Build the handle_list_legacy_backups service handler."""
     config_dir = Path(hass.config.config_dir)
     legacy_backup_dir = config_dir / _LEGACY_BACKUP_DIRNAME
 
-    async def handle_list_legacy_backups(call: ServiceCall) -> ServiceResponse:
+    async def handle_list_legacy_backups(call: ServiceCall) -> dict[str, Any]:
         """List pre-#1579 YAML backups in .ha_mcp_tools_backups/ (read-only)."""
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_LIST_LEGACY_BACKUPS, backups=[])
@@ -3340,7 +3291,7 @@ def _build_list_legacy_backups_handler(
 
 def _build_read_legacy_backup_handler(
     hass: HomeAssistant,
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the handle_read_legacy_backup service handler."""
     config_dir = Path(hass.config.config_dir)
     legacy_backup_dir = config_dir / _LEGACY_BACKUP_DIRNAME
@@ -3490,6 +3441,9 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 type(err).__name__,
                 err,
             )
+
+    # Every service registered below is admin-only; calls without a user context
+    # pass Core's check.
     register_find_yaml_key(hass, _caller_token_ok, _unauthorized_response)
     register_edit_file(
         hass,
@@ -3498,7 +3452,6 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         write_denied=_write_denied,
         volume_root_for=_volume_root_for,
     )
-    # Register all services with response support
     for service, schema, build_handler in (
         (
             SERVICE_EDIT_YAML_CONFIG,
@@ -3545,7 +3498,8 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             _build_read_legacy_backup_handler,
         ),
     ):
-        hass.services.async_register(
+        ha_service.async_register_admin_service(
+            hass,
             DOMAIN,
             service,
             build_handler(hass),

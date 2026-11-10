@@ -18,7 +18,7 @@ against balloob's Puppet add-on, but WITHOUT Chromium:
   real engine, given a bad token, reaches only the HA login screen and cannot
   reproduce the working render).
 
-Stdlib only; runs on python:3.13-slim. Never shipped to users.
+Stdlib only; runs on python:3.14-slim. Never shipped to users.
 """
 
 from __future__ import annotations

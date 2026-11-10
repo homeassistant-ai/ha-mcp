@@ -185,6 +185,21 @@
           "entry_removed": "Het HA-MCP Server-item bestaat niet meer."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP is geïnstalleerd vanuit twee winkelvermeldingen",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Wil je HA-MCP op één winkelvermelding behouden?",
+            "description": "HA-MCP staat als geïnstalleerd gemarkeerd vanuit zowel {records}. Ze bevatten dezelfde integratie (de tweede is de ouderwetse distributiespiegel). De Marketplace in Home Assistant 2026.11 zorgt ervoor dat slechts één vermelding eigenaar kan zijn van een integratie, waardoor geen van beide HA-MCP daar kan bijwerken; HACS blijft updaten, maar de upgrade naar 2026.11 zou HA-MCP laten vastlopen.\n\nDoor op verzenden te drukken behoud je **{keep}**, de vermelding in de standaardcatalogus die geen aangepaste repository nodig heeft, en wordt de andere vermelding gemarkeerd als niet-geïnstalleerd. Er wordt niets verwijderd: je HA-MCP-vermeldingen, instellingen en bestanden blijven exact zoals ze zijn, en vanaf nu verschijnen updates gewoon onder {keep}."
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP is nu geïnstalleerd vanuit één winkelvermelding; er valt niets te repareren.",
+          "store_unavailable": "De winkel (HACS of de Marketplace) is nog niet geladen, dus de vermeldingen kunnen niet worden gecontroleerd. Probeer het over een paar minuten opnieuw."
+        }
+      }
     }
   },
   "selector": {

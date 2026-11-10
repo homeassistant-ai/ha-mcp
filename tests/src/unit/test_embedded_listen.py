@@ -12,26 +12,26 @@ from typing import Any
 
 import pytest
 
-from ._embedded_stubs import install
-from .test_listen_sockets import _load, _require_ipv6_loopback
-from .test_sidecar_pin_port import _a_free_port
-
-install()
-
-from custom_components.ha_mcp_tools import embedded_listen  # noqa: E402
-from custom_components.ha_mcp_tools.const import (  # noqa: E402
+from custom_components.ha_mcp_tools import embedded_listen
+from custom_components.ha_mcp_tools.const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
     OPT_BIND_HOST,
     OPT_SERVER_PORT,
 )
 
-from .test_embedded_server import (  # noqa: E402
+from .test_embedded_server import (
     _manager,
     _no_manifest_pin,  # noqa: F401 - autouse fixture
     _stub_ha_mcp_surface,
 )
-from .test_embedded_server_stop import _clear_worker_env  # noqa: E402
+from .test_embedded_server_stop import _clear_worker_env
+from .test_listen_sockets import _load, _require_ipv6_loopback
+from .test_sidecar_pin_port import _a_free_port
+
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 _SRC = Path(__file__).parents[3] / "src" / "ha_mcp"
 

@@ -49,10 +49,10 @@ logger = logging.getLogger(__name__)
 FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 
 # Caller-token auth (mirrors custom_components/ha_mcp_tools).
-# The custom component's handlers reject every call that doesn't present
-# this field with the matching token. ha-mcp fetches the token once via
-# the get_caller_token bootstrap service, caches it, and re-fetches if a
-# subsequent call comes back unauthorized (covers token rotation).
+# Every custom-component handler except the get_caller_token bootstrap rejects
+# a call without this field and the matching token. ha-mcp fetches the token
+# once via that bootstrap service, caches it, and re-fetches if a subsequent
+# call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 EDIT_FILE_SERVICE = "edit_file"

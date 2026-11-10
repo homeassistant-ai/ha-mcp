@@ -15,7 +15,7 @@ import logging
 import os
 import posixpath
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import service as ha_service
 
 from .const import DOMAIN
 from .file_post_action import after_file_write
@@ -331,7 +332,7 @@ def build_edit_file_handler(
     unauthorized_response: Callable[[str], dict[str, Any]],
     write_denied: Callable[[HomeAssistant, str], str | None],
     volume_root_for: Callable[[str], str | None],
-) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
     """Build the edit_file service handler."""
     config_dir = Path(hass.config.config_dir)
 
@@ -385,7 +386,8 @@ def register_edit_file(
     volume_root_for: Callable[[str], str | None],
 ) -> None:
     """Register edit_file on the tools entry."""
-    hass.services.async_register(
+    ha_service.async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_EDIT_FILE,
         build_edit_file_handler(

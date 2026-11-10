@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
 
+from homeassistant.components.lovelace.const import MODE_STORAGE, MODE_YAML
 from homeassistant.core import HomeAssistant
 
 from .registry import _plainify
 
+_LOGGER = logging.getLogger(__package__)
+
 # =============================================================================
 # ha_mcp_tools/dashboards
 # =============================================================================
-# LovelaceConfig.mode returns these wire strings (MODE_STORAGE / MODE_YAML in
-# core's lovelace const). Compared as strings so a MagicMock-stubbed core in the
-# unit suite (no real constants) still exercises the branches.
-_LOVELACE_MODE_STORAGE = "storage"
-_LOVELACE_MODE_YAML = "yaml"
+# What LovelaceConfig.mode returns.
+_LOVELACE_MODE_STORAGE = MODE_STORAGE
+_LOVELACE_MODE_YAML = MODE_YAML
 
 # Cap on ``search``-mode matches per call so one WS frame stays bounded. ``docs``
 # is not capped: the server's card search needs whole configs, and the frame
@@ -217,6 +219,15 @@ def _dashboard_list_rows(dashboards_map: Mapping[Any, Any]) -> list[dict[str, An
     return rows
 
 
+def _is_config_not_found(err: BaseException) -> bool:
+    """Whether ``err`` is Core's lovelace ``ConfigNotFound`` (False if core drift moved it)."""
+    try:
+        from homeassistant.components.lovelace.const import ConfigNotFound
+    except ImportError:  # pragma: no cover - defensive; core drift
+        return False
+    return isinstance(err, ConfigNotFound)
+
+
 async def _dashboard_get_config(
     dashboards_map: Mapping[Any, Any], url_path: Any
 ) -> dict[str, Any]:
@@ -231,11 +242,6 @@ async def _dashboard_get_config(
     mutates the in-memory object synchronously, so this read never lags a save
     (audit-verified).
     """
-    try:
-        from homeassistant.components.lovelace.const import ConfigNotFound
-    except ImportError:  # pragma: no cover - defensive; core drift
-        ConfigNotFound = None
-
     dash = dashboards_map.get(url_path)
     resolved = getattr(dash, "url_path", None) if dash is not None else url_path
     if dash is None:
@@ -247,9 +253,10 @@ async def _dashboard_get_config(
         return {"status": "not_found", "url_path": resolved, "config": None}
     try:
         config = await loader(False)
-    except Exception as err:  # noqa: BLE001  # any other load failure degrades to not_found (fail-soft)
-        if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
+    except Exception as err:  # any other load failure degrades to not_found (fail-soft)
+        if _is_config_not_found(err):
             return {"status": "no_config", "url_path": resolved, "config": None}
+        _LOGGER.warning("Loading dashboard %s failed", resolved, exc_info=True)
         return {"status": "not_found", "url_path": resolved, "config": None}
     if not isinstance(config, dict):
         return {"status": "not_found", "url_path": resolved, "config": None}
@@ -288,11 +295,6 @@ async def _dashboard_search_docs(
     ``ConfigNotFound`` import, those loads degrade to ``load_failed`` —
     over-reported as partial, never silent.
     """
-    try:
-        from homeassistant.components.lovelace.const import ConfigNotFound
-    except ImportError:  # pragma: no cover - defensive; core drift
-        ConfigNotFound = None
-
     docs: list[dict[str, Any]] = []
     yaml_skipped = 0
     load_failed = 0
@@ -308,7 +310,7 @@ async def _dashboard_search_docs(
         try:
             config = await loader(force)
         except Exception as err:  # noqa: BLE001
-            if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
+            if _is_config_not_found(err):
                 # Auto-generated dashboard: nothing stored, nothing to scan.
                 continue
             load_failed += 1

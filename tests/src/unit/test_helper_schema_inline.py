@@ -43,7 +43,7 @@ from ha_mcp.tools.config_helpers.schemas import (
     get_simple_helper_schema,
 )
 
-from ._stub_helper_flows import STUB_HELPER_FLOWS
+from ._core_helper_flows import CORE_HELPER_FLOWS
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -153,7 +153,7 @@ class TestGetSimpleHelperSchema:
     def test_returns_none_for_flow_types(self) -> None:
         # Flow helpers go through the HA flow API; the static dict has no
         # entry, and callers branch on the None to fall back.
-        for helper_type in STUB_HELPER_FLOWS:
+        for helper_type in CORE_HELPER_FLOWS:
             assert get_simple_helper_schema(helper_type) is None
 
     def test_returns_none_for_unknown_helper_type(self) -> None:

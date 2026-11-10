@@ -185,6 +185,21 @@
           "entry_removed": "HA-MCP Server 条目已不存在。"
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP 从两个商店列表同时安装",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "将 HA-MCP 保留在一个商店列表中？",
+            "description": "HA-MCP 被标记为同时从 {records} 安装。它们承载相同的集成（第二个是较旧的分发镜像）。Home Assistant 2026.11 中的应用商店只允许一个列表拥有集成，因此这两个列表都无法在那里更新 HA-MCP；HACS 仍然会更新，但升级到 2026.11 会导致 HA-MCP 无法更新。\n\n提交将保留 **{keep}**，即默认目录中不需要自定义存储库的列表，并将其余列表标记为未安装。不会删除任何内容：您的 HA-MCP 条目、设置和文件将完全保持原样，从现在开始更新将像往常一样在 {keep} 下显示。"
+          }
+        },
+        "abort": {
+          "already_resolved": "HA-MCP 现在仅从一个商店列表安装；无需修复。",
+          "store_unavailable": "商店（HACS 或应用商店）尚未加载，因此无法检查列表。请几分钟后重试。"
+        }
+      }
     }
   },
   "selector": {

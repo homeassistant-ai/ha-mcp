@@ -1,9 +1,9 @@
 """Admin calls to ``ha_mcp_tools`` component services over HA REST.
 
 The E2E suites drive these services directly with the admin token, the way the
-ha-mcp server drives them. Each helper asserts that the call succeeded: the
-services answer a non-admin caller, and the setters a rejected caller token,
-with HTTP 200 and ``success: false``.
+ha-mcp server drives them. ``post_service`` returns the raw response, for tests
+that send another token. The admin helpers assert that the call succeeded: the
+setters answer a rejected caller token with HTTP 200 and ``success: false``.
 """
 
 from __future__ import annotations
@@ -15,19 +15,26 @@ import httpx
 from tests.test_constants import TEST_TOKEN
 
 
-async def _call_admin_service(
-    base_url: str, service: str, data: dict[str, Any]
-) -> dict[str, Any]:
+async def post_service(
+    base_url: str, token: str, service: str, data: dict[str, Any]
+) -> httpx.Response:
+    """Call an ``ha_mcp_tools`` service over the HA REST API as ``token``."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
+        return await client.post(
             f"{base_url}/api/services/ha_mcp_tools/{service}",
             headers={
-                "Authorization": f"Bearer {TEST_TOKEN}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
             params={"return_response": ""},
             json=data,
         )
+
+
+async def _call_admin_service(
+    base_url: str, service: str, data: dict[str, Any]
+) -> dict[str, Any]:
+    resp = await post_service(base_url, TEST_TOKEN, service, data)
     assert resp.status_code == 200, f"{service} failed: {resp.text!r}"
     sr = resp.json().get("service_response", {})
     assert sr.get("success") is True, f"{service} failed: {resp.text!r}"

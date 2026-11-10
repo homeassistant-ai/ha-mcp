@@ -15,8 +15,9 @@ surfaces stop returning operator secrets verbatim:
    form marks the password fields, and a read opens that flow only for
    ``include_schema=True`` (#2987). A read without it replaces every option
    value of an entry that has an options flow with the sentinel. With it,
-   the fields the form marks with a password text selector are replaced the
-   same way, in the options and in the form's ``current`` values. Stored
+   the fields the form marks as secret (Core's ``secret`` flag or a password
+   text selector) are replaced the same way, in the options and in the
+   form's ``current`` values. Stored
    option values are checked against the flow's first form only, so a
    password field that only a later form declares is not detected in them.
 3. **Every other tool response**: secret values seen while serving 1 and 2
@@ -467,13 +468,16 @@ def _collect_matching_paths(
 def is_password_flow_field(field: dict[str, Any]) -> bool:
     """True when a serialized flow field is marked as a password input.
 
-    The authoritative marker is a text selector with ``type: "password"``
-    (``TextSelectorType.PASSWORD`` — serialized as
-    ``{"selector": {"text": {"type": "password"}}}``). A literal
-    ``type: "password"`` on the field is honored too. Fields with no
-    password marker cannot be classified from metadata and pass through —
-    the known-value scrub is the only remaining line for those.
+    Three markers count: ``secret: true`` on the field (a
+    ``probatio.Secret`` key, Home Assistant 2026.11 and later), a text
+    selector with ``type: "password"`` (``TextSelectorType.PASSWORD`` —
+    serialized as ``{"selector": {"text": {"type": "password"}}}``), and a
+    literal ``type: "password"``. Fields with no marker cannot be
+    classified from metadata and pass through — the known-value scrub is
+    the only remaining line for those.
     """
+    if field.get("secret") is True:
+        return True
     selector = field.get("selector")
     if isinstance(selector, dict):
         text = selector.get("text")

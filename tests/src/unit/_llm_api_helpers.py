@@ -1,8 +1,4 @@
-"""Shared fakes for the ``llm_api`` unit tests (issue #1745).
-
-Importing this module loads the component, so a test module imports it after it
-has installed the ``homeassistant.*`` stubs.
-"""
+"""Shared helpers for the ``llm_api`` unit tests (issue #1745)."""
 
 from __future__ import annotations
 
@@ -12,6 +8,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+from homeassistant.helpers import llm
 
 from custom_components.ha_mcp_tools import llm_api
 from custom_components.ha_mcp_tools.const import DOMAIN, EXPOSURE_FULL
@@ -25,6 +23,22 @@ class CoreToolResult:
 
     data: Any
     error: bool = False
+
+
+def llm_context() -> llm.LLMContext:
+    """The context a conversation agent hands Core's LLM API."""
+    return llm.LLMContext(
+        platform="test",
+        context=None,
+        language="en",
+        assistant="conversation",
+        device_id=None,
+    )
+
+
+def registered_apis(hass: Any) -> dict[str, Any]:
+    """The LLM APIs registered in Core's registry for ``hass``, by id."""
+    return {api.id: api for api in llm.async_get_apis(hass)}
 
 
 def make_hass() -> MagicMock:

@@ -2,52 +2,44 @@
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant.common import MockConfigEntry
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import entry_device  # noqa: E402
-from custom_components.ha_mcp_tools.const import COMPONENT_VERSION  # noqa: E402
+from custom_components.ha_mcp_tools import entry_device
+from custom_components.ha_mcp_tools.const import COMPONENT_VERSION, DOMAIN
 
 
-@pytest.fixture
-def created(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
-    calls: list[dict] = []
-    registry = SimpleNamespace(async_get_or_create=lambda **kw: calls.append(kw))
-    fake_dr = ModuleType("homeassistant.helpers.device_registry")
-    fake_dr.async_get = MagicMock(return_value=registry)
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.device_registry", fake_dr)
-    monkeypatch.setattr(
-        sys.modules["homeassistant.helpers"], "device_registry", fake_dr, raising=False
+async def _registered_device(
+    hass: HomeAssistant, device_registry: dr.DeviceRegistry
+) -> dr.DeviceEntry:
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    await entry_device.async_register_entry_device(hass, entry, name="N", model="M")
+    device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, entry.entry_id), entry.entry_id
     )
-    return calls
+    assert device is not None
+    return device
 
 
 def _manifest(monkeypatch: pytest.MonkeyPatch, read: AsyncMock) -> None:
-    monkeypatch.setattr(
-        sys.modules["homeassistant.loader"],
-        "async_get_integration",
-        read,
-        raising=False,
-    )
+    """What reading this integration's manifest gives."""
+    monkeypatch.setattr(entry_device, "async_get_integration", read)
 
 
-async def _register() -> None:
-    await entry_device.async_register_entry_device(
-        MagicMock(), SimpleNamespace(entry_id="e1"), name="N", model="M"
-    )
-
-
-async def test_the_device_reports_the_installed_release(monkeypatch, created) -> None:
+async def test_the_device_reports_the_installed_release(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _manifest(monkeypatch, AsyncMock(return_value=SimpleNamespace(version="9.1.0")))
-    await _register()
-    assert created[0]["sw_version"] == "9.1.0"
+    device = await _registered_device(hass, device_registry)
+    assert device.sw_version == "9.1.0"
 
 
 @pytest.mark.parametrize(
@@ -59,8 +51,11 @@ async def test_the_device_reports_the_installed_release(monkeypatch, created) ->
     ids=["version-less manifest", "unreadable manifest"],
 )
 async def test_a_manifest_problem_never_reads_none_or_blocks_setup(
-    monkeypatch, created, read
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+    read: AsyncMock,
 ) -> None:
     _manifest(monkeypatch, read)
-    await _register()
-    assert created[0]["sw_version"] == COMPONENT_VERSION
+    device = await _registered_device(hass, device_registry)
+    assert device.sw_version == COMPONENT_VERSION

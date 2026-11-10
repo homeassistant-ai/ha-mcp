@@ -14,6 +14,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from ..const import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
@@ -51,8 +52,6 @@ def _oauth_callbacks_update_schema() -> dict[Any, Any]:
 
 
 def _server_entry_options(hass: HomeAssistant) -> tuple[Any, dict[str, Any]]:
-    from homeassistant.exceptions import HomeAssistantError
-
     entry = _find_server_config_entry(hass)
     if entry is None:
         raise HomeAssistantError("no ha_mcp_tools in-process server config entry")
@@ -110,14 +109,10 @@ async def _oauth_callbacks_update_prep(
                 }
             }
         if len(entries) > MAX_OAUTH_CALLBACKS:
-            from homeassistant.exceptions import HomeAssistantError
-
             raise HomeAssistantError(f"List at most {MAX_OAUTH_CALLBACKS} callbacks.")
         if (stored := stored_allowlist(options, entries)) is not None:
             options[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
     else:
-        from homeassistant.exceptions import HomeAssistantError
-
         raise HomeAssistantError("oauth_callbacks_update needs allowlist or reset")
     hass.config_entries.async_update_entry(entry, options=options)
     return {"result": {**_describe(entry, options), "saved": True, "invalid": []}}

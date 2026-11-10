@@ -4,7 +4,7 @@ Every table is derived from the ``Setting`` metadata on the ``Settings``
 fields; add or change a setting there, not here.
 """
 
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 from pydantic.fields import FieldInfo
 
@@ -173,7 +173,7 @@ def _env(field: FieldInfo) -> str:
 
 def _ftype(field: FieldInfo) -> RegistryFieldType:
     assert field.annotation in (bool, int, float, str)
-    return field.annotation
+    return cast(RegistryFieldType, field.annotation)
 
 
 FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = tuple(

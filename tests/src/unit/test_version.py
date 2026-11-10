@@ -264,6 +264,33 @@ class TestLogStartupVersion:
         assert any("available: 7.9.0" in m for m in warnings), warnings
         assert not any("dev channel" in m for m in warnings), warnings
 
+    def test_update_banner_names_the_python_the_release_needs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The banner passes the release's requires_python on: a pip hint
+        would reinstall the old version on a Python the release excludes."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "9.1.2")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
+        monkeypatch.setattr(update_check, "_running_python", lambda: "3.13.7")
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo(
+                "9.1.2", "9.2.0", True, requires_python=">=3.14"
+            ),
+        )
+        self._call(caplog)
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("uvx --python 3.14 ha-mcp@latest" in m for m in warnings), warnings
+        assert not any("pip install" in m for m in warnings), warnings
+
     def test_stable_no_update_banner_when_current(
         self,
         monkeypatch: pytest.MonkeyPatch,

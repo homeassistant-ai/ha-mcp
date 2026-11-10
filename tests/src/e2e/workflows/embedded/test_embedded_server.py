@@ -99,8 +99,8 @@ _INTEGRATION_SRC = _REPO_ROOT / "custom_components" / "ha_mcp_tools"
 # Run INSIDE the live HA container (a separate ``python3`` process, so HA itself
 # is never touched) to prove _safe_invalidate_caches() recovers from the
 # Python-3.14 setuptools editable-finder KeyError (#1891/#1985) on the REAL
-# component code + container interpreter. The container here is Python 3.13, so
-# the crash can't occur naturally — we inject a meta-path finder that raises the
+# component code + container interpreter. The crash needs a stale editable
+# placeholder the container does not have, so we inject a meta-path finder that raises the
 # exact KeyError while the stale placeholder is cached (what CPython 3.14's
 # PathFinder `del` trips on). With the fix, the helper prunes the placeholder and
 # the retry succeeds; revert the fix and the KeyError propagates → exit != 0.

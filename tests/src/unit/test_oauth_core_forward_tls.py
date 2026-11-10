@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
+import aiohttp
 import pytest
+from homeassistant.helpers import network
 
-from ._embedded_stubs import install
-
-install()
-
-import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
+import custom_components.ha_mcp_tools.oauth_autoapprove as aa
 
 
 class _CoreAnswer:
@@ -38,27 +35,22 @@ class _RelaySession:
     def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
         if url.startswith("https://") and kwargs.get("ssl") is not False:
-            raise sys.modules["aiohttp"].ClientError("certificate verify failed")
+            raise aiohttp.ClientError("certificate verify failed")
         return _CoreAnswer()
 
 
 def tls_core(monkeypatch, *, api=None, configured_url=None):
-    """A core serving TLS on :9443. ``get_url`` is stubbed because the
-    pre-#2950 forward consulted it: the stub keeps that path reachable when
-    the fix is reverted, so these tests fail instead of erroring."""
-
-    class NoURLAvailableError(Exception):
-        pass
+    """A core serving TLS on :9443. ``get_url`` answers with the configured
+    URL because the pre-#2950 forward consulted it: that keeps the path
+    reachable when the fix is reverted, so these tests fail instead of
+    erroring."""
 
     def get_url(_hass, **_kwargs):
         if configured_url is None:
-            raise NoURLAvailableError
+            raise network.NoURLAvailableError
         return configured_url
 
-    network = ModuleType("homeassistant.helpers.network")
-    network.NoURLAvailableError = NoURLAvailableError
-    network.get_url = get_url
-    monkeypatch.setitem(sys.modules, "homeassistant.helpers.network", network)
+    monkeypatch.setattr(network, "get_url", get_url)
     api = api or SimpleNamespace(use_ssl=True, port=9443)
     return SimpleNamespace(config=SimpleNamespace(api=api)), _RelaySession()
 

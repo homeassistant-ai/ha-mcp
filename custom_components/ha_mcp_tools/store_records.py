@@ -20,6 +20,8 @@ import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.start import async_at_started
 
 from .const import DOMAIN, ISSUE_STORE_RECORDS_CONFLICT
 
@@ -82,8 +84,6 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
 
     Returns False when no store manager was loaded yet, so the caller can ask
     again; the issue is left as it was rather than cleared on no evidence."""
-    from homeassistant.helpers import issue_registry as ir
-
     records = conflicting_records(hass)
     if records is None:
         return False
@@ -119,8 +119,6 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
 
 def async_clear_store_records_issue(hass: HomeAssistant) -> None:
     """Drop the repair once the store shows one installed listing."""
-    from homeassistant.helpers import issue_registry as ir
-
     ir.async_delete_issue(hass, DOMAIN, ISSUE_STORE_RECORDS_CONFLICT)
 
 
@@ -213,10 +211,4 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
         # case waits for the next start.
         unsubscribers.extend(entry.async_on_state_change(_check) for entry in entries)
 
-    try:
-        from homeassistant.helpers.start import async_at_started
-    except ImportError:
-        # Hermetic unit tests stub ``homeassistant.helpers`` without ``start``.
-        hass.bus.async_listen_once("homeassistant_started", _check)
-        return
     async_at_started(hass, _check)

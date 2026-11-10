@@ -185,6 +185,21 @@
           "entry_removed": "HA-MCP Server 항목이 더 이상 존재하지 않습니다."
         }
       }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP가 두 개의 스토어 등록 정보에 설치되어 있습니다",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "HA-MCP를 하나의 스토어 등록 정보만 유지하시겠습니까?",
+            "description": "HA-MCP가 {records} 모두에 설치된 것으로 표시되어 있습니다. 두 등록 정보는 동일한 통합 구성요소(두 번째 항목은 이전 배포 미러)입니다. Home Assistant 2026.11의 Marketplace에서는 하나의 스토어만 통합 구성요소를 소유할 수 있으므로 두 스토어 모두 HA-MCP를 업데이트할 수 없습니다. HACS는 여전히 업데이트되지만 2026.11로 업그레이드하면 HA-MCP가 멈추게 됩니다.\n\n제출하면 사용자 지정 저장소가 필요 없는 기본 카탈로그의 등록 정보인 **{keep}**(을)를 유지하고 다른 등록 정보는 설치되지 않은 것으로 표시합니다. 아무것도 삭제되지 않습니다. HA-MCP 항목, 설정 및 파일은 그대로 유지되며 지금부터는 평소와 같이 {keep} 아래에 업데이트가 표시됩니다."
+          }
+        },
+        "abort": {
+          "already_resolved": "이제 HA-MCP가 하나의 스토어 등록 정보에만 설치되어 있으므로 수정할 필요가 없습니다.",
+          "store_unavailable": "스토어(HACS 또는 Marketplace)가 아직 로드되지 않아 등록 정보를 확인할 수 없습니다. 몇 분 후에 다시 시도하세요."
+        }
+      }
     }
   },
   "selector": {

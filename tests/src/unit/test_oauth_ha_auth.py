@@ -5,22 +5,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import importlib
 import json
-import sys
 
 import pytest
+from aiohttp import test_utils
+from aiohttp import web as aiohttp_web
 
-from ._embedded_stubs import install
-
-install()
-
-from custom_components.ha_mcp_tools import oauth_dcr, oauth_ha_auth  # noqa: E402
-from custom_components.ha_mcp_tools.oauth_dcr import (  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_dcr, oauth_ha_auth
+from custom_components.ha_mcp_tools.oauth_dcr import (
     client_redirect_uris,
     mint_client_id,
 )
-from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
+from custom_components.ha_mcp_tools.oauth_ha_auth import (
     MAX_REVOKE_ENVELOPE_LEN,
     EnvelopeState,
     _b64url_encode,
@@ -33,6 +29,10 @@ from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
     unwrap_refresh_token,
     wrap_refresh_token,
 )
+
+# These tests run their own listener on the loopback interface; Core's test
+# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 KEY = b"k" * 32
 GOOGLE_REDIRECT_URIS = [
@@ -460,30 +460,11 @@ async def test_mixed_registration_refresh_derivation_is_unreproducible():
     assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
-def _module_is(name: str, root: str) -> bool:
-    """Return whether a module name is ``root`` or one of its children."""
-    return name == root or name.startswith(f"{root}.")
-
-
 @pytest.fixture
 async def aiohttp_client_factory():
-    """Serve real CIMD documents while the component keeps its aiohttp stub."""
-    package_roots = ("aiohttp", "yarl")
-    saved_modules = {
-        name: module
-        for name, module in tuple(sys.modules.items())
-        if any(_module_is(name, root) for root in package_roots)
-    }
-    for name in saved_modules:
-        sys.modules.pop(name, None)
-
+    """Serve real CIMD documents for the component to fetch."""
     clients = []
-    stub_timeout = oauth_ha_auth.CIMD_FETCH_TIMEOUT
     try:
-        aiohttp = importlib.import_module("aiohttp")
-        aiohttp_web = importlib.import_module("aiohttp.web")
-        test_utils = importlib.import_module("aiohttp.test_utils")
-        oauth_ha_auth.CIMD_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
         async def factory(*, body, status, self_ref_client_id):
             doc_url = ""
@@ -506,11 +487,6 @@ async def aiohttp_client_factory():
     finally:
         for client in clients:
             await client.close()
-        oauth_ha_auth.CIMD_FETCH_TIMEOUT = stub_timeout
-        for name in tuple(sys.modules):
-            if any(_module_is(name, root) for root in package_roots):
-                sys.modules.pop(name, None)
-        sys.modules.update(saved_modules)
 
 
 @pytest.mark.asyncio

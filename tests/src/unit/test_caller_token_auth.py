@@ -9,49 +9,32 @@ Covers three layers:
 3. **ha_call_service refusal** — the wrapper-layer block on the
    ``ha_mcp_tools`` domain.
 
-Custom-component tests stub the homeassistant.* imports the same way
-``test_custom_component_filesystem.py`` does so they can run without
-the real HA package available.
+Custom-component tests run against real Home Assistant Core.
 """
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-# --- Custom-component-side imports (must stub HA first) ---------------------
-
-sys.modules.setdefault("voluptuous", MagicMock())
-sys.modules.setdefault("homeassistant", MagicMock())
-sys.modules.setdefault("homeassistant.components", MagicMock())
-sys.modules.setdefault("homeassistant.components.persistent_notification", MagicMock())
-sys.modules.setdefault("homeassistant.config", MagicMock())
-sys.modules.setdefault("homeassistant.config_entries", MagicMock())
-sys.modules.setdefault("homeassistant.core", MagicMock())
-sys.modules.setdefault("homeassistant.helpers", MagicMock())
-sys.modules.setdefault("homeassistant.helpers.config_validation", MagicMock())
-sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
-sys.modules.setdefault("homeassistant.loader", MagicMock())
-
-from custom_components.ha_mcp_tools import (  # noqa: E402
+# --- Custom-component-side imports ------------------------------------------
+import custom_components.ha_mcp_tools as comp
+from custom_components.ha_mcp_tools import (
     _HASS_DATA_TOKEN_KEY,
     CALLER_TOKEN_FIELD,
     _build_get_caller_token_handler,
-    _caller_is_admin,
     _caller_token_ok,
     _unauthorized_response,
 )
-from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
+from custom_components.ha_mcp_tools.const import DOMAIN
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # --- ha-mcp wrapper-side imports --------------------------------------------
-from ha_mcp.tools.tools_filesystem import (  # noqa: E402
+from ha_mcp.tools.tools_filesystem import (
     CALLER_TOKEN_BOOTSTRAP_SERVICE,
     MCP_TOOLS_DOMAIN,
     MIN_COMPONENT_VERSION,
@@ -72,10 +55,10 @@ def _fake_hass(token: str | None) -> MagicMock:
     return hass
 
 
-def _fake_call(presented_token: str | None, **extra: str) -> MagicMock:
+def _fake_call(presented_token: str | None, **extra: object) -> MagicMock:
     """Build a ServiceCall stand-in with .data containing the presented token."""
     call = MagicMock()
-    payload: dict[str, str] = dict(extra)
+    payload: dict[str, object] = dict(extra)
     if presented_token is not None:
         payload[CALLER_TOKEN_FIELD] = presented_token
     call.data = payload
@@ -121,50 +104,6 @@ class TestCallerTokenOk:
         assert _caller_token_ok(hass, call) is False
 
 
-class TestCallerIsAdmin:
-    """Bootstrap service is admin-gated explicitly (HA doesn't gate
-    service calls by default — verified against HA core)."""
-
-    @pytest.mark.asyncio
-    async def test_accepts_admin_user(self):
-        hass = MagicMock()
-        admin = MagicMock(is_admin=True)
-        hass.auth.async_get_user = AsyncMock(return_value=admin)
-        call = MagicMock()
-        call.context.user_id = "admin-uid"
-        assert await _caller_is_admin(hass, call) is True
-
-    @pytest.mark.asyncio
-    async def test_rejects_non_admin_user(self):
-        hass = MagicMock()
-        non_admin = MagicMock(is_admin=False)
-        hass.auth.async_get_user = AsyncMock(return_value=non_admin)
-        call = MagicMock()
-        call.context.user_id = "non-admin-uid"
-        assert await _caller_is_admin(hass, call) is False
-
-    @pytest.mark.asyncio
-    async def test_rejects_unknown_user_id(self):
-        """async_get_user returning None (deleted user, stale token) → reject."""
-        hass = MagicMock()
-        hass.auth.async_get_user = AsyncMock(return_value=None)
-        call = MagicMock()
-        call.context.user_id = "deleted-uid"
-        assert await _caller_is_admin(hass, call) is False
-
-    @pytest.mark.asyncio
-    async def test_no_user_context_is_trusted(self):
-        """call.context.user_id is None for system-internal events; HA's
-        own async_admin_handler_factory treats these as trusted, so we
-        match that convention rather than locking everyone out."""
-        hass = MagicMock()
-        hass.auth.async_get_user = AsyncMock()
-        call = MagicMock()
-        call.context.user_id = None
-        assert await _caller_is_admin(hass, call) is True
-        hass.auth.async_get_user.assert_not_awaited()
-
-
 class TestUnauthorizedResponse:
     """The structured 'unauthorized' reply the helper emits."""
 
@@ -183,6 +122,36 @@ class TestUnauthorizedResponse:
         resp = _unauthorized_response("list_files", files=[])
         assert resp["files"] == []
         assert resp["error_code"] == "unauthorized"
+
+
+class TestSettingsHandlersRefuseABadToken:
+    """The caller token is the only check inside these handlers."""
+
+    @pytest.mark.parametrize(
+        ("build_handler", "data"),
+        [
+            ("_build_get_allowed_paths_handler", {}),
+            ("_build_set_allowed_paths_handler", {"paths": ["pyscript"]}),
+            ("_build_get_extra_yaml_keys_handler", {}),
+            ("_build_set_extra_yaml_keys_handler", {"keys": ["alert2"]}),
+        ],
+        ids=["get_paths", "set_paths", "get_keys", "set_keys"],
+    )
+    async def test_bad_token_is_unauthorized_and_changes_nothing(
+        self, monkeypatch, build_handler, data
+    ):
+        save = AsyncMock()
+        monkeypatch.setattr(comp, "_save_allowed_paths", save)
+        monkeypatch.setattr(comp, "_save_extra_yaml_keys", save)
+        hass = _fake_hass("good")
+        handler = getattr(comp, build_handler)(hass)
+
+        result = await handler(_fake_call("bad", **data))
+
+        assert result["success"] is False
+        assert result["error_code"] == "unauthorized"
+        save.assert_not_awaited()
+        assert hass.data == _fake_hass("good").data
 
 
 class TestManifestVersionCoupling:
@@ -239,7 +208,6 @@ class TestGetCallerTokenManifestVersion:
     async def test_version_less_manifest_reports_unreadable(self, monkeypatch):
         import custom_components.ha_mcp_tools as component
 
-        monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",
@@ -258,7 +226,6 @@ class TestGetCallerTokenManifestVersion:
     async def test_readable_manifest_reports_its_version(self, monkeypatch):
         import custom_components.ha_mcp_tools as component
 
-        monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",

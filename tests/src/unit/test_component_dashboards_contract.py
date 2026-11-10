@@ -18,12 +18,11 @@ existence check, and the auto-backup capture read.
 
 from __future__ import annotations
 
-import sys
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+import voluptuous as vol
 
 from ha_mcp import backup_manager
 from ha_mcp.tools import component_api, tools_config_dashboards
@@ -252,15 +251,10 @@ async def test_list_carries_the_fields_core_accepts_on_update(
 ) -> None:
     """Restoring settings needs Core's update schema, not a copy of it."""
 
-    class _Optional:
-        def __init__(self, key: str) -> None:
-            self.schema = key
-
-    fields = {_Optional(k): None for k in ("title", "icon", "sidebar_order")}
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.components.lovelace.const",
-        SimpleNamespace(STORAGE_DASHBOARD_UPDATE_FIELDS=fields),
+    fields = {vol.Optional(k): None for k in ("title", "icon", "sidebar_order")}
+    monkeypatch.setattr(
+        "homeassistant.components.lovelace.const.STORAGE_DASHBOARD_UPDATE_FIELDS",
+        fields,
     )
     hass = _component_hass({"home": _storage_dash("home", "Home")})
     prep_out = await wsapi._dashboards_prep(hass, {"mode": "list"})

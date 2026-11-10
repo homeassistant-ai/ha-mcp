@@ -39,7 +39,9 @@ def declare_metadata(
         )
 
 
-def tool_result(data: JsonObjectType, *, error: bool) -> Any:
+def tool_result(
+    data: JsonObjectType, *, error: bool
+) -> llm.ToolResult | JsonObjectType:
     """Wrap a result in ``llm.ToolResult`` where Core has it, else return it bare."""
     result_cls = getattr(llm, "ToolResult", None)
     return data if result_cls is None else result_cls(data=data, error=error)

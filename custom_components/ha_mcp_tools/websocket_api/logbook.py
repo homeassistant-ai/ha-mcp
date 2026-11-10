@@ -29,6 +29,7 @@ from homeassistant.components.logbook.processor import EventProcessor
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.websocket_api import messages
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util import dt as dt_util
 
@@ -39,11 +40,6 @@ CAPABILITIES = ("logbook_events",)
 
 def _parse_time(value: str, label: str) -> datetime:
     """Parse an ISO datetime the way Core's handlers do, or raise."""
-    # Function-local like the other ``HomeAssistantError`` raises in this
-    # package: ``homeassistant.exceptions`` is not part of the component's
-    # import-time surface (and the unit-test stubs may install it late).
-    from homeassistant.exceptions import HomeAssistantError
-
     parsed = dt_util.parse_datetime(value)
     if parsed is None:
         raise HomeAssistantError(f"Invalid {label}")
@@ -92,8 +88,6 @@ async def _logbook_events_prep(
     context_id = msg.get("context_id")
     if context_id and (entity_ids or device_ids):
         # Core's processor asserts on this; fail with a shaped error instead.
-        from homeassistant.exceptions import HomeAssistantError
-
         raise HomeAssistantError(
             "context_id cannot be combined with entity_ids or device_ids"
         )
@@ -112,8 +106,6 @@ async def _logbook_events_prep(
         # the integration loaded the query cannot run (the REST/WS views are
         # registered by logbook too). Surface a clear error instead of a
         # KeyError; the server's command-error path reports it.
-        from homeassistant.exceptions import HomeAssistantError
-
         raise HomeAssistantError(
             "The logbook integration is not set up on this instance; enable it "
             "to query logbook events."

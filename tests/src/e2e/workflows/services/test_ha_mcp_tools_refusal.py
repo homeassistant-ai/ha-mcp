@@ -14,9 +14,11 @@ running inside the dev addon container with the supervisor token):
   proof that ``call_mcp_tools_service`` bootstrap-fetches the caller
   token via ``ha_mcp_tools.get_caller_token``, injects it, and the
   handler accepts it. In addon mode the supervisor token maps to the
-  admin-forced ``hassio_user`` and therefore passes the explicit admin
-  gate; in container / external HAOS mode the user-supplied admin LLAT
-  does the same.
+  admin-forced ``hassio_user`` and therefore passes the admin-only
+  service registration; in container / external HAOS mode the
+  user-supplied admin LLAT does the same.
+* Admin gate: a non-admin caller is refused by HA core for every
+  ``ha_mcp_tools`` service, independently of the caller-token check.
 """
 
 from __future__ import annotations
@@ -27,11 +29,14 @@ import uuid
 
 import pytest
 
+from tests.test_constants import NON_ADMIN_TEST_TOKEN
+
 from ...utilities.assertions import (
     MCPAssertions,
     extract_error_message,
     safe_call_tool,
 )
+from ...utilities.component_services import post_service
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +198,9 @@ class TestHaCallServiceRefusesMcpToolsDomain:
 
 class TestCallerTokenBootstrapEndToEnd:
     """Calling ``ha_list_files`` proves the full chain: ``ha-mcp`` fetches
-    the caller token via ``ha_mcp_tools.get_caller_token``, the handler's
-    admin gate accepts the supervisor user (addon mode) or the admin LLAT
-    (container / external HAOS mode), the wrapper injects ``_ha_mcp_token``,
+    the caller token via ``ha_mcp_tools.get_caller_token``, Core's admin-only
+    service registration accepts the supervisor user (addon mode) or the admin
+    LLAT (container / external HAOS mode), the wrapper injects ``_ha_mcp_token``,
     and the dangerous-handler's ``_caller_token_ok`` check accepts it."""
 
     async def test_list_files_round_trips(self, mcp_client_for_refusal):
@@ -218,20 +223,29 @@ class TestCallerTokenBootstrapEndToEnd:
 
 
 # ---------------------------------------------------------------------------
-# Admin gate — non-admin caller is rejected at the bootstrap surface
+# Admin gate — non-admin caller is rejected by HA core
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+async def _dismiss_login_notification(ha_client):
+    """http.ban posts a "Login attempt failed" notification for every 401."""
+    yield
+    await ha_client.call_service(
+        "persistent_notification", "dismiss", {"notification_id": "http-login"}
+    )
+
+
+@pytest.mark.usefixtures("_dismiss_login_notification")
 class TestCallerTokenAdminGate:
-    """``ha_mcp_tools.get_caller_token`` is admin-gated explicitly.
+    """Every ``ha_mcp_tools`` service is registered admin-only.
 
     The seeded non-admin user lives in ``tests/initial_test_state/.storage/auth``
     (``a5973d59…``, ``system-users`` group). The matching LLAT is
     ``NON_ADMIN_TEST_TOKEN`` in ``tests/test_constants.py``. We call the
     HA REST endpoint directly with that token — no MCP wrapper, no
-    ``HOMEASSISTANT_TOKEN`` shadowing — and assert HA returns the
-    structured ``unauthorized`` reply emitted by the handler when
-    ``_caller_is_admin`` rejects.
+    ``HOMEASSISTANT_TOKEN`` shadowing — and assert HA core refuses the
+    call with 401 before any handler runs.
     """
 
     async def test_non_admin_caller_rejected(
@@ -239,22 +253,12 @@ class TestCallerTokenAdminGate:
         _filesystem_feature_flag,
         ha_container_with_fresh_config,
     ):
-        import httpx
-
-        from tests.test_constants import NON_ADMIN_TEST_TOKEN
-
-        base_url = ha_container_with_fresh_config["base_url"]
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{base_url}/api/services/ha_mcp_tools/get_caller_token",
-                headers={
-                    "Authorization": f"Bearer {NON_ADMIN_TEST_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-                params={"return_response": ""},
-                json={},
-            )
+        response = await post_service(
+            ha_container_with_fresh_config["base_url"],
+            NON_ADMIN_TEST_TOKEN,
+            "get_caller_token",
+            {},
+        )
 
         # No graceful skip on missing component: the testcontainer conftest
         # auto-installs ha_mcp_tools and HAOS lanes bake it in, so a 400
@@ -262,19 +266,28 @@ class TestCallerTokenAdminGate:
         # TestMcpToolsComponentNotInstalled in
         # workflows/filesystem/test_file_operations.py covers the
         # deliberate not-installed scenario; this test does not.
-        assert response.status_code == 200, (
-            f"HA must accept the non-admin LLAT at the auth layer (the "
-            f"admin gate fires inside the handler, not at the transport). "
-            f"Status={response.status_code}, body={response.text!r}"
+        assert response.status_code == 401, (
+            f"HA core must refuse a non-admin caller of the admin-only "
+            f"service. Status={response.status_code}, body={response.text!r}"
         )
 
-        body = response.json()
-        # HA wraps the service response under ``service_response``
-        service_response = body.get("service_response", body)
-        assert service_response.get("success") is False, (
-            f"Non-admin caller must be rejected by the admin gate; got: {body!r}"
+    async def test_non_admin_caller_rejected_on_edit_file(
+        self,
+        _filesystem_feature_flag,
+        ha_container_with_fresh_config,
+    ):
+        """edit_file registers on its own, outside the loop the bootstrap is in."""
+        response = await post_service(
+            ha_container_with_fresh_config["base_url"],
+            NON_ADMIN_TEST_TOKEN,
+            "edit_file",
+            {
+                "path": f"www/non_admin_{uuid.uuid4().hex[:8]}.txt",
+                "edits": [{"old": "a", "new": "b"}],
+            },
         )
-        assert service_response.get("error_code") == "unauthorized", (
-            f"Rejection must carry error_code='unauthorized' so clients can "
-            f"distinguish it from other failures; got: {body!r}"
+        # The handler itself answers 200, so a 401 can only come from Core.
+        assert response.status_code == 401, (
+            f"HA core must refuse a non-admin caller of edit_file. "
+            f"Status={response.status_code}, body={response.text!r}"
         )
