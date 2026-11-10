@@ -44,9 +44,7 @@ def _trace(
     trigger_variables: dict[str, Any] | None = None,
     cls: type[AutomationTrace] = AutomationTrace,
 ) -> AutomationTrace:
-    trace = cls(
-        "uid", {}, None, Context(id=context_id, parent_id=parent_id)
-    )
+    trace = cls("uid", {}, None, Context(id=context_id, parent_id=parent_id))
     trace.run_id = run_id
     trace.not_triggered = not_triggered
     trace._timestamp_start = start
@@ -139,6 +137,7 @@ async def test_context_lookup_treats_missing_start_as_oldest(
     )
 
     assert result["run_id"] == "valid"
+
 
 @pytest.mark.asyncio
 async def test_context_lookup_honors_domain_and_item_filters(

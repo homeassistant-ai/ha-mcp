@@ -160,9 +160,9 @@ class TestGatherDiagnostics:
         )
 
         assert result["validation"] == {"status": "failed", "error": "bad template"}
-        assert "core reports this automation did not load" in result[
-            "suggestion"
-        ].lower()
+        assert (
+            "core reports this automation did not load" in result["suggestion"].lower()
+        )
         assert "warnings" not in result
 
     @pytest.mark.asyncio

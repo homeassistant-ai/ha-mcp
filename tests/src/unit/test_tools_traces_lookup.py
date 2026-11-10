@@ -299,19 +299,13 @@ class TestResolveContextTrace:
                 "item_id": "uid",
             }
         }
-        client = _context_client(
-            contexts=contexts, traces=traces, details=details
-        )
+        client = _context_client(contexts=contexts, traces=traces, details=details)
 
-        match = await resolve_context_trace(
-            client, "automation", "uid", "ctx-1"
-        )
+        match = await resolve_context_trace(client, "automation", "uid", "ctx-1")
 
         assert match.run_id == "run"
         assert match.match == "parent"
-        assert any(
-            other["run_id"] == "diagnostic" for other in match.other_matches
-        )
+        assert any(other["run_id"] == "diagnostic" for other in match.other_matches)
 
     @pytest.mark.asyncio
     async def test_parent_context_not_found(self):
@@ -531,9 +525,7 @@ class TestResolveGlobalContext:
         assert match.run_id == "run"
         assert match.match == "parent"
         assert match.scanned == 2
-        assert any(
-            other["run_id"] == "diagnostic" for other in match.other_matches
-        )
+        assert any(other["run_id"] == "diagnostic" for other in match.other_matches)
 
 
 class TestNotTriggeredPreference:
@@ -571,8 +563,4 @@ class TestNotTriggeredPreference:
         assert match.run_id == "run"
         assert match.match == "parent"
         assert match.scanned == 2
-        assert any(
-            other["run_id"] == "diagnostic" for other in match.other_matches
-        )
-
-
+        assert any(other["run_id"] == "diagnostic" for other in match.other_matches)
