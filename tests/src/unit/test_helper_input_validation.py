@@ -175,7 +175,7 @@ class TestTagAutoGeneratesTagId:
             await register_tools["ha_config_set_helper"](
                 helper_type="tag",
                 name="My Tag",
-                tag_id="custom-tag-id",
+                config={"tag_id": "custom-tag-id"},
             )
         msg = _find_msg(mock_client, "tag/create")
         assert msg is not None
@@ -204,7 +204,7 @@ class TestTagAutoGeneratesTagId:
             await register_tools["ha_config_set_helper"](
                 helper_type="tag",
                 name="My Tag",
-                tag_id="some-tag",
+                config={"tag_id": "some-tag"},
             )
         wait_mock.assert_not_awaited()
 
@@ -250,9 +250,7 @@ class TestInputNumberStepReachesCore:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 name="Volume",
-                min_value=0,
-                max_value=10,
-                step=15,
+                config={"min": 0, "max": 10, "step": 15},
             )
         msg = _find_msg(mock_client, "input_number/create")
         assert msg is not None
@@ -274,7 +272,7 @@ class TestInputTextLengthValidation:
             return_value=True,
         ):
             await register_tools["ha_config_set_helper"](
-                helper_type="input_text", name="Pin", min_value=4, max_value=4
+                helper_type="input_text", name="Pin", config={"min": 4, "max": 4}
             )
         msg = _find_msg(mock_client, "input_text/create")
         assert msg["min"] == 4 and msg["max"] == 4
@@ -289,8 +287,7 @@ class TestInputTextLengthValidation:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_text",
                 name="Note",
-                min_value=0,
-                max_value=255,
+                config={"min": 0, "max": 255},
             )
         msg = _find_msg(mock_client, "input_text/create")
         assert msg is not None
@@ -313,7 +310,7 @@ class TestInputSelectDuplicateOptions:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 name="Mode",
-                options=["A", "B", "C"],
+                config={"options": ["A", "B", "C"]},
             )
         msg = _find_msg(mock_client, "input_select/create")
         assert msg is not None
@@ -336,10 +333,12 @@ class TestScheduleValidation:
             await register_tools["ha_config_set_helper"](
                 helper_type="schedule",
                 name="Wakeup",
-                monday=[
-                    {"from": "07:00", "to": "12:00"},
-                    {"from": "13:00", "to": "17:00"},
-                ],
+                config={
+                    "monday": [
+                        {"from": "07:00", "to": "12:00"},
+                        {"from": "13:00", "to": "17:00"},
+                    ]
+                },
             )
         msg = _find_msg(mock_client, "schedule/create")
         assert msg is not None
@@ -357,10 +356,12 @@ class TestScheduleValidation:
             await register_tools["ha_config_set_helper"](
                 helper_type="schedule",
                 name="Wakeup",
-                monday=[
-                    {"from": "07:00", "to": "12:00"},
-                    {"from": "12:00", "to": "14:00"},
-                ],
+                config={
+                    "monday": [
+                        {"from": "07:00", "to": "12:00"},
+                        {"from": "12:00", "to": "14:00"},
+                    ]
+                },
             )
         msg = _find_msg(mock_client, "schedule/create")
         assert msg is not None
@@ -397,8 +398,7 @@ class TestInputSelectInitialInOptions:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 name="Mode",
-                options=["A", "B", "C"],
-                initial="B",
+                config={"options": ["A", "B", "C"], "initial": "B"},
             )
         msg = _find_msg(mock_client, "input_select/create")
         assert msg is not None
@@ -421,8 +421,7 @@ class TestInputSelectInitialInOptions:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 helper_id="input_select.mode",
-                options=["A", "B", "C"],
-                initial="C",
+                config={"options": ["A", "B", "C"], "initial": "C"},
             )
         msg = _find_msg(mock_client, "input_select/update")
         assert msg is not None
@@ -451,8 +450,7 @@ class TestInputDatetimeHasDateOrTime:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
                 name="DateOnly",
-                has_date=True,
-                has_time=False,
+                config={"has_date": True, "has_time": False},
             )
         msg = _find_msg(mock_client, "input_datetime/create")
         assert msg is not None
@@ -477,7 +475,7 @@ class TestInputDatetimeHasDateOrTime:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
                 helper_id="input_datetime.schedule",
-                has_date=True,
+                config={"has_date": True},
             )
         msg = _find_msg(mock_client, "input_datetime/update")
         assert msg is not None

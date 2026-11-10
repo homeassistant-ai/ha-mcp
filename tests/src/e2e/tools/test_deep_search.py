@@ -213,7 +213,7 @@ async def test_deep_search_helper(mcp_client):
         {
             "helper_type": "input_select",
             "name": helper_config["name"],
-            "options": helper_config["options"],
+            "config": {"options": helper_config["options"]},
         },
     )
     create_data = assert_mcp_success(create_result, "Create test helper")

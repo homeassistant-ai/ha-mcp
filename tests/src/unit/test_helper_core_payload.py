@@ -17,6 +17,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.config_helpers.core_payload import (
     merged_update,
+    storage_fields,
     with_create_defaults,
 )
 
@@ -32,6 +33,36 @@ def test_update_keeps_every_stored_field_it_does_not_change() -> None:
     stored = {"id": "t", "name": "T", "min": 0.0, "max": 50.0, "mode": "box"}
     body = merged_update("input_number", stored, None, None, {"max": 80.0})
     assert body == {"name": "T", "min": 0.0, "max": 80.0, "mode": "box"}
+
+
+def test_a_field_set_to_null_is_removed_from_the_stored_item() -> None:
+    """Core's update writes the whole item, so a field is cleared by leaving
+    it out, as the helper's dialog drops a box that is emptied."""
+    stored = {"id": "t", "name": "T", "min": 0.0, "max": 50.0, "initial": 5.0}
+    body = merged_update("input_number", stored, None, None, {"initial": None})
+    assert body == {"name": "T", "min": 0.0, "max": 50.0}
+
+
+def test_a_null_field_is_left_out_of_a_create() -> None:
+    assert with_create_defaults("input_number", {"min": 0, "initial": None}) == {
+        "min": 0
+    }
+
+
+def test_config_reaches_core_as_written_with_name_and_icon_lifted() -> None:
+    """``name`` and ``icon`` are Core fields too: ``config`` may carry them,
+    and every other key is sent under the name it was given."""
+    name, icon, fields = storage_fields(
+        "counter", {"name": "Laps", "icon": "mdi:run", "minimum": "0"}, None, None
+    )
+    assert (name, icon, fields) == ("Laps", "mdi:run", {"minimum": "0"})
+
+
+def test_a_list_is_not_a_storage_helpers_config() -> None:
+    """A list answers a flow's forms; a storage helper has no flow."""
+    with pytest.raises(ToolError) as exc_info:
+        storage_fields("input_number", [{"min": 0}], "T", None)
+    assert "written in one call" in _error(exc_info)["error"]["message"]
 
 
 def test_update_does_not_send_the_items_id() -> None:

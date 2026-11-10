@@ -18,6 +18,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
+from ..component_api import COMPONENT_INSTALL_HINT, component_serves
 from ..component_flow import flow_outline, steps_after
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
@@ -173,8 +174,14 @@ async def describe_form(
         outline = await flow_outline(client, domain, path)
         declared = steps_after(outline, step_id) if outline is not None else None
     if declared is None:
-        # Core's flow is not declared as steps: only the step itself says.
+        # Core's flow is not declared as steps, or no component reads the
+        # declaration: only the step itself says.
         described.update(_later_forms(step))
+        if "note" in described and not await component_serves(client, "flow_outline"):
+            described["note"] += (
+                " The ha_mcp_tools component lists a flow's later forms up "
+                f"front. {COMPONENT_INSTALL_HINT}"
+            )
     elif declared:
         described["later_forms"] = [
             _later_form(later, always, strings, domain, path)
@@ -481,7 +488,7 @@ async def _describe_simple(
                 "through the ha_mcp_tools component, which is not installed "
                 "or does not serve it. Send the fields under Home "
                 "Assistant's own names: it validates the write, and its "
-                "error names a wrong or missing field."
+                f"error names a wrong or missing field. {COMPONENT_INSTALL_HINT}"
             ),
         }
         if item is not None:

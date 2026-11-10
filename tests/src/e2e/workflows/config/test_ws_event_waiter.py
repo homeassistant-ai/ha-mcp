@@ -57,10 +57,7 @@ class TestWsEventWaiter:
             {
                 "helper_type": "input_number",
                 "name": "WS Waiter Regression",
-                "min": 0,
-                "max": 100,
-                "step": 1,
-                "initial": 0,
+                "config": {"min": 0, "max": 100, "step": 1, "initial": 0},
             },
         )
 

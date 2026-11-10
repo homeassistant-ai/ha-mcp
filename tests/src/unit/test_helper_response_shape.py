@@ -139,7 +139,7 @@ class TestUniformResponseShape:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 helper_id="input_select.existing",
-                options=["x", "y"],
+                config={"options": ["x", "y"]},
             )
         _assert_uniform_shape(result, expect_warnings=False)
         assert result["action"] == "update"

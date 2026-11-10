@@ -9,7 +9,6 @@ from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ..helpers import (
-    hidden_param_names,
     raise_tool_error,
     validate_identifier_not_empty,
 )
@@ -17,46 +16,11 @@ from .schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
 
 
 @functools.cache
-def _storage_helper_params() -> frozenset[str]:
-    """The tool's hidden storage-helper parameters (folded in from ``config``)."""
-    from ..tools_config_helpers import HelperConfigTools  # the tool imports this
-
-    return frozenset(hidden_param_names(HelperConfigTools.ha_config_set_helper))
-
-
 def _helper_error_context(helper_type: str, **extra: Any) -> dict[str, Any]:
     """A call-shape error's context: a storage helper's carries its fields."""
     if helper_type in SIMPLE_HELPER_TYPES:
         return _simple_helper_error_context(helper_type, **extra)
     return {"helper_type": helper_type, **extra}
-
-
-def _reject_storage_params_on_flow_helper(
-    helper_type: str, passed: dict[str, Any]
-) -> None:
-    """A flow helper takes its fields in ``config``; storage-helper parameters
-    passed top-level would otherwise be dropped silently (issue #1150)."""
-    inapplicable = sorted(
-        name
-        for name, value in passed.items()
-        if value is not None and name in _storage_helper_params()
-    )
-    if not inapplicable:
-        return
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"The following parameters are not applicable for "
-            f"helper_type='{helper_type}': {', '.join(inapplicable)}. Flow "
-            "helpers take their fields inside `config`.",
-            context={"helper_type": helper_type, "inapplicable_params": inapplicable},
-            suggestions=[
-                f"Move {', '.join(inapplicable)} into `config`",
-                f"ha_config_list_helpers({helper_type!r}, describe=True) lists the "
-                "fields",
-            ],
-        )
-    )
 
 
 def _reject_flow_params_on_storage_helper(

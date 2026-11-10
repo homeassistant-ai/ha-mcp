@@ -28,6 +28,7 @@ from typing import Any, NoReturn, cast
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from .component_api import COMPONENT_INSTALL_HINT
 from .component_flow import flow_record
 from .config_entry_flow import (
     _reject_redaction_sentinels,
@@ -198,7 +199,7 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
                 + (
                     " ha-mcp restarted since the flow was opened, and "
                     "without a current ha_mcp_tools component it cannot read "
-                    "the flow's target from Home Assistant."
+                    f"the flow's target from Home Assistant. {COMPONENT_INSTALL_HINT}"
                     if unreadable
                     else ""
                 )

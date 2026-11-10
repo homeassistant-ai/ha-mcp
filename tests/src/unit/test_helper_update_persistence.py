@@ -109,7 +109,7 @@ class TestInputSelectUpdatePersistence:
                 helper_type="input_select",
                 name="My Dropdown",
                 helper_id="input_select.my_dropdown",
-                options=["Option A", "Option B", "Option C"],
+                config={"options": ["Option A", "Option B", "Option C"]},
             )
 
         assert result["success"] is True
@@ -143,8 +143,7 @@ class TestInputSelectUpdatePersistence:
                 helper_type="input_select",
                 name="My Dropdown",
                 helper_id="input_select.my_dropdown",
-                options=["A", "B"],
-                initial="B",
+                config={"options": ["A", "B"], "initial": "B"},
             )
 
         assert result["success"] is True
@@ -173,11 +172,13 @@ class TestInputNumberUpdatePersistence:
                 helper_type="input_number",
                 name="My Number",
                 helper_id="input_number.my_number",
-                min_value=0,
-                max_value=200,
-                step=5,
-                unit_of_measurement="W",
-                mode="slider",
+                config={
+                    "min": 0,
+                    "max": 200,
+                    "step": 5,
+                    "unit_of_measurement": "W",
+                    "mode": "slider",
+                },
             )
 
         assert result["success"] is True
@@ -214,9 +215,7 @@ class TestInputTextUpdatePersistence:
                 helper_type="input_text",
                 name="My Text",
                 helper_id="input_text.my_text",
-                min_value=1,
-                max_value=50,
-                mode="password",
+                config={"min": 1, "max": 50, "mode": "password"},
             )
 
         assert result["success"] is True
@@ -282,8 +281,7 @@ class TestInputDatetimeUpdatePersistence:
                 helper_type="input_datetime",
                 name="My Datetime",
                 helper_id="input_datetime.my_datetime",
-                has_date=True,
-                has_time=False,
+                config={"has_date": True, "has_time": False},
             )
 
         assert result["success"] is True
@@ -316,11 +314,13 @@ class TestCounterUpdatePersistence:
                 helper_type="counter",
                 name="My Counter",
                 helper_id="counter.my_counter",
-                initial=10,
-                min_value=0,
-                max_value=100,
-                step=2,
-                restore=True,
+                config={
+                    "initial": 10,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "step": 2,
+                    "restore": True,
+                },
             )
 
         assert result["success"] is True
@@ -356,8 +356,7 @@ class TestTimerUpdatePersistence:
                 helper_type="timer",
                 name="My Timer",
                 helper_id="timer.my_timer",
-                duration="00:30:00",
-                restore=False,
+                config={"duration": "00:30:00", "restore": False},
             )
 
         assert result["success"] is True

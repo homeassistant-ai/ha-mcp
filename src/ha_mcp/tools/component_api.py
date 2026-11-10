@@ -615,6 +615,18 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     return auth if isinstance(auth, str) else None
 
 
+# Said wherever a response is poorer for want of a component command.
+COMPONENT_INSTALL_HINT = (
+    "Install or update the ha_mcp_tools component via HACS (the Marketplace "
+    "on Home Assistant 2026.11+) and restart Home Assistant."
+)
+
+
+async def component_serves(client: Any, capability: str) -> bool:
+    """Whether the installed component advertises ``capability``."""
+    return component_supports(await get_component_caps(client), capability)
+
+
 async def ask_component(
     client: Any, command: str, **params: Any
 ) -> dict[str, Any] | None:
@@ -622,7 +634,7 @@ async def ask_component(
     capability has its name. ``None`` when the component does not advertise
     it, the command was not sent, or it was refused: the caller then works
     from Core's own commands."""
-    if not component_supports(await get_component_caps(client), command):
+    if not await component_serves(client, command):
         return None
     try:
         reply = await client.send_websocket_message(

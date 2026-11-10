@@ -9,7 +9,7 @@ input_number, input_text, input_datetime, counter, timer, schedule).
 import logging
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
@@ -30,7 +30,7 @@ from .component_api import (
     is_unknown_command,
 )
 from .config_entry_backup import helper_backup_id
-from .config_helpers.core_payload import core_fields
+from .config_helpers.core_payload import storage_fields
 from .config_helpers.create import _execute_create_simple_helper
 from .config_helpers.describe import describe_helper_response
 from .config_helpers.flow import _handle_flow_helper, _handle_set_config_subentry
@@ -54,7 +54,7 @@ from .config_helpers.schemas import (
     SIMPLE_HELPER_TYPES,
     StorageHelperType,
 )
-from .config_helpers.typed_config import _core_schema_context, _prepare_typed_params
+from .config_helpers.typed_config import _core_schema_context
 from .config_helpers.update import _execute_update_simple_helper
 from .config_helpers.validation import (
     _reject_flow_params_on_storage_helper,
@@ -66,7 +66,6 @@ from .config_write_helpers import (
 )
 from .helper_flows import helper_flow_types, require_helper_type
 from .helpers import (
-    HIDDEN_PARAM,
     clear_or_keep,
     exception_to_structured_error,
     log_tool_usage,
@@ -607,75 +606,6 @@ class HelperConfigTools:
             JSON_STRING_COERCION,
             Field(description="Labels to categorize the helper", default=None),
         ] = None,
-        # Type fields for SIMPLE helpers, also accepted inside `config`; hidden from
-        # the schema so only `config` documents them.
-        min_value: Annotated[
-            float | None,
-            HIDDEN_PARAM,
-            Field(
-                default=None,
-                validation_alias=AliasChoices("min_value", "min", "minimum"),
-            ),
-        ] = None,
-        max_value: Annotated[
-            float | None,
-            HIDDEN_PARAM,
-            Field(
-                default=None,
-                validation_alias=AliasChoices("max_value", "max", "maximum"),
-            ),
-        ] = None,
-        step: Annotated[float | None, HIDDEN_PARAM] = None,
-        unit_of_measurement: Annotated[
-            str | None,
-            HIDDEN_PARAM,
-            Field(
-                default=None,
-                validation_alias=AliasChoices("unit_of_measurement", "unit"),
-            ),
-        ] = None,
-        options: Annotated[
-            str | list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        initial: Annotated[str | bool | int | float | None, HIDDEN_PARAM] = None,
-        mode: Annotated[str | None, HIDDEN_PARAM] = None,
-        has_date: Annotated[bool | None, HIDDEN_PARAM] = None,
-        has_time: Annotated[bool | None, HIDDEN_PARAM] = None,
-        restore: Annotated[bool | None, HIDDEN_PARAM] = None,
-        duration: Annotated[str | int | float | None, HIDDEN_PARAM] = None,
-        monday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        tuesday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        wednesday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        thursday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        friday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        saturday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        sunday: Annotated[
-            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        latitude: Annotated[float | None, HIDDEN_PARAM] = None,
-        longitude: Annotated[float | None, HIDDEN_PARAM] = None,
-        radius: Annotated[float | None, HIDDEN_PARAM] = None,
-        passive: Annotated[bool | None, HIDDEN_PARAM] = None,
-        user_id: Annotated[str | None, HIDDEN_PARAM] = None,
-        device_trackers: Annotated[
-            list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
-        ] = None,
-        picture: Annotated[str | None, HIDDEN_PARAM] = None,
-        tag_id: Annotated[str | None, HIDDEN_PARAM] = None,
-        description: Annotated[str | None, HIDDEN_PARAM] = None,
-        pattern: Annotated[str | None, HIDDEN_PARAM] = None,
         category: Annotated[
             str | None,
             Field(
@@ -689,7 +619,8 @@ class HelperConfigTools:
             Field(
                 description=(
                     "Type-specific fields. On update it is a patch: a field "
-                    "you omit keeps its current value. SIMPLE types take "
+                    "you omit keeps its current value, and a SIMPLE type's "
+                    "field set to null is removed. SIMPLE types take "
                     f"these keys: {_SIMPLE_CONFIG_KEYS_DESCRIPTION} "
                     "FLOW types and config_subentry: the answers to the form "
                     "the flow is at, under the form's own field names (a "
@@ -851,40 +782,6 @@ class HelperConfigTools:
                 "abort": abort or None,
             }
             async with _core_schema_context(self._client, helper_type, action):
-                type_kw: dict[str, Any] = {
-                    "options": options,
-                    "initial": initial,
-                    "min_value": min_value,
-                    "max_value": max_value,
-                    "step": step,
-                    "unit_of_measurement": unit_of_measurement,
-                    "mode": mode,
-                    "has_date": has_date,
-                    "has_time": has_time,
-                    "restore": restore,
-                    "duration": duration,
-                    "monday": monday,
-                    "tuesday": tuesday,
-                    "wednesday": wednesday,
-                    "thursday": thursday,
-                    "friday": friday,
-                    "saturday": saturday,
-                    "sunday": sunday,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "radius": radius,
-                    "passive": passive,
-                    "user_id": user_id,
-                    "device_trackers": device_trackers,
-                    "picture": picture,
-                    "tag_id": tag_id,
-                    "description": description,
-                    "pattern": pattern,
-                }
-                name, icon, type_kw, passthrough = _prepare_typed_params(
-                    helper_type, config, name, icon, type_kw
-                )
-
                 if helper_type not in SIMPLE_HELPER_TYPES:
                     return await _handle_flow_helper(
                         self._client,
@@ -905,15 +802,14 @@ class HelperConfigTools:
                     )
 
                 _reject_flow_params_on_storage_helper(helper_type, flow_args)
+                # Home Assistant validates the fields itself (#2632).
+                name, icon, fields = storage_fields(helper_type, config, name, icon)
                 # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
                 if action == "create":
                     await _check_name_collision(self._client, helper_type, name)
 
                 try:
                     labels = parse_string_list_param(labels, "labels")
-                    type_kw["options"] = parse_string_list_param(
-                        type_kw["options"], "options"
-                    )
                 except ValueError as e:
                     raise_tool_error(
                         create_error_response(
@@ -930,9 +826,6 @@ class HelperConfigTools:
                     {"helpers": category},
                     fail_closed=True,
                 )
-
-                # Home Assistant validates the fields itself (#2632).
-                fields = core_fields(helper_type, type_kw, passthrough)
 
                 if action == "create":
                     return await _execute_create_simple_helper(

@@ -993,17 +993,19 @@ class TestComplexHelperCaptureRestore:
             "helper_type": "schedule",
             "name": helper_id,
             "icon": "mdi:calendar-clock",
-            "monday": [
-                {"from": "08:00:00", "to": "12:00:00"},
-                {"from": "13:00:00", "to": "17:00:00"},
-            ],
-            "tuesday": [{"from": "09:00:00", "to": "18:00:00"}],
-            "wednesday": [
-                {"from": "07:00:00", "to": "11:30:00"},
-                {"from": "12:30:00", "to": "16:00:00"},
-                {"from": "18:00:00", "to": "20:00:00"},
-            ],
-            "friday": [{"from": "08:30:00", "to": "14:30:00"}],
+            "config": {
+                "monday": [
+                    {"from": "08:00:00", "to": "12:00:00"},
+                    {"from": "13:00:00", "to": "17:00:00"},
+                ],
+                "tuesday": [{"from": "09:00:00", "to": "18:00:00"}],
+                "wednesday": [
+                    {"from": "07:00:00", "to": "11:30:00"},
+                    {"from": "12:30:00", "to": "16:00:00"},
+                    {"from": "18:00:00", "to": "20:00:00"},
+                ],
+                "friday": [{"from": "08:30:00", "to": "14:30:00"}],
+            },
         }
         mcp = MCPAssertions(mcp_client)
         await mcp.call_tool_success("ha_config_set_helper", original)
@@ -1021,13 +1023,15 @@ class TestComplexHelperCaptureRestore:
                 "helper_id": helper_id,
                 "name": helper_id,
                 "icon": "mdi:calendar-remove",
-                "monday": [{"from": "10:00:00", "to": "12:00:00"}],
-                "tuesday": [
-                    {"from": "08:00:00", "to": "12:00:00"},
-                    {"from": "13:00:00", "to": "17:00:00"},
-                ],
-                "wednesday": [],
-                "friday": [{"from": "08:30:00", "to": "14:30:00"}],
+                "config": {
+                    "monday": [{"from": "10:00:00", "to": "12:00:00"}],
+                    "tuesday": [
+                        {"from": "08:00:00", "to": "12:00:00"},
+                        {"from": "13:00:00", "to": "17:00:00"},
+                    ],
+                    "wednesday": [],
+                    "friday": [{"from": "08:30:00", "to": "14:30:00"}],
+                },
             }
             await mcp.call_tool_success("ha_config_set_helper", edited)
 

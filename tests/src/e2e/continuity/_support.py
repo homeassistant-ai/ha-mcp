@@ -31,7 +31,7 @@ class Scenario:
             {
                 "helper_type": helper_type,
                 "name": self.unique_name(),
-                "initial": initial,
+                "config": {"initial": initial},
             },
         )
         entity_id = created.get("entity_id") or f"{helper_type}.{created['data']['id']}"
