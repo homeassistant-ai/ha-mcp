@@ -124,12 +124,10 @@ def _helper_response(
 # own field list replaces it (``ComponentHelperSchemaTransform``, when the
 # component serves it). No field is named here: Core's schema is the list.
 _SIMPLE_CONFIG_KEYS_DESCRIPTION = (
-    "the fields of the type's own Home Assistant schema, under its names "
-    "(as the type's YAML configuration names them); Home Assistant validates "
-    "them and its error names any mistake. On input_* types, `initial` — even "
-    "false/0 — disables last-state restore and forces that value on every HA "
-    "restart. With the ha_mcp_tools component installed, "
-    "ha_config_list_helpers(helper_type, describe=True) lists a type's fields."
+    "the fields of the type's own Home Assistant schema, under its names; "
+    "Home Assistant validates them and its error names any mistake. With the "
+    "ha_mcp_tools component installed, ha_config_list_helpers(helper_type, "
+    "describe=True) lists a type's fields."
 )
 
 

@@ -670,8 +670,8 @@ class TestCatalogTransform:
         description = properties["config"]["description"]
         assert hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION not in description
         assert (
-            "input_number: min (float, required), max (float, required), "
-            "step (float, default 1), mode (box|slider)." in description
+            "input_number: max (float, required), min (float, required), "
+            "mode (box|slider), step (float, default 1)." in description
         )
 
     async def test_static_contract_without_component(

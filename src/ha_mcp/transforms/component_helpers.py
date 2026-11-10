@@ -27,35 +27,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TOOL = "ha_config_set_helper"
-# Rendering order; input_button has no fields beyond name/icon.
-_ORDER = (
-    "input_select",
-    "input_number",
-    "input_text",
-    "input_datetime",
-    "input_boolean",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-)
-_WEEKDAYS = frozenset(
-    {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
-)
-# Semantics Core's schemas don't carry.
-_NOTES = (
-    "On input_* types `initial` — even false/0 — disables last-state restore and "
-    "forces that value on every HA restart; counter `initial` is the starting "
-    "value. input_text min/max are lengths. input_select options is a list. An "
-    "input_datetime needs has_date or has_time. timer "
-    "duration is 'HH:MM:SS' or seconds. Schedule days are lists of "
-    "{'from': 'HH:MM', 'to': 'HH:MM'} with an optional 'data' dict. zone radius "
-    "is in meters; a passive zone doesn't trigger person state changes. person "
-    "device_trackers is a list of device_tracker entity IDs. Home Assistant "
-    "generates a tag_id omitted on create."
-)
 
 
 def _render_field(field: dict[str, Any]) -> str:
@@ -74,21 +45,25 @@ def _render_field(field: dict[str, Any]) -> str:
 
 
 def render_core_keys(schemas: dict[str, Any]) -> str:
-    """The SIMPLE-type key list, from Core's create schemas."""
+    """The SIMPLE-type key list, from Core's create schemas alone.
+
+    Types and fields are sorted, required fields first, so the text is the
+    same on every run: Core builds some field lists from a set.
+    """
     lines = []
-    for helper_type in _ORDER:
-        fields = [
-            f
-            for f in schemas[helper_type]["create"]
-            if f.get("name") not in ("name", "icon")
-        ]
-        rendered = [_render_field(f) for f in fields if f.get("name") not in _WEEKDAYS]
-        # Core builds schedule's day keys from a set; one entry keeps this stable.
-        if any(f.get("name") in _WEEKDAYS for f in fields):
-            rendered.append("monday..sunday")
-        if rendered:
-            lines.append(f"{helper_type}: {', '.join(rendered)}.")
-    return f"{' '.join(lines)} {_NOTES}"
+    for helper_type in sorted(schemas):
+        fields = sorted(
+            (
+                field
+                for field in schemas[helper_type]["create"]
+                # The tool's own parameters.
+                if field.get("name") not in ("name", "icon")
+            ),
+            key=lambda field: (not field.get("required"), str(field.get("name"))),
+        )
+        if fields:
+            lines.append(f"{helper_type}: {', '.join(map(_render_field, fields))}.")
+    return " ".join(lines)
 
 
 class ComponentHelperSchemaTransform(Transform):
