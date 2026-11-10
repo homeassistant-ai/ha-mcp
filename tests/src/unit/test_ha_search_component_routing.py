@@ -55,6 +55,8 @@ _ENTITY_REGISTRY = {
     ],
 }
 
+# The capability a component that composes entity names advertises.
+_NAMES = "entity_composed_name"
 _CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
@@ -63,7 +65,7 @@ _CAPS_PRE_CHILD_SEMANTICS = {
 }
 _CAPS_SEARCH = {
     **_CAPS_PRE_CHILD_SEMANTICS,
-    "capabilities": ["search", "device_registry_child_semantics"],
+    "capabilities": ["search", "device_registry_child_semantics", _NAMES],
 }
 _CAPS_SEARCH_MEMBERSHIP = {
     **_CAPS_SEARCH,
@@ -1063,16 +1065,12 @@ class TestDashboardSearchTypesGate:
         still never runs."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         caps = {
-            "schema_version": 1,
-            "component_version": "1.2.4",
+            **_CAPS_SEARCH,
             "capabilities": [
-                "search",
+                *_CAPS_SEARCH["capabilities"],
                 "dashboards",
                 "dashboards_doc_search",
-                "device_registry_child_semantics",
-                "entity_composed_name",
             ],
-            "limits": {},
         }
 
         async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
@@ -1138,11 +1136,7 @@ class TestDashboardSearchTypesGate:
         dashboard used to raise. Pins the two fixes composed through
         ``ha_search``'s outer merge, not just each half in isolation."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        caps = {
-            **_CAPS_SEARCH,
-            "capabilities": [*_CAPS_SEARCH["capabilities"], "entity_composed_name"],
-        }
-        ws = make_ws("ha_mcp_tools/search", info_result=caps)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
         client = ConfigNotFoundDashboardClient()
         ha_search = _build_ha_search(client)
 
