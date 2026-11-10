@@ -125,6 +125,18 @@ async def test_the_top_level_name_goes_only_to_a_form_that_asks_for_one(
     assert _options(hass, unnamed["entry_id"])["entity_id"] == source.entity_id
 
 
+async def test_an_empty_menu_choice_and_flow_id_count_as_not_given(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    """A client that fills unused parameters with "" still creates a helper
+    whose flow has no menu, instead of being refused for a menu choice."""
+    created = await tools.ha_config_set_helper(
+        helper_type="min_max", menu_choice="", flow_id="", config=dict(_MIN_MAX)
+    )
+
+    assert _options(hass, created["entry_id"])["entity_ids"] == _SOURCES
+
+
 async def test_a_call_without_config_returns_cores_form_and_saves_nothing(
     hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:

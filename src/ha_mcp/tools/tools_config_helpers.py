@@ -806,9 +806,8 @@ class HelperConfigTools:
         Behavior:
         - A SIMPLE update preserves type-specific fields not re-passed (a rename
           never wipes initial/icon/etc.).
-        - Omitted `action` falls back to the `helper_id`-presence discriminator
-          (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config
-          subentries).
+        - Omitted `action`: update when `helper_id` (for a config subentry,
+          `subentry_id`) is given, else create.
         - area_id, labels, category and icon are applied to a flow helper's
           entities by the call that finishes the flow.
         - A progress step (Home Assistant working in the background) is waited
@@ -829,6 +828,7 @@ class HelperConfigTools:
             area_id = clear_or_keep(area_id, "area_id")
             icon = clear_or_keep(icon, "icon")
             category = clear_or_keep(category, "category")
+            menu_choice, flow_id = menu_choice or None, flow_id or None
             if helper_type == "config_subentry":
                 return await _handle_set_config_subentry(
                     self._client,
