@@ -479,7 +479,7 @@ def format_sandbox_error(
             "Use .get(key, default) to handle missing keys",
             f"Expression: {preview}",
         ]
-        # A single-target unpack; Python 3.14 adds ", got N" to the too-many text.
+        # Python 3.14 adds ", got N" only for a plain list, tuple or dict.
         if "unpack (expected 1)" in str(error) or "unpack (expected 1," in str(error):
             suggestions.insert(
                 0,

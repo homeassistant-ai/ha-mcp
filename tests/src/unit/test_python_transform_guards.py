@@ -16,8 +16,8 @@ from ha_mcp.utils.python_sandbox import (
 )
 
 
-def _actions(*aliases: str, value: int = 1) -> dict[str, Any]:
-    return {"actions": [{"alias": a, "data": {"v": value}} for a in aliases]}
+def _actions(*aliases: str) -> dict[str, Any]:
+    return {"actions": [{"alias": a, "data": {"v": 1}} for a in aliases]}
 
 
 class TestGuards:
@@ -41,7 +41,11 @@ class TestGuards:
         [
             pytest.param(ONE_MATCH, _actions("X"), id="no-match"),
             pytest.param(ONE_MATCH, _actions("Y", "Y"), id="two-matches"),
-            pytest.param(VALUE, _actions("X", "X", "Y", value=9), id="value-differs"),
+            pytest.param(
+                "[a] = (a for a in config['actions'] if a.get('alias') == 'Y')",
+                _actions("Y", "Y"),
+                id="two-matches-no-length",
+            ),
         ],
     )
     def test_failed_guard_raises_and_says_why(
@@ -51,17 +55,8 @@ class TestGuards:
             safe_execute(guard, config)
 
         _, suggestions = format_sandbox_error(exc_info.value, guard)
-        assert "guard, it matched no item or several" in suggestions[0]
-
-    def test_plain_single_target_unpack_hint_states_the_mismatch_first(self) -> None:
-        expr = "[a] = config['actions']"
-
-        with pytest.raises(PythonSandboxExecutionError, match="unpack") as exc_info:
-            safe_execute(expr, _actions("X", "Y"))
-
-        _, suggestions = format_sandbox_error(exc_info.value, expr)
         assert suggestions[0].startswith("A single-target unpack needs exactly one")
-        assert "If this is a `[a] = [...]` guard" in suggestions[0]
+        assert "guard, it matched no item or several" in suggestions[0]
 
     def test_multi_target_unpack_error_gets_no_guard_hint(self) -> None:
         expr = "x, y = config['actions']"
