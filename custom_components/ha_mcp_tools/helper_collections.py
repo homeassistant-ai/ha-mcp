@@ -147,8 +147,8 @@ def helpers_named(
     """The helpers of ``domain`` a new one named ``name`` would be numbered
     after: those whose id, or whose name, Core's ``slugify`` turns into the
     same id. ``ids`` are storage ids, or config entry ids for a flow helper.
-    ``not_stored`` repeats the ones among ``ids`` that are neither: the object
-    id of an entity that is not a stored helper, which no storage write
+    ``not_stored`` repeats the ones among ``ids`` that are neither: an id
+    held by something that is not a stored helper, which no storage write
     reaches.
     """
     from homeassistant.util import slugify
@@ -175,12 +175,17 @@ def helpers_named(
             isinstance(item_name, str) and slugify(item_name) == slug
         ):
             ids.append(item_id)
-    # Core numbers the new helper's entity after any entity of this id, and
-    # not every one is a stored helper: a helper defined in YAML is not, nor
-    # is the home zone Core makes itself.
+    # Core numbers the new helper after anything that holds this id, and not
+    # all of it is a stored helper: a helper defined in YAML is not, nor is
+    # the home zone Core makes itself. The entity id is taken by an entity,
+    # and the storage id is reserved in the manager Core generates ids with.
     not_stored: list[str] = []
     taken = f"{domain}.{slug}"
-    if not ids and (hass.states.get(taken) or registry.async_is_registered(taken)):
+    if not ids and (
+        hass.states.get(taken)
+        or registry.async_is_registered(taken)
+        or stored.id_manager.has_id(slug)
+    ):
         entry = registry.async_get(taken)
         if entry and entry.platform == domain and entry.unique_id in stored.data:
             ids.append(entry.unique_id)

@@ -588,6 +588,7 @@ async def _check_name_collision(
             ],
         )
     )
+    # CodeQL (py/mixed-returns) reads raise_tool_error as returning.
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
