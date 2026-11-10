@@ -3,6 +3,7 @@
 import json
 import re
 from datetime import UTC, datetime, timedelta, tzinfo
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -129,15 +130,15 @@ class TestParseRelativeTime:
         assert result == expected
 
     def test_iso_format_without_timezone(self) -> None:
-        """ISO format without timezone gets UTC added."""
+        """ISO format without timezone stays naive for ha_get_history to resolve."""
         result = parse_relative_time("2025-01-25T12:00:00")
-        expected = datetime(2025, 1, 25, 12, 0, 0, tzinfo=UTC)
+        expected = datetime(2025, 1, 25, 12, 0, 0)
         assert result == expected
 
     def test_iso_format_date_only(self) -> None:
         """ISO format with date only parsed correctly."""
         result = parse_relative_time("2025-01-25")
-        expected = datetime(2025, 1, 25, 0, 0, 0, tzinfo=UTC)
+        expected = datetime(2025, 1, 25, 0, 0, 0)
         assert result == expected
 
     def test_invalid_format_raises_error(self) -> None:
@@ -172,3 +173,21 @@ class TestParseRelativeTime:
         """A value too large for a datetime is rejected as out of range, not raised as OverflowError."""
         with pytest.raises(ValueError, match="is out of range"):
             parse_relative_time(value)
+
+
+async def test_time_without_offset_is_home_assistant_local_time() -> None:
+    """Like Core, ha_get_history reads a time without an offset in HA's zone."""
+    fetch = AsyncMock(return_value={"success": True})
+    client = MagicMock(
+        get_config=AsyncMock(return_value={"time_zone": "Europe/Berlin"})
+    )
+    with patch.object(tools_history, "_fetch_history", fetch):
+        await tools_history.HistoryTools(client).ha_get_history(
+            entity_ids="sensor.temp",
+            start_time="2026-07-01T12:00:00",
+            end_time="2026-07-01T13:00:00Z",
+        )
+    assert fetch.call_args.args[2:4] == (
+        datetime(2026, 7, 1, 10, tzinfo=UTC),
+        datetime(2026, 7, 1, 13, tzinfo=UTC),
+    )

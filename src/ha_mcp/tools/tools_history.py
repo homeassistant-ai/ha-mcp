@@ -85,7 +85,7 @@ def parse_relative_time(
         reference_time: Reference datetime for relative values and defaults.
 
     Returns:
-        A datetime in the parsed value's timezone; relative values use ``reference_time``'s.
+        A datetime in the parsed value's timezone (naive if it has no offset); relative values use ``reference_time``'s.
     """
     now = reference_time or datetime.now(UTC)
     if time_str is None:
@@ -105,12 +105,7 @@ def parse_relative_time(
             ) from exc
 
     try:
-        if time_str.endswith("Z"):
-            time_str = time_str[:-1] + "+00:00"
-        dt = datetime.fromisoformat(time_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt
+        return datetime.fromisoformat(time_str)
     except (ValueError, OverflowError) as e:
         raise ValueError(
             f"Invalid time format: {time_str}. Use ISO format or relative (e.g., '30min', '24h', '7d', '2w', '1m' (= 30 days))"
@@ -229,7 +224,7 @@ class HistoryTools:
         start_time: Annotated[
             str | None,
             Field(
-                description="Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
+                description="Start time: ISO datetime (HA local time without an offset) or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
                 default=None,
             ),
         ] = None,
@@ -416,6 +411,11 @@ class HistoryTools:
             start_dt, end_dt = _parse_time_range(
                 start_time, end_time, default_hours, now
             )
+            if None in (start_dt.tzinfo, end_dt.tzinfo):  # Core: naive = HA local time
+                tz_name, _ = await fetch_ha_timezone(self._client)
+                tz, _ = resolve_local_timezone(tz_name)
+                start_dt = start_dt.replace(tzinfo=start_dt.tzinfo or tz)
+                end_dt = end_dt.replace(tzinfo=end_dt.tzinfo or tz)
             query_settings = get_global_settings()
             statistics_timezone = await _prepare_guardrail_query(
                 self._client,
