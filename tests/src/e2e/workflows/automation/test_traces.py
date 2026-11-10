@@ -17,6 +17,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.entity_finders import find_test_light_entity
 from ...utilities.wait_helpers import (
     wait_for_condition,
@@ -927,24 +928,25 @@ action:
             assert trigger_result["reason"]
             assert isinstance(trigger_result["data"], dict)
         finally:
-            if automation_id is not None:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_config_remove_automation",
-                    {"entity_id": automation_id},
-                )
-            if light_was_on:
-                # The test turned the light off to force the state trigger;
-                # put the instance back the way it was for later tests.
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_call_service",
-                    {
-                        "domain": "light",
-                        "service": "turn_on",
-                        "entity_id": light_id,
-                    },
-                )
+            cleanup = CleanupSteps()
+            with cleanup.step():
+                if automation_id is not None:
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_config_remove_automation",
+                        {"entity_id": automation_id},
+                    )
+            with cleanup.step():
+                if light_was_on:
+                    # The test turned the light off to force the state trigger;
+                    # put the instance back the way it was for later tests.
+                    await MCPAssertions(mcp_client).call_tool_success(
+                        "ha_call_service",
+                        {
+                            "domain": "light",
+                            "service": "turn_on",
+                            "entity_id": light_id,
+                        },
+                    )
 
 
 @pytest.mark.automation
