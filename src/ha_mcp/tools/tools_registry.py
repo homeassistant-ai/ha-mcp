@@ -717,7 +717,6 @@ class RegistryTools:
                 context={"device_id": device_id},
             )
             return None  # unreachable: exception_to_structured_error always raises
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_get_device",
@@ -1059,7 +1058,6 @@ class RegistryTools:
                 context={"device_id": device_id},
             )
             return None  # unreachable: exception_to_structured_error always raises
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
