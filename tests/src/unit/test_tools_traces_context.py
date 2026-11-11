@@ -15,10 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.automation.trace import AutomationTrace
-from homeassistant.components.trace import async_store_trace
-from homeassistant.core import Context, HomeAssistant
-from homeassistant.helpers.trace import TraceElement
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -27,36 +24,13 @@ from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_logbook import TraceLogbook
 from ha_mcp.tools.trace_lookup import ContextTraceMatch, resolve_global_context
 
-_STORED_TRACES = 10
+from ._trace_fixtures import automation_run, store_runs
 
 
 @pytest.fixture(autouse=True)
 async def trace_store(hass: HomeAssistant) -> None:
     """Set up Core's trace store, which serves the ``trace/*`` commands."""
     assert await async_setup_component(hass, "trace", {})
-
-
-def _run(
-    run_id: str, *, context_id: str, parent_id: str | None = None
-) -> AutomationTrace:
-    """One run Core stores for ``automation.uid_1``."""
-    trace = AutomationTrace(
-        "uid_1",
-        {"alias": "Trace capture"},
-        None,
-        Context(id=context_id, parent_id=parent_id),
-    )
-    trace.run_id = run_id
-    trace.set_trigger_description("state change")
-    trace.set_trace({"action/0": [TraceElement({}, "action/0")]})
-    trace.finished()
-    return trace
-
-
-async def _store(hass: HomeAssistant, *traces: AutomationTrace) -> None:
-    """Save ``traces`` through Core's own trace helper."""
-    for trace in traces:
-        async_store_trace(hass, trace, stored_traces=_STORED_TRACES)
 
 
 class TestNoComponentContextLookup:
@@ -66,7 +40,7 @@ class TestNoComponentContextLookup:
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         """Core's map holds each run's own context id and its trace key."""
-        await _store(hass, _run("r1", context_id="ctx-1"))
+        await store_runs(hass, automation_run("r1", context_id="ctx-1"))
 
         match = await resolve_global_context(core_client, "ctx-1")
 
@@ -79,7 +53,9 @@ class TestNoComponentContextLookup:
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         """Core cannot resolve a triggering context, and no scan guesses it."""
-        await _store(hass, _run("r1", context_id="own-1", parent_id="parent-1"))
+        await store_runs(
+            hass, automation_run("r1", context_id="own-1", parent_id="parent-1")
+        )
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(core_client).ha_get_automation_traces(
@@ -122,7 +98,7 @@ class TestNoComponentContextLookup:
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         """Core's map says which domain owns the run, so ``script`` is refused."""
-        await _store(hass, _run("r1", context_id="ctx-1"))
+        await store_runs(hass, automation_run("r1", context_id="ctx-1"))
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(core_client).ha_get_automation_traces(
@@ -138,7 +114,7 @@ class TestNoComponentContextLookup:
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         """domain+item_id+context_id asks Core only about that trace key."""
-        await _store(hass, _run("r1", context_id="ctx-1"))
+        await store_runs(hass, automation_run("r1", context_id="ctx-1"))
 
         with pytest.raises(ToolError) as exc_info:
             await TraceTools(core_client).ha_get_automation_traces(
@@ -238,7 +214,7 @@ class TestDetailLogbook:
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         """A blank sections string must not suppress the detailed logbook read."""
-        await _store(hass, _run("r1", context_id="ctx-1"))
+        await store_runs(hass, automation_run("r1", context_id="ctx-1"))
         logbook = TraceLogbook([{"name": "Light"}], "component", [], 1, False)
 
         with patch(
@@ -269,7 +245,7 @@ class TestDetailLogbook:
         error: Exception,
     ) -> None:
         """The run's trace is already in hand, so a logbook failure is a warning."""
-        await _store(hass, _run("r1", context_id="ctx-1"))
+        await store_runs(hass, automation_run("r1", context_id="ctx-1"))
 
         with patch(
             "ha_mcp.tools.tools_traces.fetch_trace_logbook",
