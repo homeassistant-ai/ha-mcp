@@ -66,8 +66,11 @@ class Gateway:
         caller = web.WebSocketResponse()
         await caller.prepare(request)
         async with self._session.ws_connect(f"{self._core_url}/api/websocket") as core:
+            # Either side may already be closed when the other relay sends.
             await asyncio.gather(
-                _relay(caller, core, self.drops), _relay(core, caller, set())
+                _relay(caller, core, self.drops),
+                _relay(core, caller, set()),
+                return_exceptions=True,
             )
         return caller
 

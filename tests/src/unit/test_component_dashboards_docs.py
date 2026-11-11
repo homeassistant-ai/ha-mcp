@@ -161,8 +161,11 @@ async def test_search_survives_deeply_nested_card_options(
     await _storage_dash(component_ws, _HOME, body)
 
     result = await ws_result(component_ws, _WS, mode="search", query="light.a")
+    deep = await ws_result(component_ws, _WS, mode="search", query="light.deep")
 
     assert [m["card_path"] for m in result["matches"]] == ["views[0].cards[1]"]
+    # The walk stops at its bound, so the entity below it is not read.
+    assert deep["matches"] == []
 
 
 async def test_search_survives_a_deep_chain_of_nested_cards(
@@ -176,8 +179,11 @@ async def test_search_survives_a_deep_chain_of_nested_cards(
     await _storage_dash(component_ws, _HOME, body)
 
     result = await ws_result(component_ws, _WS, mode="search", query="light.a")
+    deep = await ws_result(component_ws, _WS, mode="search", query="light.deep")
 
     assert [m["card_path"] for m in result["matches"]] == ["views[0].cards[1]"]
+    # The walk stops at its bound, so the entity below it is not read.
+    assert deep["matches"] == []
 
 
 async def test_search_query_matches_number_options(
