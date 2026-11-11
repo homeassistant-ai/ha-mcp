@@ -314,6 +314,82 @@ async def test_get_entity_serves_cores_full_entry(
         assert entry["aliases"] == ["Desk"]
 
 
+@pytest.fixture
+def unique_ids(hass: HomeAssistant, core_client: HomeAssistantClient) -> dict[str, str]:
+    """One unique_id under two platforms, and an entry with a unique_id of its own."""
+    registry = er.async_get(hass)
+    return {
+        "hue": registry.async_get_or_create("sensor", "hue", "shared").entity_id,
+        "zwave_js": registry.async_get_or_create(
+            "light", "zwave_js", "shared"
+        ).entity_id,
+        "other": registry.async_get_or_create("sensor", "hue", "abc123").entity_id,
+    }
+
+
+async def test_unique_id_reads_the_list_then_the_entry(
+    core_client: HomeAssistantClient, sent: AsyncMock, unique_ids: dict[str, str]
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(unique_id="abc123")
+
+    assert result["success"] is True
+    assert result["matches"] == 1
+    assert result["unique_id"] == "abc123"
+    entry = result["entity_entries"][0]
+    assert entry["entity_id"] == unique_ids["other"]
+    assert entry["unique_id"] == "abc123"
+    assert entry["platform"] == "hue"
+    assert _types(sent) == [
+        "config/entity_registry/list",
+        "config/entity_registry/get_entries",
+    ]
+    assert sent.call_args_list[0].args[0] == {"type": "config/entity_registry/list"}
+    assert sent.call_args_list[1].args[0]["entity_ids"] == [unique_ids["other"]]
+
+
+async def test_unique_id_on_two_platforms_returns_both(
+    core_client: HomeAssistantClient, unique_ids: dict[str, str]
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(unique_id="shared")
+
+    assert result["matches"] == 2
+    assert {e["entity_id"] for e in result["entity_entries"]} == {
+        unique_ids["hue"],
+        unique_ids["zwave_js"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "expected"),
+    [("platform", "zwave_js", "zwave_js"), ("domain", "sensor", "hue")],
+)
+async def test_unique_id_narrowed_by_platform_or_domain(
+    core_client: HomeAssistantClient,
+    unique_ids: dict[str, str],
+    key: str,
+    value: str,
+    expected: str,
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(
+        unique_id="shared", **{key: value}
+    )
+
+    assert result["matches"] == 1
+    assert result[key] == value
+    assert result["entity_entries"][0]["entity_id"] == unique_ids[expected]
+
+
+async def test_an_unknown_unique_id_is_not_found(
+    core_client: HomeAssistantClient, unique_ids: dict[str, str]
+) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        await EntityTools(core_client).ha_get_entity(unique_id="nope")
+
+    error = _error(exc_info)
+    assert error["code"] == "ENTITY_NOT_FOUND"
+    assert "nope" in error["message"]
+
+
 async def test_a_rename_into_another_domain_is_cores_refusal(
     core_client: HomeAssistantClient,
     lamp: str,
