@@ -190,11 +190,9 @@ async def test_variables_appear_at_the_steps_that_changed_them(
 
     actions = (await _latest_run(tools, "automation.counting"))["action_trace"]
 
-    assert [action.get("variables") for action in actions] == [
-        {"counter": 1},
-        None,
-        {"counter": 2},
-    ]
+    # Core adds the run's context to the first step's variables as well.
+    counters = [(action.get("variables") or {}).get("counter") for action in actions]
+    assert counters == [1, None, 2]
 
 
 async def test_script_steps_are_reported_as_actions(
