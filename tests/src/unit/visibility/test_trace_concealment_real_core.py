@@ -42,6 +42,11 @@ _VISIBLE_AUTOMATION = "automation.visible"
 _VISIBLE_AUTOMATION_KEY = "1700000000002"
 _VISIBLE_SCRIPT = "script.front_door_2"
 _VISIBLE_SCRIPT_KEY = "front_door"
+# A hidden automation whose trace key is the object ID of a different, visible
+# automation: the trace tool resolves the latter's own registry ``unique_id``.
+_LOOKALIKE_HIDDEN_KEY = "morning"
+_LOOKALIKE_VISIBLE = "automation.morning"
+_LOOKALIKE_VISIBLE_KEY = "other"
 # A visible config id that literally starts with its own domain, so a
 # domain-prefix strip would make it collide with the hidden item's key.
 _DOMAIN_PREFIXED_KEY = f"automation.{_HIDDEN_AUTOMATION_KEY}"
@@ -509,6 +514,85 @@ class TestVisibleTraceKeys:
         )
 
         assert result.structured_content["run_id"] == "visible-run"
+
+
+class TestLookalikeObjectId:
+    """A visible entity_id is checked by its own registry key, not its object ID."""
+
+    async def test_a_visible_entity_id_is_not_concealed_by_a_lookalike_hidden_key(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """The tool resolves the visible entity's own key, so the call proceeds."""
+        _register(hass, entity_registry, _HIDDEN_AUTOMATION, _LOOKALIKE_HIDDEN_KEY)
+        _register(hass, entity_registry, _LOOKALIKE_VISIBLE, _LOOKALIKE_VISIBLE_KEY)
+        await store_runs(
+            hass,
+            automation_run(
+                "visible-run",
+                context_id="own-visible",
+                item_id=_LOOKALIKE_VISIBLE_KEY,
+            ),
+        )
+        _enforce(set_config, _HIDDEN_AUTOMATION)
+        mw = _ChainedEnforcement(lambda: core_client)
+        args = {"entity_id": _LOOKALIKE_VISIBLE, "run_id": "visible-run"}
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_automation_traces", args),
+            _tool_calls(core_client, **args),
+        )
+
+        assert result.structured_content["run_id"] == "visible-run"
+        assert result.structured_content["trace"]["action/0"]
+
+    async def test_the_hidden_entity_id_is_still_concealed(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """The registry key the hidden entity resolves to is concealed."""
+        _register(hass, entity_registry, _HIDDEN_AUTOMATION, _LOOKALIKE_HIDDEN_KEY)
+        _enforce(set_config, _HIDDEN_AUTOMATION)
+        mw = _ChainedEnforcement(lambda: core_client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces", {"entity_id": _HIDDEN_AUTOMATION}
+                ),
+                _unreached_call_next,
+            )
+
+        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+
+    async def test_an_unregistered_entity_id_falls_back_to_the_object_id(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """Without a registry row the tool would use the object ID, so it fails closed."""
+        _register(hass, entity_registry, _HIDDEN_AUTOMATION, _LOOKALIKE_HIDDEN_KEY)
+        hass.states.async_set(_LOOKALIKE_VISIBLE, "on")
+        _enforce(set_config, _HIDDEN_AUTOMATION)
+        mw = _ChainedEnforcement(lambda: core_client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces", {"entity_id": _LOOKALIKE_VISIBLE}
+                ),
+                _unreached_call_next,
+            )
+
+        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
 
 
 class TestTraceQueryRefreshesTheHiddenSet:

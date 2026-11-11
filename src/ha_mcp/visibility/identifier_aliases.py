@@ -64,11 +64,15 @@ class IdentifierAliases:
     registry ``unique_id``) match exactly, like the tools' registry lookup, so a
     visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
     are the casefolded service names (storage keys) of hidden scripts.
+    ``entity_unique_ids`` maps every trace-target entity_id the registry read saw
+    to its ``unique_id``, hidden or not, so the trace tool's entity_id can be
+    resolved the way that tool resolves it.
     """
 
     object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
     storage_keys: Mapping[str, frozenset[str]] = field(default_factory=dict)
     script_services: frozenset[str] = frozenset()
+    entity_unique_ids: Mapping[str, str] = field(default_factory=dict)
 
     def embedded_terms(self) -> frozenset[str]:
         """Strings that run a hidden script without naming its entity_id."""
@@ -91,12 +95,47 @@ class IdentifierAliases:
         return value.strip() in self.storage_keys.get(domain, frozenset())
 
 
+def _registry_key(entry: Any) -> tuple[str, str] | None:
+    """The entity_id and registry ``unique_id`` of a usable registry row."""
+    if not isinstance(entry, dict):
+        return None
+    entity_id = entry.get("entity_id")
+    unique_id = entry.get("unique_id")
+    if isinstance(entity_id, str) and isinstance(unique_id, str) and unique_id:
+        return entity_id, unique_id
+    return None
+
+
+def _collect_registry_aliases(
+    hidden: Collection[str], registry_result: Any, hidden_scripts: dict[str, str]
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Read hidden keys and all trace-target entity keys from the registry rows."""
+    storage_keys: dict[str, set[str]] = {}
+    entity_unique_ids: dict[str, str] = {}
+    entries = (
+        registry_result.get("result") if isinstance(registry_result, dict) else None
+    )
+    for entry in entries if isinstance(entries, list) else []:
+        parsed = _registry_key(entry)
+        if parsed is None:
+            continue
+        entity_id, unique_id = parsed
+        domain = entity_id.partition(".")[0]
+        if domain in _TRACE_DOMAINS:
+            entity_unique_ids[entity_id] = unique_id
+        if entity_id not in hidden or domain not in _ALIASED_DOMAINS:
+            continue
+        storage_keys.setdefault(domain, set()).add(unique_id)
+        if domain == "script":
+            hidden_scripts[entity_id] = unique_id
+    return storage_keys, entity_unique_ids
+
+
 def build_identifier_aliases(
     hidden: Collection[str], registry_result: Any
 ) -> IdentifierAliases:
-    """Collect the object IDs and registry unique_ids of hidden aliased entities."""
+    """Collect the keys, and the trace entity keys, of hidden aliased entities."""
     object_ids: dict[str, set[str]] = {}
-    storage_keys: dict[str, set[str]] = {}
     hidden_scripts: dict[str, str] = {}
     for hidden_id in hidden:
         domain, _, object_id = hidden_id.partition(".")
@@ -105,30 +144,14 @@ def build_identifier_aliases(
                 object_ids.setdefault(domain, set()).add(object_id.casefold())
             if domain == "script":
                 hidden_scripts[hidden_id] = object_id
-    entries = (
-        registry_result.get("result") if isinstance(registry_result, dict) else None
+    storage_keys, entity_unique_ids = _collect_registry_aliases(
+        hidden, registry_result, hidden_scripts
     )
-    for entry in entries if isinstance(entries, list) else []:
-        if not isinstance(entry, dict):
-            continue
-        entity_id = entry.get("entity_id")
-        unique_id = entry.get("unique_id")
-        if not (
-            isinstance(entity_id, str)
-            and entity_id in hidden
-            and isinstance(unique_id, str)
-            and unique_id
-        ):
-            continue
-        domain = entity_id.partition(".")[0]
-        if domain in _ALIASED_DOMAINS:
-            storage_keys.setdefault(domain, set()).add(unique_id)
-            if domain == "script":
-                hidden_scripts[entity_id] = unique_id
     return IdentifierAliases(
         object_ids={d: frozenset(v) for d, v in object_ids.items()},
         storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
         script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
+        entity_unique_ids=entity_unique_ids,
     )
 
 
@@ -155,6 +178,10 @@ def hidden_identifier_argument(
         trace_hit = _hidden_trace_item(args, aliases)
         if trace_hit is not None:
             return trace_hit
+        entity_id = args.get("entity_id")
+        if not isinstance(entity_id, str):
+            return None
+        return _hidden_trace_entity_id(entity_id, aliases)
     prefixed_arg = PREFIXED_IDENTIFIER_ARGS.get(tool_name)
     if prefixed_arg is not None:
         value = args.get(prefixed_arg)
@@ -170,6 +197,24 @@ def hidden_identifier_argument(
     value = args.get(arg_name)
     if not isinstance(value, str):
         return None
+    return value if aliases.addresses_hidden(domain, value) else None
+
+
+def _hidden_trace_entity_id(entity_id: str, aliases: IdentifierAliases) -> str | None:
+    """Whether the trace tool's ``entity_id`` resolves to a hidden trace key.
+
+    The tool resolves an entity_id to its registry ``unique_id`` and falls back
+    to the object ID only when the registry has no answer, so a visible
+    entity's object ID that matches a hidden storage key is not concealed.
+    Without a registry row the tool would use the object ID, so the alias check
+    still fails closed.
+    """
+    value = entity_id.strip()
+    domain = value.partition(".")[0]
+    unique_id = aliases.entity_unique_ids.get(value)
+    if unique_id is not None:
+        hit = unique_id in aliases.storage_keys.get(domain, frozenset())
+        return value if hit else None
     return value if aliases.addresses_hidden(domain, value) else None
 
 
