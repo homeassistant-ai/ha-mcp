@@ -337,7 +337,6 @@ module = [
     "tests.src.unit.test_rest_client_get_error_log",
     "tests.src.unit.test_rest_client_scenes",
     "tests.src.unit.test_rest_client_scripts",
-    "tests.src.unit.test_rest_client_states",
     "tests.src.unit.test_scene_fragment_matcher",
     "tests.src.unit.test_search_fields_projection",
     "tests.src.unit.test_search_pagination",
