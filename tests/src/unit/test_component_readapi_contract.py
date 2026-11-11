@@ -80,6 +80,9 @@ from .test_ha_get_entity_component_routing import (
 from .test_ha_get_entity_exposure_component_routing import (
     RoutingClient as ExposureRoutingClient,
 )
+from .test_ha_get_entity_exposure_component_routing import (
+    _listing as _exposure_listing,
+)
 from .test_ha_get_state_component_routing import (
     RoutingClient as StateRoutingClient,
 )
@@ -937,9 +940,8 @@ class TestExposureSeam:
         client = ExposureRoutingClient({})
         hass = FakeHass(states=[FakeState("light.lamp", "on", friendly_name="Lamp")])
         ws = _real_component_ws(hass)
-        tool = _build_get_entity(client)
         with patch_ws(ws, entity_exposure):
-            resp = await tool()
+            resp = await _exposure_listing(client)
 
         assert resp["exposed_entities"] == {"light.lamp": {"conversation": True}}
         assert set(resp["entity_info"]) == {"light.lamp"}
@@ -972,9 +974,8 @@ class TestExposureSeam:
         hass = FakeHass(
             states=[FakeState("sensor.child", "21", friendly_name="Child Sensor")]
         )
-        tool = _build_get_entity(client)
         with patch_ws(_real_component_ws(hass), entity_exposure):
-            resp = await tool()
+            resp = await _exposure_listing(client)
 
         info = resp["entity_info"]["sensor.child"]
         assert info["area"] == "Office"
