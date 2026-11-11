@@ -340,11 +340,6 @@ def _raise_context_not_found(
     )
 
 
-def _trace_start(trace: dict[str, Any]) -> str:
-    """Return Core's start timestamp, the sort key for ``trace/list`` rows."""
-    return str(trace["timestamp"]["start"])
-
-
 def _requested_sections(sections: str | None) -> set[str]:
     """Return the lower-cased section names requested by the caller."""
     requested: set[str] = set()
