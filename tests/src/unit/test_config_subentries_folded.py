@@ -241,10 +241,16 @@ async def test_config_subentry_create_returns_the_new_subentry_id(
     mock_client.start_config_subentry_flow.return_value = _form("set_options", "model")
     mock_client.submit_config_subentry_flow_step.return_value = {"type": "create_entry"}
 
-    result = await _set_subentry(helper_tools, config={"model": "m"})
+    result = await _set_subentry(
+        helper_tools, config={"model": "m"}, show_advanced_options=True
+    )
 
     assert result["operation"] == "created"
     assert result["subentry_id"] == "new"
+    # Only a Home Assistant older than 2026.6 reads the flag.
+    mock_client.start_config_subentry_flow.assert_awaited_once_with(
+        "entry-1", "conversation", subentry_id=None, show_advanced_options=True
+    )
 
 
 async def test_concurrent_creates_each_return_their_subentry_id(mock_client):
