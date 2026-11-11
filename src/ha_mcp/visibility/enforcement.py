@@ -862,10 +862,12 @@ class _HiddenSetCache:
     cold cache and that instance's CLOSED client ("Cannot send a request, as the
     client has been closed" — CI round 3). Every ``get`` therefore takes the
     caller's own live client for any refresh, and all callers share one view of
-    the hidden set. On a refresh failure: fall back to the last-known-good set
-    for the SAME config key (a set computed under a different denylist is a
+    the hidden set. On a TTL refresh failure: fall back to the last-known-good
+    set for the SAME config key (a set computed under a different denylist is a
     different policy); with none, raise ``VisibilityDataUnavailable`` so call
-    gates fail closed. The lock prevents a refresh stampede.
+    gates fail closed. A forced refresh (trace queries) never uses
+    last-known-good: that snapshot may predate a newly registered trace key, so
+    it raises instead. The lock prevents a refresh stampede.
     """
 
     def __init__(self) -> None:

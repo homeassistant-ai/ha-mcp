@@ -50,8 +50,8 @@ _TRACE_TOOL = "ha_get_automation_traces"
 TRACE_KEY_FAIL_CLOSED_REASON = (
     "The entity visibility filter cannot identify the owner of this trace "
     "because a restricted automation or script has no entity registry key, so "
-    "enforce mode fails closed. Reload the entity registry (or remove the stale "
-    "restricted entry) and retry."
+    "enforce mode fails closed. Give a restricted YAML automation an id, or "
+    "remove a restricted entry that no longer exists, then retry."
 )
 
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())

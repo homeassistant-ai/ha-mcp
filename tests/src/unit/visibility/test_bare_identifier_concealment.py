@@ -23,6 +23,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.visibility.identifier_aliases import (
     BARE_IDENTIFIER_ARGS,
     PREFIXED_IDENTIFIER_ARGS,
+    TRACE_KEY_FAIL_CLOSED_REASON,
 )
 
 from ..test_container_param_coercion_complete import _all_registered_tools
@@ -400,6 +401,42 @@ class TestHiddenScriptStorageKeyInContent:
             )
 
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_future_trace_command_without_a_trace_key_fails_closed(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """Any trace/* command is a trace query, not only today's three."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        detail = {"success": True, "trace": {"trigger": []}}
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_service",
+                    {"ws_command": "trace/unknown", "data": {"domain": "automation"}},
+                ),
+                _returns(text_result(json.dumps(detail), detail)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_unkeyed_trace_query_names_the_key_cause(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """The refusal explains the missing trace key, not a generic result leak."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_automation_traces", {"domain": "automation"}),
+                _unreached_call_next,
+            )
+
+        assert TRACE_KEY_FAIL_CLOSED_REASON in _error_body(exc)["error"]["message"]
 
     async def test_context_only_trace_with_an_unkeyed_hidden_automation_is_refused(
         self, set_config: Callable[..., Any]
