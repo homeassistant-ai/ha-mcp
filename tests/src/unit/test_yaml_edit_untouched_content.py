@@ -25,6 +25,12 @@ import pytest
 from homeassistant.core import HomeAssistant
 from ruamel.yaml import YAML
 
+from custom_components.ha_mcp_tools import (
+    CALLER_TOKEN_FIELD,
+    SERVICE_GET_CALLER_TOKEN,
+    SERVICE_READ_FILE,
+)
+from custom_components.ha_mcp_tools.const import DOMAIN
 from custom_components.ha_mcp_tools.yaml_rt import make_yaml
 from custom_components.ha_mcp_tools.yaml_rt import (
     yaml_dumps as real_yaml_dumps,
@@ -394,13 +400,43 @@ class TestMixedStyleReindent:
         assert "- platform: rest" in pkg.read_text().splitlines()  # still col 0
 
 
-def test_extract_yaml_subtree_ignores_leaked_style():
-    """The backup-snapshot subtree extractor must not inherit a sequence
-    style a prior edit applied to the thread-cached YAML instance."""
-    from custom_components.ha_mcp_tools import _extract_yaml_subtree
-    from custom_components.ha_mcp_tools.yaml_rt import apply_seq_indent, make_yaml
+async def test_read_subtree_ignores_leaked_style(
+    hass: HomeAssistant,
+    edit_yaml: EditYaml,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backup snapshot ``read_file`` takes of a key must not inherit a
+    sequence style a prior edit applied to the thread-cached YAML instance."""
+    from custom_components.ha_mcp_tools.yaml_rt import apply_seq_indent
 
-    content = "sensor:\n- platform: rest\n- platform: template\n"
-    baseline = _extract_yaml_subtree(content, "sensor")
-    apply_seq_indent(make_yaml(), (4, 2))  # simulate a prior styled dump
-    assert _extract_yaml_subtree(content, "sensor") == baseline
+    # Core's executor may serve the two reads on different threads, each with
+    # its own cached instance; one instance makes them share it.
+    shared = make_yaml()
+    monkeypatch.setattr("custom_components.ha_mcp_tools.make_yaml", lambda: shared)
+    (tmp_path / "configuration.yaml").write_text(
+        "sensor:\n- platform: rest\n- platform: template\n"
+    )
+    bootstrap = await hass.services.async_call(
+        DOMAIN, SERVICE_GET_CALLER_TOKEN, {}, blocking=True, return_response=True
+    )
+    assert bootstrap is not None
+
+    async def subtree() -> Any:
+        response = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_READ_FILE,
+            {
+                "path": "configuration.yaml",
+                "yaml_path": "sensor",
+                CALLER_TOKEN_FIELD: bootstrap["token"],
+            },
+            blocking=True,
+            return_response=True,
+        )
+        assert response is not None and response["success"] is True, response
+        return response["subtree"]
+
+    baseline = await subtree()
+    apply_seq_indent(shared, (4, 2))  # simulate a prior styled dump
+    assert await subtree() == baseline

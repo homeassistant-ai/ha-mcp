@@ -346,7 +346,7 @@ async def test_enabled_key_passes_disabled_set_in_payload(monkeypatch):
 async def test_non_packages_key_unaffected_by_flag(monkeypatch):
     """Keys that aren't PACKAGES_ONLY (e.g. ``template``) must not be
     gated by these flags. They route through the same wrapper but
-    aren't in _YAML_PACKAGES_FLAG_BY_KEY."""
+    aren't in YAML_PACKAGES_FLAG_BY_KEY."""
     from ha_mcp import config as ha_mcp_config
 
     # Turn ALL 3 packages flags OFF.

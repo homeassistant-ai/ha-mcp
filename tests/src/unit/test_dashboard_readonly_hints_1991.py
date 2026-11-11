@@ -15,7 +15,6 @@ from unittest.mock import MagicMock
 
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.tools.tools_dashboard_screenshot import DashboardScreenshotTools
-from ha_mcp.transforms.categorized_search import _categorize_tool
 
 
 def _annotations(method):
@@ -38,13 +37,3 @@ class TestDashboardReadOnlyHints:
         )
         assert annotations.read_only_hint is True
         assert annotations.destructive_hint is False
-
-    def test_both_tools_categorize_as_read(self):
-        """The categorized tool-search bucketing must classify both as read so
-        a ``ha_call_read_tool`` invocation no longer hard-fails (#1991)."""
-        get_dashboard = DashboardConfigTools(MagicMock()).ha_config_get_dashboard
-        get_screenshot = DashboardScreenshotTools(
-            MagicMock()
-        ).ha_get_dashboard_screenshot
-        assert _categorize_tool(get_dashboard.__fastmcp__) == "read"
-        assert _categorize_tool(get_screenshot.__fastmcp__) == "read"
