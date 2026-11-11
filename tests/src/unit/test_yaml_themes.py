@@ -1,27 +1,34 @@
-"""Unit tests for theme file editing in ha_mcp_tools."""
+"""Unit tests for theme file editing in ha_mcp_tools.
 
-from unittest.mock import AsyncMock, MagicMock
+The service runs on a real ``hass`` whose config directory is the test's
+``tmp_path``. Core loads no ``frontend`` here, so ``frontend.reload_themes``
+exists only where a test registers it with ``async_mock_service``.
+"""
+
+import asyncio
+import threading
+from pathlib import Path
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceNotFound
+from pytest_homeassistant.common import async_mock_service
 
-from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD
-from custom_components.ha_mcp_tools.const import DOMAIN
+from custom_components.ha_mcp_tools.file_ops import file_lock, write_text_atomic
 
-_TEST_CALLER_TOKEN = "test-caller-token-yaml-themes"
+from ._edit_yaml import EditYaml, make_edit_yaml
 
 
-@pytest.fixture(autouse=True)
-def _stub_config_check(monkeypatch):
-    """Default: the post-write config check passes (valid config).
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core's config directory is this test's ``tmp_path``."""
+    return hass_tmp_config_dir
 
-    Theme edits route through ``_run_config_check``; without a stub the handler
-    would await a bare mock.
-    """
-    monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.async_check_ha_config_file",
-        AsyncMock(return_value=None),
-        raising=False,
-    )
+
+@pytest.fixture
+async def edit_yaml(hass: HomeAssistant) -> EditYaml:
+    """Call ``ha_mcp_tools.edit_yaml_config`` the way ha-mcp does."""
+    return await make_edit_yaml(hass)
 
 
 class TestParseYamlPathThemes:
@@ -57,56 +64,14 @@ class TestParseYamlPathThemes:
 class TestThemeEditHandler:
     """Component handler tests for themes/*.yaml editing."""
 
-    @pytest.fixture
-    def hass(self, tmp_path):
-        """Minimal hass mock that runs executor jobs synchronously."""
-        h = MagicMock()
-        h.config = MagicMock()
-        h.config.config_dir = str(tmp_path)
-        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
-
-        async def _run(fn, *args):
-            return fn(*args)
-
-        h.async_add_executor_job = AsyncMock(side_effect=_run)
-
-        reload_calls = []
-
-        async def fake_service_call(domain, service, data, **kwargs):
-            if domain == "frontend" and service == "reload_themes":
-                reload_calls.append((domain, service, data))
-                return None
-            return {"errors": None}
-
-        h.services = MagicMock()
-        h.services.async_call = AsyncMock(side_effect=fake_service_call)
-        h.reload_calls = reload_calls
-        return h
-
-    @pytest.fixture
-    def call_factory(self):
-        """Build a ServiceCall-like object with the caller token pre-injected."""
-
-        def _make(data):
-            call = MagicMock()
-            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
-            return call
-
-        return _make
-
-    @pytest.fixture
-    def handler(self, hass):
-        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
-
-        return _build_edit_yaml_config_handler(hass)
-
     async def test_theme_add_creates_file_with_theme_key(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, hass: HomeAssistant, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
+        reload_calls = async_mock_service(hass, "frontend", "reload_themes")
         theme_file = tmp_path / "themes" / "dark-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/dark-theme.yaml",
                 "action": "add",
@@ -115,8 +80,6 @@ class TestThemeEditHandler:
                 "backup": False,
             }
         )
-
-        result = await handler(call)
 
         assert result["success"] is True
         assert result["action"] == "add"
@@ -128,89 +91,104 @@ class TestThemeEditHandler:
         assert "dark-theme:" in written
         assert "primary-color: '#1976D2'" in written
 
-        assert len(hass.reload_calls) == 1
-        assert hass.reload_calls[0] == ("frontend", "reload_themes", {})
+        assert len(reload_calls) == 1
+        assert reload_calls[0].data == {}
 
     async def test_theme_edit_waits_for_the_file_lock(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self,
+        hass: HomeAssistant,
+        edit_yaml: EditYaml,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """edit_file can write the same theme; an overlapping read-modify-write
         would undo its change while both report success."""
-        import asyncio
-
-        from custom_components.ha_mcp_tools.file_ops import file_lock
-
         (tmp_path / "themes").mkdir()
-        call = call_factory(
-            {
-                "file": "themes/dark.yaml",
-                "action": "add",
-                "yaml_path": "dark",
-                "content": "primary-color: red",
-            }
-        )
+        lock_asked = asyncio.Event()
 
+        def _asked_lock(hass: HomeAssistant) -> asyncio.Lock:
+            lock_asked.set()
+            return file_lock(hass)
+
+        monkeypatch.setattr(
+            "custom_components.ha_mcp_tools.file_ops.file_lock", _asked_lock
+        )
         async with file_lock(hass):
-            edit = asyncio.ensure_future(handler(call))
-            for _ in range(5):
-                await asyncio.sleep(0)
+            edit = asyncio.ensure_future(
+                edit_yaml(
+                    {
+                        "file": "themes/dark.yaml",
+                        "action": "add",
+                        "yaml_path": "dark",
+                        "content": "primary-color: red",
+                    }
+                )
+            )
+            # The edit either finishes, or asks for the lock and waits on it.
+            asked = asyncio.ensure_future(lock_asked.wait())
+            await asyncio.wait({edit, asked}, return_when=asyncio.FIRST_COMPLETED)
+            asked.cancel()
+            assert not edit.done()
             assert not (tmp_path / "themes" / "dark.yaml").exists()
         assert (await edit)["success"] is True
+        assert (tmp_path / "themes" / "dark.yaml").exists()
 
     async def test_cancelled_theme_edit_keeps_the_lock_until_its_write_ends(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self,
+        hass: HomeAssistant,
+        edit_yaml: EditYaml,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Its thread keeps writing; a later edit_file must not report success
         before that write overwrites it."""
-        import asyncio
-
-        from custom_components.ha_mcp_tools.file_ops import (
-            file_lock,
-            write_text_atomic,
-        )
-
         (tmp_path / "themes").mkdir()
-        release = asyncio.Event()
+        writing = asyncio.Event()
+        release = threading.Event()
 
-        async def _blocked(fn, *args):
-            if fn is write_text_atomic:  # the write, after the lock is taken
-                await release.wait()
-            return fn(*args)
+        def _blocked_write(path: Path, text: str) -> None:
+            hass.loop.call_soon_threadsafe(writing.set)
+            release.wait(timeout=30)
+            write_text_atomic(path, text)
 
-        hass.async_add_executor_job = AsyncMock(side_effect=_blocked)
-        call = call_factory(
-            {
-                "file": "themes/dark.yaml",
-                "action": "add",
-                "yaml_path": "dark",
-                "content": "primary-color: red",
-            }
+        monkeypatch.setattr(
+            "custom_components.ha_mcp_tools.write_text_atomic", _blocked_write
         )
-        edit = asyncio.ensure_future(handler(call))
-        for _ in range(5):
-            await asyncio.sleep(0)
+        edit = asyncio.ensure_future(
+            edit_yaml(
+                {
+                    "file": "themes/dark.yaml",
+                    "action": "add",
+                    "yaml_path": "dark",
+                    "content": "primary-color: red",
+                }
+            )
+        )
+        try:
+            async with asyncio.timeout(10):
+                await writing.wait()
+            edit.cancel()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert file_lock(hass).locked()
+        finally:
+            release.set()
 
-        edit.cancel()
-        for _ in range(5):
-            await asyncio.sleep(0)
-        assert file_lock(hass).locked()
-
-        release.set()
         (outcome,) = await asyncio.gather(edit, return_exceptions=True)
         assert isinstance(outcome, asyncio.CancelledError)
         assert not file_lock(hass).locked()
         assert (tmp_path / "themes" / "dark.yaml").exists()
 
     async def test_theme_add_merges_into_existing_theme(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "dark-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text(
             "dark-theme:\n  primary-color: '#1976D2'\n  text-color: '#FFFFFF'"
         )
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/dark-theme.yaml",
                 "action": "add",
@@ -220,8 +198,6 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
 
         written = theme_file.read_text()
@@ -230,13 +206,13 @@ class TestThemeEditHandler:
         assert "accent-color: '#FFC107'" in written
 
     async def test_theme_add_type_mismatch_error(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "bad-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text("bad-theme: not-a-dict")
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/bad-theme.yaml",
                 "action": "add",
@@ -246,21 +222,19 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "Type mismatch" in result["error"]
 
     async def test_theme_replace_overwrites_content(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "light-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text(
             "light-theme:\n  primary-color: '#000000'\n  old-key: old-value"
         )
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/light-theme.yaml",
                 "action": "replace",
@@ -270,8 +244,6 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
 
         written = theme_file.read_text()
@@ -280,15 +252,15 @@ class TestThemeEditHandler:
         assert "old-key" not in written
 
     async def test_theme_remove_deletes_theme_key(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "multi-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text(
             "theme1:\n  primary-color: '#111111'\ntheme2:\n  primary-color: '#222222'"
         )
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/multi-theme.yaml",
                 "action": "remove",
@@ -297,8 +269,6 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
 
         written = theme_file.read_text()
@@ -306,13 +276,13 @@ class TestThemeEditHandler:
         assert "theme2" in written
 
     async def test_theme_remove_last_theme_leaves_empty_mapping(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "single-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text("only-theme:\n  primary-color: '#123456'")
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/single-theme.yaml",
                 "action": "remove",
@@ -321,21 +291,19 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
         # ruamel serializes an empty root mapping as "{}"; both that and a
         # truly empty file parse cleanly under !include_dir_merge_named.
         assert theme_file.read_text().strip() in ("", "{}")
 
     async def test_theme_add_second_theme_to_existing_file(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "pair.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text("theme-a:\n  primary-color: '#111111'")
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/pair.yaml",
                 "action": "add",
@@ -345,8 +313,6 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
         written = theme_file.read_text()
         assert "theme-a:" in written
@@ -355,13 +321,13 @@ class TestThemeEditHandler:
         assert "primary-color: '#222222'" in written
 
     async def test_theme_remove_not_found_error(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "empty-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
         theme_file.write_text("other-theme:\n  primary-color: '#000000'")
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/empty-theme.yaml",
                 "action": "remove",
@@ -370,15 +336,11 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "not found" in result["error"]
 
-    async def test_theme_content_must_be_mapping(
-        self, handler, hass, call_factory, tmp_path
-    ):
-        call = call_factory(
+    async def test_theme_content_must_be_mapping(self, edit_yaml: EditYaml) -> None:
+        result = await edit_yaml(
             {
                 "file": "themes/new-theme.yaml",
                 "action": "add",
@@ -388,15 +350,11 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "must be a YAML mapping" in result["error"]
 
-    async def test_theme_dotted_name_rejected(
-        self, handler, hass, call_factory, tmp_path
-    ):
-        call = call_factory(
+    async def test_theme_dotted_name_rejected(self, edit_yaml: EditYaml) -> None:
+        result = await edit_yaml(
             {
                 "file": "themes/bad-name.yaml",
                 "action": "add",
@@ -406,15 +364,11 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "cannot contain dots" in result["error"]
 
-    async def test_theme_path_traversal_blocked(
-        self, handler, hass, call_factory, tmp_path
-    ):
-        call = call_factory(
+    async def test_theme_path_traversal_blocked(self, edit_yaml: EditYaml) -> None:
+        result = await edit_yaml(
             {
                 "file": "themes/../secrets.yaml",
                 "action": "add",
@@ -424,14 +378,10 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "not allowed" in result["error"]
 
-    async def test_theme_dotfile_basename_rejected(
-        self, handler, hass, call_factory, tmp_path
-    ):
+    async def test_theme_dotfile_basename_rejected(self, edit_yaml: EditYaml) -> None:
         """A dotfile theme basename is rejected before write.
 
         ``themes/.hidden.yaml`` matches the ``themes/*.yaml`` allowlist, but
@@ -439,7 +389,7 @@ class TestThemeEditHandler:
         it would report a phantom ``reload_performed`` for a theme that never
         loads.
         """
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/.hidden.yaml",
                 "action": "add",
@@ -449,14 +399,12 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "dot-prefixed" in result["error"]
 
     async def test_theme_dot_prefixed_directory_rejected(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml
+    ) -> None:
         """A theme file under a dot-prefixed subdirectory is rejected.
 
         ``themes/.foo/bar.yaml`` matches ``themes/*.yaml`` (fnmatch ``*`` spans
@@ -465,7 +413,7 @@ class TestThemeEditHandler:
         theme never loads — the same phantom ``reload_performed`` the basename
         guard catches, one directory level up.
         """
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/.foo/bar.yaml",
                 "action": "add",
@@ -475,14 +423,12 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is False
         assert "dot-prefixed" in result["error"]
 
     async def test_theme_mid_name_dot_allowed(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         """A dot mid-name (not segment-prefix) is allowed.
 
         ``themes/my.theme.yaml`` has a dot in the basename, but the segment
@@ -493,7 +439,7 @@ class TestThemeEditHandler:
         theme_file = tmp_path / "themes" / "my.theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/my.theme.yaml",
                 "action": "add",
@@ -503,40 +449,17 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
         assert theme_file.exists()
 
     async def test_theme_reload_failure_degrades_gracefully(
-        self, handler, tmp_path, call_factory
-    ):
-        h = MagicMock()
-        h.config = MagicMock()
-        h.config.config_dir = str(tmp_path)
-        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
-
-        async def _run(fn, *args):
-            return fn(*args)
-
-        h.async_add_executor_job = AsyncMock(side_effect=_run)
-
-        async def failing_service_call(domain, service, data, **kwargs):
-            if domain == "frontend" and service == "reload_themes":
-                raise RuntimeError("Reload service unavailable")
-            return {"errors": None}
-
-        h.services = MagicMock()
-        h.services.async_call = AsyncMock(side_effect=failing_service_call)
-
-        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
-
-        handler = _build_edit_yaml_config_handler(h)
-
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
+        """Without the frontend loaded, Core has no frontend.reload_themes."""
         theme_file = tmp_path / "themes" / "test-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/test-theme.yaml",
                 "action": "add",
@@ -546,24 +469,23 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
         assert result["post_action"] == "reload_available"
         assert result["reload_service"] == "frontend.reload_themes"
-        assert "reload_error" in result
-        assert "unavailable" in result["reload_error"]
+        assert result["reload_error"] == str(
+            ServiceNotFound("frontend", "reload_themes")
+        )
 
         # The write itself must have landed despite the failed reload.
         assert "primary-color: '#000000'" in theme_file.read_text()
 
     async def test_theme_nested_directory_supported(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         theme_file = tmp_path / "themes" / "custom" / "nested-theme.yaml"
         theme_file.parent.mkdir(parents=True, exist_ok=True)
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "themes/custom/nested-theme.yaml",
                 "action": "add",
@@ -573,18 +495,16 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
         assert theme_file.exists()
 
     async def test_configuration_yaml_still_works(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         config_file = tmp_path / "configuration.yaml"
         config_file.write_text("homeassistant:\n  name: Home")
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "configuration.yaml",
                 "action": "add",
@@ -594,17 +514,15 @@ class TestThemeEditHandler:
             }
         )
 
-        result = await handler(call)
-
         assert result["success"] is True
 
     async def test_packages_yaml_still_works(
-        self, handler, hass, call_factory, tmp_path
-    ):
+        self, edit_yaml: EditYaml, tmp_path: Path
+    ) -> None:
         package_file = tmp_path / "packages" / "test.yaml"
         package_file.parent.mkdir(parents=True, exist_ok=True)
 
-        call = call_factory(
+        result = await edit_yaml(
             {
                 "file": "packages/test.yaml",
                 "action": "add",
@@ -613,7 +531,5 @@ class TestThemeEditHandler:
                 "backup": False,
             }
         )
-
-        result = await handler(call)
 
         assert result["success"] is True

@@ -59,7 +59,7 @@ class _SearchClient:
 
 
 class _OverviewClient:
-    def __init__(self, states, entity_registry):
+    def __init__(self, states, entity_registry: dict):
         self._states = states
         self._entity_registry = entity_registry
 

@@ -32,7 +32,7 @@ from types import SimpleNamespace
 import pytest
 import voluptuous as vol
 from homeassistant.components.lovelace.const import ConfigNotFound
-from homeassistant.core import is_callback
+from homeassistant.core import HomeAssistant, is_callback
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from ._component_ws_fakes import _FakeBulkServices, _FakeCallServices
@@ -114,7 +114,7 @@ def patch_dashboards(monkeypatch):
     return _set
 
 
-def _run_dashboards(hass, msg):
+def _run_dashboards(hass: FakeHass, msg):
     extra = asyncio.run(wsapi._dashboards_prep(hass, msg))
     return wsapi._do_dashboards(hass, msg, **extra)
 
@@ -588,10 +588,10 @@ class TestServicesList:
         assert {e["domain"] for e in res["services"]} == {"light", "climate"}
 
     def test_prep_feeds_do(self, monkeypatch):
-        async def _fake_desc(hass):
+        async def _fake_desc(hass: HomeAssistant):
             return _DESCRIPTIONS
 
-        async def _fake_trans(hass, language):
+        async def _fake_trans(hass: HomeAssistant, language):
             assert language == "en"
             return _TRANSLATIONS
 
@@ -607,7 +607,7 @@ class TestServicesList:
         # Core drift: async_get_all_descriptions returns a non-Mapping. This must
         # RAISE (→ command-error fallback to the legacy REST /api/services), NOT
         # serve a well-formed empty catalog the server would trust (review-4 E).
-        async def _bad_desc(hass):
+        async def _bad_desc(hass: HomeAssistant):
             return ["not", "a", "mapping"]
 
         monkeypatch.setitem(
@@ -1417,7 +1417,7 @@ class TestSearchVisibilityPlacement:
         """An AUTHORIZING allowlist makes Assist moot, so its probe is skipped."""
         h = self._hass_and_view(monkeypatch)
 
-        def _unexpected_probe(hass):
+        def _unexpected_probe(hass: HomeAssistant):
             raise AssertionError("Assist availability must not be probed")
 
         monkeypatch.setattr(wsapi, "_assist_exposure_available", _unexpected_probe)
@@ -1440,7 +1440,7 @@ class TestSearchVisibilityPlacement:
         h = self._hass_and_view(monkeypatch)
         probes = []
 
-        def _probe(hass):
+        def _probe(hass: HomeAssistant):
             probes.append(hass)
             return True
 
@@ -1657,7 +1657,7 @@ class TestAssistShouldExposeReadOnly:
     def test_unknown_entity_falls_to_default(self, monkeypatch):
         # An id in neither the registry nor the store raises "Unknown entity" from the
         # settings read; that is NOT an explicit override — fall to the default.
-        def _raise(hass, eid):
+        def _raise(hass: HomeAssistant, eid):
             raise HomeAssistantError("Unknown entity")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", _raise)
@@ -1666,7 +1666,7 @@ class TestAssistShouldExposeReadOnly:
         assert wsapi._assist_should_expose(FakeHass(), "sensor.states_only") is True
 
     def test_fails_open_on_error(self, monkeypatch):
-        def _raise(hass):
+        def _raise(hass: HomeAssistant):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", lambda hass, eid: {})
@@ -1775,10 +1775,10 @@ def functional_ws(monkeypatch):
     )
     monkeypatch.setattr(wsapi, "_lovelace_dashboards_map", lambda hass: None)
 
-    async def _empty_desc(hass):
+    async def _empty_desc(hass: HomeAssistant):
         return {}
 
-    async def _empty_trans(hass, language):
+    async def _empty_trans(hass: HomeAssistant, language):
         return {}
 
     monkeypatch.setattr(wsapi, "_fetch_service_descriptions", _empty_desc)
@@ -1866,7 +1866,7 @@ def _call_hass(states, services, bus):
     return hass
 
 
-def _run_call_service(hass, msg):
+def _run_call_service(hass: HomeAssistant, msg):
     """Drive the async prep then the pure formatter, as the WS wrapper does."""
     extra = asyncio.run(wsapi._call_service_prep(hass, msg))
     return wsapi._do_call_service(hass, msg, **extra)
@@ -2528,7 +2528,7 @@ class TestCallServiceSchema:
 # =============================================================================
 # bulk_call_service (Phase 3, D5a — the BATCH write capability, issue #1813)
 # =============================================================================
-def _run_bulk_call_service(hass, msg):
+def _run_bulk_call_service(hass: HomeAssistant, msg):
     """Drive the async prep then the pure formatter, as the WS wrapper does."""
     extra = asyncio.run(wsapi._bulk_call_service_prep(hass, msg))
     return wsapi._do_bulk_call_service(hass, msg, **extra)

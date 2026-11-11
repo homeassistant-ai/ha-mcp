@@ -31,7 +31,7 @@ class _OverviewClient:
     """Serves the five reads in get_system_overview; only entity registry
     carries data, the other registries are empty."""
 
-    def __init__(self, states, entity_registry):
+    def __init__(self, states, entity_registry: dict):
         self._states = states
         self._entity_registry = entity_registry
 
@@ -58,7 +58,7 @@ def _run_overview(tmp_path, monkeypatch, config: VisibilityConfig):
 class _DeviceRegistryOverviewClient(_OverviewClient):
     """Overview client that also serves a device registry (round-4 wiring proof)."""
 
-    def __init__(self, states, entity_registry, device_registry):
+    def __init__(self, states, entity_registry: dict, device_registry: dict):
         super().__init__(states, entity_registry)
         self._device_registry = device_registry
 

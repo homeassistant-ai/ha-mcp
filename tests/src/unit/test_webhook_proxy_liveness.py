@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
+from homeassistant.core import HomeAssistant
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
@@ -30,7 +31,7 @@ def oauth(monkeypatch):
     return module
 
 
-def _provider(oauth, hass, mode: str):
+def _provider(oauth, hass: HomeAssistant, mode: str):
     hass.data[oauth.DOMAIN] = {
         "oauth_mode": mode,
         "target_url": "http://127.0.0.1:9583/private_x",
@@ -45,7 +46,7 @@ def _provider(oauth, hass, mode: str):
     )
 
 
-async def test_mode_none_when_addon_down(oauth, monkeypatch, hass):
+async def test_mode_none_when_addon_down(oauth, monkeypatch, hass: HomeAssistant):
     """A bound discovery view behaves like an unregistered route when stopped."""
 
     async def _down(_hass):
@@ -61,7 +62,7 @@ async def test_mode_none_when_addon_down(oauth, monkeypatch, hass):
     assert response.status == 404
 
 
-async def test_mode_served_when_addon_up(oauth, monkeypatch, hass):
+async def test_mode_served_when_addon_up(oauth, monkeypatch, hass: HomeAssistant):
     """The existing mode dispatch still serves while the heartbeat is fresh."""
 
     async def _up(_hass):
@@ -103,7 +104,7 @@ def test_heartbeat_fresh_only_for_recent_mtime(oauth, monkeypatch, tmp_path, fre
 
 
 async def test_addon_alive_caches_only_the_negative_verdict(
-    oauth, monkeypatch, hass, freezer
+    oauth, monkeypatch, hass: HomeAssistant, freezer
 ):
     """A positive verdict re-stats every request so a clean shutdown's file
     deletion takes effect immediately (#2218 review); only the down verdict

@@ -410,6 +410,9 @@ jobs:
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
+        # The unit and app tests, against Core's real types (tests/AGENTS.md).
+        # The script runs mypy and keeps the list of exempt modules exact.
+        uv run python scripts/mypy_tests_exact.py || status=1
         exit "$status"
 
     # The ratchet scripts only lower their baselines, but the baselines are
@@ -441,6 +444,8 @@ jobs:
         status=0
         uv run python scripts/module_size_ratchet.py --base "$base_sha" || status=1
         uv run python scripts/duplicate_code_ratchet.py --base "$base_sha" || status=1
+        # No test is exempted from the real-Core checks (tests/AGENTS.md).
+        uv run python scripts/stand_in_lists_ratchet.py --base "$base_sha" || status=1
         exit "$status"
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types

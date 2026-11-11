@@ -25,7 +25,7 @@
 
 - [ ] The author or a reviewer has live-tested this PR with an LLM agent on the dev environment or another live HA chosen by the user (if applicable)
 - [ ] Unit tests pass (`cd tests && uv run pytest src/unit/ -n auto`); CI runs the app (add-on), E2E, UAT and Docker suites
-- [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format --check` on changed files, `uv run mypy src/`)
+- [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format --check` on changed files, `uv run mypy src/`, `uv run python scripts/mypy_tests_exact.py`)
 
 ## Future improvements
 
