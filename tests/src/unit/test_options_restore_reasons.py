@@ -28,7 +28,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow import OptionsFlowError, update_config_entry_options
+from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    restore_config_entry_options,
+)
 
 DOMAIN = "restore_probe"
 
@@ -95,12 +98,8 @@ async def _refused_restore(
     client: HomeAssistantClient, entry_id: str, config: dict[str, Any]
 ) -> OptionsFlowError:
     with pytest.raises(OptionsFlowError) as caught:
-        await update_config_entry_options(
-            client,
-            entry_id,
-            config,
-            expected_domain=DOMAIN,
-            keep_current_values=False,
+        await restore_config_entry_options(
+            client, entry_id, config, expected_domain=DOMAIN
         )
     return caught.value
 

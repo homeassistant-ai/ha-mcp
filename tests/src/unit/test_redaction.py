@@ -732,20 +732,14 @@ class TestWriteFlowErrorSchemaRedaction:
     ]
 
     @pytest.mark.asyncio
-    async def test_raise_flow_api_error_redacts_current_step_schema(
-        self, redact_on, monkeypatch
-    ):
+    async def test_raise_flow_api_error_redacts_current_step_schema(self, redact_on):
         from ha_mcp.tools import config_entry_flow_errors as flow_errors
 
-        monkeypatch.setattr(
-            flow_errors, "fetch_helper_flow_info", AsyncMock(return_value={})
-        )
         with pytest.raises(ToolError) as exc_info:
             await flow_errors._raise_flow_api_error(
                 HomeAssistantAPIError("bad value", status_code=400),
-                client=MagicMock(),
                 flow_id="f1",
-                helper_type="filter",
+                domain="filter",
                 menu_choice=None,
                 current_step={"type": "form", "data_schema": self._PW_SCHEMA},
                 submitted={"api_key": "x"},
@@ -755,54 +749,55 @@ class TestWriteFlowErrorSchemaRedaction:
         assert schema[0]["description"]["suggested_value"] == REDACTED_SET
         assert "sk-LIVEFLOWSECRET" in known_secret_values()
 
-    @pytest.mark.asyncio
-    async def test_flow_helper_error_context_redacts_schema(self, redact_on):
-        from ha_mcp.tools.config_helpers.flow import _flow_helper_error_context
-
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "f1",
-                "step_id": "user",
-                "data_schema": self._PW_SCHEMA,
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
-        ctx = await _flow_helper_error_context(client, "filter")
-        assert ctx["data_schema"][0]["description"]["suggested_value"] == REDACTED_SET
-
 
 class TestWriteEntryPointsRejectSentinels:
-    """Every flow-write entry point calls the sentinel guard before any
-    client traffic — not just create_config_entry."""
+    """Every flow-write entry point calls the sentinel guard before it opens
+    a flow."""
 
     @pytest.mark.asyncio
-    async def test_update_config_entry_options_rejects_before_flow(self, redact_on):
-        from ha_mcp.tools.config_entry_flow import update_config_entry_options
+    async def test_options_restore_rejects_before_flow(self, redact_on):
+        from ha_mcp.tools.config_entry_flow import (
+            OptionsFlowError,
+            restore_config_entry_options,
+        )
 
         client = AsyncMock()
-        with pytest.raises(ToolError):
-            await update_config_entry_options(client, "e1", {"api_key": REDACTED_SET})
+        with pytest.raises(OptionsFlowError) as exc_info:
+            await restore_config_entry_options(client, "e1", {"api_key": REDACTED_SET})
+        assert exc_info.value.apply_status == "not_applied"
         client.get_config_entry.assert_not_awaited()
         client.start_options_flow.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_set_config_subentry_rejects_before_flow(self, redact_on):
-        from ha_mcp.tools.config_entry_flow import set_config_subentry
+    async def test_subentry_step_rejects_before_flow(self, redact_on):
+        from ha_mcp.tools.config_helpers.flow import _handle_set_config_subentry
 
         client = AsyncMock()
+        client.get_config_entry.return_value = {"entry_id": "e1", "domain": "demo"}
         with pytest.raises(ToolError):
-            await set_config_subentry(client, "e1", "device", {"token": REDACTED_EMPTY})
+            await _handle_set_config_subentry(
+                client, None, "e1", "device", None, {"token": REDACTED_EMPTY}, False
+            )
         client.start_config_subentry_flow.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_create_config_entry_rejects_before_flow(self, redact_on):
-        from ha_mcp.tools.config_entry_flow import create_config_entry
+    async def test_helper_flow_step_rejects_before_flow(self, redact_on):
+        from ha_mcp.tools.config_helpers.flow import _handle_flow_helper
 
         client = AsyncMock()
         with pytest.raises(ToolError):
-            await create_config_entry(client, "group", {"pw": REDACTED_SET})
+            await _handle_flow_helper(
+                client,
+                "group",
+                None,
+                None,
+                {"pw": REDACTED_SET},
+                None,
+                None,
+                None,
+                False,
+                action="create",
+            )
         client.start_config_flow.assert_not_awaited()
 
 

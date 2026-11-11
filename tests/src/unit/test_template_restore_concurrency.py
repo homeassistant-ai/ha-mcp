@@ -109,7 +109,7 @@ async def test_failure_before_options_flow_keeps_not_applied_knowledge(
     from ha_mcp.tools import config_entry_flow
 
     flow = AsyncMock()
-    monkeypatch.setattr(config_entry_flow, "update_config_entry_options", flow)
+    monkeypatch.setattr(config_entry_flow, "restore_config_entry_options", flow)
     # Manager preflight and mandatory capture succeed; handler's pre-submit fetch fails.
     response = {
         "covered_types": ["template"],

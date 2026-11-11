@@ -214,7 +214,7 @@ async def test_restore_does_not_report_success_on_readback_mismatch(
     )
     monkeypatch.setattr(
         config_entry_flow,
-        "update_config_entry_options",
+        "restore_config_entry_options",
         AsyncMock(return_value={"success": True}),
     )
     handler = manager.handler_for("helper_template")
@@ -239,7 +239,7 @@ async def test_readback_transport_failure_reports_applied_but_unverified(
     )
     monkeypatch.setattr(
         config_entry_flow,
-        "update_config_entry_options",
+        "restore_config_entry_options",
         AsyncMock(return_value={"success": True}),
     )
     handler = manager.handler_for("helper_template")
@@ -255,7 +255,7 @@ async def test_readback_transport_failure_reports_applied_but_unverified(
 
 
 async def test_restore_clears_nested_optional_section(manager, monkeypatch):
-    from ha_mcp.tools.config_entry_flow import update_config_entry_options
+    from ha_mcp.tools.config_entry_flow import restore_config_entry_options
 
     client = SimpleNamespace(
         get_config_entry=AsyncMock(return_value={"domain": "template"}),
@@ -288,12 +288,11 @@ async def test_restore_clears_nested_optional_section(manager, monkeypatch):
         ),
         abort_options_flow=AsyncMock(),
     )
-    result = await update_config_entry_options(
+    result = await restore_config_entry_options(
         client,
         "template-entry",
         {"state": "{{ 12 }}"},
         expected_domain="template",
-        keep_current_values=False,
     )
     assert result["success"] is True
     client.submit_options_flow_step.assert_awaited_once_with(

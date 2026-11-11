@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.tools.config_entry_flow import CreationFlowError, create_flow_helper
+from ha_mcp.tools.config_entry_flow import CreationFlowError, recreate_flow_helper
 
 
 def _form() -> dict[str, Any]:
@@ -29,7 +29,7 @@ def _form() -> dict[str, Any]:
 def _config() -> dict[str, Any]:
     return {
         "name": "Example",
-        "next_step_id": "sensor",
+        "template_type": "sensor",
         "state": "{{ 12 }}",
         "additional_options": {"availability": "{{ false }}"},
     }
@@ -57,12 +57,10 @@ async def test_complete_recreation_submits_nested_options_unchanged(
         _form(),
         {"type": "create_entry", "result": {"entry_id": "new-entry"}},
     ]
-    result = await create_flow_helper(
-        client, "template", _config(), complete_snapshot=True
-    )
+    result = await recreate_flow_helper(client, "template", _config())
     assert result["entry_id"] == "new-entry"
     payload = deepcopy(_config())
-    payload.pop("next_step_id")
+    payload.pop("template_type")
     assert client.submit_config_flow_step.await_args_list[1].args == (
         "create-flow",
         payload,
@@ -136,7 +134,7 @@ async def test_complete_recreation_reports_native_outcomes_without_retry(
     client.submit_config_flow_step.side_effect = replies
 
     with caplog.at_level(logging.WARNING), pytest.raises(CreationFlowError) as caught:
-        await create_flow_helper(client, "template", _config(), complete_snapshot=True)
+        await recreate_flow_helper(client, "template", _config())
 
     assert caught.value.apply_status == status
     assert caught.value.reason == reason
@@ -162,5 +160,5 @@ async def test_complete_recreation_propagates_cancellation_without_aborting(
     else:
         client.submit_config_flow_step.side_effect = [_form(), asyncio.CancelledError()]
     with pytest.raises(asyncio.CancelledError):
-        await create_flow_helper(client, "template", _config(), complete_snapshot=True)
+        await recreate_flow_helper(client, "template", _config())
     client.abort_config_flow.assert_not_awaited()

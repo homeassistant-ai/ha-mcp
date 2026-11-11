@@ -68,7 +68,7 @@ class TestHomeAssistantJudgesStorageHelperFields:
             {
                 "helper_type": "input_boolean",
                 "name": f"E2E Wrong Field {uuid.uuid4().hex[:6]}",
-                "options": ["a", "b"],
+                "config": {"options": ["a", "b"]},
             },
             expected_error="options",
         )
@@ -76,8 +76,11 @@ class TestHomeAssistantJudgesStorageHelperFields:
     @pytest.mark.parametrize(
         "params",
         [
-            {"helper_type": "input_number", "min_value": 100, "max_value": 0},
-            {"helper_type": "input_datetime", "has_date": False, "has_time": False},
+            {"helper_type": "input_number", "config": {"min": 100, "max": 0}},
+            {
+                "helper_type": "input_datetime",
+                "config": {"has_date": False, "has_time": False},
+            },
             {"helper_type": "input_select"},  # options are required
         ],
         ids=["input_number-min-above-max", "input_datetime-neither", "no-options"],
@@ -124,8 +127,12 @@ class TestHomeAssistantJudgesStorageHelperFields:
                         "helper_id": entity_id,
                     },
                 )
-                fields = {f["name"]: f for f in described["fields"]}
-                assert fields["options"]["current"] == ["a", "b", "c"]
+                if described["source"] == "unavailable":  # a lane without the component
+                    kept = described["stored"]["options"]
+                else:
+                    fields = {f["name"]: f for f in described["fields"]}
+                    kept = fields["options"]["current"]
+                assert kept == ["a", "b", "c"]
             finally:
                 await safe_call_tool(
                     mcp_client,

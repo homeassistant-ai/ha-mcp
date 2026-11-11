@@ -15,6 +15,8 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_integration_schema import _HOST, _MENU, _client, _error, _form
 
+pytestmark = pytest.mark.usefixtures("no_flow_outline")
+
 
 @pytest.mark.asyncio
 async def test_set_integration_returns_the_setup_form() -> None:
