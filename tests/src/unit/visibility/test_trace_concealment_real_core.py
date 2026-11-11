@@ -42,6 +42,9 @@ _VISIBLE_AUTOMATION = "automation.visible"
 _VISIBLE_AUTOMATION_KEY = "1700000000002"
 _VISIBLE_SCRIPT = "script.front_door_2"
 _VISIBLE_SCRIPT_KEY = "front_door"
+# A visible config id that literally starts with its own domain, so a
+# domain-prefix strip would make it collide with the hidden item's key.
+_DOMAIN_PREFIXED_KEY = f"automation.{_HIDDEN_AUTOMATION_KEY}"
 
 
 @pytest.fixture(autouse=True)
@@ -56,16 +59,18 @@ def _register(
     entity_registry: er.EntityRegistry,
     entity_id: str,
     unique_id: str,
-) -> None:
+) -> er.RegistryEntry:
     """Create the registry row Core creates for a loaded automation or script."""
     domain = entity_id.partition(".")[0]
-    entity_registry.async_get_or_create(
+    entry = entity_registry.async_get_or_create(
         domain,
         domain,
         unique_id,
         suggested_object_id=entity_id.partition(".")[2],
     )
+    assert (entry.entity_id, entry.unique_id) == (entity_id, unique_id)
     hass.states.async_set(entity_id, "on")
+    return entry
 
 
 def _tool_result(payload: dict[str, Any]) -> SimpleNamespace:
@@ -103,6 +108,15 @@ def _tool_calls(client: HomeAssistantClient, **args: Any) -> Any:
 
     async def _call(_context: Any) -> Any:
         return _tool_result(await TraceTools(client).ha_get_automation_traces(**args))
+
+    return _call
+
+
+def _raw_trace_calls(client: HomeAssistantClient, message: dict[str, Any]) -> Any:
+    """A ``call_next`` that returns the raw trace command reply Core sends."""
+
+    async def _call(_context: Any) -> Any:
+        return _tool_result(await client.send_websocket_message(message))
 
     return _call
 
@@ -160,6 +174,86 @@ class TestHiddenTraceTargets:
             )
 
         assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+
+
+class TestRawTraceCommandTargets:
+    """A raw trace command's target goes through the same alias check."""
+
+    async def test_a_raw_trace_command_naming_a_hidden_storage_key_is_concealed(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """The storage key in ``trace/get`` data is concealed before Core is asked."""
+        _register(hass, entity_registry, _HIDDEN_SCRIPT, _HIDDEN_SCRIPT_KEY)
+        _enforce(set_config, _HIDDEN_SCRIPT)
+        mw = _ChainedEnforcement(lambda: core_client)
+        context = make_context(
+            "ha_call_service",
+            {
+                "ws_command": "trace/get",
+                "data": {
+                    "domain": "script",
+                    "item_id": _HIDDEN_SCRIPT_KEY,
+                    "run_id": "hidden-run",
+                },
+            },
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await mw.on_call_tool(context, _unreached_call_next)
+
+        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+
+    async def test_a_raw_trace_command_naming_a_visible_item_id_passes(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A visible trace key is not concealed by the hidden script's object id."""
+        _register(hass, entity_registry, _HIDDEN_SCRIPT, _HIDDEN_SCRIPT_KEY)
+        _register(hass, entity_registry, _VISIBLE_SCRIPT, _VISIBLE_SCRIPT_KEY)
+        await store_runs(
+            hass,
+            script_run(
+                "visible-run",
+                context_id="own-visible",
+                item_id=_VISIBLE_SCRIPT_KEY,
+            ),
+        )
+        _enforce(set_config, _HIDDEN_SCRIPT)
+        mw = _ChainedEnforcement(lambda: core_client)
+        context = make_context(
+            "ha_call_service",
+            {
+                "ws_command": "trace/get",
+                "data": {
+                    "domain": "script",
+                    "item_id": _VISIBLE_SCRIPT_KEY,
+                    "run_id": "visible-run",
+                },
+            },
+        )
+
+        result = await mw.on_call_tool(
+            context,
+            _raw_trace_calls(
+                core_client,
+                {
+                    "type": "trace/get",
+                    "domain": "script",
+                    "item_id": _VISIBLE_SCRIPT_KEY,
+                    "run_id": "visible-run",
+                },
+            ),
+        )
+
+        assert result.structured_content["success"] is True
+        assert result.structured_content["result"]["run_id"] == "visible-run"
 
 
 class TestHiddenTraceResults:
@@ -350,6 +444,39 @@ class TestVisibleTraceKeys:
         assert result.structured_content["run_id"] == "visible-run"
         assert result.structured_content["trace"]["action/0"]
 
+    async def test_a_visible_trace_key_that_starts_with_its_domain_stays_readable(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A trace item_id is matched exactly, not after stripping the domain."""
+        _register(hass, entity_registry, _VISIBLE_AUTOMATION, _DOMAIN_PREFIXED_KEY)
+        _register(hass, entity_registry, _HIDDEN_AUTOMATION, _HIDDEN_AUTOMATION_KEY)
+        await store_runs(
+            hass,
+            automation_run(
+                "visible-run",
+                context_id="own-visible",
+                item_id=_DOMAIN_PREFIXED_KEY,
+            ),
+        )
+        _enforce(set_config, _HIDDEN_AUTOMATION)
+        mw = _ChainedEnforcement(lambda: core_client)
+        args = {
+            "domain": "automation",
+            "item_id": _DOMAIN_PREFIXED_KEY,
+            "run_id": "visible-run",
+        }
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_automation_traces", args),
+            _tool_calls(core_client, **args),
+        )
+
+        assert result.structured_content["run_id"] == "visible-run"
+
     async def test_a_visible_trace_key_equal_to_a_hidden_object_id_stays_readable(
         self,
         hass: HomeAssistant,
@@ -387,17 +514,42 @@ class TestVisibleTraceKeys:
 class TestTraceQueryRefreshesTheHiddenSet:
     """A trace query never trusts a hidden set read before the item existed."""
 
+    @pytest.mark.parametrize(
+        ("tool", "args", "raw_message"),
+        [
+            pytest.param(
+                "ha_get_automation_traces",
+                {"domain": "automation"},
+                None,
+                id="trace-tool",
+            ),
+            pytest.param(
+                "ha_call_service",
+                {"ws_command": "trace/list", "data": {"domain": "automation"}},
+                {"type": "trace/list", "domain": "automation"},
+                id="raw-trace-command",
+            ),
+        ],
+    )
     async def test_a_trace_query_refreshes_a_stale_hidden_set(
         self,
         hass: HomeAssistant,
         entity_registry: er.EntityRegistry,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
+        tool: str,
+        args: dict[str, Any],
+        raw_message: dict[str, Any] | None,
     ) -> None:
         """A registry row created after the cached read still conceals the run."""
         hass.states.async_set("sensor.visible", "on")
         _enforce(set_config, _HIDDEN_AUTOMATION)
         mw = _ChainedEnforcement(lambda: core_client)
+        call_next = (
+            _raw_trace_calls(core_client, raw_message)
+            if raw_message is not None
+            else _tool_calls(core_client, **args)
+        )
         with patch.object(
             core_client,
             "send_websocket_message",
@@ -422,10 +574,7 @@ class TestTraceQueryRefreshesTheHiddenSet:
             )
 
             with pytest.raises(ToolError) as exc_info:
-                await mw.on_call_tool(
-                    make_context("ha_get_automation_traces", {"domain": "automation"}),
-                    _tool_calls(core_client, domain="automation"),
-                )
+                await mw.on_call_tool(make_context(tool, args), call_next)
 
             assert _registry_reads(send) == 2
 
