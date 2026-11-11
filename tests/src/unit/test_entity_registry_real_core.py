@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
@@ -26,6 +27,7 @@ from pytest_homeassistant.common import MockConfigEntry
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
+from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 
 @pytest.fixture(params=["component", "core"])
@@ -52,6 +54,10 @@ async def lamp(hass: HomeAssistant, core_client: HomeAssistantClient) -> str:
     entry = registry.async_get_or_create("light", "demo", "lamp")
     registry.async_update_entity(entry.entity_id, new_entity_id="light.my_lamp")
     return "light.my_lamp"
+
+
+def _types(sent: AsyncMock) -> list[str]:
+    return [call.args[0]["type"] for call in sent.call_args_list]
 
 
 def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
@@ -137,36 +143,62 @@ async def test_auto_on_an_unknown_entity_is_not_found(
     assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
+async def test_auto_on_an_invalid_id_is_cores_refusal(
+    core_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        await EntityTools(core_client).ha_set_entity(
+            entity_id="not an id", new_entity_id="auto"
+        )
+
+    error = _error(exc_info)
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "is an invalid entity ID" in error["message"]
+    assert _types(sent) == ["config/entity_registry/get_automatic_entity_ids"]
+
+
+@pytest.mark.parametrize("own_area", [True, False])
 @pytest.mark.parametrize(
-    ("original_name", "expected_name"), [("Dawn", ""), (None, None)]
+    ("original_name", "name", "expected_name"),
+    [("Dawn", "Mine", ""), (None, "Mine", None), ("Dawn", None, "")],
 )
 async def test_main_entity_writes_what_the_dialog_writes(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     original_name: str | None,
+    name: str | None,
     expected_name: str | None,
+    own_area: bool,
 ) -> None:
     kitchen = ar.async_get(hass).async_create("Kitchen")
     registry = er.async_get(hass)
     entry = _device_entity(hass, original_name)
-    registry.async_update_entity(entry.entity_id, name="Mine", area_id=kitchen.id)
+    registry.async_update_entity(
+        entry.entity_id, name=name, area_id=kitchen.id if own_area else None
+    )
 
-    await EntityTools(core_client).ha_set_entity(
+    result = await EntityTools(core_client).ha_set_entity(
         entity_id=entry.entity_id, use_device_name=True
     )
 
     written = registry.async_get(entry.entity_id)
     assert written is not None
     assert (written.name, written.area_id) == (expected_name, None)
+    assert result["updates"] == ["main entity of the device"] + (
+        ["area cleared: follows the device's area"] if own_area else []
+    )
 
 
+@pytest.mark.parametrize(("original_name", "name"), [("Dawn", ""), (None, None)])
 async def test_main_entity_is_returned_unchanged(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
+    original_name: str | None,
+    name: str | None,
 ) -> None:
     registry = er.async_get(hass)
-    entry = _device_entity(hass, "Dawn")
-    registry.async_update_entity(entry.entity_id, name="")
+    entry = _device_entity(hass, original_name)
+    registry.async_update_entity(entry.entity_id, name=name)
     before = registry.async_get(entry.entity_id)
 
     result = await EntityTools(core_client).ha_set_entity(
@@ -174,8 +206,67 @@ async def test_main_entity_is_returned_unchanged(
     )
 
     assert registry.async_get(entry.entity_id) == before
-    assert result["entity_entry"]["name"] == ""
+    assert result["entity_entry"]["name"] == name
     assert result["entity_entry"]["entity_id"] == entry.entity_id
+    assert result["updates"] == ["already the main entity"]
+
+
+async def test_main_entity_keeps_an_area_core_left_on_it(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> None:
+    """Core refuses a user edit into this shape, but an integration update
+    that drops the entity's name leaves it so; the switch keeps the area."""
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    registry = er.async_get(hass)
+    entry = _device_entity(hass, "Dawn")
+    registry.async_update_entity(entry.entity_id, area_id=kitchen.id)
+    registry.async_update_entity(entry.entity_id, original_name=None)
+    before = registry.async_get(entry.entity_id)
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id, use_device_name=True
+    )
+
+    assert registry.async_get(entry.entity_id) == before
+    assert result["updates"] == ["already the main entity"]
+
+
+async def test_main_entity_on_an_unknown_entity_is_not_found(
+    core_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        await EntityTools(core_client).ha_set_entity(
+            entity_id="sensor.nope", use_device_name=True
+        )
+
+    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert _types(sent) == ["config/entity_registry/get"]
+
+
+async def test_main_entity_reads_the_entry_under_the_update_lock(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The write is built from the entry, so no update may land between."""
+    entry = _device_entity(hass, "Dawn")
+    lock = registry_update_lock("entity", entry.entity_id)
+    read = er.RegistryEntry.extended_dict
+    held: list[bool] = []
+
+    def extended_dict(registry_entry: er.RegistryEntry) -> dict[str, Any]:
+        # Core builds its reply to config/entity_registry/get from this.
+        held.append(lock.locked())
+        return read.__get__(registry_entry)
+
+    monkeypatch.setattr(er.RegistryEntry, "extended_dict", property(extended_dict))
+    await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id, use_device_name=True
+    )
+
+    assert held
+    assert all(held)
 
 
 async def test_main_entity_with_own_area_is_cores_refusal(
@@ -219,6 +310,7 @@ async def test_get_entity_serves_cores_full_entry(
     for entry in (single, bulk[0], resolved[0]):
         # Every field of Core's entry, value for value; enrichment is additive.
         assert entry.items() >= core["result"].items()
+        assert entry.keys() - core["result"].keys() <= {"area", "floor", "label_names"}
         assert entry["aliases"] == ["Desk"]
 
 
@@ -305,6 +397,7 @@ async def test_an_entity_without_registry_entry_reads_cores_store(
     mixed = await tools.ha_get_entity(entity_id="Light.Loose")
     quiet = await tools.ha_get_entity(entity_id="light.quiet")
     gone = await tools.ha_get_entity(entity_id="light.gone")
+    bulk = await tools.ha_get_entity(entity_id=[lamp, "light.loose"])
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_get_entity(entity_id="light.nowhere")
 
@@ -315,6 +408,17 @@ async def test_an_entity_without_registry_entry_reads_cores_store(
     assert quiet["exposed_to"] == {}
     assert quiet["is_exposed_anywhere"] is False
     assert gone["exposed_to"] == {"conversation": True}
+    assert bulk["count"] == 1
+    assert [e["entity_id"] for e in bulk["entity_entries"]] == [lamp]
+    assert bulk["unregistered_entities"] == [
+        {
+            "entity_id": "light.loose",
+            "entity_entry": None,
+            "exposed_to": {"conversation": True},
+            "is_exposed_anywhere": True,
+        }
+    ]
+    assert "errors" not in bulk
     assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 

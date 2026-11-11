@@ -7,8 +7,9 @@ listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -64,3 +65,15 @@ async def component_core_client(
 
     websocket_api.async_register_commands(hass)
     return core_client
+
+
+@pytest.fixture
+def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    """A spy on ``core_client``'s WebSocket send: it calls through, so Core
+    answers, and a test can count or forbid a command."""
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        wraps=core_client.send_websocket_message,
+    ) as spy:
+        yield spy

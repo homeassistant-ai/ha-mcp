@@ -139,44 +139,6 @@ class TestBulkGetViaGetEntries:
         assert "suggestions" in result
 
     @pytest.mark.asyncio
-    async def test_bulk_get_answers_an_entity_without_registry_entry(self):
-        """An id without a registry entry but with a state gets its exposure
-        from Core's exposed-entities store, under unregistered_entities."""
-        client = _make_client()
-
-        async def ws(message, **_kwargs):
-            if message["type"] == "homeassistant/expose_entity/list":
-                return {
-                    "success": True,
-                    "result": {
-                        "exposed_entities": {"light.yaml": {"cloud.alexa": True}}
-                    },
-                }
-            return {
-                "success": True,
-                "result": {"light.a": self._entry("light.a"), "light.yaml": None},
-            }
-
-        client.send_websocket_message = AsyncMock(side_effect=ws)
-        client.get_entity_state = AsyncMock(
-            return_value={"entity_id": "light.yaml", "state": "on"}
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        result = await tool(entity_id=["light.a", "light.yaml"])
-
-        assert result["count"] == 1
-        assert result["unregistered_entities"] == [
-            {
-                "entity_id": "light.yaml",
-                "entity_entry": None,
-                "exposed_to": {"cloud.alexa": True},
-                "is_exposed_anywhere": True,
-            }
-        ]
-        assert "errors" not in result
-
-    @pytest.mark.asyncio
     async def test_bulk_get_preserves_request_order(self):
         """Response order follows the requested id order, not the map order."""
         client = _make_client()
@@ -534,14 +496,12 @@ class TestUniqueIdResolver:
             "config_entry_id": "ce1",
         }
 
-    def _client(self, rows, entries_reply=None):
+    def _client(self, rows):
         """Core's registry: the list rows, and get_entries for the ids asked."""
 
         async def send(msg, **_):
             if msg["type"] == "config/entity_registry/list":
                 return {"success": True, "result": rows}
-            if entries_reply is not None:
-                return entries_reply
             by_id = {row["entity_id"]: row for row in rows}
             return {"success": True, "result": {e: by_id[e] for e in msg["entity_ids"]}}
 
@@ -612,21 +572,6 @@ class TestUniqueIdResolver:
         assert result["matches"] == 1
         assert result[key] == value
         assert result["entity_entries"][0]["entity_id"] == expected
-
-    @pytest.mark.asyncio
-    async def test_unreadable_match_is_an_error_not_zero_matches(self):
-        client = self._client(
-            [self._list_entry("sensor.a", "u", "hue")],
-            entries_reply={"success": False, "error": "timeout"},
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(unique_id="u")
-
-        body = _error_body(exc_info)
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert list(body["errors"]) == ["sensor.a"]
 
     @pytest.mark.asyncio
     async def test_resolve_not_found_raises(self):
@@ -729,28 +674,3 @@ class TestSingleSetHoldsEntityLock:
         assert before.count("config/entity_registry/update") == 2, order
         assert "config/device_registry/update" in before, order
         assert "homeassistant/expose_entity" in before, order
-
-
-class TestAutomaticEntityId:
-    @pytest.mark.asyncio
-    async def test_a_refused_read_keeps_cores_error_kind(self):
-        """new_entity_id='auto' reports Core's refusal of the ID read as such."""
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "Invalid entity ID",
-                "error_code": "invalid_format",
-                # Only success decides: a result next to a failure is not used.
-                "result": {"light.a": "light.b"},
-            }
-        )
-        tool = _register(client)["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="light.a", new_entity_id="auto")
-
-        error = _error_body(exc_info)["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "Invalid entity ID" in error["message"]
-        client.send_websocket_message.assert_awaited_once()

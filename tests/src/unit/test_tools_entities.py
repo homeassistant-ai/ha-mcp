@@ -1457,30 +1457,6 @@ class TestHaSetEntityBulkOperations:
         }
 
     @pytest.mark.asyncio
-    async def test_bulk_refetch_failure_warns(self, mock_mcp, mock_client):
-        """A failed refetch after the bulk exposure keeps the rows and says so."""
-        ids = ["light.a", "light.b"]
-        entries = {"success": True, "result": {e: {"entity_id": e} for e in ids}}
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                entries,
-                {"success": True},
-                {"success": False, "error": "busy"},
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(entity_id=ids, expose_to={"conversation": True})
-
-        assert result["success"] is True
-        assert [row["entity_entry"] for row in result["succeeded"]] == [
-            {"entity_id": e} for e in ids
-        ]
-        assert [w.split(":")[0] for w in result["warnings"]] == ids
-        assert all("busy" in w for w in result["warnings"])
-
-    @pytest.mark.asyncio
     async def test_bulk_rejects_single_entity_params(self, mock_mcp, mock_client):
         """Bulk operation should reject single-entity parameters with ToolError."""
         register_entity_tools(mock_mcp, mock_client)

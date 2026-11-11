@@ -9,9 +9,9 @@ raising Core's own exception, or the client getting no answer at all.
 """
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components.homeassistant import exposed_entities as core_exposed
@@ -51,17 +51,6 @@ async def _core(hass: HomeAssistant) -> None:
 @pytest.fixture
 def tools(core_client: HomeAssistantClient) -> EntityTools:
     return EntityTools(core_client)
-
-
-@pytest.fixture
-def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
-    """A spy on the client's WebSocket send: it calls through, so Core answers."""
-    with patch.object(
-        core_client,
-        "send_websocket_message",
-        wraps=core_client.send_websocket_message,
-    ) as spy:
-        yield spy
 
 
 @pytest.fixture
@@ -369,6 +358,53 @@ class TestBulkRead:
         assert "entity_ids" in errors[_BAD_ID]
         assert "no registry entry" not in errors[_BAD_ID]
         assert "no registry entry" in errors["light.porch"]
+
+    async def test_an_unreadable_unique_id_match_is_an_error_not_zero_matches(
+        self, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
+    ) -> None:
+        def unreadable(_entry: er.RegistryEntry) -> dict[str, Any]:
+            raise HomeAssistantError("registry busy")
+
+        # Core lists the match, then fails to build its full entry.
+        monkeypatch.setattr(er.RegistryEntry, "extended_dict", property(unreadable))
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_entity(unique_id="kitchen")
+
+        body = _body(exc_info)
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert list(body["errors"]) == ["light.kitchen"]
+        assert "registry busy" in body["errors"]["light.kitchen"]
+
+    async def test_a_dropped_refetch_keeps_the_exposed_rows_and_warns(
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        core_client: HomeAssistantClient,
+        tools: EntityTools,
+    ) -> None:
+        er.async_get(hass).async_get_or_create(
+            "light", "demo", "desk", suggested_object_id="desk"
+        )
+        ids = ["light.kitchen", "light.desk"]
+        expose = core_exposed.async_expose_entity
+
+        def expose_then_drop(*args: Any) -> None:
+            expose(*args)
+            monkeypatch.setattr(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+            )
+
+        monkeypatch.setattr(core_exposed, "async_expose_entity", expose_then_drop)
+        result = await tools.ha_set_entity(
+            entity_id=ids, expose_to={"conversation": True}
+        )
+
+        assert [row["entity_id"] for row in result["succeeded"]] == ids
+        assert [row["entity_entry"]["entity_id"] for row in result["succeeded"]] == ids
+        assert [w.split(":")[0] for w in result["warnings"]] == ids
+        assert all("connection lost" in w for w in result["warnings"])
 
 
 class TestRegistryWideWrite:
