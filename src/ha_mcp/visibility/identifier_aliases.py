@@ -45,6 +45,8 @@ PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
 }
 
 _SERVICE_TOOL = "ha_call_service"
+_TRACE_TOOL = "ha_get_automation_traces"
+_TRACE_WS_COMMANDS = frozenset({"trace/list", "trace/get", "trace/contexts"})
 
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
 # The automation tools read a bare ``entity_id`` only as a config ``id``, so an
@@ -63,11 +65,14 @@ class IdentifierAliases:
     registry ``unique_id``) match exactly, like the tools' registry lookup, so a
     visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
     are the casefolded service names (storage keys) of hidden scripts.
+    ``unkeyed_trace_domains`` names trace domains holding a hidden item whose
+    registry key was absent from the snapshot; their trace results fail closed.
     """
 
     object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
     storage_keys: Mapping[str, frozenset[str]] = field(default_factory=dict)
     script_services: frozenset[str] = frozenset()
+    unkeyed_trace_domains: frozenset[str] = frozenset()
 
     def embedded_terms(self) -> frozenset[str]:
         """Strings that run a hidden script without naming its entity_id."""
@@ -81,14 +86,18 @@ class IdentifierAliases:
         return folded in self.object_ids.get(domain, frozenset())
 
     def addresses_hidden_trace_item(self, domain: str, value: str) -> bool:
-        """Whether a trace's ``item_id`` is a hidden entity's storage key.
+        """Whether a trace's ``item_id`` may belong to a hidden entity.
 
         Traces are keyed by the registry ``unique_id``; an object ID is not a
         trace key, so a visible script whose storage key matches a hidden
-        script's object ID must not be concealed.
+        script's object ID must not be concealed. When a hidden item in this
+        trace domain has no cached key, no ``item_id`` can be cleared: the
+        result may be that item's trace, so the domain fails closed.
         """
         key = value.strip()
-        return key in self.storage_keys.get(domain, frozenset())
+        if key in self.storage_keys.get(domain, frozenset()):
+            return True
+        return domain in self.unkeyed_trace_domains
 
 
 def build_identifier_aliases(
@@ -98,9 +107,12 @@ def build_identifier_aliases(
     object_ids: dict[str, set[str]] = {}
     storage_keys: dict[str, set[str]] = {}
     hidden_scripts: dict[str, str] = {}
+    hidden_domains: set[str] = set()
+    keyed_domains: set[str] = set()
     for hidden_id in hidden:
         domain, _, object_id = hidden_id.partition(".")
         if domain in _ALIASED_DOMAINS and object_id:
+            hidden_domains.add(domain)
             if domain in _OBJECT_ID_DOMAINS:
                 object_ids.setdefault(domain, set()).add(object_id.casefold())
             if domain == "script":
@@ -122,6 +134,7 @@ def build_identifier_aliases(
             continue
         domain = entity_id.partition(".")[0]
         if domain in _ALIASED_DOMAINS:
+            keyed_domains.add(domain)
             storage_keys.setdefault(domain, set()).add(unique_id)
             if domain == "script":
                 hidden_scripts[entity_id] = unique_id
@@ -129,7 +142,18 @@ def build_identifier_aliases(
         object_ids={d: frozenset(v) for d, v in object_ids.items()},
         storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
         script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
+        unkeyed_trace_domains=frozenset(
+            (hidden_domains & _TRACE_DOMAINS) - keyed_domains
+        ),
     )
+
+
+def is_trace_query(tool_name: str, args: Mapping[str, Any]) -> bool:
+    """Whether a call reads stored traces, keyed by hidden storage keys."""
+    if tool_name == _TRACE_TOOL:
+        return True
+    command = args.get("ws_command")
+    return isinstance(command, str) and command.strip().casefold() in _TRACE_WS_COMMANDS
 
 
 def hidden_identifier_argument(
@@ -140,7 +164,7 @@ def hidden_identifier_argument(
         return _hidden_script_service(args, aliases) or _hidden_trace_item(
             _json_mapping(args.get("data")), aliases
         )
-    if tool_name == "ha_get_automation_traces":
+    if tool_name == _TRACE_TOOL:
         trace_hit = _hidden_trace_item(args, aliases)
         if trace_hit is not None:
             return trace_hit

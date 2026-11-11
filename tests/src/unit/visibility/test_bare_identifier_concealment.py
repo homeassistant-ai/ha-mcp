@@ -326,6 +326,129 @@ class TestHiddenScriptStorageKeyInContent:
             )
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_trace_listing_with_an_unkeyed_hidden_automation_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A denied automation the registry cannot key still hides its traces."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        listing = {
+            "success": True,
+            "result": [
+                {"domain": "automation", "item_id": "1700000000001", "run_id": "1"}
+            ],
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_service",
+                    {"ws_command": "trace/list", "data": {"domain": "automation"}},
+                ),
+                _returns(text_result(json.dumps(listing), listing)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_context_only_trace_with_an_unkeyed_hidden_automation_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A context-only detail names no hidden entity_id, only its trace key."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        detail = {
+            "success": True,
+            "domain": "automation",
+            "item_id": "1700000000001",
+            "trace": {"trigger": []},
+            "context": {"id": "01J00000000000000000000000"},
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces",
+                    {"context_id": "01J00000000000000000000000"},
+                ),
+                _returns(text_result(json.dumps(detail), detail)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_unkeyed_hidden_automation_does_not_conceal_script_traces(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """Fail-closed aliases stay scoped to the domain whose key is missing."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        listing = {
+            "success": True,
+            "result": [{"domain": "script", "item_id": "wake_up", "run_id": "1"}],
+        }
+
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_call_service",
+                {"ws_command": "trace/list", "data": {"domain": "script"}},
+            ),
+            _returns(text_result(json.dumps(listing), listing)),
+        )
+
+        assert result.structured_content == listing
+
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            pytest.param(
+                "ha_get_automation_traces",
+                {"domain": "automation"},
+                id="trace-tool",
+            ),
+            pytest.param(
+                "ha_call_service",
+                {"ws_command": "trace/list", "data": {"domain": "automation"}},
+                id="raw-trace-command",
+            ),
+        ],
+    )
+    async def test_trace_query_refreshes_a_stale_hidden_set(
+        self,
+        set_config: Callable[..., Any],
+        tool: str,
+        args: dict[str, Any],
+    ) -> None:
+        """A trace query must not trust a snapshot taken before the item existed."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "sensor.visible"}),
+            _returns(text_result("ok")),
+        )
+        assert client.get_states_calls == 1
+
+        # The denied automation now registers with the key its traces use.
+        client.registry = _registry(
+            _entry("automation.private", "1700000000001", "automation")
+        )
+        listing = {
+            "success": True,
+            "result": [
+                {"domain": "automation", "item_id": "1700000000002", "run_id": "1"}
+            ],
+        }
+
+        result = await mw.on_call_tool(
+            make_context(tool, args),
+            _returns(text_result(json.dumps(listing), listing)),
+        )
+
+        assert client.get_states_calls == 2
+        assert result.structured_content == listing
+
 
 class _NotFoundClient(FakeClient):
     """Answers every config fetch with a 404, as for a genuinely absent key."""
