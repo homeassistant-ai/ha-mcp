@@ -46,13 +46,13 @@ rule:
     # side_effect that raises a transport error and nothing else. An error
     # reply (HomeAssistantAPIError, HomeAssistantCommandError) is Core's answer
     # and comes from Core.
-    # A spy stays too: wraps= calls through to the real method, so the reply is
+    # A spy stays too: wraps= on a client method calls through to it, so the reply is
     # still Core's and the test can count or forbid a call. A return_value or
     # side_effect beside it would answer instead of the real method.
     - not:
         any:
           - all:
-              - regex: '\bwraps\s*=\s*\w+(\.\w+)+\s*[,)]'
+              - regex: '\bwraps\s*=\s*\w+(\.\w+)*\.(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)\s*[,)]'
               - not:
                   regex: '\b(return_value|side_effect)\b'
           - regex: 'side_effect\s*=\s*([\w.]+\.)?(HomeAssistantConnectionError|HomeAssistantCommandNotSent|HomeAssistantCommandTimeout|WebSocketException|ConnectionClosed\w*|TimeoutError|ConnectionError|ConnectionResetError|OSError|ConnectError|ConnectTimeout|ReadTimeout|ReadError|TimeoutException|NetworkError|TransportError|RemoteProtocolError)\b[^\[\]{}]*$'

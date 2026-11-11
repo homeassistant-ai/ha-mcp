@@ -181,6 +181,10 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             id="spy-that-wraps-a-fake",
         ),
         pytest.param(
+            "client.get_states = AsyncMock(wraps=helpers.fake_states)\n",
+            id="spy-that-wraps-a-fake-in-another-module",
+        ),
+        pytest.param(
             "client.get_states = AsyncMock(wraps=client.get_states, return_value=[])\n",
             id="spy-whose-return-value-answers-instead",
         ),
