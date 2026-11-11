@@ -703,6 +703,15 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
                 effective_name,
             )
             _conceal_as_not_found(bare)
+        if matcher.identifier_aliases.refuses_unkeyed_trace_query(
+            effective_name, effective_args
+        ):
+            logger.info(
+                "visibility enforce: refused %s trace query with an unkeyed "
+                "hidden item",
+                effective_name,
+            )
+            _raise_enforced(effective_name, _outbound_reason(effective_name))
         self._scan_inbound(effective_name, name, args, matcher)
         return await call_next(context)
 

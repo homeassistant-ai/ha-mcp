@@ -377,6 +377,30 @@ class TestHiddenScriptStorageKeyInContent:
 
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_context_only_trace_without_a_trace_key_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """Some trace payloads carry no domain/item_id to match against."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        detail = {
+            "success": True,
+            "trace": {"trigger": []},
+            "config": {"alias": "private"},
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces",
+                    {"context_id": "01J00000000000000000000000"},
+                ),
+                _returns(text_result(json.dumps(detail), detail)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_unkeyed_hidden_automation_does_not_conceal_script_traces(
         self, set_config: Callable[..., Any]
     ) -> None:

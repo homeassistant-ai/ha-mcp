@@ -99,6 +99,15 @@ class IdentifierAliases:
             return True
         return domain in self.unkeyed_trace_domains
 
+    def refuses_unkeyed_trace_query(
+        self, tool_name: str, args: Mapping[str, Any]
+    ) -> bool:
+        """Whether a trace result cannot be cleared because its domain lacks keys."""
+        if not self.unkeyed_trace_domains or not is_trace_query(tool_name, args):
+            return False
+        domain = _trace_query_domain(tool_name, args)
+        return domain is None or domain in self.unkeyed_trace_domains
+
 
 def build_identifier_aliases(
     hidden: Collection[str], registry_result: Any
@@ -154,6 +163,29 @@ def is_trace_query(tool_name: str, args: Mapping[str, Any]) -> bool:
         return True
     command = args.get("ws_command")
     return isinstance(command, str) and command.strip().casefold() in _TRACE_WS_COMMANDS
+
+
+def _trace_query_domain(tool_name: str, args: Mapping[str, Any]) -> str | None:
+    """The trace domain a call targets, or ``None`` when it is not scoped to one."""
+    if tool_name == _TRACE_TOOL:
+        domain = args.get("domain")
+        if isinstance(domain, str):
+            return domain.strip().casefold()
+        entity_id = args.get("entity_id")
+        if isinstance(entity_id, str):
+            prefix = entity_id.strip().partition(".")[0].casefold()
+            return prefix if prefix in _TRACE_DOMAINS else None
+        return None
+    if tool_name != _SERVICE_TOOL:
+        return None
+    command = args.get("ws_command")
+    if not (
+        isinstance(command, str) and command.strip().casefold() in _TRACE_WS_COMMANDS
+    ):
+        return None
+    record = _json_mapping(args.get("data"))
+    domain = record.get("domain") if record is not None else None
+    return domain.strip().casefold() if isinstance(domain, str) else None
 
 
 def hidden_identifier_argument(
