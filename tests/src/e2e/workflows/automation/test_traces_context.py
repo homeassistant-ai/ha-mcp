@@ -13,7 +13,7 @@ import pytest
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.cleanup import CleanupSteps
 from ...utilities.entity_finders import find_test_light_entity
-from ...utilities.wait_helpers import wait_for_condition, wait_for_tool_result
+from ...utilities.wait_helpers import wait_for_entity_state, wait_for_tool_result
 from .conftest import create_trace_automation, create_trace_script
 
 
@@ -502,16 +502,8 @@ action:
                 },
             )
 
-            async def _light_is_on() -> bool:
-                state = await mcp.call_tool_success(
-                    "ha_get_state", {"entity_id": light_id}
-                )
-                return state.get("data", {}).get("state") == "on"
-
-            light_is_on = await wait_for_condition(
-                _light_is_on,
-                timeout=10,
-                condition_name=f"{light_id} to turn on",
+            light_is_on = await wait_for_entity_state(
+                mcp_client, light_id, "on", timeout=10
             )
             assert light_is_on, (
                 f"{light_id} never turned on; the not-triggered trace setup is invalid"
