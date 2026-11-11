@@ -204,8 +204,6 @@ ignores:
   - "tests/src/unit/test_template_restore_safety.py"
   - "tests/src/unit/test_template_review_outcomes.py"
   - "tests/src/unit/test_template_rotation_scaling.py"
-  - "tests/src/unit/test_tool_docstring_no_parameter_section.py"
-  - "tests/src/unit/test_tool_schema_exclusive_bounds.py"
   - "tests/src/unit/test_tools_addons.py"
   - "tests/src/unit/test_tools_assist_pipeline.py"
   - "tests/src/unit/test_tools_bug_report.py"

@@ -5,9 +5,11 @@ also answers ``ha_mcp_tools/*``, so the component's capabilities, search and
 location resolution are the real handlers.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -16,6 +18,10 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
@@ -43,6 +49,31 @@ def _build_ha_search(client: HomeAssistantClient) -> Any:
 def _setup_visibility_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
+@contextmanager
+def _routes(
+    client: HomeAssistantClient, component_socket: HomeAssistantWebSocketClient
+) -> Iterator[tuple[AsyncMock, AsyncMock, AsyncMock]]:
+    """Spies on the three routes a search can take; each calls through."""
+    with (
+        patch.object(client, "get_states", wraps=client.get_states) as states,
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as legacy,
+        patch.object(
+            component_socket, "send_command", wraps=component_socket.send_command
+        ) as component,
+    ):
+        yield states, legacy, component
+
+
+def _searches(component: AsyncMock) -> list[dict[str, object]]:
+    return [
+        call.kwargs
+        for call in component.call_args_list
+        if call.args[0] == "ha_mcp_tools/search"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -73,11 +104,22 @@ async def test_unified_component_serves_listings_and_locations(
     entity_registry.async_update_entity(entry.entity_id, area_id=kitchen.id)
     hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen"})
 
-    response = await _build_ha_search(component_core_client)(**arguments)
+    socket = await websocket_manager.get_client(
+        url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
+    )
+    with _routes(component_core_client, socket) as (states, legacy, component):
+        response = await _build_ha_search(component_core_client)(**arguments)
 
     assert response["entities"][0]["entity_id"] == "light.kitchen"
     assert response["search_type"] == mode
-    assert not any("legacy path" in w for w in response.get("warnings", []))
+    # One component search and nothing else: no state read, no legacy command.
+    states.assert_not_called()
+    legacy.assert_not_called()
+    searches = _searches(component)
+    assert len(searches) == 1
+    assert searches[0]["search_types"] == ["entity"]
     if "area_filter" in arguments:
         assert response["area_filter"] == arguments["area_filter"].strip()
         assert response["area_names"] == ["Kitchen"]
@@ -110,17 +152,26 @@ async def test_unified_component_large_dashboard_window_is_serviceable(
     assert await async_setup_component(hass, "automation", {})
     assert await async_setup_component(hass, "lovelace", {})
 
-    response = await _build_ha_search(component_core_client)(
-        query="kitchen",
-        search_types=["automation", "dashboard"],
-        limit=100,
-        offset=600,
-        exact_match=True,
-        include_hidden=True,
+    socket = await websocket_manager.get_client(
+        url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
     )
+    with _routes(component_core_client, socket) as (states, _legacy, component):
+        response = await _build_ha_search(component_core_client)(
+            query="kitchen",
+            search_types=["automation", "dashboard"],
+            limit=100,
+            offset=600,
+            exact_match=True,
+            include_hidden=True,
+        )
 
     # A window past the 500-result ceiling is still served, with no
     # component-failure fallback warning and no partial dashboards leg.
     assert response["success"] is True
     assert not response.get("partial")
     assert not any("legacy path" in w for w in response.get("warnings", []))
+    # The component served it: its search command ran and no state was read.
+    assert _searches(component)
+    states.assert_not_called()

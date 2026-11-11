@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
+from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -37,24 +39,6 @@ async def point_server_at(
         reset_global_settings()
 
     return configure
-
-
-@pytest.fixture
-async def silent_server() -> AsyncIterator[str]:
-    """A listener that accepts connections and never answers."""
-
-    async def accept_and_stay_silent(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        await reader.read()
-        writer.close()
-
-    server = await asyncio.start_server(accept_and_stay_silent, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.close()
 
 
 async def test_startup_check_asks_about_the_configured_token(
@@ -110,22 +94,43 @@ async def test_startup_check_never_raises(
     assert "Startup admin-token check failed" in caplog.text
 
 
-async def test_lifespan_runs_the_hacs_nudge_and_cancels_the_startup_tasks(
-    hass: HomeAssistant,
-    hass_access_token: str,
-    silent_server: str,
-    point_server_at: Callable[[str, str | None], None],
-) -> None:
-    point_server_at(hass_access_token, silent_server)
-    tasks_before = asyncio.all_tasks()
+async def test_lifespan_runs_the_hacs_nudge_and_cancels_the_startup_tasks() -> None:
+    """The lifespan's own parts are replaced: none of them speaks for Home Assistant."""
+    started = {"admin check": asyncio.Event(), "discovery": asyncio.Event()}
+    cancelled: set[str] = set()
+    hacs_entered = False
 
-    async with server_lifespan.server_lifespan(object()) as state:
-        # The admin check is blocked on the silent listener.
-        await asyncio.sleep(0.2)
-        running = asyncio.all_tasks() - tasks_before
-        assert running, "the startup tasks must be running inside the lifespan"
+    def never_finishes(name: str) -> Callable[[], Coroutine[Any, Any, None]]:
+        async def run() -> None:
+            started[name].set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.add(name)
+                raise
 
-    assert state == {}
-    await asyncio.sleep(0.1)
-    leftover = {task for task in asyncio.all_tasks() - tasks_before if not task.done()}
-    assert not leftover, "exiting the lifespan must cancel the startup tasks"
+        return run
+
+    @asynccontextmanager
+    async def fake_hacs_lifespan(_server: object) -> AsyncIterator[dict[str, Any]]:
+        nonlocal hacs_entered
+        hacs_entered = True
+        yield {}
+
+    with (
+        patch.object(
+            server_lifespan,
+            "warn_if_non_admin_token",
+            new=never_finishes("admin check"),
+        ),
+        patch.object(
+            server_lifespan, "announce_mcp_discovery", new=never_finishes("discovery")
+        ),
+        patch.object(server_lifespan, "hacs_refresh_lifespan", new=fake_hacs_lifespan),
+    ):
+        async with server_lifespan.server_lifespan(object()):
+            for event in started.values():
+                await event.wait()
+
+    assert hacs_entered
+    assert cancelled == set(started), "exiting the lifespan must cancel both tasks"

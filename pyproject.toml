@@ -260,7 +260,6 @@ module = [
     "tests.src.unit.test_dashboard_patch",
     "tests.src.unit.test_dashboard_screenshot",
     "tests.src.unit.test_dashboard_screenshot_theme_guard",
-    "tests.src.unit.test_deep_search_cancellation",
     "tests.src.unit.test_deep_search_error_handling",
     "tests.src.unit.test_deep_search_helper_rename_1794",
     "tests.src.unit.test_domain_handlers",

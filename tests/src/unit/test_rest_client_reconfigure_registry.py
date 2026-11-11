@@ -1,80 +1,50 @@
 """Tests for config-entry reconfigure registry reads."""
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantClient
 
 
-@pytest.fixture
-def client() -> HomeAssistantClient:
-    """Create a client without opening a network connection."""
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        value = HomeAssistantClient()
-        value.base_url = "http://test.local:8123"
-        value.token = "test-token"
-        value.timeout = 30
-        value.verify_ssl = True
-        return value
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method_name", ["list_entity_registry", "list_device_registry"]
-)
-async def test_registry_list_accepts_valid_result_envelope(
-    client: HomeAssistantClient, method_name: str
+async def test_registry_lists_return_cores_rows(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
 ) -> None:
-    """Registry methods return dictionaries from a valid WebSocket result."""
-    with patch.object(
-        client,
-        "send_websocket_message",
-        new=AsyncMock(return_value={"success": True, "result": [{"id": "device-1"}]}),
-    ):
-        result = await getattr(client, method_name)()
+    """Both registry methods return the rows Core's WebSocket API lists."""
+    assert await async_setup_component(hass, "config", {})
+    entry = MockConfigEntry(domain="demo")
+    entry.add_to_hass(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("demo", "device-1")}
+    )
+    entity = entity_registry.async_get_or_create(
+        "light", "demo", "uid-1", device_id=device.id
+    )
 
-    assert result == [{"id": "device-1"}]
+    devices = await core_client.list_device_registry()
+    entities = await core_client.list_entity_registry()
+
+    assert [row["id"] for row in devices] == [device.id]
+    assert [row["entity_id"] for row in entities] == [entity.entity_id]
+    assert entities[0]["device_id"] == device.id
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name", ["list_entity_registry", "list_device_registry"]
 )
 async def test_registry_list_rejects_error_envelope(
-    client: HomeAssistantClient, method_name: str
+    core_client: HomeAssistantClient, method_name: str
 ) -> None:
-    """A WebSocket error envelope is not silently converted to an empty list."""
-    with (
-        patch.object(
-            client,
-            "send_websocket_message",
-            new=AsyncMock(
-                return_value={
-                    "success": False,
-                    "error": {"code": "not_loaded", "message": "registry unavailable"},
-                }
-            ),
-        ),
-        pytest.raises(HomeAssistantAPIError, match="registry unavailable"),
-    ):
-        await getattr(client, method_name)()
+    """Core's error reply is not silently converted to an empty list.
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method_name", ["list_entity_registry", "list_device_registry"]
-)
-async def test_registry_list_rejects_malformed_result(
-    client: HomeAssistantClient, method_name: str
-) -> None:
-    """A malformed result cannot disable identity and duplicate checks."""
-    with (
-        patch.object(
-            client,
-            "send_websocket_message",
-            new=AsyncMock(return_value={"success": True, "result": ["not-a-row"]}),
-        ),
-        pytest.raises(HomeAssistantAPIError, match="Unexpected response"),
-    ):
-        await getattr(client, method_name)()
+    Without the ``config`` integration Core has no registry commands and
+    answers ``unknown_command``.
+    """
+    with pytest.raises(HomeAssistantAPIError, match="Unexpected response from"):
+        await getattr(core_client, method_name)()

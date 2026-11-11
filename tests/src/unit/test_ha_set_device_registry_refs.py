@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -138,6 +138,7 @@ class TestSetDeviceRegistryReferences:
     async def test_empty_label_list_clears_without_lookup(
         self,
         tools: RegistryTools,
+        core_client: HomeAssistantClient,
         device: dr.DeviceEntry,
         device_registry: dr.DeviceRegistry,
         label_registry: lr.LabelRegistry,
@@ -146,7 +147,16 @@ class TestSetDeviceRegistryReferences:
         label = label_registry.async_create("Important")
         device_registry.async_update_device(device.id, labels={label.label_id})
 
-        result = await tools.ha_set_device(device_id=device.id, labels=[])
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as sent:
+            result = await tools.ha_set_device(device_id=device.id, labels=[])
+
+        sent_types = [call.args[0]["type"] for call in sent.call_args_list]
+        assert "config/label_registry/list" not in sent_types
+        assert "config/device_registry/update" in sent_types
 
         assert result["success"] is True
         stored = device_registry.async_get(device.id)

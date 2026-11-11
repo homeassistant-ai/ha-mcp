@@ -51,3 +51,6 @@ async def test_other_credentials_have_no_connection(
     assert websocket_manager.pooled_client(url, "other", False) is None
     assert websocket_manager.pooled_client(url, token, True) is None
     assert websocket_manager.pooled_client(url, token, False) is pooled
+    # A lookup opens nothing, so asking again still finds no connection.
+    assert websocket_manager.pooled_client(url, "other", False) is None
+    assert websocket_manager.pooled_client(url, token, True) is None
