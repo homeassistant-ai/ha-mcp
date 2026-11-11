@@ -12,6 +12,8 @@ from .. import (
     config_references,
     core_contract,
     entity_restore,
+    flow_outline,
+    flow_record,
     helper_collections,
     todo_items,
 )
@@ -224,6 +226,8 @@ CAPABILITIES: list[str] = [
     core_contract.CAPABILITY,
     core_contract.INTEGRATION_CAPABILITY,
     todo_items.CAPABILITY,
+    flow_record.CAPABILITY,
+    flow_outline.CAPABILITY,
     automation_config.CAPABILITY,
     config_references.CAPABILITY,
     *card_definitions.CAPABILITIES,

@@ -96,7 +96,7 @@ class TestUniformResponseShape:
                 helper_type="input_boolean",
                 name="Test Switch",
             )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result, expect_warnings=True)
         assert result["action"] == "create"
         assert result["data"]["id"] == "abc123"
 
@@ -139,7 +139,7 @@ class TestUniformResponseShape:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 helper_id="input_select.existing",
-                options=["x", "y"],
+                config={"options": ["x", "y"]},
             )
         _assert_uniform_shape(result, expect_warnings=False)
         assert result["action"] == "update"
@@ -190,7 +190,7 @@ class TestUniformResponseShape:
             config={"entity_ids": ["sensor.a", "sensor.b"], "type": "mean"},
             wait=False,
         )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result, expect_warnings=True)
         assert result["data"]["entry_id"] == "entry-1"
         assert result["data"]["title"] == "avg_temp"
         # Flat accessors remain (per-action metadata, not wrapper keys).
@@ -354,7 +354,7 @@ class TestUniformResponseShape:
                 icon="mdi:toggle-switch",
                 area_id="area.kitchen",
             )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result, expect_warnings=True)
         assert result["action"] == "create"
         assert result["data"]["icon"] == "mdi:toggle-switch"
         assert result["data"]["area_id"] == "area.kitchen"

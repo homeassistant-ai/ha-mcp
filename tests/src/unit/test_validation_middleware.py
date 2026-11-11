@@ -449,6 +449,31 @@ async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> No
 
 
 @pytest.mark.asyncio
+async def test_a_helper_field_passed_top_level_is_told_it_goes_in_config() -> None:
+    """A helper's fields are Home Assistant's to name and the tool declares
+    none of them, so an undeclared argument is told where such a field goes
+    as well as that a stored tool list may be stale."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_config_set_helper(
+        helper_type: str, config: dict | None = None
+    ) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_config_set_helper", {"helper_type": "input_number", "min_value": 0}
+        )
+
+    body = json.loads(str(exc_info.value))
+    assert "`min_value`: unknown parameter" in body["error"]["message"]
+    assert "inside `config`" in body["error"]["message"]
+    assert any("stale" in s for s in _suggestions(body))
+
+
+@pytest.mark.asyncio
 async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     """Same as above for ha_config_set_script (issue #2649 section 1)."""
     mcp = _make_config_set_like_mcp()

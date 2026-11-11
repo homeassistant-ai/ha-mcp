@@ -93,6 +93,16 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
 }
 
 
+# Tools whose `config` takes the object's own fields under Home Assistant's
+# names, which the tool does not list: any name the tool does not declare may
+# be one of them, so the rejection says where such a field goes.
+_FIELDS_IN_CONFIG_TOOLS = frozenset({"ha_config_set_helper"})
+_FIELD_GOES_IN_CONFIG = (
+    "; if it is one of the helper's own fields, pass it inside `config` under "
+    "Home Assistant's name for it"
+)
+
+
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
     """Return the called tool's declared parameter names, or None if unavailable."""
     fastmcp_context = getattr(context, "fastmcp_context", None)
@@ -179,6 +189,7 @@ def _argument_hint(
     unclaimed: Sequence[str],
     valid_parameters: list[str] | None,
     config_keys: set[str] | None,
+    fields_in_config: bool = False,
 ) -> tuple[str, _RejectionKind]:
     """Hint for one rejected argument.
 
@@ -196,7 +207,8 @@ def _argument_hint(
             "— move it inside `config`"
         )
         return hint, "misplaced"
-    return _unknown_argument_hint(param, unclaimed), "undeclared"
+    hint = _unknown_argument_hint(param, unclaimed)
+    return hint + (_FIELD_GOES_IN_CONFIG if fields_in_config else ""), "undeclared"
 
 
 def _rejection_suggestions(
@@ -303,7 +315,12 @@ class ValidationErrorMiddleware(Middleware):
             undeclared_names: list[str] = []
             for param, errs in grouped.items():
                 hint, kind = _argument_hint(
-                    param, errs, unclaimed, valid_parameters, config_keys
+                    param,
+                    errs,
+                    unclaimed,
+                    valid_parameters,
+                    config_keys,
+                    tool_name in _FIELDS_IN_CONFIG_TOOLS,
                 )
                 if kind == "misplaced":
                     misplaced_keys.append(param)

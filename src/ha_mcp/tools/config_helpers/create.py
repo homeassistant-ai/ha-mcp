@@ -27,10 +27,10 @@ from .schemas import (
 
 
 def _build_create_message(
-    helper_type: str, name: str, icon: str | None, fields: dict[str, Any]
+    helper_type: str, name: str | None, icon: str | None, fields: dict[str, Any]
 ) -> dict[str, Any]:
     """The WebSocket {type}/create message: the caller's fields under Core's names."""
-    message: dict[str, Any] = {"name": name}
+    message: dict[str, Any] = {} if name is None else {"name": name}
     if icon:
         message["icon"] = icon
     message.update(with_create_defaults(helper_type, fields))
@@ -110,17 +110,13 @@ async def _execute_create_simple_helper(
     fields: dict[str, Any],
 ) -> dict[str, Any]:
     """Execute the create path for a simple (non-flow) helper type."""
-    if not name or not name.strip():
+    # Core says which types need a name (a tag does not). A blank one it would
+    # store for a zone or person is refused, as their dialogs refuse it.
+    if name is not None and not name.strip():
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"name is required for create action. Include "
-                f'"name" as a top-level argument, e.g. '
-                f'{{"helper_type": "{helper_type}", "name": "My Helper"}}.',
-                suggestions=[
-                    'Add "name": "My Helper" at the top level of the JSON arguments',
-                    'Or pass "helper_id": "my_helper" if you intended to update an existing helper',
-                ],
+                "name cannot be blank.",
                 context=_simple_helper_error_context(helper_type),
             )
         )
@@ -138,7 +134,8 @@ async def _execute_create_simple_helper(
             helper_type,
             data=native_data,
             entity_id=native_entity_id,
-            message=f"Successfully created {helper_type}: {name}",
+            message=f"Successfully created {helper_type}"
+            + (f": {name}" if name else ""),
             warnings=native_warnings,
         )
         _attach_helper_skill(create_response, MandatoryBPS)
@@ -209,7 +206,7 @@ async def _execute_create_simple_helper(
         helper_type,
         data=helper_data,
         entity_id=entity_id,
-        message=f"Successfully created {helper_type}: {name}",
+        message=f"Successfully created {helper_type}" + (f": {name}" if name else ""),
         warnings=warnings,
     )
     _attach_helper_skill(create_response, MandatoryBPS)
