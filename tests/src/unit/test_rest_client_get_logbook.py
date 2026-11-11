@@ -38,6 +38,8 @@ async def test_get_logbook_returns_core_s_rows_for_the_context(
     context = Context()
     hass.states.async_set("light.kitchen", "initial")
     hass.states.async_set("light.kitchen", "on", context=context)
+    hass.states.async_set("light.hall", "initial")
+    hass.states.async_set("light.hall", "on", context=Context())
     await hass.async_block_till_done()
     await async_wait_recording_done(hass)
 

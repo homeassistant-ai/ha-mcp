@@ -217,7 +217,7 @@ class TestGatherDiagnostics:
         )
 
         assert result["validation"] is not None
-        assert result["validation"]["status"] != "ok"
+        assert result["validation"]["status"].startswith("failed")
         assert "did not load" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
@@ -250,6 +250,8 @@ class TestGatherDiagnostics:
 
         assert result["entity_exists"] is True
         assert result["trace_key_available"] is True
+        assert result["trace_storage_enabled"] is True
+        assert result["loaded"] is None
         assert not any("component" in warning for warning in warnings)
 
 

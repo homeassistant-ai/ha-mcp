@@ -124,10 +124,16 @@ class TestFetchTraceLogbook:
         hass_ws_client: WebSocketGenerator,
         core_client: HomeAssistantClient,
     ) -> None:
-        """The REST fallback reads the same run's context from Core."""
+        """The REST fallback keeps the run's context filter, not just its window."""
         context = Context()
         trace = await _trace(hass, hass_ws_client, context=context)
-        await _record(hass, [("light.matched", "on", context)])
+        await _record(
+            hass,
+            [
+                ("light.matched", "on", context),
+                ("light.other", "on", Context()),
+            ],
+        )
 
         logbook = await fetch_trace_logbook(core_client, trace)
 
@@ -137,24 +143,45 @@ class TestFetchTraceLogbook:
         ]
 
     @pytest.mark.asyncio
+    async def test_rows_before_the_run_start_are_excluded(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        """The run's start is the query's lower bound, not just its context."""
+        context = Context()
+        await _record(hass, [("light.before", "on", context)])
+        trace = await _trace(hass, hass_ws_client, context=context)
+        await _record(hass, [("light.after", "on", context)])
+
+        logbook = await fetch_trace_logbook(component_core_client, trace)
+
+        assert [row["entity_id"] for row in logbook.entries] == ["light.after"]
+
+    @pytest.mark.asyncio
     async def test_rows_are_capped_and_the_total_is_core_s(
         self,
         hass: HomeAssistant,
         hass_ws_client: WebSocketGenerator,
         component_core_client: HomeAssistantClient,
     ) -> None:
-        """Core returns every row; the trace page caps the list it shows."""
+        """Core returns every row; the trace page keeps the first 50 in core order."""
         context = Context()
         trace = await _trace(hass, hass_ws_client, context=context)
         changes = [
             (f"light.row_{index}", f"state_{index}", context)
             for index in range(LOGBOOK_ROW_LIMIT + 5)
         ]
-        await _record(hass, changes)
+        # One at a time, so Core's timestamps order the rows as listed.
+        for change in changes:
+            await _record(hass, [change])
 
         logbook = await fetch_trace_logbook(component_core_client, trace)
 
-        assert len(logbook.entries) == LOGBOOK_ROW_LIMIT
+        assert [row["entity_id"] for row in logbook.entries] == [
+            f"light.row_{index}" for index in range(LOGBOOK_ROW_LIMIT)
+        ]
         assert logbook.total == len(changes)
         assert logbook.truncated is True
 
@@ -206,22 +233,24 @@ class TestFetchTraceLogbook:
         assert "Invalid start_time" in payload["error"]["message"]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "trace",
-        [
-            pytest.param(
-                {"timestamp": {"start": "2026-11-08T16:00:00+00:00"}},
-                id="no-context",
-            ),
-            pytest.param({"context": {"id": "ctx-1"}}, id="no-start"),
-        ],
-    )
+    @pytest.mark.parametrize("missing", ["context", "timestamp"])
     async def test_a_run_without_its_context_or_start_reads_nothing(
-        self, core_client: HomeAssistantClient, trace: dict[str, Any]
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        core_client: HomeAssistantClient,
+        missing: str,
     ) -> None:
-        """Without both fields Core's query cannot be addressed, so it is skipped."""
-        logbook = await fetch_trace_logbook(core_client, trace)
+        """Without both Core fields the query cannot be addressed, so it is skipped."""
+        trace = await _trace(hass, hass_ws_client, context=Context())
+        incomplete = {key: value for key, value in trace.items() if key != missing}
+
+        logbook = await fetch_trace_logbook(core_client, incomplete)
 
         assert logbook.entries == []
         assert logbook.transport is None
-        assert len(logbook.warnings) == 1
+        (warning,) = logbook.warnings
+        if missing == "context":
+            assert "context id" in warning.lower()
+        else:
+            assert "start timestamp" in warning.lower()
